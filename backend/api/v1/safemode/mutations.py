@@ -32,6 +32,7 @@ from ._schemas import (
     SafeModeActionResponse,
     SafeModeDenyRequest,
     SafeModeRunApproveResponse,
+    SafeModeRunDenyResponse,
 )
 
 router = APIRouter()
@@ -166,6 +167,45 @@ async def approve_item(
     # session so the persist sits inside the caller's transaction.
     await persist_compensation_handles(session, deliverable_id=deliverable_id, result=result)
     return SafeModeActionResponse(item_id=item_id, status="approved", dispatched=True)
+
+
+@router.post("/runs/{run_id}/deny")
+async def deny_run(
+    run_id: uuid.UUID,
+    body: SafeModeDenyRequest,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    user: Annotated[UserRow, Depends(get_current_user_row)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SafeModeRunDenyResponse:
+    """Deny ALL pending Safe Mode items for one Run — the twin of
+    :func:`approve_run`.
+
+    Approve had a per-run route from the start (B12a) and deny did not, so a
+    multi-artifact run could only be refused one item at a time. Every item the
+    founder did not individually name stayed pending forever.
+
+    The reason is recorded on EVERY item: it is one decision about one run, and
+    the capture path (#760) reads ``deny_reason`` per row. An empty reason stays
+    empty — a blank string must never be mistaken for a recorded judgement.
+    """
+    queue = SafeModeQueue(session)
+    pending = await queue.list_pending_for_run(workspace_id=workspace_id, run_id=run_id)
+    if not pending:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No pending Safe Mode items for run {run_id}",
+        )
+    denied = 0
+    for item in pending:
+        if await queue.deny(
+            workspace_id=workspace_id,
+            item_id=item.id,
+            actor_id=user.id,
+            reason=body.reason,
+        ):
+            denied += 1
+    await session.commit()
+    return SafeModeRunDenyResponse(run_id=run_id, denied_count=denied)
 
 
 @router.post("/{item_id}/deny")

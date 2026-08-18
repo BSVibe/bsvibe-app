@@ -176,8 +176,8 @@ async def handle_approval_callback(  # noqa: PLR0911 — each return is one secu
     # 3) Resolve the PENDING held item SCOPED to the account's workspace. A
     # crafted cross-workspace id finds nothing → treat as already-handled
     # (idempotent double-tap lands here too).
-    item_id = await _pending_item_for(session, deliverable_id, account.workspace_id)
-    if item_id is None:
+    targets = await _pending_items_for(session, deliverable_id, account.workspace_id)
+    if not targets:
         # Already-handled (idempotent double-tap, or a cross-workspace id that
         # resolves to nothing): the card was already edited on the FIRST tap, so
         # only ack the toast — re-editing would stack a second status line onto an
@@ -198,20 +198,26 @@ async def handle_approval_callback(  # noqa: PLR0911 — each return is one secu
 
     queue = SafeModeQueue(session)
     if verb == "apv":
-        await _approve(session, queue, account, item_id, deliverable_id, actor_id, dispatcher)
+        # One tap = one RUN. Each item still goes through the same _approve so
+        # there stays ONE outbound code path (mirrors the REST per-run approve).
+        for target_item, target_deliverable in targets:
+            await _approve(
+                session, queue, account, target_item, target_deliverable, actor_id, dispatcher
+            )
         await _ack(runner, plugin, adapter, context, parsed, _t("approved_answer", language))
         await _update(runner, plugin, adapter, context, parsed, _t("approved_result", language))
     else:  # "rej"
-        await queue.deny(
-            workspace_id=account.workspace_id,
-            item_id=item_id,
-            actor_id=actor_id,
-            # 폰의 거절 버튼은 사유를 받지 않는다. 출처를 사유인 척 넘기면
-            # 그것이 negative pattern 으로 승격돼 모든 신호에 "avoid: declined
-            # via telegram" 이 딸려온다. 사유가 없으면 없는 것이다 — 출처는
-            # ``decided_by`` 가 이미 남긴다.
-            reason="",
-        )
+        # 폰의 거절 버튼은 사유를 받지 않는다. 출처를 사유인 척 넘기면 그것이
+        # negative pattern 으로 승격돼 모든 신호에 "avoid: declined via telegram"
+        # 이 딸려온다. 사유가 없으면 없는 것이다 — 출처는 ``decided_by`` 가 남긴다.
+        # 승인과 대칭으로, 한 번의 탭은 그 런의 대기 항목을 전부 닫는다.
+        for target_item, _ in targets:
+            await queue.deny(
+                workspace_id=account.workspace_id,
+                item_id=target_item,
+                actor_id=actor_id,
+                reason="",
+            )
         await session.commit()
         await _ack(runner, plugin, adapter, context, parsed, _t("declined_answer", language))
         await _update(runner, plugin, adapter, context, parsed, _t("declined_result", language))
@@ -277,22 +283,61 @@ async def _approve(
         )
 
 
-async def _pending_item_for(
+async def _pending_items_for(
     session: AsyncSession, deliverable_id: uuid.UUID, workspace_id: uuid.UUID
-) -> uuid.UUID | None:
-    """The PENDING Safe-Mode item for this deliverable in THIS workspace (scoped —
-    a cross-tenant deliverable_id finds nothing). ``None`` when nothing is held
-    (already approved/denied/expired, or another workspace's item)."""
-    stmt = (
-        select(SafeModeQueueItemRow.id)
-        .where(
-            SafeModeQueueItemRow.deliverable_id == deliverable_id,
-            SafeModeQueueItemRow.workspace_id == workspace_id,
-            SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
+) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    """The PENDING items ONE tap settles, as ``[(item_id, deliverable_id), …]``.
+
+    Safe Mode is a per-RUN transactional container (B12a / Workflow §1.2): a
+    multi-artifact run leaves one queue row per partial Deliver event, and the
+    founder settles them **together**. The notification names a single
+    ``deliverable_id``, so resolve that row first, then widen to its whole run.
+
+    Settling only the named row is what let 35 partials pile up in prod — one
+    run alone left 17 pending rows nobody could ever reach, because no
+    notification named them.
+
+    Scoped to ``workspace_id`` — a cross-tenant deliverable_id finds nothing.
+    An item with no ``run_id`` (nullable: legacy rows, direct emits) settles
+    alone. Empty list when nothing is held (already settled / double-tap).
+    """
+    tapped = (
+        (
+            await session.execute(
+                select(SafeModeQueueItemRow)
+                .where(
+                    SafeModeQueueItemRow.deliverable_id == deliverable_id,
+                    SafeModeQueueItemRow.workspace_id == workspace_id,
+                    SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
+                )
+                .limit(1)
+            )
         )
-        .limit(1)
+        .scalars()
+        .first()
     )
-    return (await session.execute(stmt)).scalars().first()
+    if tapped is None:
+        return []
+    if tapped.run_id is None:
+        return [(tapped.id, tapped.deliverable_id)]
+
+    siblings = (
+        (
+            await session.execute(
+                select(SafeModeQueueItemRow)
+                .where(
+                    SafeModeQueueItemRow.run_id == tapped.run_id,
+                    SafeModeQueueItemRow.workspace_id == workspace_id,
+                    SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
+                )
+                .order_by(SafeModeQueueItemRow.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Oldest-first so dispatch happens in the order the agent loop emitted them.
+    return [(row.id, row.deliverable_id) for row in siblings]
 
 
 async def _owner_user_id(session: AsyncSession, workspace_id: uuid.UUID) -> uuid.UUID | None:
