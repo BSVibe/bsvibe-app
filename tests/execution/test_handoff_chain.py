@@ -132,16 +132,35 @@ async def test_spawn_with_no_deliverable_yields_empty_refs() -> None:
         assert impls[0].payload["design_artifact_refs"] == []
 
 
-async def test_no_chaining_without_routing_rules() -> None:
-    """Gate: a rule-less workspace keeps single-run behaviour — chaining a
-    design→impl pair onto one model would just run the work twice."""
+async def test_chaining_does_not_depend_on_routing_rules() -> None:
+    """A routing rule's EXISTENCE is not the pipeline's feature flag.
+
+    The gate used to be ``has_any(run_routing_rules)`` on the reasoning that
+    chaining onto one model "would just run the work twice". prod 2026-08-18
+    showed the cost of overloading that row: the workspace where 149 of 203 runs
+    happen had exactly one rule, yesterday's cleanup deleted it as an inert
+    duplicate (its ROUTING effect really was dead — #766), and design→impl
+    chaining silently switched off with it. Chained impl runs: 08-17 one,
+    08-18 zero.
+
+    The failure mode is the worst-shaped one: the framer still marks the run
+    ``design_then_impl``, so the loop is told to SPEC rather than build
+    (``_is_design_stage``), the spec lands, nothing implements it, and the run
+    reports ``verified``. The founder asks for code and is told it is done.
+
+    The pipeline decision belongs to the frame. Whether two stages route to
+    distinct models is a routing question and must not silently decide whether
+    the second stage runs at all."""
     async with memory_session() as s:
         design = await _seed_design_run(s, refs=["spec.md"], with_rules=False)
         runner = AgentRunner(s)
 
         await runner.transition(run_id=design.id, to_status=RunStatus.REVIEW_READY)
 
-        assert await _impl_runs(s, exclude=design.id) == []
+        impls = await _impl_runs(s, exclude=design.id)
+        assert len(impls) == 1
+        assert impls[0].payload["stage"] == "impl"
+        assert impls[0].payload["design_run_id"] == str(design.id)
 
 
 async def test_spawn_inlines_design_spec_text(tmp_path: Any) -> None:

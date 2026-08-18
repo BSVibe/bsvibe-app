@@ -328,7 +328,14 @@ async def test_production_deps_drive_greenfield_direct_run_to_delivery(
     assert await agent.drive_once() == 1
 
     async with sf() as s:
-        run = (await s.execute(select(ExecutionRun))).scalar_one()
+        # "Build the answer file" frames as ``design_then_impl`` (artifact code +
+        # a build verb), so REVIEW_READY chains an impl run. Select the DESIGN
+        # run — the one this test drove — rather than assuming a single row.
+        run = (
+            await s.execute(
+                select(ExecutionRun).where(ExecutionRun.payload["stage"].as_string().is_(None))
+            )
+        ).scalar_one()
         # W2: verified product runs auto-merge to main + transition to SHIPPED.
         # This product is GREENFIELD — an empty repo with NO stack manifest yet —
         # so a gate was not reasonably expected. The verify grades it D (weak) but
@@ -543,7 +550,13 @@ async def test_drive_frames_against_only_the_runs_workspace_skills(
     assert await agent.drive_once() == 1
 
     async with sf() as s:
-        run = (await s.execute(select(ExecutionRun))).scalar_one()
+        # The design run — REVIEW_READY chains an impl run behind it (the frame
+        # marks this ``design_then_impl``); the impl run carries no frame.
+        run = (
+            await s.execute(
+                select(ExecutionRun).where(ExecutionRun.payload["stage"].as_string().is_(None))
+            )
+        ).scalar_one()
         # Framed against workspace A's skills only — sees A's "weekly-digest",
         # never the other workspace's "groceries".
         assert run.payload["frame"]["skill_match"] == "weekly-digest"

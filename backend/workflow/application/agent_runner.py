@@ -23,9 +23,9 @@ skipped.** AgentRunner owns one cohesive responsibility: transactional
 ExecutionRun lifecycle (open, transition, post-transition reactions —
 auto-ship at REVIEW_READY for product-bound runs, design→impl handoff
 spawning). Persistence is delegated to ``RunRepository`` /
-``DeliverableRepository`` / ``RunRoutingRuleRepository`` (Lift I-Repo
-seam). The post-transition reactions (``_auto_ship_product_run``,
-``_maybe_spawn_impl_run``) are tightly coupled to the transition that
+``DeliverableRepository`` (Lift I-Repo seam). The post-transition
+reactions (``_auto_ship_product_run``, ``_maybe_spawn_impl_run``) are
+tightly coupled to the transition that
 triggers them — extracting as policy strategies would force the caller
 to re-derive trigger conditions externally, harming the invariant that
 status transitions atomically advance the run.
@@ -45,8 +45,6 @@ from backend.config import Settings, get_settings
 from backend.identity.workspaces_db import load_workspace_language
 from backend.notifications.copy import notification_copy
 from backend.notifications.emit import emit_notification
-from backend.router.domain.repositories import RunRoutingRuleRepository
-from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
 from backend.workflow.application.agent_loop import LoopResult, RunCompute
 from backend.workflow.application.handoff import capture_design_spec_text
 from backend.workflow.domain.repositories import DeliverableRepository, RunRepository
@@ -139,7 +137,6 @@ class AgentRunner:
         *,
         run_repository: RunRepository | None = None,
         deliverable_repository: DeliverableRepository | None = None,
-        run_routing_rule_repository: RunRoutingRuleRepository | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._session = session
@@ -155,13 +152,6 @@ class AgentRunner:
         # Deliverable(s) via this Repository instead of a raw select().
         self._deliverables: DeliverableRepository = (
             deliverable_repository or SqlAlchemyDeliverableRepository(session)
-        )
-        # Lift I-Repo-Router — the design→impl handoff gate consults the
-        # Router context's rule set via Protocol instead of issuing a raw
-        # SQLAlchemy query. Workflow → Router cross-context dependency
-        # travels through the Protocol seam.
-        self._run_routing_rules: RunRoutingRuleRepository = (
-            run_routing_rule_repository or SqlAlchemyRunRoutingRuleRepository(session)
         )
 
     async def open_run(self, *, request: RequestRow) -> uuid.UUID:
@@ -540,11 +530,6 @@ class AgentRunner:
         """P1-L2: chain an IMPLEMENTATION run after a verified DESIGN run.
 
         Fires only when ALL hold:
-        * the workspace has run-routing rules — i.e. it has OPTED IN to the
-          rule-routed / executor execution model. A rule-less workspace (every
-          existing single-account workspace) keeps today's single-run behaviour:
-          chaining a design→impl pair onto one model would just run the work
-          twice. The handoff is meaningful only when stages route distinctly.
         * the run's frame marks the pipeline ``design_then_impl``;
         * this run is NOT itself the impl stage (so the impl run can't spawn
           another — the chain is exactly two runs).
@@ -560,8 +545,6 @@ class AgentRunner:
         if frame.get("pipeline") != "design_then_impl":
             return
         if payload.get("stage") == "impl":
-            return
-        if not await self._workspace_has_routing_rules(design_run.workspace_id):
             return
 
         refs = await self._design_artifact_refs(design_run.id)
@@ -618,11 +601,6 @@ class AgentRunner:
             artifact_refs=len(refs),
             has_spec=spec_text is not None,
         )
-
-    async def _workspace_has_routing_rules(self, workspace_id: uuid.UUID) -> bool:
-        """True when the workspace has any run-routing rule (it has opted into
-        the rule-routed execution model — the gate for design→impl chaining)."""
-        return await self._run_routing_rules.has_any(workspace_id=workspace_id)
 
     async def _design_artifact_refs(self, design_run_id: uuid.UUID) -> list[str]:
         """The artifact_refs the design run's deliverable(s) produced — the
