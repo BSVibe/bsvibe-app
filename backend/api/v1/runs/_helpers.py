@@ -98,13 +98,38 @@ def _write_paths(payload: dict[str, Any]) -> list[str]:
 
 
 _VERIFY_LABELS = {
-    "passed": "Verified the work",
-    "failed": "Verification failed",
-    "inconclusive": "Verification was inconclusive",
+    "en": {
+        "passed": "Verified the work",
+        "failed": "Verification failed",
+        "inconclusive": "Verification was inconclusive",
+    },
+    "ko": {
+        "passed": "작업을 검증했어요",
+        "failed": "검증에 실패했어요",
+        "inconclusive": "검증이 판정 불가였어요",
+    },
+}
+
+_VERIFY_FALLBACK = {"en": "Ran verification", "ko": "검증을 실행했어요"}
+
+_STATIC_LABELS = {
+    "settle": {"en": "Settled into knowledge", "ko": "지식으로 정리했어요"},
+    "error": {"en": "Hit a problem", "ko": "문제가 생겼어요"},
+}
+
+_ROUTING_SOURCE_REASONS = {
+    "en": {"explicit_rule": "your routing rule", "workspace_default": "workspace default"},
+    "ko": {"explicit_rule": "라우팅 규칙", "workspace_default": "워크스페이스 기본값"},
 }
 
 
-def _tool_call_label(payload: dict[str, Any]) -> str | None:
+def _lang(language: str) -> str:
+    """The catalog key for ``language`` — anything we have no wording for reads
+    English rather than a half-translated line."""
+    return language if language in ("en", "ko") else "en"
+
+
+def _tool_call_label(payload: dict[str, Any], language: str) -> str | None:
     """ "Delivered X" for a file-writing tool_call; ``None`` for a read-only one
     (noise the founder timeline skips)."""
     paths = _write_paths(payload)
@@ -112,17 +137,12 @@ def _tool_call_label(payload: dict[str, Any]) -> str | None:
         return None
     shown = ", ".join(paths[:3])
     if len(paths) > 3:
-        shown += f" (+{len(paths) - 3} more)"
-    return f"Delivered {shown}"
+        more = len(paths) - 3
+        shown += f" 외 {more}개" if _lang(language) == "ko" else f" (+{more} more)"
+    return f"{shown} 전달했어요" if _lang(language) == "ko" else f"Delivered {shown}"
 
 
-_ROUTING_SOURCE_REASONS = {
-    "explicit_rule": "your routing rule",
-    "workspace_default": "workspace default",
-}
-
-
-def _routing_decision_label(payload: dict[str, Any]) -> str | None:
+def _routing_decision_label(payload: dict[str, Any], language: str) -> str | None:
     """ "Which model ran this step, and why" — the glass-box line.
 
     ``None`` for a payload we cannot state honestly (missing model, or a
@@ -133,54 +153,61 @@ def _routing_decision_label(payload: dict[str, Any]) -> str | None:
     source = payload.get("source")
     if not isinstance(target, str) or not target:
         return None
-    reason = _ROUTING_SOURCE_REASONS.get(source) if isinstance(source, str) else None
+    reasons = _ROUTING_SOURCE_REASONS[_lang(language)]
+    reason = reasons.get(source) if isinstance(source, str) else None
     if reason is None:
         return None
     caller = payload.get("caller_id")
+    ko = _lang(language) == "ko"
     if isinstance(caller, str) and caller:
-        return f"Routed {caller} to {target} ({reason})"
-    return f"Routed to {target} ({reason})"
+        return (
+            f"{caller} → {target} ({reason})" if ko else f"Routed {caller} to {target} ({reason})"
+        )
+    return f"모델 → {target} ({reason})" if ko else f"Routed to {target} ({reason})"
 
 
-def _verify_label(payload: dict[str, Any]) -> str | None:
+def _verify_label(payload: dict[str, Any], language: str) -> str | None:
     """The verifier's verdict in one calm phrase."""
+    lang = _lang(language)
     outcome = payload.get("outcome")
     if isinstance(outcome, str):
-        return _VERIFY_LABELS.get(outcome, "Ran verification")
-    return "Ran verification"
+        return _VERIFY_LABELS[lang].get(outcome, _VERIFY_FALLBACK[lang])
+    return _VERIFY_FALLBACK[lang]
 
 
 # Types whose label needs the payload, and types whose label is a constant.
 # A dict rather than an if-chain so adding the next activity type is one line
 # and never re-trips the return-count lint.
-_LABEL_BUILDERS: dict[str, Callable[[dict[str, Any]], str | None]] = {
+_LABEL_BUILDERS: dict[str, Callable[[dict[str, Any], str], str | None]] = {
     "tool_call": _tool_call_label,
     "verify": _verify_label,
     "routing_decision": _routing_decision_label,
 }
 
-_STATIC_LABELS = {
-    "settle": "Settled into knowledge",
-    "error": "Hit a problem",
-}
 
-
-def _activity_label(activity_type: str, payload: dict[str, Any]) -> str | None:
+def _activity_label(
+    activity_type: str, payload: dict[str, Any], language: str = "en"
+) -> str | None:
     """A short human label for one ExecutionRunActivity, or ``None`` when the
     event is low-signal noise the founder timeline should skip.
 
     Surfaced events tell the run's STORY: a file-writing ``tool_call``
-    ("Delivered X"), a ``verify`` verdict, a ``settle`` ("Settled into
-    knowledge"), and a calm ``error``. Per-turn ``llm_turn`` chatter and
-    read-only ``tool_call`` rows are noise and drop out (→ ``None``). All payload
-    reads are defensive so a malformed row degrades to a calm label / drop rather
-    than 500ing the response model.
+    ("Delivered X"), a ``verify`` verdict, a ``settle``, a ``routing_decision``,
+    and a calm ``error``. Per-turn ``llm_turn`` chatter and read-only
+    ``tool_call`` rows are noise and drop out (→ ``None``). All payload reads are
+    defensive so a malformed row degrades to a calm label / drop rather than
+    500ing the response model.
+
+    Localized at the PRODUCER (``workspaces.language``) — same discipline as the
+    notification sentences. The heading was already translated; these lines were
+    not, so a KO founder read Korean chrome over an English list.
     """
     builder = _LABEL_BUILDERS.get(activity_type)
     if builder is not None:
-        return builder(payload)
+        return builder(payload, language)
     # llm_turn and any unknown / low-signal type are skipped.
-    return _STATIC_LABELS.get(activity_type)
+    static = _STATIC_LABELS.get(activity_type)
+    return static[_lang(language)] if static else None
 
 
 def _partial_deliverable(row: Deliverable) -> RunPartialDeliverable:
@@ -212,6 +239,7 @@ def _build_timeline(
     verification: VerificationResult | None,
     deliverable_id: uuid.UUID | None,
     deliverable_created_at: datetime | None,
+    language: str = "en",
 ) -> tuple[list[RunActivity], str]:
     """Build the run's STORY timeline (oldest-first) + its source tag.
 
@@ -225,7 +253,7 @@ def _build_timeline(
         events: list[RunActivity] = []
         for row in activity_rows:
             payload = row.payload if isinstance(row.payload, dict) else {}
-            label = _activity_label(row.activity_type, payload)
+            label = _activity_label(row.activity_type, payload, language)
             if label is None:
                 continue
             events.append(
@@ -236,7 +264,7 @@ def _build_timeline(
     # Derived fallback: synthesize from the verification + deliverable we have.
     derived: list[RunActivity] = []
     if verification is not None:
-        label = _activity_label("verify", {"outcome": verification.outcome.value})
+        label = _activity_label("verify", {"outcome": verification.outcome.value}, language)
         if label is not None:
             derived.append(
                 RunActivity(type="verify", label=label, created_at=verification.created_at)
@@ -244,7 +272,11 @@ def _build_timeline(
     if deliverable_id is not None and deliverable_created_at is not None:
         derived.append(
             RunActivity(
-                type="deliver", label="Produced a deliverable", created_at=deliverable_created_at
+                type="deliver",
+                label=(
+                    "산출물을 만들었어요" if _lang(language) == "ko" else "Produced a deliverable"
+                ),
+                created_at=deliverable_created_at,
             )
         )
     derived.sort(key=lambda e: e.created_at)

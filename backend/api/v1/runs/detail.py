@@ -21,6 +21,7 @@ from backend.api.v1._workflow_deps import (
     get_deliverable_repository,
     get_run_repository,
 )
+from backend.identity.workspaces_db import load_workspace_language
 from backend.workflow.domain.repositories import (
     DecisionRepository,
     DeliverableRepository,
@@ -120,8 +121,11 @@ async def get_run_detail(
         .order_by(ExecutionRunActivity.created_at.asc())
     )
     activity_rows = list((await session.execute(activities_stmt)).scalars().all())
+    # The run's STORY speaks the workspace's language — localized at the
+    # producer, like every notification sentence. Absent row → "en".
+    language = await load_workspace_language(session, workspace_id)
     activities, timeline_source = _build_timeline(
-        activity_rows, verification_row, deliverable_id, deliverable_created_at
+        activity_rows, verification_row, deliverable_id, deliverable_created_at, language
     )
 
     # L2 (#9): for a terminal-failed run, surface WHY — the latest history
