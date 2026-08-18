@@ -459,6 +459,20 @@ class VerificationService:
         # ``_run_derived_gate``), so the same coverage generalises across stacks.
         # The agent's declared checks stay as its advisory attestation.
 
+        # A DECLARATION IS REQUIRED. Retrieved knowledge may ride a contract the
+        # agent's own declaration made usable (it becomes the Delivery Report's
+        # 참고지식 chips), but it must never be the thing that makes a contract
+        # EXIST — otherwise a run that declared nothing is graded against
+        # somebody else's criteria instead of routing to the caller's
+        # ``no_verification_declared`` Decision and asking.
+        #
+        # prod 전수 (2026-08): all 85 judge rejections graded criteria whose
+        # rationale was RETRIEVED_KNOWLEDGE_RATIONALE — none came from a judge
+        # the agent staked itself; and all 61 judge-ONLY rejections were runs
+        # that declared no commands at all.
+        if not checks:
+            return None
+
         if self._retriever is not None:
             signals = (final_text + "\n" + "\n".join(written_paths)).strip()
             # Retrieve STRUCTURED so each folded statement carries its identity
@@ -492,6 +506,7 @@ class VerificationService:
         box: SandboxSession,
         written_paths: list[str],
         final_text: str,
+        baseline: str | None = None,
     ) -> VerificationResult:
         """Run the contract's command + judge checks, persist a
         :class:`VerificationResult` (PASS = all commands pass AND the judge
@@ -643,28 +658,30 @@ class VerificationService:
             # an otherwise-good agent judge; dogfood dd2bd3a3). They still surface
             # as Delivery-Report references via the persisted contract.
             await self._release_connection(run)
-            judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
+            judge_blob = await self._run_judge(
+                gating_criteria, written_paths, final_text, box, baseline
+            )
             # cannot_determine → pass: judge uncertainty must not override command evidence.
             judge_pass = (
                 True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
             )
         elif retrieved_criteria:
-            # No agent judge — only the retriever fold. Lift E39/F6: when the
-            # agent's command attestation already passed, the retriever judge is
-            # ADVISORY (it reliably hallucinates against weak / unrelated criteria
-            # + a truncated file view — skip it, don't flip a clean command-passed
-            # run to FAILED). Otherwise it is the only verdict signal, so grade it.
-            if command_results and all_cmd_pass:
-                judge_blob = {"advisory": True, "skipped": "advisory_retrieval_only"}
-            else:
-                await self._release_connection(run)
-                judge_blob = await self._run_judge(
-                    retrieved_criteria, written_paths, final_text, box
-                )
-                # cannot_determine → pass (same as gating path).
-                judge_pass = (
-                    True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
-                )
+            # No agent judge — only the retriever fold, which is ADVISORY
+            # UNCONDITIONALLY. It is similarity output, not a criterion anyone
+            # declared: it reliably hallucinates against weak / unrelated
+            # criteria + a truncated file view.
+            #
+            # It used to be graded whenever the commands FAILED ("otherwise it is
+            # the only verdict signal"). But a run whose command already failed
+            # is already rejected — grading it a second time against undeclared
+            # criteria only adds a rejection nobody can act on, which is what
+            # drove the 13.2-rejections-per-run judge loop (prod 전수 2026-08:
+            # 61 of 66 judge-only rejections, across 3 runs).
+            #
+            # A run that declared NOTHING no longer reaches here at all —
+            # ``assemble_contract`` returns None so the caller raises the
+            # ``no_verification_declared`` Decision and asks the founder.
+            judge_blob = {"advisory": True, "skipped": "advisory_retrieval_only"}
 
         # I1′ — the repo's OWN gate, DERIVED by an LLM grounded in the repo's
         # manifests (the general replacement for the hardcoded quality bar +
@@ -1289,8 +1306,9 @@ class VerificationService:
         written_paths: list[str],
         final_text: str,
         box: SandboxSession,
+        baseline: str | None = None,
     ) -> dict[str, Any]:
-        work_block = await self._judge_file_context(written_paths, box)
+        work_block = await self._judge_file_context(written_paths, box, baseline=baseline)
         criteria_block = "\n".join(f"- {c}" for c in criteria)
         judge_messages = [
             {
@@ -1348,7 +1366,9 @@ class VerificationService:
             }
         return verdict
 
-    async def _judge_file_context(self, written_paths: list[str], box: SandboxSession) -> str:
+    async def _judge_file_context(
+        self, written_paths: list[str], box: SandboxSession, *, baseline: str | None = None
+    ) -> str:
         """Build file context for the judge.
 
         Strategy — git diff first, blob fallback:
@@ -1357,9 +1377,21 @@ class VerificationService:
            file size. A function modified at line 500 of a 1000-line file IS
            visible in the diff but invisible to an 8 KB blob read from the
            file start. A valid diff always contains "diff --git" or "@@ ".
-        2. **blob fallback**: used when git diff is unavailable (non-git
-           sandbox, new file with no prior commit). Reads from the file start
-           up to ``_JUDGE_FILE_CONTEXT_BYTES``.
+
+           The range is ``baseline..HEAD`` — where the tree stood when the run
+           STARTED. It used to be ``HEAD~1 HEAD``, which is only the agent's
+           LAST commit: an agent loop commits per turn, so everything built in
+           an earlier commit rendered as 0 bytes and the judge rejected work it
+           could not see (prod run abe9e2b9 — the new 147-LOC module and the
+           rewritten gate test were both 0 B; only the file touched by the last
+           commit was visible, and it was the incidental one).
+
+           With no baseline the diff is SKIPPED rather than guessed: a wrong
+           revision range fails silently as "this file did not change".
+        2. **blob fallback**: used when there is no baseline, git diff is
+           unavailable (non-git sandbox), or the file is new with no prior
+           commit. Reads from the file start up to
+           ``_JUDGE_FILE_CONTEXT_BYTES``.
 
         Truncation markers — whenever content is clipped (per-file byte cap or
         the total 12 KB budget), a ``[... TRUNCATED ...]`` sentinel is appended
@@ -1373,10 +1405,10 @@ class VerificationService:
         )
 
         diff_parts: list[str] = []
-        for path in written_paths[:5]:
+        for path in written_paths[:5] if baseline else []:
             try:
                 result = await box.exec(
-                    f"git -C {box.workspace_mount} diff HEAD~1 HEAD -- {path}",
+                    f"git -C {box.workspace_mount} diff {baseline} HEAD -- {path}",
                     timeout_s=10.0,
                     shell=True,
                 )
