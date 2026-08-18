@@ -221,6 +221,43 @@ async def _h_deny(args: SafeModeDenyInput, ctx: ToolContext) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_safe_mode_deny_run — the RUN-scoped twin (MCP↔REST parity).
+# Safe Mode is a per-Run transactional container (B12a): a multi-artifact run
+# leaves one queue row per partial. Item-scoped deny alone left every row the
+# founder did not individually name pending forever.
+# ---------------------------------------------------------------------------
+class SafeModeDenyRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: uuid.UUID
+    reason: str = Field("", max_length=2000)
+
+
+class SafeModeRunActionOutput(_Output):
+    run_id: str
+    denied_count: int
+
+
+async def _h_deny_run(args: SafeModeDenyRunInput, ctx: ToolContext) -> Any:
+    queue = SafeModeQueue(ctx.session)
+    pending = await queue.list_pending_for_run(
+        workspace_id=ctx.principal.workspace_id, run_id=args.run_id
+    )
+    if not pending:
+        raise ToolError(f"no pending Safe Mode items for run {args.run_id}")
+    denied = 0
+    for item in pending:
+        if await queue.deny(
+            workspace_id=ctx.principal.workspace_id,
+            item_id=item.id,
+            actor_id=ctx.principal.user_id,
+            reason=args.reason,
+        ):
+            denied += 1
+    await ctx.session.commit()
+    return SafeModeRunActionOutput(run_id=str(args.run_id), denied_count=denied)
+
+
+# ---------------------------------------------------------------------------
 # bsvibe_safe_mode_get / bsvibe_safe_mode_set — the workspace mode toggle.
 # L3 (#5) — MCP parity for the Settings → General Safe / Auto control. Safe
 # (True) holds every deliverable for approval; Auto (False) auto-dispatches
@@ -300,6 +337,23 @@ def register_safe_mode_tools(registry: ToolRegistry) -> None:
             handler=_h_deny,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.safe_mode_deny.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_safe_mode_deny_run",
+            description=(
+                "Deny EVERY pending Safe Mode item for one run, with an optional "
+                "reason recorded on each. Safe Mode is a per-run transaction — "
+                "denying item-by-item leaves the rest of the run pending forever. "
+                "Leave the reason EMPTY for housekeeping: a blank reason is not "
+                "captured as a teaching signal."
+            ),
+            input_schema=SafeModeDenyRunInput,
+            output_schema=SafeModeRunActionOutput,
+            handler=_h_deny_run,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.safe_mode_deny_run.invoked",
         )
     )
     registry.register(

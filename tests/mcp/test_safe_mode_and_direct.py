@@ -277,6 +277,39 @@ async def test_safe_mode_deny_flips_state(db, workspace_id, user_id, registry, s
     assert out["status"] == "denied"
 
 
+async def test_safe_mode_deny_run_settles_every_item(db, workspace_id, user_id, registry) -> None:
+    """MCP↔REST parity — 런 단위 거절. 항목 단위만 있으면 형님이 직접 지목하지
+    않은 행이 영원히 대기한다(prod 46건 중 35건이 그 모양이었다)."""
+    import uuid as _uuid
+
+    from backend.workflow.application.safe_mode_queue import SafeModeQueue
+
+    run_id = _uuid.uuid4()
+    async with db() as s:
+        q = SafeModeQueue(s)
+        for _ in range(3):
+            await q.enqueue(workspace_id=workspace_id, deliverable_id=_uuid.uuid4(), run_id=run_id)
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                scopes=("mcp:read", "mcp:write"),
+            ),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_safe_mode_deny_run", {"run_id": str(run_id), "reason": ""}, ctx
+        )
+        assert out["denied_count"] == 3
+        listed = await registry.call_tool(
+            "bsvibe_safe_mode_list_pending", {"run_id": str(run_id)}, ctx
+        )
+    assert listed["total"] == 0, "런 단위 거절 후에도 대기가 남았다"
+
+
 async def test_safe_mode_approve_requires_write_scope(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
