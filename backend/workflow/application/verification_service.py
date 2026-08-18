@@ -459,6 +459,20 @@ class VerificationService:
         # ``_run_derived_gate``), so the same coverage generalises across stacks.
         # The agent's declared checks stay as its advisory attestation.
 
+        # A DECLARATION IS REQUIRED. Retrieved knowledge may ride a contract the
+        # agent's own declaration made usable (it becomes the Delivery Report's
+        # 참고지식 chips), but it must never be the thing that makes a contract
+        # EXIST — otherwise a run that declared nothing is graded against
+        # somebody else's criteria instead of routing to the caller's
+        # ``no_verification_declared`` Decision and asking.
+        #
+        # prod 전수 (2026-08): all 85 judge rejections graded criteria whose
+        # rationale was RETRIEVED_KNOWLEDGE_RATIONALE — none came from a judge
+        # the agent staked itself; and all 61 judge-ONLY rejections were runs
+        # that declared no commands at all.
+        if not checks:
+            return None
+
         if self._retriever is not None:
             signals = (final_text + "\n" + "\n".join(written_paths)).strip()
             # Retrieve STRUCTURED so each folded statement carries its identity
@@ -649,22 +663,22 @@ class VerificationService:
                 True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
             )
         elif retrieved_criteria:
-            # No agent judge — only the retriever fold. Lift E39/F6: when the
-            # agent's command attestation already passed, the retriever judge is
-            # ADVISORY (it reliably hallucinates against weak / unrelated criteria
-            # + a truncated file view — skip it, don't flip a clean command-passed
-            # run to FAILED). Otherwise it is the only verdict signal, so grade it.
-            if command_results and all_cmd_pass:
-                judge_blob = {"advisory": True, "skipped": "advisory_retrieval_only"}
-            else:
-                await self._release_connection(run)
-                judge_blob = await self._run_judge(
-                    retrieved_criteria, written_paths, final_text, box
-                )
-                # cannot_determine → pass (same as gating path).
-                judge_pass = (
-                    True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
-                )
+            # No agent judge — only the retriever fold, which is ADVISORY
+            # UNCONDITIONALLY. It is similarity output, not a criterion anyone
+            # declared: it reliably hallucinates against weak / unrelated
+            # criteria + a truncated file view.
+            #
+            # It used to be graded whenever the commands FAILED ("otherwise it is
+            # the only verdict signal"). But a run whose command already failed
+            # is already rejected — grading it a second time against undeclared
+            # criteria only adds a rejection nobody can act on, which is what
+            # drove the 13.2-rejections-per-run judge loop (prod 전수 2026-08:
+            # 61 of 66 judge-only rejections, across 3 runs).
+            #
+            # A run that declared NOTHING no longer reaches here at all —
+            # ``assemble_contract`` returns None so the caller raises the
+            # ``no_verification_declared`` Decision and asks the founder.
+            judge_blob = {"advisory": True, "skipped": "advisory_retrieval_only"}
 
         # I1′ — the repo's OWN gate, DERIVED by an LLM grounded in the repo's
         # manifests (the general replacement for the hardcoded quality bar +
