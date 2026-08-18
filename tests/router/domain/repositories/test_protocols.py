@@ -76,8 +76,11 @@ def test_application_layer_decoupled_from_sqlalchemy_for_router_repos() -> None:
       or ``session.get(RunRoutingRuleRow, ...)`` (the RunRoutingRuleRepository
       covers list / get / delete).
     * ``backend/workflow/application/agent_runner.py`` no longer issues
-      ``select(RunRoutingRuleRow)`` (the RunRoutingRuleRepository.has_any
-      gate covers the Workflow→Router cross-reference).
+      ``select(RunRoutingRuleRow)``. It no longer consults routing rules at
+      all: the design→impl chaining gate that used to read them was removed
+      (a rule row's EXISTENCE must not double as the pipeline's feature flag),
+      so the Workflow→Router cross-reference is gone rather than routed
+      through a Protocol.
     * ``backend/workflow/infrastructure/workers/run.py`` no longer issues
       ``select(ModelAccount)`` (the ModelAccountRepository.list_active_for_workspace
       covers the run resolver's roster fetch).
@@ -96,7 +99,7 @@ def test_application_layer_decoupled_from_sqlalchemy_for_router_repos() -> None:
 
     agent_runner = (repo_root / "backend/workflow/application/agent_runner.py").read_text()
     assert "select(RunRoutingRuleRow" not in agent_runner, (
-        "agent_runner.py should use RunRoutingRuleRepository.has_any now"
+        "agent_runner.py must not query routing rules — it no longer consults them"
     )
 
     run_worker = (repo_root / "backend/workflow/infrastructure/workers/run.py").read_text()
