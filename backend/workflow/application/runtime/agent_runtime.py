@@ -20,7 +20,7 @@ time — rather than any full-run wrapper.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -52,13 +52,16 @@ from backend.workflow.application.knowledge_orchestrator import KnowledgeAnswerO
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import (
     product_dispatch_config,
-    product_is_client_attach,
     resolve_via_caller,
 )
 from backend.workflow.application.runtime.dispatcher import _ResolverFrameLlm
 from backend.workflow.application.runtime.sandbox_selection import (
     resolve_sandbox_manager,
     sandbox_manager_for_run,
+)
+from backend.workflow.application.runtime.workspace_provisioning import (
+    _build_composite_workspace_provisioner,
+    _product_workspace_provisioner,
 )
 from backend.workflow.application.stages.frame import FrameLlm
 from backend.workflow.domain.client_worktree import client_run_worktree
@@ -68,50 +71,6 @@ from backend.workflow.infrastructure.sandbox import SandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps
 
 logger = structlog.get_logger(__name__)
-
-
-async def _product_workspace_provisioner(
-    session: AsyncSession,
-    run: ExecutionRun,
-    workspace_dir: Path,
-) -> bool:
-    """W1: provision the run's workspace_dir as a git worktree of the product's
-    main branch, restoring the product repo from its durable bundle if it is not
-    on disk."""
-    if run.product_id is None:
-        return False
-
-    from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
-        add_run_worktree,
-        ensure_or_init_product_workspace,
-    )
-
-    await ensure_or_init_product_workspace(run.product_id)
-    if workspace_dir.exists() and not any(workspace_dir.iterdir()):  # noqa: ASYNC240
-        workspace_dir.rmdir()  # noqa: ASYNC240
-    await add_run_worktree(run.product_id, run.id)
-    return True
-
-
-def _build_composite_workspace_provisioner(
-    *,
-    github: Callable[[AsyncSession, ExecutionRun, Path], Awaitable[None]],
-    product: Callable[[AsyncSession, ExecutionRun, Path], Awaitable[bool]],
-) -> Callable[[AsyncSession, ExecutionRun, Path], Awaitable[None]]:
-    """Compose the two W1 provisioners in priority order. #692 — SKIPPED for a
-    ``client_attach`` product: both put its source into a server-side worktree,
-    and local execution means it stays on the user's machine."""
-
-    async def _composed(session: AsyncSession, run: ExecutionRun, workspace_dir: Path) -> None:
-        if run.product_id is not None and await product_is_client_attach(session, run.product_id):
-            logger.info("client_attach_server_workspace_skipped", run_id=str(run.id))
-            return
-        await github(session, run, workspace_dir)
-        if not workspace_dir.exists() or any(workspace_dir.iterdir()):  # noqa: ASYNC240
-            return
-        await product(session, run, workspace_dir)
-
-    return _composed
 
 
 def _is_knowledge_only(run: ExecutionRun) -> bool:
@@ -391,9 +350,7 @@ def build_agent_execution_deps(
 
 
 __all__ = [
-    "_build_composite_workspace_provisioner",
     "_frame_skill_hint",
     "_is_knowledge_only",
-    "_product_workspace_provisioner",
     "build_agent_execution_deps",
 ]

@@ -153,6 +153,7 @@ def test_legacy_run_module_is_thin_shim() -> None:
         "delivery_runtime.py",
         "worker_runtime.py",
         "lifecycle.py",
+        "workspace_provisioning.py",
     ],
 )
 def test_runtime_module_under_400_loc(module_filename: str) -> None:
