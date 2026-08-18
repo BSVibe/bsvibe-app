@@ -40,18 +40,32 @@ def current_output_language() -> str:
 
 
 def language_directive(language: str | None = None) -> str:
-    """The system-prompt suffix that makes the model write prose in the workspace
-    language. Empty for English (the default) so it adds nothing to the prompt.
+    """The system-prompt suffix that makes the model write prose in the USER's
+    language — the workspace setting, whatever it is.
 
     Pass ``language`` to override the contextvar (e.g. when the site already has
     the workspace language in hand); otherwise the contextvar is used.
+
+    Two properties this must hold, both learned from prod (2026-08-18):
+
+    * **No language is an exception, including the default.** English used to
+      return ``""`` — "zero prompt overhead". But zero prompt is not zero
+      instruction: it left an English workspace's model free to answer in any
+      language. The workspace language is a user SETTING; English is one of its
+      values, not the absence of one.
+    * **Naming a language is not enough — leaving it must be forbidden.** 12
+      August runs produced turns that mixed the workspace language with
+      Japanese, one of them reaching a founder-visible deliverable summary.
+      Every such turn ALSO contained the workspace language, so the directive
+      was reaching the model; it simply never said "and do not switch". A long
+      tool-heavy generation wanders unless told not to.
     """
     lang = (language or current_output_language() or _DEFAULT).strip() or _DEFAULT
-    if lang == _DEFAULT:
-        return ""
     name = _LANGUAGE_NAME.get(lang, lang)
     return (
         f"\n\nWrite all user-facing prose (titles, summaries, questions, note "
-        f"bodies, explanations) in {name}. Keep code, identifiers, file paths, "
-        f"and shell commands unchanged."
+        f"bodies, explanations) in {name} ONLY. Do not switch to another "
+        f"language part-way through a response, and do not mix languages within "
+        f"one — if you catch yourself drifting, continue in {name}. Keep code, "
+        f"identifiers, file paths, and shell commands unchanged."
     )
