@@ -326,7 +326,10 @@ async def test_assemble_contract_carries_structured_knowledge_refs() -> None:
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=StubLlm([]), retriever=retriever)
         contract = await svc.assemble_contract(
-            declared_contract=None, written_paths=["db.py"], final_text="chose a database"
+            # The refs ride a contract the agent's declaration made usable.
+            declared_contract={"checks": [{"kind": "command", "command": "true"}]},
+            written_paths=["db.py"],
+            final_text="chose a database",
         )
         assert contract is not None
         judge = contract.judge_checks[0]
@@ -354,16 +357,44 @@ async def test_assemble_contract_carries_structured_knowledge_refs() -> None:
         ]
 
 
-async def test_assemble_contract_canon_only_when_no_declared() -> None:
-    """A non-native caller passes declared_contract=None; canon alone still
-    yields a contract (mirrors the native retriever fold)."""
+async def test_retrieved_canon_never_stands_in_for_a_declaration() -> None:
+    """Retrieved knowledge must NOT make a contract "usable" on its own.
+
+    The founder's design is: the agent declares how the work will be verified,
+    then that declaration is executed. When the agent declared NOTHING, that is
+    a DECLARATION FAILURE — the caller must route to the existing
+    ``no_verification_declared`` Decision and ask. Folding similarity-retrieved
+    statements in and grading against them substitutes somebody else's criteria
+    for the agent's, which is not a verification at all.
+
+    prod 전수 (2026-08): every one of August's 85 judge rejections graded
+    criteria whose rationale was ``Canonical patterns retrieved for this
+    change`` — ZERO came from a judge the agent staked itself. All 61
+    judge-ONLY rejections (3 runs) happened on runs that declared no commands,
+    i.e. exactly the path this test closes."""
     retriever = StubRetriever(["follow the existing logging convention"])
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=StubLlm([]), retriever=retriever)
         contract = await svc.assemble_contract(
             declared_contract=None, written_paths=["x.py"], final_text="done"
         )
+        assert contract is None
+
+
+async def test_retrieved_canon_still_rides_a_real_declaration() -> None:
+    """The retriever fold is NOT deleted — it still rides a contract that the
+    agent's own declaration made usable, so the Delivery Report keeps its
+    참고지식 chips. It just cannot be the thing that makes a contract exist."""
+    retriever = StubRetriever(["follow the existing logging convention"])
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]), retriever=retriever)
+        contract = await svc.assemble_contract(
+            declared_contract={"checks": [{"kind": "command", "command": "true"}]},
+            written_paths=["x.py"],
+            final_text="done",
+        )
         assert contract is not None
+        assert len(contract.command_checks) == 1
         assert len(contract.judge_checks) == 1
 
 
@@ -413,7 +444,10 @@ async def test_real_factory_retriever_folds_canon_into_contract(tmp_path: Any) -
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=StubLlm([]), retriever=retriever)
         contract = await svc.assemble_contract(
-            declared_contract=None,
+            # A declaration is REQUIRED for a contract to exist; the canon rides
+            # it. Passing None here would (correctly) yield None and test nothing
+            # about the fold.
+            declared_contract={"checks": [{"kind": "command", "command": "true"}]},
             written_paths=["requirements.txt"],
             final_text="updated dependency pinning in the lockfile",
         )
@@ -663,6 +697,53 @@ async def test_verify_retriever_added_judge_is_advisory_when_command_passes() ->
         judge_blob = vr.result["judge"]
         assert judge_blob is not None
         assert judge_blob.get("advisory") is True
+        assert judge_blob.get("skipped") == "advisory_retrieval_only"
+        assert "passed" not in judge_blob
+
+
+async def test_retrieved_judge_is_never_graded_even_when_commands_fail() -> None:
+    """The retriever judge is ADVISORY unconditionally — not just when the
+    commands happened to pass.
+
+    Before: ``if command_results and all_cmd_pass`` skipped it, so a run whose
+    command FAILED also got graded by similarity-retrieved criteria and could be
+    rejected a second time for a reason nobody declared. That second rejection
+    is noise on top of an already-failing run, and it is what drove the
+    13.2-rejections-per-run judge loop.
+
+    StubLlm([]) raises if a judge call is made, so this proves the judge is not
+    invoked at all."""
+    async with memory_session() as session:
+        run = await _make_run(session)
+        work_step, attempt = await _make_step_and_attempt(session, run)
+        contract = VerificationContract(
+            checks=(
+                VerificationCheck(kind="command", command="false"),
+                VerificationCheck(
+                    kind="judge",
+                    criteria=("Verification", "Git"),
+                    rationale=RETRIEVED_KNOWLEDGE_RATIONALE,
+                ),
+            )
+        )
+        svc = VerificationService(session=session, llm=StubLlm([]))
+        box = FakeBox(
+            exec_map={
+                "false": SandboxResult(exit_code=1, stdout="", stderr="boom", timed_out=False)
+            }
+        )
+        vr = await svc.verify(
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            contract=contract,
+            box=box,
+            written_paths=[],
+            final_text="",
+        )
+        # The command failure is the verdict — honestly, on its own.
+        assert vr.outcome is VerificationOutcome.FAILED
+        judge_blob = vr.result["judge"]
         assert judge_blob.get("skipped") == "advisory_retrieval_only"
         assert "passed" not in judge_blob
 
