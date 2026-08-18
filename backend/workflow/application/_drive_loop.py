@@ -207,14 +207,16 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     # the worker, so the server never sees written_paths and holds no copy of the
     # source. Resolved once here; consumed at the "model is done" branch below.
     client_attach = await is_client_attach_run(orch._session, run)
-    # Where the tree stood BEFORE the agent touched it — the only moment this is
-    # knowable, since the agent's own commits then move HEAD. Two consumers:
-    #   * the in-place gate diffs against it to tell the deriver what changed;
-    #   * the JUDGE diffs against it to see the whole run. It used to read
-    #     ``HEAD~1 HEAD``, i.e. only the agent's LAST commit, so work built in an
-    #     earlier turn was invisible and got rejected as unverifiable.
-    # Captured for EVERY run now, not just in-place ones: a sandbox run is a
-    # clone whose HEAD is equally unrecoverable once the agent commits.
+    # Where the tree stood BEFORE the agent touched it — knowable only here, since
+    # the agent's commits then move HEAD. Two consumers: the in-place gate, and the
+    # JUDGE (which read ``HEAD~1 HEAD`` — only the agent's LAST commit — so work
+    # built in an earlier turn was invisible and got rejected as unverifiable).
+    # Captured for EVERY run: a sandbox clone's HEAD is equally unrecoverable.
+    # COMMIT FIRST — ``flush()`` and the read above leave a transaction open, and
+    # this is an EXTERNAL sandbox call; holding a pooled connection across it is
+    # the #632/#686/#680 outage shape (proven by test_session_release.py's
+    # 1-connection parking test).
+    await orch._session.commit()
     run_baseline = await capture_inplace_baseline(box)
     inplace_baseline = run_baseline if getattr(box, "runs_in_place", False) else None
 
