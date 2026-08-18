@@ -459,3 +459,132 @@ async def test_safe_mode_set_requires_write_scope(db, workspace_id, user_id, reg
         )
         with pytest.raises(Exception, match="requires scope"):
             await registry.call_tool("bsvibe_safe_mode_set", {"safe_mode": False}, ctx)
+
+
+# ---------------------------------------------------------------------------
+# MCP↔REST 승인 파리티 — 거절만 런 단위였다
+# ---------------------------------------------------------------------------
+
+
+class _HandleDispatcher(_StubDeliveryDispatcher):
+    """A dispatcher whose successful action carries a compensation handle —
+    the token retract later needs to revert the delivery."""
+
+    async def dispatch(self, *, workspace_id, deliverable_id, artifact_type):
+        from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+
+        self.calls.append(
+            {
+                "workspace_id": workspace_id,
+                "deliverable_id": deliverable_id,
+                "artifact_type": artifact_type,
+            }
+        )
+        return DeliveryResult(
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type=artifact_type,
+            actions=[
+                ActionResult(
+                    action=f"stub:outbound:{artifact_type}",
+                    succeeded=True,
+                    output={"compensation_handle": {"kind": "stub", "id": "h-1"}},
+                )
+            ],
+        )
+
+
+async def test_safe_mode_approve_run_settles_and_dispatches_every_item(
+    db, workspace_id, user_id, registry
+) -> None:
+    """#769 가 거절 쪽에서 고친 누수가 승인 쪽 MCP 에 그대로 있었다.
+
+    REST 는 처음부터 ``approve_run`` 을 가졌는데(B12a) MCP 에는 항목 단위 승인밖에
+    없었다. 멀티아티팩트 런은 partial N 개 → 큐 N 행이므로, MCP 로 승인하면 한 행만
+    닫히고 **나머지는 어떤 알림도 지목하지 않아 도달 자체가 불가능**해진다.
+    """
+    run_id = uuid.uuid4()
+    dispatcher = _HandleDispatcher()
+    async with db() as s:
+        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
+        await s.flush()
+        run = ExecutionRun(
+            id=run_id,
+            workspace_id=workspace_id,
+            product_id=None,
+            status=RunStatus.RUNNING,
+            payload={},
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        s.add(run)
+        await s.flush()
+        queue = SafeModeQueue(s)
+        for _ in range(3):
+            deliverable = Deliverable(
+                id=uuid.uuid4(),
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.DIRECT_OUTPUT,
+                payload={},
+            )
+            s.add(deliverable)
+            await s.flush()
+            await queue.enqueue(
+                workspace_id=workspace_id, deliverable_id=deliverable.id, run_id=run_id
+            )
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                scopes=("mcp:read", "mcp:write"),
+            ),
+            session=s,
+            extras={"delivery_dispatcher": dispatcher},
+        )
+        out = await registry.call_tool("bsvibe_safe_mode_approve_run", {"run_id": str(run_id)}, ctx)
+        listed = await registry.call_tool(
+            "bsvibe_safe_mode_list_pending", {"run_id": str(run_id)}, ctx
+        )
+
+    assert out["approved_count"] == 3
+    assert out["dispatched_count"] == 3
+    assert listed["total"] == 0, "런 단위 승인 후에도 대기가 남았다 — 도달 불가능한 행이다"
+    assert len(dispatcher.calls) == 3, "승인만 하고 디스패치를 안 했다"
+
+
+async def test_mcp_approve_persists_the_compensation_handle(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """MCP 승인이 보상 핸들을 저장해야 철회가 가능하다.
+
+    REST(``mutations.py``)·텔레그램(``approval_callback.py``)·딜리버리 워커는 전부
+    디스패치 직후 ``persist_compensation_handles`` 를 부른다. MCP 만 안 불렀다 —
+    그래서 **MCP 로 승인한 딜리버러블은 되돌릴 수 없었다.** 디스패치는 성공하고
+    ``dispatched=True`` 를 돌려주므로 겉으로는 아무 문제가 없어 보인다.
+    """
+    dispatcher = _HandleDispatcher()
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                scopes=("mcp:read", "mcp:write"),
+            ),
+            session=s,
+            extras={"delivery_dispatcher": dispatcher},
+        )
+        out = await registry.call_tool("bsvibe_safe_mode_approve", {"item_id": str(seeded)}, ctx)
+        assert out["dispatched"] is True
+        deliverable_id = dispatcher.calls[0]["deliverable_id"]
+
+    async with db() as s:
+        row = await s.get(Deliverable, deliverable_id)
+        assert row is not None
+        handles = list(row.compensation_handles or [])
+    assert handles, "MCP 승인이 보상 핸들을 저장하지 않았다 — 철회가 불가능해진다"
+    assert handles[0]["handle"] == {"kind": "stub", "id": "h-1"}
