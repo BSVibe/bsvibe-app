@@ -92,6 +92,7 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         ("GET", "/queue/by-run"),
         ("GET", "/resolved"),
         ("POST", "/runs/{run_id}/approve"),
+        ("POST", "/runs/{run_id}/deny"),
         ("POST", "/{item_id}/approve"),
         ("POST", "/{item_id}/deny"),
     },

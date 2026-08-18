@@ -58,6 +58,21 @@ class SafeModeRunApproveResponse(BaseModel):
     dispatched_count: int
 
 
+class SafeModeRunDenyResponse(BaseModel):
+    """``POST /api/v1/safemode/runs/{run_id}/deny`` result — the deny twin of
+    :class:`SafeModeRunApproveResponse`.
+
+    Safe Mode is a per-RUN transaction, so deny must be reachable at the same
+    granularity as approve. Without this route the founder could approve a whole
+    run in one call but had to deny it item-by-item — and every item they did not
+    name stayed pending forever."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: uuid.UUID
+    denied_count: int
+
+
 class SafeModeResolvedResponse(BaseModel):
     """One decided Safe-Mode delivery (the Decisions "Resolved" tab, delivery
     side). ``status`` is the terminal outcome (approved / denied / expired);
