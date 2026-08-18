@@ -139,36 +139,64 @@ def test_legacy_run_module_is_thin_shim() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Delta 4: each new runtime/ module ≤400 LOC
+# Delta 4: every runtime/ module ≤400 LOC  (auto-discovery — §17.2 invariant)
 # ---------------------------------------------------------------------------
+#
+# The parametrize list is built by scanning the runtime/ directory at collection
+# time, so any new module is gated automatically without a manual registration.
+#
+# Explicit known-debt registry: modules that already exceeded 400 LOC before
+# this auto-discovery gate was introduced.  Each entry carries the LOC count
+# and a decomposition note so the debt is visible and trackable.  Entries are
+# validated by test_runtime_module_loc_debt_documented below — when a file is
+# decomposed the companion test fails, prompting removal of the debt entry.
+#
+# Debt inventory (2026-08-18):
+#   product_bootstrap_runtime.py — 1157 LOC: bootstrap orchestration god-file;
+#   candidate for Lift A v3 decomposition.
 
-
-@pytest.mark.parametrize(
-    "module_filename",
-    [
-        "dispatcher.py",
-        "account_resolution.py",
-        "agent_runtime.py",
-        "settle_runtime.py",
-        "delivery_runtime.py",
-        "worker_runtime.py",
-        "lifecycle.py",
-        "workspace_provisioning.py",
-    ],
+_RUNTIME_DIR = (
+    Path(__file__).resolve().parents[2] / "backend" / "workflow" / "application" / "runtime"
 )
-def test_runtime_module_under_400_loc(module_filename: str) -> None:
-    """Each new runtime/ module is ≤400 LOC (audit §17.2 invariant)."""
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "backend"
-        / "workflow"
-        / "application"
-        / "runtime"
-        / module_filename
+
+_LOC_DEBT: dict[str, str] = {
+    # 1157 LOC (2026-08-18): product-bootstrap orchestration; Lift A v3 candidate.
+    "product_bootstrap_runtime.py": "1157 LOC — product bootstrap god-file; Lift A v3",
+}
+
+
+def _runtime_module_filenames() -> list[str]:
+    return sorted(
+        p.name
+        for p in _RUNTIME_DIR.glob("*.py")
+        if p.name != "__init__.py" and p.name not in _LOC_DEBT
     )
+
+
+@pytest.mark.parametrize("module_filename", _runtime_module_filenames())
+def test_runtime_module_under_400_loc(module_filename: str) -> None:
+    """Each runtime/ module is ≤400 LOC (audit §17.2 invariant)."""
+    path = _RUNTIME_DIR / module_filename
     assert path.exists(), f"{module_filename} not created"
     loc = path.read_text(encoding="utf-8").count("\n")
     assert loc <= 400, f"runtime/{module_filename} is {loc} LOC (must be ≤400)"
+
+
+@pytest.mark.parametrize("module_filename,description", sorted(_LOC_DEBT.items()))
+def test_runtime_module_loc_debt_documented(module_filename: str, description: str) -> None:
+    """Confirms each _LOC_DEBT entry still exceeds 400 LOC.
+
+    When a debt file is decomposed below 400 LOC this test fails — a reminder
+    to remove the entry from _LOC_DEBT and let the file rejoin the main gate.
+    """
+    path = _RUNTIME_DIR / module_filename
+    assert path.exists(), f"debt entry {module_filename!r} no longer exists — remove it"
+    loc = path.read_text(encoding="utf-8").count("\n")
+    assert loc > 400, (
+        f"{module_filename} is now {loc} LOC (≤400) — decomposition complete; "
+        f"remove from _LOC_DEBT and let it rejoin test_runtime_module_under_400_loc.  "
+        f"Stale debt description was: {description!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
