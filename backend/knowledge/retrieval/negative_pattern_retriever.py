@@ -102,6 +102,16 @@ class NegativePatternRetriever:
             fm = extract_frontmatter(content)
             if fm.get("kind") != _NEGATIVE_KIND:
                 continue
+            # Retraction tombstone (Lift M3a). Retraction rewrites the note IN
+            # PLACE — the file survives for provenance — so every reader has to
+            # check, and this one did not. prod 2026-08-18: a rejection reason
+            # recorded by mistake was retracted, the tombstone was written, the
+            # SEARCH path honoured it, and a run two hours later still received
+            # it as a judge criterion. Without this check the founder cannot
+            # withdraw a wrong rejection: the ratchet has no undo and the bad
+            # teaching grades every future run forever.
+            if fm.get("retracted_at"):
+                continue
             reason = str(fm.get("reason") or "").strip()
             if not reason:
                 continue
