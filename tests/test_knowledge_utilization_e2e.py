@@ -233,7 +233,12 @@ async def test_accumulated_knowledge_is_used_by_verify_e2e(tmp_path: Path) -> No
             retriever = _production_retriever(s, settings=settings, workspace_id=workspace_id)
             service = VerificationService(session=s, llm=_NoopJudge(), retriever=retriever)
             contract = await service.assemble_contract(
-                declared_contract=None,
+                # A declaration is REQUIRED for a contract to exist (#773) — retrieved
+                # knowledge rides it as Delivery-Report references, but may never
+                # stand in for a verification the agent never declared. This test's
+                # subject is the RETRIEVAL end-to-end, so it supplies the declaration
+                # and asserts the knowledge folded in on top.
+                declared_contract={"checks": [{"kind": "command", "command": "true"}]},
                 written_paths=["backend/api/search.py"],
                 final_text="add request throttling to the search endpoint",
             )

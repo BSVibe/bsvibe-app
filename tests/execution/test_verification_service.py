@@ -207,6 +207,42 @@ def test_demonstration_planner_forbids_absolute_paths_and_cd() -> None:
     assert "absolute" in system.lower()
 
 
+# --------------------------------------------------------------------------
+# _judge_file_context — the judge must see THE WHOLE RUN, not the last commit
+# --------------------------------------------------------------------------
+
+
+async def test_judge_diff_spans_the_whole_run_not_just_the_last_commit() -> None:
+    """``git diff HEAD~1 HEAD`` shows only the agent's LAST commit.
+
+    An agent loop commits per turn, so everything created in an earlier commit
+    renders as 0 bytes — the judge then rejects with "실제 파일 내용을 검증할 수
+    없습니다" while the file plainly exists (prod run abe9e2b9: the new 147-LOC
+    module and the rewritten gate test were both 0 B to the judge; only the file
+    touched by the last commit was visible).
+
+    Given the run's baseline the diff must span baseline..HEAD."""
+    box = FakeBox()
+    svc = VerificationService(session=None, llm=StubLlm([]))  # type: ignore[arg-type]
+    await svc._judge_file_context(["a.py"], box, baseline="basesha")
+    diffs = [c for c in box.exec_calls if " diff " in c]
+    assert diffs, "the judge context must attempt a diff"
+    assert all("HEAD~1" not in c for c in diffs), f"HEAD~1 hides every commit but the last: {diffs}"
+    assert any("basesha HEAD" in c for c in diffs), diffs
+
+
+async def test_judge_context_without_a_baseline_does_not_guess_a_range() -> None:
+    """No baseline (not a git tree / unknowable) → do NOT fall back to a WRONG
+    window. Reading the files themselves is honest; a wrong revision range is
+    not, and it fails silently as "the file did not change"."""
+    box = FakeBox(files={"a.py": b"print('hi')\n"})
+    svc = VerificationService(session=None, llm=StubLlm([]))  # type: ignore[arg-type]
+    out = await svc._judge_file_context(["a.py"], box, baseline=None)
+    assert all("HEAD~1" not in c for c in box.exec_calls), box.exec_calls
+    # It still shows the judge something real — the file blob.
+    assert "print('hi')" in out
+
+
 # assemble_contract
 # --------------------------------------------------------------------------
 
@@ -807,7 +843,7 @@ async def test_verify_retrieved_knowledge_excluded_from_gating_judge() -> None:
         )
         seen: dict[str, list[str]] = {}
 
-        async def _fake_judge(criteria, written_paths, final_text, box):  # noqa: ANN001, ANN202
+        async def _fake_judge(criteria, written_paths, final_text, box, baseline=None):  # noqa: ANN001, ANN202
             seen["criteria"] = list(criteria)
             return {"passed": True}
 
@@ -1590,7 +1626,7 @@ async def test_run_judge_uses_git_diff_when_available() -> None:
     )
     box = FakeBox(
         exec_map={
-            "git -C /workspace diff HEAD~1 HEAD -- backend/big.py": SandboxResult(
+            "git -C /workspace diff basesha HEAD -- backend/big.py": SandboxResult(
                 exit_code=0, stdout=fake_diff, stderr="", timed_out=False
             )
         },
@@ -1604,6 +1640,7 @@ async def test_run_judge_uses_git_diff_when_available() -> None:
             written_paths=["backend/big.py"],
             final_text="added new_func",
             box=box,
+            baseline="basesha",
         )
     # read_file was NOT called — diff was used instead of file blob.
     assert "backend/big.py" not in box.read_calls
@@ -1619,7 +1656,7 @@ async def test_run_judge_falls_back_to_file_blobs_when_no_valid_diff() -> None:
     Existing test behaviour for non-product / non-git sandboxes is preserved."""
     box = FakeBox(
         exec_map={
-            "git -C /workspace diff HEAD~1 HEAD -- hello.txt": SandboxResult(
+            "git -C /workspace diff basesha HEAD -- hello.txt": SandboxResult(
                 exit_code=128, stdout="", stderr="not a git repo", timed_out=False
             )
         },
@@ -1684,7 +1721,7 @@ async def test_judge_file_context_truncation_marker_on_large_diff() -> None:
 
     box = FakeBox(
         exec_map={
-            "git -C /workspace diff HEAD~1 HEAD -- big.py": SandboxResult(
+            "git -C /workspace diff basesha HEAD -- big.py": SandboxResult(
                 exit_code=0, stdout=big_diff, stderr="", timed_out=False
             )
         },
@@ -1697,6 +1734,7 @@ async def test_judge_file_context_truncation_marker_on_large_diff() -> None:
             written_paths=["big.py"],
             final_text="",
             box=box,
+            baseline="basesha",
         )
     user_msg = llm.calls[-1]["messages"][-1]["content"]
     import backend.workflow.application.verification_service as _svc_mod
