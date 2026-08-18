@@ -429,8 +429,10 @@ class RunOrchestrator:
         box: SandboxSession,
         written_paths: list[str],
         final_text: str,
+        baseline: str | None = None,
     ) -> VerificationResult:
         return await self._verifier().verify(
+            baseline=baseline,
             run=run,
             work_step=work_step,
             attempt=attempt,

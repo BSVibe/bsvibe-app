@@ -506,6 +506,7 @@ class VerificationService:
         box: SandboxSession,
         written_paths: list[str],
         final_text: str,
+        baseline: str | None = None,
     ) -> VerificationResult:
         """Run the contract's command + judge checks, persist a
         :class:`VerificationResult` (PASS = all commands pass AND the judge
@@ -657,7 +658,9 @@ class VerificationService:
             # an otherwise-good agent judge; dogfood dd2bd3a3). They still surface
             # as Delivery-Report references via the persisted contract.
             await self._release_connection(run)
-            judge_blob = await self._run_judge(gating_criteria, written_paths, final_text, box)
+            judge_blob = await self._run_judge(
+                gating_criteria, written_paths, final_text, box, baseline
+            )
             # cannot_determine → pass: judge uncertainty must not override command evidence.
             judge_pass = (
                 True if judge_blob.get("cannot_determine") else bool(judge_blob.get("passed"))
@@ -1303,8 +1306,9 @@ class VerificationService:
         written_paths: list[str],
         final_text: str,
         box: SandboxSession,
+        baseline: str | None = None,
     ) -> dict[str, Any]:
-        work_block = await self._judge_file_context(written_paths, box)
+        work_block = await self._judge_file_context(written_paths, box, baseline=baseline)
         criteria_block = "\n".join(f"- {c}" for c in criteria)
         judge_messages = [
             {
@@ -1362,7 +1366,9 @@ class VerificationService:
             }
         return verdict
 
-    async def _judge_file_context(self, written_paths: list[str], box: SandboxSession) -> str:
+    async def _judge_file_context(
+        self, written_paths: list[str], box: SandboxSession, *, baseline: str | None = None
+    ) -> str:
         """Build file context for the judge.
 
         Strategy — git diff first, blob fallback:
@@ -1371,9 +1377,21 @@ class VerificationService:
            file size. A function modified at line 500 of a 1000-line file IS
            visible in the diff but invisible to an 8 KB blob read from the
            file start. A valid diff always contains "diff --git" or "@@ ".
-        2. **blob fallback**: used when git diff is unavailable (non-git
-           sandbox, new file with no prior commit). Reads from the file start
-           up to ``_JUDGE_FILE_CONTEXT_BYTES``.
+
+           The range is ``baseline..HEAD`` — where the tree stood when the run
+           STARTED. It used to be ``HEAD~1 HEAD``, which is only the agent's
+           LAST commit: an agent loop commits per turn, so everything built in
+           an earlier commit rendered as 0 bytes and the judge rejected work it
+           could not see (prod run abe9e2b9 — the new 147-LOC module and the
+           rewritten gate test were both 0 B; only the file touched by the last
+           commit was visible, and it was the incidental one).
+
+           With no baseline the diff is SKIPPED rather than guessed: a wrong
+           revision range fails silently as "this file did not change".
+        2. **blob fallback**: used when there is no baseline, git diff is
+           unavailable (non-git sandbox), or the file is new with no prior
+           commit. Reads from the file start up to
+           ``_JUDGE_FILE_CONTEXT_BYTES``.
 
         Truncation markers — whenever content is clipped (per-file byte cap or
         the total 12 KB budget), a ``[... TRUNCATED ...]`` sentinel is appended
@@ -1387,10 +1405,10 @@ class VerificationService:
         )
 
         diff_parts: list[str] = []
-        for path in written_paths[:5]:
+        for path in written_paths[:5] if baseline else []:
             try:
                 result = await box.exec(
-                    f"git -C {box.workspace_mount} diff HEAD~1 HEAD -- {path}",
+                    f"git -C {box.workspace_mount} diff {baseline} HEAD -- {path}",
                     timeout_s=10.0,
                     shell=True,
                 )

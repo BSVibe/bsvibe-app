@@ -207,12 +207,16 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     # the worker, so the server never sees written_paths and holds no copy of the
     # source. Resolved once here; consumed at the "model is done" branch below.
     client_attach = await is_client_attach_run(orch._session, run)
-    # Where the founder's tree stood BEFORE the agent touched it — the only
-    # moment this is knowable, since the agent's own commits then move HEAD. The
-    # in-place gate diffs against it to tell the deriver what actually changed.
-    inplace_baseline = (
-        await capture_inplace_baseline(box) if getattr(box, "runs_in_place", False) else None
-    )
+    # Where the tree stood BEFORE the agent touched it — the only moment this is
+    # knowable, since the agent's own commits then move HEAD. Two consumers:
+    #   * the in-place gate diffs against it to tell the deriver what changed;
+    #   * the JUDGE diffs against it to see the whole run. It used to read
+    #     ``HEAD~1 HEAD``, i.e. only the agent's LAST commit, so work built in an
+    #     earlier turn was invisible and got rejected as unverifiable.
+    # Captured for EVERY run now, not just in-place ones: a sandbox run is a
+    # clone whose HEAD is equally unrecoverable once the agent commits.
+    run_baseline = await capture_inplace_baseline(box)
+    inplace_baseline = run_baseline if getattr(box, "runs_in_place", False) else None
 
     for _cycle in range(orch._max_cycles):
         # Cooperative cancel — stop at the turn boundary if the run was cancelled
@@ -463,6 +467,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             box=box,
             written_paths=written_paths,
             final_text=final_text,
+            baseline=run_baseline,
         )
         await orch._audit(
             run,
