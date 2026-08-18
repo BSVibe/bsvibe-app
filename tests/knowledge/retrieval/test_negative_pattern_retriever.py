@@ -165,3 +165,62 @@ async def test_negative_pattern_cap(vault_root: Path, workspace_id: str) -> None
     factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
     statements = await factory.retriever().retrieve_for_signals("payment settings")
     assert 0 < len(statements) <= 10
+
+
+async def _retract_note(vault_root: Path, *, region: str, workspace_id: str) -> None:
+    """Stamp the retraction tombstone the way ``GardenWriter`` does — the note
+    file survives (provenance) and gains ``retracted_at`` in its frontmatter."""
+    ws_root = vault_root / region / workspace_id
+    for note in (ws_root / "garden").rglob("*.md"):
+        raw = note.read_text(encoding="utf-8")
+        if "kind: negative_pattern" not in raw:
+            continue
+        assert raw.startswith("---")
+        end = raw.index("\n---", 3)
+        note.write_text(
+            raw[:end] + "\nretracted_at: '2026-08-18T03:21:21+00:00'" + raw[end:],
+            encoding="utf-8",
+        )
+
+
+async def test_retracted_rejection_stops_surfacing(vault_root: Path, workspace_id: str) -> None:
+    """철회한 거절은 다음 런의 검증 계약에 실리지 않아야 한다.
+
+    prod 2026-08-18: 테스트 프로브로 잘못 기록된 거절 사유(``probe``)를 철회했다.
+    tombstone 은 정상 기록됐고(``retracted_at``) 검색 경로는 그것을 존중했지만,
+    **이 리트리버는 안 봤다** — 2시간 뒤 런(``abe9e2b9``)의 판사 기준에 그 문장이
+    그대로 실렸다.
+
+    형제 리더 셋은 전부 검사한다 — ``decision_note_locator`` ·
+    ``answer_grounding`` · ``resolved_decisions_retriever``. 그 중 하나의
+    docstring 이 이유를 적어뒀다: *"Retraction rewrites the note in place; the
+    embedding index does not forget it, so every READER has to check."*
+
+    이것이 없으면 **형님이 잘못 내린 거절을 되돌릴 수 없다** — ratchet 에 undo 가
+    없어진다. 잘못된 가르침이 영원히 모든 런을 채점한다.
+    """
+    await _seed_negative_pattern_note(
+        vault_root,
+        region=_REGION,
+        workspace_id=workspace_id,
+        reason="never ship a payment change without a regression test",
+        intent_text="adjust the payment settings screen",
+    )
+    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    signal = "the founder wants to change the payment settings screen layout"
+
+    # 양성 대조 — 철회 전에는 반드시 떠야 한다. 이게 없으면 아래 단언은
+    # "원래 안 뜨는 것"을 통과로 읽는 공허한 검사가 된다.
+    before = await factory.retriever().retrieve_for_signals(signal)
+    assert any("regression test" in s.lower() for s in before), before
+
+    await _retract_note(vault_root, region=_REGION, workspace_id=workspace_id)
+
+    after = (
+        await KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+        .retriever()
+        .retrieve_for_signals(signal)
+    )
+    assert not any("regression test" in s.lower() for s in after), (
+        f"철회한 거절이 여전히 주입된다: {after}"
+    )
