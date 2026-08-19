@@ -79,17 +79,21 @@ async def test_narrate_writes_in_the_workspace_language(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_narrate_english_workspace_has_no_language_directive(monkeypatch) -> None:
-    """The default (``en``) adds nothing — an English workspace pays zero prompt
-    overhead (the directive is empty)."""
+async def test_narrate_english_workspace_is_told_to_write_english(monkeypatch) -> None:
+    """An English workspace gets an ENGLISH directive — not an empty one.
+
+    It used to get nothing ("zero prompt overhead"), which is not zero
+    instruction: nothing told the model to stay in the user's language, and prod
+    turns drifted into a third language mid-response."""
     chat = _StubChat("Added a helper.")
     svc = ReportNarrativeService.__new__(ReportNarrativeService)
     monkeypatch.setattr(svc, "_resolve_chat", lambda workspace_id: _ready(chat))
 
     await svc.narrate(workspace_id=uuid.uuid4(), intent="x", summary="y", diff=None, language="en")
     system = next(m["content"] for m in chat.seen[0] if m["role"] == "system")
+    assert "Write all user-facing prose" in system
+    assert "English" in system
     assert "Korean" not in system
-    assert "Write all user-facing prose" not in system
 
 
 @pytest.mark.asyncio

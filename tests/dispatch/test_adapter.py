@@ -92,14 +92,21 @@ class TestLiteLLMAdapter:
         assert response.usage_prompt_tokens == 4
         assert response.usage_completion_tokens == 1
         kwargs = mock_completion.call_args.kwargs
-        assert kwargs["messages"][0] == {"role": "system", "content": "be terse"}
+        # The system prompt is the caller's, plus the output-language directive
+        # (which now applies to EVERY workspace language, English included).
+        assert kwargs["messages"][0]["role"] == "system"
+        assert kwargs["messages"][0]["content"].startswith("be terse")
         assert kwargs["messages"][1] == {"role": "user", "content": "hi"}
 
     async def test_chat_appends_output_language_directive(self) -> None:
-        """#6 — when the workspace output language is set (via the contextvar the
-        resolver stamps), chat() appends a 'write prose in <lang>' directive to
-        the system prompt so generated prose follows the workspace language.
-        English (the default) appends nothing."""
+        """#6 — chat() appends a 'write prose in <lang>' directive to the system
+        prompt so generated prose follows the workspace language (stamped on the
+        contextvar by the resolver).
+
+        English is NOT an exception. It used to append nothing — "zero prompt
+        overhead" — but zero prompt is not zero instruction: it left an English
+        workspace's model free to answer in any language. The workspace language
+        is a user setting; English is one of its values."""
         from backend.identity.output_language import set_output_language
 
         account = _stub_account()
@@ -126,7 +133,10 @@ class TestLiteLLMAdapter:
 
             set_output_language("en")
             await adapter.chat(system="be terse", messages=[{"role": "user", "content": "hi"}])
-            assert mock_completion.call_args.kwargs["messages"][0]["content"] == "be terse"
+            en_sys = mock_completion.call_args.kwargs["messages"][0]["content"]
+            assert en_sys.startswith("be terse")
+            assert "English" in en_sys
+            assert "Korean" not in en_sys
         finally:
             set_output_language("en")
 
