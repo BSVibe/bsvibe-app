@@ -44,7 +44,6 @@ from backend.workflow.application._loop_context import (
     _intent_title,
     _is_design_stage,
     _resumption_messages,
-    ask_directive_message,
     design_directive_message,
     design_seed_message,
     knowledge_seed_message,
@@ -262,9 +261,6 @@ class RunOrchestrator:
 
     def _design_directive_message(self, run: ExecutionRun) -> dict[str, Any] | None:
         return design_directive_message(run)
-
-    def _ask_directive_message(self, run: ExecutionRun) -> dict[str, Any] | None:
-        return ask_directive_message(run)
 
     def _design_seed_message(self, run: ExecutionRun) -> dict[str, Any] | None:
         return design_seed_message(run, settings=self._settings)

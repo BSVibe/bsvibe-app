@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from backend.workflow.application._loop_context import (
-    _SYSTEM_PROMPT,
     _consume_merge_conflict,
     _initial_user_message,
     _intent_title,
@@ -25,6 +24,7 @@ from backend.workflow.application._loop_context import (
     _resumption_messages,
     is_client_attach_run,
     settle_client_attach,
+    system_prompt_for,
 )
 from backend.workflow.application.audit_events import (
     DecisionPending,
@@ -168,7 +168,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         EMIT_DELIVERABLE_TOOL,
     ]
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt_for(run)},
         _initial_user_message(run),
     ]
     # B6 — seed canon relevant to the run intent.
@@ -181,10 +181,6 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     # D1b — DESIGN stage of a design_then_impl pipeline: spec-only.
     if (design_directive := orch._design_directive_message(run)) is not None:
         messages.append(design_directive)
-    # ASK — the DIRECTIVE, not a withheld tool, is what keeps a question from
-    # shipping a diff (prod ff1615e8).
-    if (ask_directive := orch._ask_directive_message(run)) is not None:
-        messages.append(ask_directive)
     # B9a — frame-matched skill hint.
     if (skill_hint := orch._suggested_skill_message()) is not None:
         messages.append(skill_hint)

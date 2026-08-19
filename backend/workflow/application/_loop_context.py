@@ -22,7 +22,7 @@ from backend.config import Settings
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
 from backend.workflow.application.agent_briefing import (
-    _ASK_ANSWER_DIRECTIVE,
+    _ASK_SYSTEM_PROMPT,
     _DESIGN_SPEC_DIRECTIVE,
     _SYSTEM_PROMPT,
 )
@@ -217,18 +217,16 @@ def _is_ask(run: ExecutionRun) -> bool:
     return frame.get("path_classification") == "knowledge_only"
 
 
-def ask_directive_message(run: ExecutionRun) -> dict[str, Any] | None:
-    """Seed the answer-don't-build directive when this run is an ASK.
+def system_prompt_for(run: ExecutionRun) -> str:
+    """The identity this run works under — investigator for an ASK, engineer
+    otherwise.
 
-    An ASK now takes the SAME tool-surface seam as any other run (the separate
-    tool-less orchestrator is gone), so the instruction — not the tool list — is
-    what keeps a question from shipping a diff. ``None`` for a PRODUCE run or a
-    run with no frame (loop unchanged), exactly like
-    :func:`design_directive_message`."""
-    if not _is_ask(run):
-        return None
-    logger.info("ask_directive_seeded", run_id=str(run.id))
-    return {"role": "system", "content": _ASK_ANSWER_DIRECTIVE}
+    Selecting the prompt (rather than appending a retraction to it) is what
+    #778 got wrong: prod ``fae09a47`` kept the engineer identity, received the
+    "do not change the product" directive, and edited four files anyway. A run
+    with no frame keeps the engineer prompt — a missing classification must
+    never silently downgrade a build into an investigation."""
+    return _ASK_SYSTEM_PROMPT if _is_ask(run) else _SYSTEM_PROMPT
 
 
 def design_seed_message(run: ExecutionRun, *, settings: Settings) -> dict[str, Any] | None:
@@ -441,9 +439,9 @@ def client_attach_terminal(
 
 
 __all__ = [
-    "_ASK_ANSWER_DIRECTIVE",
+    "_ASK_SYSTEM_PROMPT",
     "_DESIGN_SPEC_DIRECTIVE",
-    "ask_directive_message",
+    "system_prompt_for",
     "_RetrieverSearcher",
     "_SYSTEM_PROMPT",
     "_initial_user_message",

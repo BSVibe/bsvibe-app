@@ -230,8 +230,9 @@ def build_agent_execution_deps(
         # Withholding tools was never the right lever, because whether a question
         # needs the repo is not knowable before the work — the agent finds out by
         # looking. So every run takes this one seam and gets the same surface.
-        # What separates an answer from a code change is the ASK directive seeded
-        # into the loop (``_loop_context.ask_directive_message``), which also
+        # What separates an answer from a code change is the IDENTITY the run
+        # works under (``_loop_context.system_prompt_for``) — an ASK is briefed
+        # as an investigator, never as an engineer who changes files. That also
         # guards the OPPOSITE prod failure: ``ff1615e8`` ("현 프로젝트 상황
         # 설명해줘") reached the loop and SHIPPED an unrelated diff.
         #
