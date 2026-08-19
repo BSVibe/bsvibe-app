@@ -88,29 +88,42 @@ _DESIGN_SPEC_DIRECTIVE = (
 )
 
 
-# An ASK run used to be answered by a SEPARATE orchestrator holding NO tools, so
-# it could not open the repo and answered from the ontology alone — prod
-# `c40c513d` opened its own deliverable with "코드를 직접 열람한 것이 아님을 먼저
-# 밝힙니다" and left three of four questions unanswered. A starved agent does not
-# fail; it guesses. So the tools are no longer withheld: an ASK takes the same
-# tool-surface seam as any other run.
+# An ASK run gets a DIFFERENT identity, not the engineer's identity plus a
+# retraction. #778 tried the retraction: it kept ``_SYSTEM_PROMPT`` ("You are an
+# autonomous engineer … Use the tools to inspect and CHANGE FILES") and appended
+# a "do not change the product" directive after it.
 #
-# That reopens the OTHER prod failure — `ff1615e8` ("현 프로젝트 상황 설명해줘")
-# reached the loop and SHIPPED an unrelated diff. Tools cannot separate those two
-# runs; only the instruction can. Hence this directive: read whatever you need,
-# change nothing. The write tools stay refused by their own gate (B7) because a
-# run under this directive never declares a contract.
-_ASK_ANSWER_DIRECTIVE = (
-    "THIS IS A QUESTION, NOT A BUILD. Answer it — do NOT change the product. "
-    "Do not call declare_verification, file_write, or file_edit, and do not "
-    "leave any file different from how you found it; a diff is never the answer "
-    "to a question. Use file_read, file_list, shell_exec, and knowledge_search "
-    "as much as you need: read the actual files before you claim anything about "
-    "them. Ground every claim in what you read — cite the concrete file and line "
-    "you saw it in. If you could not verify something, say so plainly rather "
-    "than inferring it; an honest gap is useful and a confident guess is not. "
-    "When you are done, stop calling tools and reply with the answer itself."
+# prod `fae09a47` measured the result. The directive was genuinely attached
+# (``ask_directive_seeded``) and the founder's own instruction said "파일은 하나도
+# 쓰지 마라" — and the run still edited four files and committed them (+108 −2):
+# while investigating it found a real defect and implemented the fix, tests
+# included. It did not disobey out of laziness. It was faithful to WHO WE SAID
+# IT WAS, and a later sentence does not undo an identity.
+#
+# So the contradiction is removed rather than argued with. An investigation is a
+# first-class job here, described in its own terms — which is also why nothing
+# below mentions ``declare_verification``: a run that changes nothing has
+# nothing to declare, and naming the write workflow at all invites the write.
+_ASK_SYSTEM_PROMPT = (
+    "You are an investigator answering a question about a codebase you have "
+    "full read access to. Answering IS the job — finishing well means the "
+    "person who asked now knows something they did not, with the evidence to "
+    "check it. "
+    "Read whatever you need: file_read, file_list, shell_exec, and "
+    "knowledge_search are all available, and you are expected to use them "
+    "heavily rather than answer from memory or inference. Open the actual files "
+    "before you make any claim about them, and cite the concrete file and line "
+    "you saw it in. "
+    "You will very likely notice something that could be improved, or even a "
+    "real defect. Report it — do NOT fix it. Do not use file_write or "
+    "file_edit, do not create files, and do not leave any file different from "
+    "how you found it. A diff is never the answer to a question, and a fix "
+    "nobody asked for costs the person their review time. Describing precisely "
+    "what is wrong and where is worth more here than changing it. "
+    "If you could not verify something, say so plainly instead of inferring it "
+    "— an honest gap is useful and a confident guess is not. When you have the "
+    "answer, stop calling tools and reply with the answer itself."
 )
 
 
-__all__ = ["_ASK_ANSWER_DIRECTIVE", "_DESIGN_SPEC_DIRECTIVE", "_SYSTEM_PROMPT"]
+__all__ = ["_ASK_SYSTEM_PROMPT", "_DESIGN_SPEC_DIRECTIVE", "_SYSTEM_PROMPT"]
