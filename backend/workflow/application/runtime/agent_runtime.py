@@ -34,11 +34,9 @@ from backend.config import Settings, get_settings
 from backend.dispatch.caller_registry import (
     CALLER_AGENT_LOOP_ACT,
     CALLER_FRAME,
-    CALLER_KNOWLEDGE_QUERY,
 )
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.skill.loader import SkillLoader
-from backend.knowledge.retrieval.answer_grounding import build_answer_retriever
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workflow.application.agent_loop import (
     CanonRetriever,
@@ -48,7 +46,6 @@ from backend.workflow.application.agent_loop import (
 from backend.workflow.application.delivery.connector_dispatch import (
     build_github_workspace_provisioner,
 )
-from backend.workflow.application.knowledge_orchestrator import KnowledgeAnswerOrchestrator
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import (
     product_dispatch_config,
@@ -222,38 +219,24 @@ def build_agent_execution_deps(
             else client_workspace_dir
         )
 
-        # L10 (#5) — Knowledge-only short-circuit (B9b): a ``knowledge_only`` ask
-        # is a CHAT answer, not engineering work — it MUST use a chat model, never
-        # the act-stage executor ([[bsvibe-executor-subprocess-too-heavy]]), and is
-        # resolved BEFORE act. CALLER_KNOWLEDGE_QUERY is the spec written FOR this
-        # site (90 s, the founder waits); it stood unwired behind FRAME's 300 s.
-        if _is_knowledge_only(run):
-            chat = await resolve_via_caller(
-                session,
-                caller_id=CALLER_KNOWLEDGE_QUERY,
-                workspace_id=run.workspace_id,
-                settings=settings,
-                redis=redis_client,
-                run_id=run.id,  # §C — a question routed to chat is worth seeing
-            )
-            if chat is None:
-                # A question with no chat model does NOT become work. Falling
-                # through to the act path would hand it to the coding executor —
-                # the misroute the frame stage exists to prevent. Decision + pause.
-                await resolve_workspace_model_account(session, run)
-                logger.info("knowledge_only_chat_unresolved", run_id=str(run.id))
-                return None
-            logger.info("knowledge_only_route", run_id=str(run.id))
-            return KnowledgeAnswerOrchestrator(
-                session=session,
-                llm=ResolverLoopLlm(adapter=chat.adapter),
-                # An ANSWER needs note CONTENT; the verify path's retriever carries
-                # only "Related note — <path>" pointers. Same builder as the inline
-                # /ask service, so both surfaces ground identically.
-                retriever=build_answer_retriever(
-                    session, settings=settings, workspace_id=run.workspace_id
-                ),
-            )
+        # An ASK no longer gets a SEPARATE, TOOL-LESS orchestrator. That
+        # short-circuit (B9b) answered from the ontology alone because it never
+        # took the tool-surface seam (``tool_registry.mcp_tool_names_for`` /
+        # ``RUN_TOOL_FORWARDING``, INV-7) — so prod ``c40c513d``, asked to
+        # "코드로 확인하고 근거 파일:라인을 대라", could not open a single file and
+        # GUESSED: its own deliverable opens with "코드를 직접 열람한 것이 아님을
+        # 먼저 밝힙니다". A starved agent does not fail; it invents.
+        #
+        # Withholding tools was never the right lever, because whether a question
+        # needs the repo is not knowable before the work — the agent finds out by
+        # looking. So every run takes this one seam and gets the same surface.
+        # What separates an answer from a code change is the ASK directive seeded
+        # into the loop (``_loop_context.ask_directive_message``), which also
+        # guards the OPPOSITE prod failure: ``ff1615e8`` ("현 프로젝트 상황
+        # 설명해줘") reached the loop and SHIPPED an unrelated diff.
+        #
+        # The cost saver survives on its own — an agent handed tools it does not
+        # need stops after one turn. Starving it was never what made it cheap.
 
         resolved = await resolve_via_caller(
             session,

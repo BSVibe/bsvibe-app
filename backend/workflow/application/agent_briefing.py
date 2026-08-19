@@ -88,4 +88,29 @@ _DESIGN_SPEC_DIRECTIVE = (
 )
 
 
-__all__ = ["_DESIGN_SPEC_DIRECTIVE", "_SYSTEM_PROMPT"]
+# An ASK run used to be answered by a SEPARATE orchestrator holding NO tools, so
+# it could not open the repo and answered from the ontology alone — prod
+# `c40c513d` opened its own deliverable with "코드를 직접 열람한 것이 아님을 먼저
+# 밝힙니다" and left three of four questions unanswered. A starved agent does not
+# fail; it guesses. So the tools are no longer withheld: an ASK takes the same
+# tool-surface seam as any other run.
+#
+# That reopens the OTHER prod failure — `ff1615e8` ("현 프로젝트 상황 설명해줘")
+# reached the loop and SHIPPED an unrelated diff. Tools cannot separate those two
+# runs; only the instruction can. Hence this directive: read whatever you need,
+# change nothing. The write tools stay refused by their own gate (B7) because a
+# run under this directive never declares a contract.
+_ASK_ANSWER_DIRECTIVE = (
+    "THIS IS A QUESTION, NOT A BUILD. Answer it — do NOT change the product. "
+    "Do not call declare_verification, file_write, or file_edit, and do not "
+    "leave any file different from how you found it; a diff is never the answer "
+    "to a question. Use file_read, file_list, shell_exec, and knowledge_search "
+    "as much as you need: read the actual files before you claim anything about "
+    "them. Ground every claim in what you read — cite the concrete file and line "
+    "you saw it in. If you could not verify something, say so plainly rather "
+    "than inferring it; an honest gap is useful and a confident guess is not. "
+    "When you are done, stop calling tools and reply with the answer itself."
+)
+
+
+__all__ = ["_ASK_ANSWER_DIRECTIVE", "_DESIGN_SPEC_DIRECTIVE", "_SYSTEM_PROMPT"]
