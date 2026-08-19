@@ -1,10 +1,16 @@
-"""B9b — Frame knowledge-only short-circuit ROUTING in the worker factory.
+"""Frame path ROUTING in the worker factory — every run takes ONE seam.
 
-B9a recorded ``run.payload["frame"]["path_classification"]`` but only the
-agent loop ran. B9b acts on it: a run framed ``knowledge_only`` (and a cheap LLM
-resolvable) routes to the :class:`KnowledgeAnswerOrchestrator` (one LLM call,
-answer from BSage, NO agent loop). An ``agent_loop`` run, or a knowledge-only run
-with no LLM, falls back to the native loop — never stranded.
+B9b used to short-circuit a ``knowledge_only`` run into the tool-less
+:class:`KnowledgeAnswerOrchestrator`. That bypass is GONE: it skipped the
+tool-surface seam (``tool_registry.RUN_TOOL_FORWARDING``, INV-7), so an ASK could
+not open a single file and answered by GUESSING — prod ``c40c513d`` was told to
+"코드로 확인하고 근거 파일:라인을 대라" and its deliverable opens with "코드를
+직접 열람한 것이 아님을 먼저 밝힙니다".
+
+Now EVERY run — ASK or PRODUCE — routes to the native :class:`RunOrchestrator`
+and gets the same tool surface. What keeps a question from shipping a diff is the
+ASK directive seeded into the loop (``tests/glue/test_ask_takes_the_tool_seam.py``),
+not a withheld tool list.
 
 These exercise the REAL production ``build_agent_execution_deps`` → ``_factory``
 routing, the gateway work-LLM stubbed at the :class:`LlmClient` boundary.
@@ -41,7 +47,6 @@ from backend.workflow.infrastructure.db import (
     DeliverableType,
     ExecutionRun,
     RunStatus,
-    VerificationResult,
 )
 from backend.workflow.infrastructure.intake.db import (
     RequestRow,
@@ -204,48 +209,44 @@ def _answer_turn() -> dict[str, Any]:
     return {"content": "The deployment policy is to ship via the gateway.", "tool_calls": []}
 
 
-async def test_knowledge_only_routes_to_knowledge_answer_no_loop(
+async def test_ask_run_takes_the_same_seam_as_any_other_run(
     sf: async_sessionmaker[AsyncSession],
     kms_key: None,
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A run framed ``knowledge_only`` → KnowledgeAnswerOrchestrator → ONE answer
-    LLM call (after the frame call), an ANSWER deliverable, REVIEW_READY — and
-    NO agent loop / sandbox / verify (no VerificationResult)."""
+    """A run framed ``knowledge_only`` gets the NATIVE loop, not a tool-less
+    orchestrator — so it can actually open the repo it is being asked about.
+
+    This is the ``c40c513d`` regression: the old short-circuit returned an
+    orchestrator holding no tools, and the agent answered from the ontology
+    alone. Withholding tools cannot be right, because whether a question needs
+    the repo is not knowable before the work.
+    """
     workspace_id = uuid.uuid4()
     await _seed_active_account(sf, workspace_id=workspace_id, account_id=uuid.uuid4())
 
     async with sf() as session:
-        run_id = await _seed_request_and_run(
-            session, workspace_id=workspace_id, text="what is our deploy policy?"
+        run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            product_id=None,
+            request_id=None,
+            status=RunStatus.RUNNING,
+            payload={
+                "intent_text": "코드로 확인하고 근거 파일:라인을 대라",
+                "frame": {"path_classification": "knowledge_only"},
+            },
         )
-        await session.commit()
+        session.add(run)
+        await session.flush()
 
-    # Frame call → knowledge_only; then exactly ONE answer completion. If the
-    # native loop ran it would request MORE turns and exhaust the script.
-    script = _ScriptedCompletion([_frame_turn("knowledge_only"), _answer_turn()])
-    _patch_scripted_llm(monkeypatch, script)
+        deps = runtime.build_agent_execution_deps(
+            settings=get_settings(), sandbox_manager=NoopSandboxManager()
+        )
+        orch = await deps.orchestrator_factory(session, run)
 
-    deps = runtime.build_agent_execution_deps(
-        settings=get_settings(), sandbox_manager=NoopSandboxManager()
-    )
-    deps.workspace_root = tmp_path
-    agent = AgentWorker(session_factory=sf, execution=deps)
-    assert await agent.drive_once() == 1
-
-    # Exactly two completions total: frame + answer (the cost saver).
-    assert script.count == 2
-
-    async with sf() as s:
-        run = await s.get(ExecutionRun, run_id)
-        assert run is not None
-        assert run.status is RunStatus.REVIEW_READY
-        deliverable = (await s.execute(select(Deliverable))).scalar_one()
-        assert deliverable.deliverable_type is DeliverableType.DIRECT_OUTPUT
-        assert deliverable.payload.get("kind") == KNOWLEDGE_ANSWER_KIND
-        # Honest: no verification ran (no agent loop / sandbox / verify).
-        assert (await s.execute(select(VerificationResult))).first() is None
+        assert isinstance(orch, RunOrchestrator)
+        assert not isinstance(orch, KnowledgeAnswerOrchestrator)
 
 
 async def test_agent_loop_path_is_unchanged(
@@ -316,16 +317,11 @@ async def test_factory_routes_executor_account_even_when_knowledge_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Lift E3 — the factory no longer special-cases executor accounts; the
-    knowledge_only path applies uniformly.
+    """The factory special-cases NOTHING — neither executor accounts (Lift E3)
+    nor the frame's path classification (this change).
 
-    The historical invariant ("executor → ExecutorOrchestrator regardless of
-    path_classification") was a side-effect of the bypass branch that Lift E3
-    deleted. Today an executor account behaves like any other account: the
-    knowledge_only classification routes to :class:`KnowledgeAnswerOrchestrator`,
-    and its underlying chat call lands on
-    :class:`backend.dispatch.adapter.ExecutorAdapter` because the resolver
-    handed back an executor adapter.
+    Both bypasses are gone for the same reason: each let a run skip the seam
+    that defines what it may do. What remains is one path for every run.
     """
     workspace_id = uuid.uuid4()
     await _seed_active_account(
@@ -351,9 +347,10 @@ async def test_factory_routes_executor_account_even_when_knowledge_only(
             settings=get_settings(), sandbox_manager=NoopSandboxManager()
         )
         orch = await deps.orchestrator_factory(session, run)
-        # Lift E3 — knowledge_only short-circuits before any orchestrator
-        # specialization, so an executor account routes here too.
-        assert isinstance(orch, KnowledgeAnswerOrchestrator)
+        # There is no path-based specialization left at all: an executor account
+        # framed ``knowledge_only`` lands on the SAME native loop as everything
+        # else, reaching its CLI one chat turn at a time through ExecutorAdapter.
+        assert isinstance(orch, RunOrchestrator)
 
 
 async def test_knowledge_only_without_llm_falls_back_to_loop(

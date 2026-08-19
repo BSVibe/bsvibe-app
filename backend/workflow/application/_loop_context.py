@@ -22,6 +22,7 @@ from backend.config import Settings
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
 from backend.workflow.application.agent_briefing import (
+    _ASK_ANSWER_DIRECTIVE,
     _DESIGN_SPEC_DIRECTIVE,
     _SYSTEM_PROMPT,
 )
@@ -203,6 +204,31 @@ def design_directive_message(run: ExecutionRun) -> dict[str, Any] | None:
         return None
     logger.info("design_directive_seeded", run_id=str(run.id))
     return {"role": "system", "content": _DESIGN_SPEC_DIRECTIVE}
+
+
+def _is_ask(run: ExecutionRun) -> bool:
+    """True when the frame judged this run an ASK (a question), not a PRODUCE.
+
+    Reads the same ``path_classification`` the frame already records — this adds
+    no second source and no new prediction. Tolerant of an odd payload."""
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    raw_frame = payload.get("frame")
+    frame = raw_frame if isinstance(raw_frame, dict) else {}
+    return frame.get("path_classification") == "knowledge_only"
+
+
+def ask_directive_message(run: ExecutionRun) -> dict[str, Any] | None:
+    """Seed the answer-don't-build directive when this run is an ASK.
+
+    An ASK now takes the SAME tool-surface seam as any other run (the separate
+    tool-less orchestrator is gone), so the instruction — not the tool list — is
+    what keeps a question from shipping a diff. ``None`` for a PRODUCE run or a
+    run with no frame (loop unchanged), exactly like
+    :func:`design_directive_message`."""
+    if not _is_ask(run):
+        return None
+    logger.info("ask_directive_seeded", run_id=str(run.id))
+    return {"role": "system", "content": _ASK_ANSWER_DIRECTIVE}
 
 
 def design_seed_message(run: ExecutionRun, *, settings: Settings) -> dict[str, Any] | None:
@@ -415,7 +441,9 @@ def client_attach_terminal(
 
 
 __all__ = [
+    "_ASK_ANSWER_DIRECTIVE",
     "_DESIGN_SPEC_DIRECTIVE",
+    "ask_directive_message",
     "_RetrieverSearcher",
     "_SYSTEM_PROMPT",
     "_initial_user_message",

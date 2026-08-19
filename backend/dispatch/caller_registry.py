@@ -36,7 +36,6 @@ __all__ = [
     "CALLER_JUDGE",
     "CALLER_KNOWLEDGE_CANONICALIZATION",
     "CALLER_KNOWLEDGE_INGEST",
-    "CALLER_KNOWLEDGE_QUERY",
     "CALLER_SETTLE_EXTRACT",
     "KNOWN_CALLERS",
     "SKILL_CALLER_PREFIX",
@@ -101,8 +100,6 @@ class CallerSpec:
 
 #: Knowledge ingest's compile pass — :class:`backend.knowledge.ingest.ingest_compiler.IngestCompiler`.
 CALLER_KNOWLEDGE_INGEST = "knowledge.ingest"
-#: Knowledge query / answer orchestrator — single-turn QA over the workspace ontology.
-CALLER_KNOWLEDGE_QUERY = "knowledge.query"
 #: BSage canonicalization mutation extractor.
 CALLER_KNOWLEDGE_CANONICALIZATION = "knowledge.canonicalization"
 #: Frame stage — cheap completion that classifies the run + matches a skill.
@@ -143,18 +140,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
         # big-file chunks; 10 min covers them while still failing fast on
         # a genuinely stuck chunk.
         default_timeout_s=600.0,
-    ),
-    CALLER_KNOWLEDGE_QUERY: CallerSpec(
-        caller_id=CALLER_KNOWLEDGE_QUERY,
-        required_methods=frozenset({"chat"}),
-        description=(
-            "Knowledge query answerer — single chat call over the workspace "
-            "ontology when the frame classified the ask as knowledge_only."
-        ),
-        # 90 s — interactive query, founder is waiting for the answer.
-        # Small bump from the original 60 s so a slow first-token doesn't
-        # cancel a healthy query when the worker is under load.
-        default_timeout_s=90.0,
     ),
     CALLER_KNOWLEDGE_CANONICALIZATION: CallerSpec(
         caller_id=CALLER_KNOWLEDGE_CANONICALIZATION,

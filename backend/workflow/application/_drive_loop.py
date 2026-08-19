@@ -176,16 +176,17 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     if seed is not None:
         messages.append(seed)
     # P1-L2b — design→impl handoff: seed the prior design stage's spec.
-    design_seed = orch._design_seed_message(run)
-    if design_seed is not None:
+    if (design_seed := orch._design_seed_message(run)) is not None:
         messages.append(design_seed)
     # D1b — DESIGN stage of a design_then_impl pipeline: spec-only.
-    design_directive = orch._design_directive_message(run)
-    if design_directive is not None:
+    if (design_directive := orch._design_directive_message(run)) is not None:
         messages.append(design_directive)
+    # ASK — the DIRECTIVE, not a withheld tool, is what keeps a question from
+    # shipping a diff (prod ff1615e8).
+    if (ask_directive := orch._ask_directive_message(run)) is not None:
+        messages.append(ask_directive)
     # B9a — frame-matched skill hint.
-    skill_hint = orch._suggested_skill_message()
-    if skill_hint is not None:
+    if (skill_hint := orch._suggested_skill_message()) is not None:
         messages.append(skill_hint)
     # Resumption context (founder-resolved prior questions).
     messages.extend(_resumption_messages(run))

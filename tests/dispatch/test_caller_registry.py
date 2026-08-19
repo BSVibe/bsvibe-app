@@ -10,7 +10,6 @@ from backend.dispatch.caller_registry import (
     CALLER_JUDGE,
     CALLER_KNOWLEDGE_CANONICALIZATION,
     CALLER_KNOWLEDGE_INGEST,
-    CALLER_KNOWLEDGE_QUERY,
     CALLER_SETTLE_EXTRACT,
     KNOWN_CALLERS,
     SKILL_CALLER_PREFIX,
@@ -106,12 +105,6 @@ class TestPerCallerTimeout:
     def test_settle_extract_five_minutes(self) -> None:
         spec = KNOWN_CALLERS[CALLER_SETTLE_EXTRACT]
         assert spec.default_timeout_s == 300.0
-
-    def test_knowledge_query_ninety_seconds(self) -> None:
-        """Interactive query — founder is waiting; fail fast but small bump
-        from 60 s so a slow first-token doesn't cancel a healthy query."""
-        spec = KNOWN_CALLERS[CALLER_KNOWLEDGE_QUERY]
-        assert spec.default_timeout_s == 90.0
 
     def test_agent_loop_act_uses_settings_default(self) -> None:
         """Tool-emitting agent turn genuinely runs `claude --print` — leaves the
