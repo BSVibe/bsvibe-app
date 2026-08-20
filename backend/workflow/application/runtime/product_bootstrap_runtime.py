@@ -46,6 +46,7 @@ from backend.knowledge.facade import (
     IngestResult,
     Knowledge,
 )
+from backend.knowledge.retrieval.ingest_retriever import build_ingest_retriever
 from backend.products.application.bootstrap import (
     BootstrapProgress,
     BootstrapRepository,
@@ -512,6 +513,15 @@ def _build_bootstrap_knowledge_inner(
         compiler = IngestCompiler(
             garden_writer=factory.writer(),
             llm_client=llm,
+            # The compiler decides create-vs-update per chunk from what it can
+            # SEE of the existing vault. Unwired, ``find_related`` answered
+            # "No existing notes available." every time.
+            retriever=build_ingest_retriever(
+                settings=settings,
+                session_factory=session_factory,
+                region=region,
+                workspace_id=workspace_id,
+            ),
             canonicalization_service=canon_service,
             event_bus=bus,
             parallelism=settings.ingest_compile_parallelism,
