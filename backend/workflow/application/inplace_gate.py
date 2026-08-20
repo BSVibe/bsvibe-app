@@ -255,7 +255,7 @@ async def run_inplace_gate(
     # It does not: these commands run through the same box the derived gate uses.)
     declared = await _declared_checks(service, run, check_box)
 
-    gate = await service._author_derived_gate(intent, manifests, changed)
+    gate = await service._author_derived_gate(intent, manifests, changed, baseline)
 
     if isinstance(gate, DerivedGateFailed):
         # A manifest EXISTS, so a gate was expected here and we could not produce

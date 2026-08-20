@@ -699,7 +699,7 @@ class VerificationService:
         #   • DerivedGateFailed      — the deriver could NOT run. On a repo that HAS
         #                              a toolchain manifest this fails CLOSED.
         await self._release_connection(run)
-        gate_outcome = await self._run_derived_gate(run, box, written_paths)
+        gate_outcome = await self._run_derived_gate(run, box, written_paths, baseline)
         derived_gate = gate_outcome.blob if isinstance(gate_outcome, DerivedGateOk) else None
         deriver_failed = isinstance(gate_outcome, DerivedGateFailed)
 
@@ -905,7 +905,11 @@ class VerificationService:
         return manifests
 
     async def _author_derived_gate(
-        self, intent: str, manifests: dict[str, str], written_paths: list[str]
+        self,
+        intent: str,
+        manifests: dict[str, str],
+        written_paths: list[str],
+        baseline: str | None = None,
     ) -> DerivedGate | DerivedGateFailed:
         """Ask the independent deriver for this repo's verification commands,
         grounded in its manifests. Bounded — a hung executor CLI must never stall
@@ -921,7 +925,10 @@ class VerificationService:
             turn = await asyncio.wait_for(
                 self._llm.complete(
                     messages=derivation_planner_messages(
-                        manifests=manifests, changed_files=written_paths, intent=intent
+                        manifests=manifests,
+                        changed_files=written_paths,
+                        intent=intent,
+                        baseline=baseline,
                     ),
                     tools=None,
                 ),
@@ -935,7 +942,11 @@ class VerificationService:
         return parse_derived_gate(raw)
 
     async def _run_derived_gate(
-        self, run: ExecutionRun, box: SandboxSession, written_paths: list[str]
+        self,
+        run: ExecutionRun,
+        box: SandboxSession,
+        written_paths: list[str],
+        baseline: str | None = None,
     ) -> DerivedGateOutcome:
         """I1′ — the repo's OWN verification gate, DERIVED by an LLM grounded in
         the repo's declarations (not a per-stack detector list nor a hardcoded
@@ -960,7 +971,7 @@ class VerificationService:
         payload = run.payload or {}
         intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
         manifests = await self._read_repo_manifests(box)
-        gate = await self._author_derived_gate(intent, manifests, written_paths)
+        gate = await self._author_derived_gate(intent, manifests, written_paths, baseline)
         if isinstance(gate, DerivedGateFailed):
             return gate
         if not gate.applicable or gate.is_empty:

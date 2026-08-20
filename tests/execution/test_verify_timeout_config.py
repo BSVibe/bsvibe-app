@@ -83,7 +83,10 @@ async def test_derived_gate_uses_configured_gate_timeout(
     run = SimpleNamespace(product_id=uuid.uuid4(), payload={"intent_text": "do the thing"})
 
     async def _fake_author(
-        intent: str, manifests: dict[str, str], written_paths: list[str]
+        intent: str,
+        manifests: dict[str, str],
+        written_paths: list[str],
+        baseline: str | None = None,
     ) -> DerivedGate:
         return DerivedGate(
             applicable=True,

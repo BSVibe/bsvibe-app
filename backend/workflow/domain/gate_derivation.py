@@ -162,6 +162,14 @@ _DERIVATION_SYSTEM_PROMPT = (
     "script the repo itself defines for that purpose; its name or description usually "
     "says so. NEVER invent one: if the repo declares no such check, emit none, because "
     "a fabricated end-to-end command proves nothing and fails for the wrong reason.\n"
+    "CONSTRAINTS: the task intent often states not only what to build but what NOT "
+    "to do. Every such constraint is verifiable and must become its own command "
+    "whose EXIT CODE decides whether it held — exit 0 when the constraint was "
+    "respected, non-zero when it was violated. Read the intent for them; do not "
+    "expect a fixed set, since they are stated in ordinary language and are "
+    "therefore unbounded. When a baseline commit is given, anchor a constraint about what changed to THAT ref rather than to the working tree — the agent "
+    "commits as it works, so a check that only inspects uncommitted changes sees "
+    "almost nothing. Emit these as `kind:quality`.\n"
     "If the change is not something a command can verify (pure prose / design / a "
     'doc), set "applicable" to false and return no commands — that is a valid, '
     "honest answer; the judge and demonstration paths cover it.\n"
@@ -175,20 +183,32 @@ def derivation_planner_messages(
     manifests: dict[str, str],
     changed_files: list[str],
     intent: str,
+    baseline: str | None = None,
 ) -> list[dict[str, str]]:
     """Build the (system, user) message pair grounding the deriver in the repo.
 
     ``manifests`` maps a repo-relative path (pyproject.toml, package.json,
     Cargo.toml, Makefile, a CI workflow, …) to its content — ONLY the files that
-    actually exist, so the LLM cannot ground on a manifest the repo lacks."""
+    actually exist, so the LLM cannot ground on a manifest the repo lacks.
+
+    ``baseline`` is where the tree stood before the run touched it. Offered so a
+    constraint check can be anchored to it; OMITTED entirely when unknown rather
+    than invented, since a check against a ref that does not exist fails for the
+    wrong reason."""
     manifest_block = (
         "\n\n".join(f"=== {path} ===\n{content}" for path, content in manifests.items())
         if manifests
         else "(no manifests / build config found in this repo)"
     )
     changed_block = "\n".join(changed_files) if changed_files else "(no files changed)"
+    baseline_block = (
+        f"Baseline commit (where the tree stood before this run):\n{baseline}\n\n"
+        if baseline
+        else ""
+    )
     user = (
         f"Task intent:\n{intent}\n\n"
+        f"{baseline_block}"
         f"Files changed by this work step:\n{changed_block}\n\n"
         f"The repository's own declarations:\n{manifest_block}"
     )
