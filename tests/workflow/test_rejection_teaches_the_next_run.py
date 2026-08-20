@@ -156,3 +156,85 @@ async def test_an_item_without_a_run_still_denies_cleanly() -> None:
 
         assert ok is True
         assert await _negatives(session) == []
+
+
+# ---------------------------------------------------------------------------
+# 거절이 **그 런에** 도달한다 (트랙 A-1c)
+#
+# A-1b 는 거절을 MIRAE 런을 위한 지식으로 만들었다. 정작 거절당한 런 자신은
+# 아무것도 못 듣는다 — Safe Mode 의 ``deny`` 는 런을 건드리지 않기 때문이다.
+# Decision 경로에는 그 링크가 이미 있다(``checkpoint_resolution``: RUNNING →
+# OPEN + 답변을 맥락에 접어 넣음). 실제 거절은 전부 Safe Mode 로 일어난다.
+#
+# 새 서브시스템이 아니라 링크 하나다: 기계는 이미 다 있다 —
+# ``payload["resolved_decisions"]`` 는 ``_resumption_messages`` 가 읽어 user
+# 메시지로 만들고, 상태 hop 은 ``ExecutionRunHistory`` 직접 쓰기 패턴이 있다.
+# ---------------------------------------------------------------------------
+
+
+async def _deny(session, ws, item, reason: str) -> bool:
+    return await SafeModeQueue(session).deny(
+        workspace_id=ws, item_id=item.id, actor_id=uuid.uuid4(), reason=reason
+    )
+
+
+async def test_a_denial_with_a_reason_reopens_the_run() -> None:
+    """RUNNING → OPEN so ``AgentWorker.drive_once`` (scans OPEN) re-picks it."""
+    async with memory_session() as session:
+        ws, run, item = await _run_and_item(session)
+        await _deny(session, ws, item, "이건 표면에서 막을 게 아니라 브리핑에서 막아야 한다")
+        await session.refresh(run)
+        assert run.status is RunStatus.OPEN
+
+
+async def test_the_reopened_run_actually_hears_the_reason() -> None:
+    """The load-bearing half. A resume that does not CARRY the rejection is a
+    run that wakes up and repeats the same work — so assert what the agent will
+    literally receive, not merely that a key was written."""
+    from backend.workflow.application._loop_context import _resumption_messages
+
+    async with memory_session() as session:
+        ws, run, item = await _run_and_item(session)
+        reason = "이건 표면에서 막을 게 아니라 브리핑에서 막아야 한다"
+        await _deny(session, ws, item, reason)
+        await session.refresh(run)
+
+        messages = _resumption_messages(run)
+        assert messages, "the reopened run seeds no founder feedback at all"
+        assert any(reason in str(m["content"]) for m in messages), messages
+
+
+async def test_a_reason_the_founder_did_not_write_is_never_invented() -> None:
+    """A blank reason teaches nothing (A-1a stores NULL rather than ""), so it
+    must not wake the run either — it would resume with no new information and
+    redo the identical work."""
+    async with memory_session() as session:
+        ws, run, item = await _run_and_item(session)
+        await _deny(session, ws, item, "   ")
+        await session.refresh(run)
+        assert run.status is RunStatus.RUNNING
+
+
+async def test_a_terminal_run_is_left_alone() -> None:
+    """A run that already ENDED has nowhere to resume to — reopening it would
+    re-run finished work, including its approval + delivery."""
+    async with memory_session() as session:
+        ws, run, item = await _run_and_item(session)
+        run.status = RunStatus.SHIPPED
+        await session.flush()
+        await _deny(session, ws, item, "늦었지만 이건 아니다")
+        await session.refresh(run)
+        assert run.status is RunStatus.SHIPPED
+
+
+async def test_the_hop_is_recorded_in_run_history() -> None:
+    """B4 trust integrity — every status hop leaves a row saying why."""
+    from backend.workflow.infrastructure.db import ExecutionRunHistory
+
+    async with memory_session() as session:
+        ws, run, item = await _run_and_item(session)
+        await _deny(session, ws, item, "이건 아니다")
+        rows = (await session.execute(select(ExecutionRunHistory))).scalars().all()
+        hops = [r for r in rows if r.run_id == run.id and r.to_status is RunStatus.OPEN]
+        assert len(hops) == 1
+        assert str(item.id) in (hops[0].reason or "")

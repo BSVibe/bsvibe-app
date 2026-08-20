@@ -396,7 +396,15 @@ describe("Knowledge surface (BSage graph)", () => {
     const panel = await screen.findByRole("complementary", { name: /concept/i });
     // BSage-style metadata: the node's TYPE (kind) is surfaced as a labelled
     // metadatum. The fixture node's kind is "concept" → humanized "Concept".
-    expect(within(panel).getByText("Type")).toBeInTheDocument();
+    //
+    // `findByText`, not `getByText`: the aside EXISTS the moment the node is
+    // clicked (it renders "Looking at this concept…" while the detail fetch is
+    // in flight), so `findByRole` resolves before any metadatum exists. A sync
+    // query here races that fetch — green on a fast machine, red on a loaded CI
+    // runner (measured: 5/5 local, failed on the #782 runner which touched no
+    // frontend code at all). The first assertion after a mount-time async fetch
+    // has to be the awaiting one; the rest can stay sync once it has landed.
+    expect(await within(panel).findByText("Type")).toBeInTheDocument();
     expect(within(panel).getByText("Concept")).toBeInTheDocument();
     // Lift E29 — community is labelled with the humanized form of the
     // backend's semantic community id (the same map the legend uses) so the

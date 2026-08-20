@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.common.settle_kinds import NEGATIVE_PATTERN_SETTLE_KIND
 from backend.workflow.domain.repositories import SafeModeQueueRepository
+from backend.workflow.infrastructure.db import RunStatus
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.repositories import SqlAlchemySafeModeQueueRepository
 
@@ -30,6 +32,12 @@ logger = structlog.get_logger(__name__)
 INITIAL_TTL_DAYS = 90
 EXTENSION_TTL_DAYS = 30
 MAX_EXTENSIONS = 2
+
+#: A run that already ENDED has nowhere to resume to — reopening it would re-run
+#: finished work, including its approval + delivery. Kept local for the same
+#: reason ``checkpoint_resolution`` keeps its own copy: the SET matches but the
+#: reason differs, and a shared constant would couple two unrelated decisions.
+_TERMINAL_RUN_STATUSES = frozenset({RunStatus.SHIPPED, RunStatus.FAILED, RunStatus.CANCELLED})
 
 
 class SafeModeQueue:
@@ -160,6 +168,7 @@ class SafeModeQueue:
             await self._record_rejection_knowledge(
                 workspace_id=workspace_id, item_id=item_id, actor_id=actor_id, reason=reason_text
             )
+            await self._reopen_run_with_the_reason(item_id=item_id, reason=reason_text)
         return flipped
 
     async def _record_rejection_knowledge(
@@ -219,6 +228,72 @@ class SafeModeQueue:
                     "summary": f"Rejected approach — {reason}"[:2000],
                     **await settle_run_context(self._session, run),
                 },
+            )
+        )
+        await self._session.flush()
+
+    async def _reopen_run_with_the_reason(self, *, item_id: uuid.UUID, reason: str) -> None:
+        """A-1c — 거절을 **그 런에** 도달시킨다.
+
+        A-1b 는 거절을 미래 런을 위한 지식으로 만들었다. 정작 거절당한 런은 아무것도
+        못 듣는다 — Safe Mode 의 ``deny`` 가 런을 건드리지 않기 때문이다. 그 링크는
+        Decision 경로에만 있었고(``checkpoint_resolution``: RUNNING → OPEN + 답변을
+        맥락에 접어 넣음), **실제 거절은 전부 Safe Mode 로 일어난다.**
+
+        새 서브시스템이 아니라 **링크 하나**다. 기계는 이미 다 있다:
+        ``payload["resolved_decisions"]`` 를 ``_loop_context._resumption_messages`` 가
+        읽어 user 메시지로 만들고, OPEN 런은 ``AgentWorker.drive_once`` 가 다시 집는다.
+
+        접어 넣는 텍스트는 **형님이 직접 쓴 사유뿐**이다 — 딜리버러블 요약은 LLM
+        생성물이라 쓰지 않는다 (A-1b 와 같은 규율).
+
+        상태 hop 은 ``ExecutionRunHistory`` 직접 쓰기다. :class:`AgentRunner` 를
+        import 하면 run-engine 그래프 전체가 커넥터의 인바운드 콜백 경로로 끌려와
+        R2c(인바운드 레이어는 plugin-free) 를 깬다 — ``run_delivery_resolution`` 이
+        같은 이유로 같은 패턴을 쓴다.
+        """
+        import uuid as _uuid  # noqa: PLC0415
+
+        from backend.workflow.infrastructure.db import (  # noqa: PLC0415
+            ExecutionRun,
+            ExecutionRunHistory,
+        )
+
+        row = await self._repo.get(item_id)
+        if row is None or row.run_id is None:
+            return
+        run = await self._session.get(ExecutionRun, row.run_id)
+        if run is None or run.status in _TERMINAL_RUN_STATUSES:
+            # 이미 끝난 런은 재개할 곳이 없다 — 되살리면 승인·배달까지 다시 돈다.
+            return
+
+        # JSON 컬럼은 **재할당**해야 SQLAlchemy 가 변경을 감지한다 (in-place 변경은
+        # 조용히 유실된다 — ``checkpoint_resolution`` 이 같은 주의를 달아뒀다).
+        payload: dict[str, Any] = dict(run.payload or {})
+        resolved = list(payload.get("resolved_decisions") or [])
+        resolved.append(
+            {
+                "decision_id": str(item_id),
+                "question": "Approve delivering this run's result?",
+                "answer": f"Denied. {reason}",
+            }
+        )
+        payload["resolved_decisions"] = resolved
+        run.payload = payload
+
+        now = datetime.now(tz=UTC)
+        from_status = run.status
+        run.status = RunStatus.OPEN
+        run.updated_at = now
+        self._session.add(
+            ExecutionRunHistory(
+                id=_uuid.uuid4(),
+                run_id=run.id,
+                workspace_id=run.workspace_id,
+                from_status=from_status,
+                to_status=RunStatus.OPEN,
+                reason=f"reopened: safe mode item {item_id} denied with a reason",
+                created_at=now,
             )
         )
         await self._session.flush()
