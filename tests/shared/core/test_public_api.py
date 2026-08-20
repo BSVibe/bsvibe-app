@@ -1,11 +1,8 @@
-"""Pin the public re-exports of bsvibe_core.
+"""Pin the public re-exports of ``backend.shared.core``.
 
-Migration prompt promises:
-
-    from backend.shared.core import BsvibeSettings, configure_logging, BsvibeError
-
-This test fails the moment one of those breaks — exactly the contract
-the 4 product migrations rely on.
+The surface this used to pin was *"the contract the 4 product migrations rely
+on"* — and consolidation onto a single product removed those 4. What is pinned
+now is the half production actually calls; the rest was deleted 2026-08-20.
 """
 
 from __future__ import annotations
@@ -15,18 +12,12 @@ def test_top_level_exports() -> None:
     from backend.shared import core as bsvibe_core
 
     expected = {
-        "BsvibeSettings",
         "configure_logging",
-        "BsvibeError",
-        "ConfigurationError",
-        "ValidationError",
-        "NotFoundError",
         "csv_list_field",
         "parse_csv_list",
+        "redact_url_password",
     }
-    missing = expected - set(bsvibe_core.__all__)
-    assert not missing, f"missing exports: {missing}"
-
+    assert set(bsvibe_core.__all__) == expected
     for name in expected:
         assert hasattr(bsvibe_core, name), f"bsvibe_core.{name} not importable"
 

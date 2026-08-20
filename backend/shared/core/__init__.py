@@ -1,51 +1,31 @@
 """BSVibe shared core library — public API.
 
-Stable imports for product code:
+What remains is the half production actually calls. The other half (a
+``BsvibeSettings`` base, a generic ``HttpClientBase``, an exception hierarchy
+and type aliases) was extracted for OTHER products to share and was deleted
+2026-08-20: consolidation onto a single product left it with zero consumers.
 
 .. code-block:: python
 
     from backend.shared.core import (
-        BsvibeSettings,
         configure_logging,
-        BsvibeError,
-        ConfigurationError,
-        ValidationError,
-        NotFoundError,
         csv_list_field,
         parse_csv_list,
+        redact_url_password,
     )
-    from backend.shared.core.types import TenantId, UserId, RequestId, JsonDict, JsonValue
 """
 
 from __future__ import annotations
 
-from backend.shared.core.exceptions import (
-    BsvibeError,
-    ConfigurationError,
-    NotFoundError,
-    ValidationError,
-)
-from backend.shared.core.http import HttpClientBase, redact_headers, redact_url_password
+from backend.shared.core.http import redact_url_password
 from backend.shared.core.logging import configure_logging
-from backend.shared.core.settings import (
-    BsvibeSettings,
-    csv_list_field,
-    parse_csv_list,
-)
+from backend.shared.core.settings import csv_list_field, parse_csv_list
 
 __version__ = "0.1.0"
 
 __all__ = [
-    "BsvibeSettings",
     "configure_logging",
-    "BsvibeError",
-    "ConfigurationError",
-    "ValidationError",
-    "NotFoundError",
-    "HttpClientBase",
-    "redact_headers",
-    "redact_url_password",
     "csv_list_field",
     "parse_csv_list",
-    "__version__",
+    "redact_url_password",
 ]

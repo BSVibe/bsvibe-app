@@ -25,25 +25,6 @@ from collections.abc import Iterable
 from typing import Any
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-class BsvibeSettings(BaseSettings):
-    """Pydantic-settings base shared by every BSVibe service.
-
-    * ``extra="ignore"`` — products carry their own private settings on
-      top of any shared mixin, so unknown env vars must NOT crash startup.
-    * ``case_sensitive=False`` — matches the legacy ``os.environ.get``
-      behaviour the four products grew up with.
-    * ``env_file=None`` — loading ``.env`` is a deployment concern; let
-      each product opt in by overriding ``model_config``.
-    """
-
-    model_config = SettingsConfigDict(
-        env_file=None,
-        case_sensitive=False,
-        extra="ignore",
-    )
 
 
 def parse_csv_list(value: str | Iterable[str] | None) -> list[str]:
@@ -105,7 +86,6 @@ def csv_list_field(
 
 
 __all__ = [
-    "BsvibeSettings",
     "parse_csv_list",
     "csv_list_field",
 ]
