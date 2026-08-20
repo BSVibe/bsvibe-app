@@ -1,7 +1,7 @@
 """OpenAI-compatible chat completions endpoint (Lift E2 — no classifier).
 
 Wires :class:`backend.api.v1.chat_service.ChatService` against
-the per-request session + workspace budget. Unified routing Lift 3 — this
+the per-request session. Unified routing Lift 3 — this
 surface now routes through the SAME
 :class:`backend.dispatch.resolver.ModelAccountResolver` the internal workflow
 callers use (caller ``chat.completions``): a request without an explicit
@@ -37,10 +37,6 @@ from backend.dispatch.caller_registry import CALLER_CHAT_COMPLETIONS
 from backend.dispatch.resolver import ModelAccountResolver, NoMatchingRouteError
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.service import ModelAccountService
-from backend.router.budget.errors import BudgetExceeded
-from backend.router.budget.policy import BudgetPolicyService
-from backend.router.budget.repository import BudgetPolicyRepository
-from backend.router.budget.tracker import BudgetTracker, InMemoryBudgetStore
 from backend.router.dispatch import DispatchError, ModelAccountNotFound
 from backend.router.llm_client import LlmClient
 from plugin.audit.events import AuditActor, AuditResource
@@ -107,12 +103,8 @@ async def _resolve_chat_model_account_id(
 def _build_service(session: AsyncSession) -> ChatService:
     cipher = CredentialCipher(_key_from_settings())
     accounts = ModelAccountService(session, cipher=cipher)
-    budget_repo = BudgetPolicyRepository(session)
-    tracker = BudgetTracker(InMemoryBudgetStore())
-    budget = BudgetPolicyService(repository=budget_repo, tracker=tracker)
     return ChatService(
         session=session,
-        budget=budget,
         accounts=accounts,
         llm=LlmClient(),
         cipher=cipher,
@@ -152,7 +144,6 @@ async def chat_completions(
         trace_id=str(uuid.uuid4()),
         stream=payload.stream,
         model_account_id=model_account_id,
-        estimated_cost_cents=0,
     )
     body = payload.model_dump()
     actor = AuditActor(type="user", id=str(account_id))
@@ -172,19 +163,6 @@ async def chat_completions(
         )
         await session.commit()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except BudgetExceeded as exc:
-        await safe_emit(
-            GatewayCompletionFailed(
-                actor=actor,
-                workspace_id=str(workspace_id),
-                trace_id=ctx.trace_id,
-                resource=resource,
-                data={"error": "budget_exceeded", "detail": str(exc)},
-            ),
-            session=session,
-        )
-        await session.commit()
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except DispatchError as exc:
         await safe_emit(
             GatewayCompletionFailed(

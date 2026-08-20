@@ -20,7 +20,6 @@ async def test_chat_service_complete_rejects_missing_account() -> None:
 
     svc = ChatService(
         session=MagicMock(),
-        budget=MagicMock(),
         accounts=MagicMock(),
         llm=MagicMock(chat=AsyncMock()),
         cipher=MagicMock(),

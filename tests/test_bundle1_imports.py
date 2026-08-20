@@ -29,7 +29,6 @@ def test_all_three_modules_import():
     assert backend.router.LlmClient is not None
     assert backend.router.ModelAccountNotFound is not None
     assert backend.router.accounts.ModelAccountService is not None
-    assert backend.router.budget.BudgetPolicyService is not None
 
 
 def test_no_circular_imports_between_modules():

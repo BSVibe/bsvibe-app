@@ -30,7 +30,6 @@ import backend.workflow.infrastructure.delivery.db  # noqa: F401, E402
 import backend.workflow.infrastructure.github.db  # noqa: F401, E402
 import backend.workflow.infrastructure.db  # noqa: F401, E402
 import backend.executors.db  # noqa: F401, E402
-import backend.router.budget.models  # noqa: F401, E402
 import backend.embedding.db  # noqa: F401, E402
 import backend.identity.db  # noqa: F401, E402
 import backend.workflow.infrastructure.intake.db  # noqa: F401, E402
