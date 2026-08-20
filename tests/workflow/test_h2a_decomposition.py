@@ -109,6 +109,7 @@ def test_no_new_file_exceeds_god_file_threshold() -> None:
         "backend.workflow.application.agent_loop",
         "backend.workflow.application._loop_context",
         "backend.workflow.application._drive_loop",
+        "backend.workflow.application.undeclared_verification",
         "backend.workflow.application.tool_registry",
         "backend.workflow.application.connector_action_registrar",
         "backend.workflow.domain.emit_deliverable",

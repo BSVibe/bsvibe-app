@@ -44,6 +44,9 @@ from backend.workflow.application.tool_registry import (
     _sanitize_ask_user_question_options,
     assemble_run_tool_registry,
 )
+from backend.workflow.application.undeclared_verification import (
+    settle_undeclared_verification,
+)
 from backend.workflow.domain.emit_deliverable import (
     EMIT_DELIVERABLE_NAME,
     EMIT_DELIVERABLE_TOOL,
@@ -429,33 +432,21 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         await orch._session.commit()
         contract = await orch._assemble_contract(registry, written_paths, final_text)
         if contract is None:
-            # No usable check → never a silent pass (contract.py philosophy).
-            decision = await orch._create_decision(
-                run,
-                work_step,
-                kind="human_review_required",
-                payload={"reason": "no_verification_declared", "written_paths": written_paths},
-                rationale="work finished without any verifiable contract",
+            settled = await settle_undeclared_verification(
+                orch,
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                box=box,
+                baseline=run_baseline,
+                written_paths=written_paths,
+                final_text=final_text,
+                messages=messages,
+                knowledge=registry.declared_knowledge,
             )
-            await orch._audit(
-                run,
-                attempt,
-                DecisionPending,
-                {
-                    "kind": "human_review_required",
-                    "decision_id": str(decision.id),
-                    "reason": "no_verification_declared",
-                },
-            )
-            await orch._audit(
-                run,
-                attempt,
-                LoopTerminal,
-                {"outcome": "needs_decision", "decision_id": str(decision.id)},
-            )
-            return orch._decision_result(
-                run, work_step, attempt, decision, written_paths, final_text
-            )
+            if settled is None:
+                continue  # the agent owes a declaration — the round cap terminates
+            return settled
 
         verdict = await orch._verify(
             run=run,
