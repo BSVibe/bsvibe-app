@@ -171,8 +171,12 @@ _DERIVATION_SYSTEM_PROMPT = (
     "commits as it works, so a check that only inspects uncommitted changes sees "
     "almost nothing. Emit these as `kind:quality`.\n"
     "If the change is not something a command can verify (pure prose / design / a "
-    'doc), set "applicable" to false and return no commands — that is a valid, '
-    "honest answer; the judge and demonstration paths cover it.\n"
+    'doc) AND the intent states no constraint, set "applicable" to false and return '
+    "no commands — that is a valid, honest answer; the judge and demonstration paths "
+    "cover it. A stated constraint is checkable even when the work produced nothing "
+    'to run: "produced no output" is not the same as "has nothing to prove", and '
+    "whether the constraint held is exactly what is left to prove. An intent carrying "
+    "one is therefore applicable.\n"
     'Output ONLY a JSON object: {"applicable": bool, "commands": [ {"command": '
     'str, "kind": "quality"|"test"|"surface", "rationale": str} ]}. No prose.'
 )
