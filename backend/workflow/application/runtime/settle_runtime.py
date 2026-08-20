@@ -75,6 +75,9 @@ def build_settle_entity_extractor_factory(
     async def _factory(*, region: str, workspace_id: uuid.UUID) -> EntityExtractor | None:
         from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415 — lazy
         from backend.knowledge.ingest.ingest_compiler import IngestCompiler  # noqa: PLC0415
+        from backend.knowledge.retrieval.ingest_retriever import (  # noqa: PLC0415
+            build_ingest_retriever,
+        )
 
         async with session_factory() as session:
             resolved = await resolve_via_caller(
@@ -108,6 +111,14 @@ def build_settle_entity_extractor_factory(
             return IngestCompiler(
                 garden_writer=knowledge.writer(),
                 llm_client=llm,
+                # Same eyes the bootstrap ingest gets — settle compiles into the
+                # SAME vault and must see what is already there.
+                retriever=build_ingest_retriever(
+                    settings=settings,
+                    session_factory=session_factory,
+                    region=region,
+                    workspace_id=workspace_id,
+                ),
                 parallelism=settings.ingest_compile_parallelism,
             )
 

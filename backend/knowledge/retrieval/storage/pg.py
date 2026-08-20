@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 def _to_pgvector(embedding: list[float]) -> str:
@@ -109,3 +109,61 @@ class PgNoteVectorBackend:
             },
         )
         return [(r["note_path"], 1.0 - float(r["distance"])) for r in rows.mappings()]
+
+
+class SessionScopedNoteVectorBackend:
+    """:class:`PgNoteVectorBackend` that owns a SHORT session per operation.
+
+    Same :class:`~backend.knowledge.retrieval.storage.backend.NoteVectorBackend`
+    Protocol — so it drops straight into ``VaultRetriever(vector_store=…)`` and
+    nothing downstream changes shape.
+
+    Why it has to exist: ``PgNoteVectorBackend`` holds ONE live ``AsyncSession``,
+    and :class:`~backend.knowledge.ingest.ingest_compiler.IngestCompiler` calls
+    ``find_related`` from CONCURRENT chunk tasks (``parallelism``, default 3). One
+    ``AsyncSession`` is not safe for concurrent use, so a shared-session backend
+    handed to the compiler would turn a read into an interleaving bug. The two
+    ingest runtimes already carry this exact reasoning for their LLM adapters
+    (E18/E19: *"each must own its own session"*); the vault search is the same
+    shape and gets the same treatment.
+
+    A session per call is also the honest lifetime here: these are short reads,
+    and holding a pooled connection across an ingest batch is the
+    ``idle_in_transaction`` outage shape (#632/#686/#680).
+    """
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        workspace_id: uuid.UUID,
+        embedding_model: str,
+    ) -> None:
+        self._session_factory = session_factory
+        self._workspace_id = workspace_id
+        self._embedding_model = embedding_model
+
+    def _bind(self, session: AsyncSession) -> PgNoteVectorBackend:
+        return PgNoteVectorBackend(
+            session, workspace_id=self._workspace_id, embedding_model=self._embedding_model
+        )
+
+    async def store(self, note_path: str, embedding: list[float]) -> None:
+        async with self._session_factory() as session:
+            await self._bind(session).store(note_path, embedding)
+            await session.commit()
+
+    async def remove(self, note_path: str) -> None:
+        async with self._session_factory() as session:
+            await self._bind(session).remove(note_path)
+            await session.commit()
+
+    async def search(
+        self, query_embedding: list[float], top_k: int = 10
+    ) -> list[tuple[str, float]]:
+        async with self._session_factory() as session:
+            return await self._bind(session).search(query_embedding, top_k)
+
+    async def existing_paths(self) -> set[str]:
+        async with self._session_factory() as session:
+            return await self._bind(session).existing_paths()
