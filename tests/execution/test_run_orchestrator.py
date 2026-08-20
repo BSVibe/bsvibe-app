@@ -8,6 +8,7 @@ end without touching a real model or Docker.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -970,15 +971,18 @@ async def test_ask_user_question_drops_non_string_options(tmp_path: Path) -> Non
         assert decision.payload.get("options") == ["good", "other"]
 
 
-async def test_no_contract_declared_routes_to_decision(tmp_path: Path) -> None:
-    """Work that finishes without ever declaring a contract is never a
-    silent pass — it becomes a human-review Decision.
+async def test_no_contract_declared_and_nothing_changed_passes(tmp_path: Path) -> None:
+    """Founder ruling 2026-08-20: *"정말 검증할게 없어서 아무것도 안한거는 통과야."*
 
-    Under the B7 verify-first gate the premature ``file_write`` is REFUSED
-    (so no file lands and ``written_paths`` stays empty), the loop nudges the
-    model to declare-then-do (up to ``MAX_NO_WORK_NUDGES``), and when the model
-    still never declares it routes to the human-review Decision — still never a
-    silent pass."""
+    This used to raise a ``human_review_required`` / ``no_verification_declared``
+    Decision and park the run on the founder — the third state the ruling removes
+    ("검증은 통과/실패 둘 뿐이야 오직").
+
+    Under the B7 verify-first gate the premature ``file_write`` is REFUSED (nothing
+    lands, ``written_paths`` stays empty), the loop nudges the model to declare-then-do
+    (up to ``MAX_NO_WORK_NUDGES``), and it still never declares. The tree is exactly as
+    this run found it, so there was nothing to prove — and nothing to prove is a pass,
+    not a question for the founder."""
     llm = ScriptedLlm(
         [
             # Refused — no contract declared yet, so the write does not land.
@@ -994,11 +998,52 @@ async def test_no_contract_declared_routes_to_decision(tmp_path: Path) -> None:
         orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
-        assert result.outcome == "needs_decision"
-        decision = (await session.execute(select(Decision))).scalar_one()
-        assert decision.decision == "human_review_required"
+        assert result.outcome == "verified"
+        assert (await session.execute(select(Decision))).scalars().all() == [], (
+            "the founder is not asked — pass or fail, there is no third state"
+        )
         # The premature write was refused — nothing landed on disk.
         assert not (tmp_path / "foo.txt").exists()
+
+
+async def test_no_contract_declared_but_the_tree_changed_does_not_pass(tmp_path: Path) -> None:
+    """The other half of the same ruling — and the gap that makes it load-bearing.
+
+    The B7 verify-first gate holds back ``file_write``/``file_edit`` but NOT
+    ``shell_exec``, so an agent can do all of its work through the shell while the
+    server records no writes at all (prod ``fae09a47``: ``shell_exec`` 62 times, every
+    activity ``writes`` empty, a ``+108/−2`` commit). Judged on what the SERVER saw,
+    that run changed nothing and would take the pass above with zero checks run.
+
+    So the question is put to git, which saw it. The run does not pass: it is sent back
+    to declare, and when it never does, the round cap — not the founder — ends it."""
+    git = await asyncio.create_subprocess_exec("git", "init", "-q", cwd=tmp_path)
+    assert await git.wait() == 0
+    llm = ScriptedLlm(
+        [
+            LoopTurn(content="", tool_calls=(_tc("shell_exec", command="echo hi > slipped.txt"),)),
+            # Two absorbed by the no-work nudge, then one that reaches verify.
+            *(LoopTurn(content="done", tool_calls=()) for _ in range(3)),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            max_cycles=4,  # the round cap is the terminal — reach it without 48 turns
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert (tmp_path / "slipped.txt").exists(), "the shell write must really have landed"
+        assert result.outcome != "verified", (
+            "a change nobody declared a check for must never collect a pass"
+        )
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        assert [d.payload.get("reason") for d in decisions] == ["round_cap_reached"], (
+            "the terminal is the round cap the loop already owned — not a founder park"
+        )
 
 
 # --------------------------------------------------------------------------
