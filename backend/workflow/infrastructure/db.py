@@ -1,9 +1,9 @@
 """Execution persistence schema — runs, work steps, attempts, deliverables.
 
 Workflow §3 scoping: every per-run entity carries ``workspace_id`` NOT NULL
-(usually + ``product_id`` NOT NULL for product-scoped runs). Status enums
-mirror :mod:`backend.workflow.domain._domain` so the runtime + DB share one
-source of truth for the lifecycle vocabulary.
+(usually + ``product_id`` NOT NULL for product-scoped runs). The status
+enums below are the single source for this module's lifecycle vocabulary —
+each names a Postgres ENUM, so a second declaration would be a second source.
 
 ``ExecutionBase`` is an alias of the shared ``backend.data.Base`` — every
 module's tables register on one metadata so Alembic autogenerate sees a
@@ -27,8 +27,7 @@ ExecutionBase = Base
 
 
 # ---------------------------------------------------------------------------
-# Status enums (mirror backend.workflow.domain._domain — duplicated as
-# StrEnum so SQLAlchemy can name a Postgres ENUM)
+# Status enums — declared as StrEnum so SQLAlchemy can name a Postgres ENUM
 # ---------------------------------------------------------------------------
 
 

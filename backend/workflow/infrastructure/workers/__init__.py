@@ -47,9 +47,8 @@ worker's queue-consume site uses the mechanism prescribed in v8 §11.5:
 
 Idempotence at the state-advance side complements the claim layer: the
 ``dispatch_run_attempt`` / ``dispatch_verification`` / ``dispatch_settle``
-/ ``dispatch_deliverable`` driver entrypoints re-run on the same
-(state, event) pair to the same outcome (see
-:mod:`backend.workflow.domain.transitions`).
+/ ``dispatch_deliverable`` driver entrypoints re-run to the same outcome
+for the same run state.
 """
 
 from __future__ import annotations
