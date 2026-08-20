@@ -232,3 +232,38 @@ class TestStatedConstraints:
         against a ref that does not exist — failing for the wrong reason."""
         user = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[1]["content"]
         assert "baseline" not in user.lower() or "unknown" in user.lower()
+
+
+class TestTheConstraintSurvivesTheEscapeHatch:
+    """prod 실증 `30e36b62` (2026-08-20): 제약을 명시한 지시문 + 쓰기 0 인 런에서
+    deriver 가 ``{"applicable": false, "commands": []}`` 를 냈다. 제약 검사는
+    하나도 나오지 않았다.
+
+    원인은 CONSTRAINTS 문단이 아니라 그 **바로 뒤** 문장이다 — *"명령으로 검증할
+    수 없는 변경이면 applicable=false"* 가 정확히 이 경우에 해당해서 이긴다.
+    #779 가 이미 가르친 실패 모드다: **나중 문장이 앞 문장을 이긴다.** 그래서
+    앞에 강조를 더 붙이는 게 아니라 **이기는 문장 자체**를 고친다.
+
+    제약은 산출물이 없어도 검사 가능하다 — "아무것도 쓰지 마라" 가 지켜졌다는 것은
+    트리를 기준선과 대조하면 결정적으로 증명된다. 산출물이 없다는 것이 증명할 것이
+    없다는 뜻은 아니다.
+    """
+
+    def test_the_escape_hatch_itself_knows_about_constraints(self) -> None:
+        """The sentence that WINS must carry the exception. A CONSTRAINTS
+        paragraph placed before it is overridden — measured, not guessed."""
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0]["content"]
+        head, _, tail = sys.partition('set "applicable" to false')
+        assert tail, "escape-hatch sentence not found — this pin needs updating"
+        assert "constraint" in tail.lower(), (
+            "the applicable=false escape must state that a stated constraint keeps "
+            "the gate applicable; otherwise it silently swallows every constraint check"
+        )
+
+    def test_the_constraint_paragraph_still_teaches_only_the_shape(self) -> None:
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        assert "constraint" in sys
+        for hardcoded in ("don't touch the tests", "no new dependencies", "pyproject.toml"):
+            assert hardcoded not in sys
