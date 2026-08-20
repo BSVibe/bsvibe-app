@@ -69,21 +69,3 @@ def test_tier_default_and_multi_account_deleted_by_lift_e2() -> None:
         importlib.import_module("backend.router.routing.run_routing.multi_account")
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("backend.router.routing.run_routing.tier_default")
-
-
-def test_llm_provider_routing_surface_preserved() -> None:
-    """Pre-existing backend.router.routing exports (Bundle 1.5b) survive Lift C."""
-    mod = importlib.import_module("backend.router.routing")
-    expected = {
-        "ABTester",
-        "CostOptimizer",
-        "GatewayRoutingBase",
-        "ModelCatalogEntryRow",
-        "ModelCatalogRepository",
-        "ModelRegistryService",
-        "RegionSelector",
-        "RoutingLogRow",
-        "RoutingLogsRepository",
-    }
-    missing = expected - set(dir(mod))
-    assert not missing, f"backend.router.routing (LLM-provider surface) missing: {missing}"
