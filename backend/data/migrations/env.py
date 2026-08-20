@@ -34,7 +34,6 @@ import backend.embedding.db  # noqa: F401, E402
 import backend.identity.db  # noqa: F401, E402
 import backend.workflow.infrastructure.intake.db  # noqa: F401, E402
 import backend.schedule.infrastructure.schedule_db  # noqa: F401, E402
-import backend.knowledge.canonicalization.db  # noqa: F401, E402
 import backend.knowledge.infrastructure.ontology_db  # noqa: F401, E402
 import backend.knowledge.retrieval.db  # noqa: F401, E402
 import backend.notifications.db  # noqa: F401, E402

@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, String, Text
+from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -35,22 +35,5 @@ class NoteEmbeddingRow(RetrievalBase):
     embedding_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     dimension: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
-    )
-
-
-class RetrievalQuery(RetrievalBase):
-    """One row per retrieval API invocation (truncated query for privacy)."""
-
-    __tablename__ = "retrieval_queries"
-    __table_args__ = (Index("ix_retrieval_queries_ws_created", "workspace_id", "created_at"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
-    query_text: Mapped[str] = mapped_column(Text, nullable=False)
-    top_k: Mapped[int] = mapped_column(Integer, nullable=False)
-    result_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    elapsed_ms: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
