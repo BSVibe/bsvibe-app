@@ -139,8 +139,11 @@ def test_alembic_head_is_connector_last_import():
     # drop_ingest_batches -> drop_gateway_routing (``model_catalog_entries`` /
     # ``routing_logs`` — the BSGateway routing remnant. 0 rows in prod, 0
     # production callers; the LiteLLM hook they waited for never landed).
+    # drop_gateway_routing -> drop_budget_policies (``account_budget_policies``
+    # — 0 rows in prod with no way to create one, so ``BudgetExceeded`` could
+    # never fire; its two dedicated enum types go with it).
     # NOTE revision ids are capped at 32 chars by ``alembic_version.version_num``.
-    assert "drop_gateway_routing" in result.stdout
+    assert "drop_budget_policies" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -156,7 +159,6 @@ def test_target_metadata_covers_all_bases():
     from backend.knowledge.retrieval.db import RetrievalBase
     from backend.notifications.db import NotificationsBase
     from backend.router.accounts.models import AccountsBase
-    from backend.router.budget.models import GatewayBudgetBase
     from backend.workers.db import WorkersBase
     from backend.workflow.infrastructure.db import ExecutionBase
     from backend.workflow.infrastructure.delivery.db import DeliveryBase
@@ -166,7 +168,6 @@ def test_target_metadata_covers_all_bases():
     expected_tables = {
         # Bundle 1
         "model_accounts",
-        "account_budget_policies",
         "audit_events",
         "audit_outbox",
         # Bundle 1.5b
@@ -224,7 +225,6 @@ def test_target_metadata_covers_all_bases():
     }
     actual_tables = (
         set(AccountsBase.metadata.tables)
-        | set(GatewayBudgetBase.metadata.tables)
         | set(GatewayEmbeddingBase.metadata.tables)
         | set(SupervisorBase.metadata.tables)
         | set(AuditOutboxBase.metadata.tables)

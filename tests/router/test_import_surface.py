@@ -9,8 +9,7 @@ Asserts the mechanical end state of Lift B:
      LlmRoutingHints).
    * The union of the previous ``backend.gateway`` public API
      (DispatchError / DispatchRequest / DispatchResult / GatewayDispatcher /
-     LlmClient / LlmResponse / ModelAccountNotFound + budget / classifier
-     sub-modules).
+     LlmClient / LlmResponse / ModelAccountNotFound).
 3. ``backend.router.accounts`` now exposes the previous ``backend.accounts``
    public API.
 
@@ -68,7 +67,6 @@ def test_router_root_unifies_lift_a_and_post_e2_exports() -> None:
         "LlmClient",
         "LlmResponse",
         "ModelAccountNotFound",
-        "budget",
     }
     available = set(dir(router))
     missing = (lift_a | post_e2) - available
@@ -98,12 +96,6 @@ def test_router_dispatch_importable() -> None:
     # Lift E2 — GatewayDispatcher is gone; only the error surface remains.
     assert hasattr(mod, "DispatchError")
     assert hasattr(mod, "ModelAccountNotFound")
-
-
-def test_router_budget_models_importable() -> None:
-    """Alembic env relies on this exact path."""
-    mod = importlib.import_module("backend.router.budget.models")
-    assert hasattr(mod, "GatewayBudgetBase")
 
 
 def test_router_routing_subpackage_importable() -> None:

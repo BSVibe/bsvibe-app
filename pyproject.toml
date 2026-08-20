@@ -167,7 +167,6 @@ ignore_imports = [
     "backend.data.migrations.env -> backend.knowledge.retrieval.db",
     "backend.data.migrations.env -> backend.router.accounts.account_models",
     "backend.data.migrations.env -> backend.router.accounts.models",
-    "backend.data.migrations.env -> backend.router.budget.models",
     "backend.data.migrations.env -> backend.router.routing.run_routing.db",
     "backend.data.migrations.env -> backend.schedule.infrastructure.schedule_db",
     "backend.data.migrations.env -> backend.workflow.infrastructure.db",

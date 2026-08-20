@@ -1,7 +1,9 @@
 """Router context — unified module.
 
-Owns model accounts, budget policy, the LiteLLM wrapper, and the LLM
-dispatch error surface. After Lift E2 the classifier / tier vocabulary
+Owns model accounts, the LiteLLM wrapper, and the LLM dispatch error
+surface. The budget subsystem was deleted 2026-08-20: its policy table
+held 0 rows in prod with no authoring surface, and its tracker store was
+rebuilt per request, so ``BudgetExceeded`` could never fire. After Lift E2 the classifier / tier vocabulary
 is gone — routing flows through :mod:`backend.dispatch` (resolver +
 adapter) per founder policy ``bsvibe-no-implicit-routing``.
 
@@ -9,7 +11,6 @@ Public surface (union):
 
 - :mod:`backend.router.facade` — Router Protocol + LLM I/O dataclasses.
 - :mod:`backend.router.accounts` — ``ModelAccount`` entity + CRUD.
-- :mod:`backend.router.budget` — ``BudgetPolicyService`` + tracker.
 - :mod:`backend.router.dispatch` — dispatch error types.
 - :mod:`backend.router.llm_client` — folded ``bsvibe-llm`` wrapper.
 
@@ -21,7 +22,6 @@ or the rule-evaluation table directly.
 
 from __future__ import annotations
 
-from backend.router import budget
 from backend.router.dispatch import DispatchError, ModelAccountNotFound
 from backend.router.facade import (
     LlmRequest,
@@ -40,5 +40,4 @@ __all__ = [
     "LlmRoutingHints",
     "ModelAccountNotFound",
     "Router",
-    "budget",
 ]

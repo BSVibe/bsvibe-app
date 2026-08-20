@@ -5,11 +5,12 @@ Thin coordinator that the external OpenAI-compatible proxy
 ``model_account_id`` explicitly, so routing is trivial — no resolver,
 no classifier. The service decrypts the account's credentials, runs the
 LLM call through :class:`backend.router.llm_client.LlmClient`, and
-returns the OpenAI-shape completion. Budget tracking still applies; the
-budget-exceeded path is what made the legacy ``GatewayDispatcher``
-asymmetric with the rest of the call sites (which use the resolver) —
-keeping it here keeps the per-account budget invariant intact for the
-public proxy.
+returns the OpenAI-shape completion.
+
+Cost is REPORTED (``bsvibe.actual_cost_cents`` on the response) but not
+enforced: the budget subsystem was deleted 2026-08-20 because it could
+never fire — its policy table held 0 rows in prod with no way to create
+one, and its tracker store was rebuilt on every request.
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.service import ModelAccountService
-from backend.router.budget.policy import BudgetPolicyService
 from backend.router.dispatch import ModelAccountNotFound
 from backend.router.llm_client import LlmClient
 
@@ -38,7 +38,6 @@ class ChatCompletionContext:
     trace_id: str
     stream: bool
     model_account_id: uuid.UUID | None = None
-    estimated_cost_cents: int = 0
 
 
 _COST_PER_TOKEN_CENTS = 0.002
@@ -51,13 +50,11 @@ class ChatService:
         self,
         *,
         session: AsyncSession,
-        budget: BudgetPolicyService,
         accounts: ModelAccountService | None = None,
         llm: LlmClient | None = None,
         cipher: CredentialCipher | None = None,
     ) -> None:
         self._session = session
-        self._budget = budget
         self._cipher = cipher or CredentialCipher(_key_from_settings())
         self._accounts = accounts or ModelAccountService(session, cipher=self._cipher)
         self._llm = llm or LlmClient()
@@ -83,12 +80,6 @@ class ChatService:
                 f"under workspace={context.workspace_id} account={context.account_id}"
             )
 
-        budget_check = await self._budget.check_request_cost(
-            workspace_id=context.workspace_id,
-            account_id=context.account_id,
-            projected_cost_cents=context.estimated_cost_cents,
-        )
-
         messages = payload.get("messages", [])
         api_key = self._accounts.reveal_api_key(row)
         response = await self._llm.chat(
@@ -102,19 +93,12 @@ class ChatService:
 
         actual_tokens = response.usage_prompt_tokens + response.usage_completion_tokens
         actual_cost_cents = int(round(actual_tokens * _COST_PER_TOKEN_CENTS))
-        await self._budget.record_actual_cost(
-            workspace_id=context.workspace_id,
-            account_id=context.account_id,
-            cost_cents=actual_cost_cents,
-        )
-
         logger.info(
             "chat_completion_dispatched",
             workspace_id=str(context.workspace_id),
             trace_id=context.trace_id,
             model=row.litellm_model,
             actual_cost_cents=actual_cost_cents,
-            breached_scopes=budget_check.breached_scopes,
         )
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
