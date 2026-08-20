@@ -97,24 +97,23 @@ def test_daily_brief_counts_both_languages() -> None:
     assert ko.body == "배포 2 · 실패 1 · 대기 결정 3"
 
 
-# ── NC1: verify-gate needs_you must not leak English honesty-gate jargon ───────
+# ── NC1: a system-minted needs_you must not leak English verifier jargon ──────
 
 
-def test_needs_you_reason_weak_evidence_is_friendly_ko() -> None:
-    """A system-minted verify-gate decision (reason=weak_evidence_no_gate, no
-    ``question``) maps to a warm KO sentence — never the raw English
-    honesty-grade rationale."""
-    # Terse card-style verify line — no long apology (founder feedback).
-    body = needs_you_reason_body("weak_evidence_no_gate", "ko")
-    assert body == "작업을 마쳤지만 검증 근거가 약해요. 확인해주세요."
+def test_needs_you_known_reason_is_friendly_ko() -> None:
+    """A system-minted decision with NO ``question`` maps to a warm KO sentence —
+    never the raw English ``decision.rationale``."""
+    # Terse card-style line — no long apology (founder feedback).
+    body = needs_you_reason_body("github_binding_unavailable", "ko")
+    assert body == "저장소 접근이 끊겨서 올려둔 PR을 병합할 수 없어요."
     # No leaked English jargon.
-    for jargon in ("grade", "gate", "weak evidence", "verified"):
+    for jargon in ("repo", "pull request", "merged", "access"):
         assert jargon not in body
 
 
-def test_needs_you_reason_weak_evidence_en() -> None:
-    body = needs_you_reason_body("weak_evidence_no_gate", "en")
-    assert body == "The work is done, but the evidence is weak — please review."
+def test_needs_you_known_reason_en() -> None:
+    body = needs_you_reason_body("github_binding_unavailable", "en")
+    assert body == "BSVibe lost access to the repo, so its open pull request can't be merged."
 
 
 def test_needs_you_unknown_reason_falls_back_generic_localized() -> None:

@@ -137,7 +137,7 @@ def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en
     renders e.g. "Verified: 3 checks passed (tests, lint, format). Acceptance
     check passed." (EN) or "검증: 3개 확인 통과. 검증 통과." (KO). Returns "" when
     there is no verdict / nothing to report, so the caller adds no empty line.
-    Localized so a KO founder never sees the English honesty chrome in the
+    Localized so a KO founder never sees the English verification chrome in the
     delivered summary.
     """
     if result is None:
@@ -168,7 +168,7 @@ def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en
     weak = _weak_evidence_sentence(result, ko)
     judge = result.get("judge") or {}
     if judge.get("passed") and not weak:
-        # SUPPRESSED under a weak grade, deliberately. Live run 6565db96 put
+        # SUPPRESSED under weak evidence, deliberately. Live run 6565db96 put
         # "검증 통과. 검증: 돌릴 검사가 없어 내용만 확인했어요 (증거 약함)." on the
         # founder's phone: both halves true, the pair reading as a claim and its
         # own retraction — with the strong half first, which is the half a glance
@@ -181,35 +181,39 @@ def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en
 
 
 def _weak_evidence_sentence(result: Mapping[str, Any], ko: bool) -> str:
-    """Say it out loud when a run auto-proceeded on the ladder's weak rungs.
+    """Say it out loud when a verified run rests on nothing that actually ran.
 
-    Grade D used to BLOCK, so the founder always learned about weak evidence —
-    by being interrupted. Now that a deliverable no command could verify stops
-    blocking (``work_is_gateable``), the only place still saying "this rests on
-    nothing runnable" would be the Delivery Report, which has to be opened. The
-    push they actually receive is built from THIS line (``_shipped_detail``
-    lifts it by prefix), so a weak finish that never reaches it is a weak finish
-    the founder never hears about — lesson #742: a run reaching ``verified`` is
-    not the same as the result reaching the founder.
+    A weak finish must still REACH the founder: the push they receive is built
+    from THIS line (``_shipped_detail`` lifts it by prefix), so a weak finish
+    that never reaches it is one the founder never hears about (lesson #742). It
+    stopped BLOCKING (검증은 통과/실패 둘 뿐 — 형님 판정 2026-08-20); it must not
+    stop being SAID.
 
-    D and C are different facts and must not share a sentence: D is "there was
-    nothing runnable here", C is "there WAS a gate and it could not run". Both
-    must keep the ``검증``/``Verified`` prefix or the lifter drops them.
-    """
-    grade = result.get("honesty_grade")
-    if grade == "D":
-        return (
-            "검증: 돌릴 검사가 없어 내용만 확인했어요 (증거 약함)."
-            if ko
-            else "Verified: by content only — no runnable check existed (weak evidence)."
-        )
-    if grade == "C":
+    Read from the persisted FACTS, never a grade letter — the retired A–D ladder
+    was a second representation over exactly these. ``gate_applicable`` false (a
+    Direct / non-worktree scratch answer) has no repo-gate concept to be weak
+    about and stays silent, exactly as the ladder's ``None`` grade did. The two
+    weak cases are different facts and must not share a sentence; both keep the
+    ``검증``/``Verified`` prefix or the lifter drops them."""
+    if not result.get("gate_applicable"):
+        return ""
+    commands = (result.get("derived_gate") or {}).get("commands") or []
+    gate_passed = bool((result.get("derived_gate") or {}).get("passed")) and any(
+        isinstance(c, dict) and c.get("status") == "passed" for c in commands
+    )
+    if gate_passed or (result.get("outcome_demonstration") or {}).get("verdict") == "demonstrated":
+        return ""  # a real leg carried it — not weak
+    if commands:  # a gate EXISTED here and none of it could run
         return (
             "검증: 검사를 찾았지만 여기서 돌릴 수 없었어요 (증거 약함)."
             if ko
             else "Verified: a gate was found but could not run here (weak evidence)."
         )
-    return ""
+    return (
+        "검증: 돌릴 검사가 없어 내용만 확인했어요 (증거 약함)."
+        if ko
+        else "Verified: by content only — no runnable check existed (weak evidence)."
+    )
 
 
 def _compose_verified_summary(
@@ -345,7 +349,7 @@ async def _emit_needs_you(session: AsyncSession, run: ExecutionRun, decision: De
     rides through verbatim as the ``detail``. For a SYSTEM-minted Decision with no
     question (verify-gate / ``human_review_required``), the body is derived from
     the machine ``reason`` via the localized copy catalog — NEVER the raw English
-    ``decision.rationale`` (which leaked honesty-gate jargon like "weak evidence
+    ``decision.rationale`` (which leaked verifier jargon like "weak evidence
     (grade D)" to KO founders). Delegates to the shared
     :func:`~backend.notifications.emit.emit_notification` seam (savepoint +
     dedupe): the UNIQUE ``dedupe_key`` (``needs_you:<decision_id>``) makes a
@@ -429,7 +433,7 @@ async def land_verified_artifacts(
     RunAttempt transitions, and above all ``proof_state``. The sandbox terminal
     sets ``PROVED`` because its call site has already observed a PASSED verdict;
     a client_attach run only earns that when its gate actually RAN and passed.
-    Sharing the landing must never import the proof claim (honesty ratchet).
+    Sharing the landing must never import the proof claim (trust ratchet).
 
     The settle payload carries the run's STABLE context (product binding +
     founder intent_text) so the SettleWorker can cluster garden observations by

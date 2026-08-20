@@ -43,7 +43,6 @@ from backend.workflow.domain.gate_derivation import (
     parse_derived_gate,
     surface_exercised,
 )
-from backend.workflow.domain.honesty import compute_honesty_grade, work_is_gateable
 from backend.workflow.domain.outcome_demonstration import (
     DemonstrationOutcome,
     DemonstrationPlan,
@@ -628,7 +627,7 @@ class VerificationService:
         # spurious files and still passed verify). This is a SURFACE, not a gate:
         # founder decision #3 is "no-implicit → surface" (flag it, never silently
         # fix or block), so it does NOT enter the pass computation below — the
-        # honesty grade + proof surface carry it to the founder (L-I3b).
+        # proof surface carries it to the founder (L-I3b).
         await self._release_connection(run)
         scope = await self._run_scope_check(run, written_paths)
 
@@ -733,33 +732,6 @@ class VerificationService:
         passed = command_gate_pass and judge_pass and demo_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
 
-        # The honesty ladder (redesign §4): grade a PASSING verdict by evidence
-        # strength so "verified" is honest about HOW strongly it holds. Recorded
-        # for the proof surface + the trust ratchet (D → founder review, L-I3c).
-        # ``None`` for a non-product/Direct run — the repo-gate ladder is N/A.
-        # I4 — the ladder's gate legs read the LLM-DERIVED gate (grounded in the
-        # repo's own manifests), not the per-stack detector. ``gate_passed``: the
-        # derived gate RAN and a command passed (a real objective leg).
-        # ``gate_discovered``: at least one command was derived (a runnable gate
-        # exists) even if all were unavailable (→ grade C). No derived gate → D.
-        derived_commands = derived_gate["commands"] if derived_gate is not None else []
-        gate_passed = bool(
-            derived_gate is not None
-            and derived_gate["passed"]
-            and any(c["status"] == "passed" for c in derived_commands)
-        )
-        demonstrated = demonstration is not None and demonstration["verdict"] == "demonstrated"
-        honesty_grade = (
-            compute_honesty_grade(
-                applicable=applicable,
-                gate_passed=gate_passed,
-                gate_discovered=bool(derived_commands),
-                demonstrated=demonstrated,
-            )
-            if passed
-            else None
-        )
-
         vr = VerificationResult(
             id=uuid.uuid4(),
             run_id=run.id,
@@ -773,14 +745,13 @@ class VerificationService:
                 "judge": judge_blob,
                 "outcome_demonstration": demonstration,
                 "scope": scope,
-                "honesty_grade": honesty_grade,
                 "gate_expected": gate_expected,
-                # C4 — the OTHER half of the review question, recorded so a row
-                # answers "why did this not go to review?" on its own. False =
-                # the work produced nothing a command could have gated (a report,
-                # a plan), which is legitimately gateless however well-equipped
-                # the repo is. ``gate_expected`` alone stopped deciding it.
-                "work_gateable": work_is_gateable(written_paths),
+                # Does the repo-gate concept apply at all (a product run on a
+                # real worktree)? A Direct scratch answer has no gate to be
+                # weak about, so the summary must stay silent for it. This
+                # used to ride the A–D letter as its ``None`` case; the letter
+                # is gone and the fact it stood for is persisted directly.
+                "gate_applicable": applicable,
                 # Fail-closed telemetry (INV-2): the deriver could not run. Present
                 # only when it happened, so the proof surface can explain a FAILED
                 # (or reviewed) run whose ``derived_gate`` is therefore ``None``.
@@ -831,7 +802,6 @@ class VerificationService:
                             "flagged": len(scope["flagged_paths"]),
                         }
                     ),
-                    "honesty_grade": honesty_grade,
                     "gate_expected": gate_expected,
                     "gate_deriver_failed": deriver_failed,
                 },
@@ -1152,8 +1122,8 @@ class VerificationService:
             plan = drop_unasserted(plan)
         if plan is None or plan.is_empty:
             # Honest downgrade: the deliverable could not be reduced to an
-            # executable demonstration. Not a fail — recorded so the grade /
-            # proof surface (L-honesty) reflects the weaker evidence. The surface
+            # executable demonstration. Not a fail — recorded so the proof
+            # surface reflects the weaker evidence. The surface
             # is recorded even here: "we found nothing" must still say WHERE it
             # looked (§4 rule 3).
             outcome = DemonstrationOutcome(verdict="undemonstrable")

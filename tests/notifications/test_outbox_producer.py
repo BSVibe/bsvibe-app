@@ -176,10 +176,10 @@ async def test_every_decision_kind_queues_needs_you(session) -> None:
     assert row.payload["body"] == "A run has paused and needs your input."
 
 
-async def test_verify_gate_needs_you_maps_reason_to_friendly_copy(session) -> None:
-    """NC1 — a verify-gate Decision (reason=weak_evidence_no_gate, no question)
-    renders the warm localized sentence, not the raw English honesty-grade
-    rationale the KO founder saw in prod."""
+async def test_system_decision_needs_you_maps_reason_to_friendly_copy(session) -> None:
+    """NC1 — a system-minted Decision (a known reason, no question) renders the
+    warm localized sentence, not the raw English rationale the KO founder saw
+    in prod."""
     ws = await _make_workspace(session, language="ko")
     run = await _make_run(session, ws)
     decision = await create_decision(
@@ -187,8 +187,8 @@ async def test_verify_gate_needs_you_maps_reason_to_friendly_copy(session) -> No
         run,
         None,
         kind="human_review_required",
-        payload={"reason": "weak_evidence_no_gate", "honesty_grade": "D"},
-        rationale="verified but the target declares no gate to run — weak evidence (grade D)",
+        payload={"reason": "github_binding_unavailable"},
+        rationale="the merge watch gave up: BSVibe lost access to the repo",
     )
     await session.commit()
 
@@ -199,8 +199,8 @@ async def test_verify_gate_needs_you_maps_reason_to_friendly_copy(session) -> No
             )
         )
     ).scalar_one()
-    assert row.payload["body"] == "작업을 마쳤지만 검증 근거가 약해요. 확인해주세요."
-    for jargon in ("grade", "gate", "weak evidence", "declares no"):
+    assert row.payload["body"] == "저장소 접근이 끊겨서 올려둔 PR을 병합할 수 없어요."
+    for jargon in ("repo", "access", "merge watch", "gave up"):
         assert jargon not in row.payload["body"]
 
 

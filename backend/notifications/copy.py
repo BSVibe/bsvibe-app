@@ -78,14 +78,9 @@ _FALLBACK_BODY: dict[str, dict[str, str]] = {
 #: Friendly, founder-facing BODY for a SYSTEM-minted ``needs_you`` Decision that
 #: carries NO founder question (verify-gate / ``human_review_required``). Keyed
 #: by the Decision ``payload["reason"]`` → localized copy, so the raw English
-#: honesty-gate ``decision.rationale`` ("verified but the target declares no gate
-#: to run — weak evidence (grade D)") never rides out to a KO founder. An unknown
+#: English ``decision.rationale`` never rides out to a KO founder. An unknown
 #: reason resolves to the generic ``needs_you`` fallback body above.
 _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
-    "weak_evidence_no_gate": {
-        "en": "The work is done, but the evidence is weak — please review.",
-        "ko": "작업을 마쳤지만 검증 근거가 약해요. 확인해주세요.",
-    },
     # The merge watch gave up on an OPEN pull request. Both reasons end the same
     # way — a PR nobody will merge — but call for different things, so they get
     # their own bodies rather than one catch-all. Kept in step with
@@ -187,7 +182,7 @@ def needs_you_reason_body(reason: str, language: str | None) -> str:
     its ``needs_you`` body is derived from the machine ``reason`` (not the English
     ``decision.rationale``). A KNOWN reason maps to warm, founder-facing localized
     copy; any UNKNOWN reason resolves to the generic ``needs_you`` fallback body —
-    so no raw English honesty-gate jargon ever reaches the founder. An unknown /
+    so no raw English verifier jargon ever reaches the founder. An unknown /
     missing ``language`` falls back to English.
     """
     lang = _resolve_language(language)

@@ -50,7 +50,6 @@ from backend.workflow.domain.emit_deliverable import (
     _safe_args,
     handle_emit_deliverable,
 )
-from backend.workflow.domain.honesty import needs_founder_review, work_is_gateable
 from backend.workflow.domain.verification_feedback import render_verification_failure
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -478,55 +477,6 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 "judge_checks": len(contract.judge_checks),
             },
         )
-        vresult = verdict.result if isinstance(verdict.result, dict) else {}
-        grade = vresult.get("honesty_grade")
-        gate_expected = bool(vresult.get("gate_expected"))
-        if verdict.outcome is VerificationOutcome.PASSED and needs_founder_review(
-            grade, gate_expected=gate_expected, work_gateable=work_is_gateable(written_paths)
-        ):
-            # Honesty ladder ratchet (redesign §4). A grade-D pass whose repo has a
-            # detectable stack — a real project that SHOULD declare a gate but
-            # doesn't — rests on nothing runnable, so it does NOT auto-accumulate
-            # trust (PROVED); route to founder review. A/B/C, and an early/
-            # greenfield repo with no stack yet (legitimately gateless), auto-verify.
-            #
-            # C4 — and neither does work no command could have gated. The grade is
-            # a judgement about THIS work, so what decides whether its weakness is
-            # worth the founder's eyes has to be about the work too: a report in a
-            # repo that happens to carry a pyproject.toml is not a project failing
-            # to declare a gate. It auto-proceeds, and the summary + push SAY the
-            # evidence was weak (``_weak_evidence_sentence``) so proceeding is
-            # never proceeding quietly.
-            decision = await orch._create_decision(
-                run,
-                work_step,
-                kind="human_review_required",
-                payload={
-                    "reason": "weak_evidence_no_gate",
-                    "honesty_grade": grade,
-                    "written_paths": written_paths,
-                },
-                rationale="verified but the target declares no gate to run — weak evidence (grade D)",
-            )
-            await orch._audit(
-                run,
-                attempt,
-                DecisionPending,
-                {
-                    "kind": "human_review_required",
-                    "decision_id": str(decision.id),
-                    "reason": "weak_evidence_no_gate",
-                },
-            )
-            await orch._audit(
-                run,
-                attempt,
-                LoopTerminal,
-                {"outcome": "needs_decision", "decision_id": str(decision.id)},
-            )
-            return orch._decision_result(
-                run, work_step, attempt, decision, written_paths, final_text
-            )
         if verdict.outcome is VerificationOutcome.PASSED:
             # v2 — thread the agent's own retrospective knowledge declaration
             # (latched on the registry by declare_verification / record_knowledge)
@@ -554,6 +504,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         # 1500 characters an agent received could be — and in run 010bbdd8 were —
         # entirely its own passing commands. It read "FAILED: [everything
         # passed]" and repeated the identical failure 16 times.
+        vresult = verdict.result if isinstance(verdict.result, dict) else {}
         messages.append(
             {
                 "role": "user",

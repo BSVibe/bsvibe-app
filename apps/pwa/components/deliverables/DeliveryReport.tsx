@@ -200,12 +200,6 @@ function demonstration(result: Record<string, unknown>): Demonstration | null {
   return { verdict, probes };
 }
 
-/** The honesty grade (A–D) on a verification, or null when absent / malformed. */
-function honestyGrade(v: VerificationReportItem): string | null {
-  const g = v.honesty_grade;
-  return typeof g === "string" && /^[A-D]$/.test(g.trim()) ? g.trim() : null;
-}
-
 /** The last few lines of a command's output — enough to see the failing assertion
  *  without dumping a whole log into the report. */
 function tailOutput(output: string, lines = 6): string {
@@ -1006,7 +1000,7 @@ function VerifiedHow({
 }
 
 /** The authoritative verification, rendered as the founder-facing proof: the
- *  honesty grade (how strongly a pass holds), the declared checks, the I2
+ *  declared checks, the I2
  *  result-demonstration ("we ran it and saw this"), and — when it did NOT pass —
  *  WHY (the failing command + its real output) plus a next step (open the run to
  *  retry). */
@@ -1020,7 +1014,6 @@ function AuthoritativeVerification({
   const t = useTranslations("report");
   const passed = verification.outcome === "passed";
   const failed = verification.outcome === "failed";
-  const grade = passed ? honestyGrade(verification) : null;
   const demo = demonstration(verification.result);
   // The AUTHORITATIVE gate is the repo's OWN derived checks; the agent's declared
   // commands are advisory. Lead with the derived gate when present; an older row
@@ -1039,14 +1032,6 @@ function AuthoritativeVerification({
 
   return (
     <div className="report-verify">
-      {grade && (
-        <span
-          className={`report-grade report-grade--${grade.toLowerCase()}`}
-          title={t(`gradeHint.${grade}`)}
-        >
-          {t("gradeLabel", { grade })}
-        </span>
-      )}
       {hasGate ? (
         <DerivedGateChecklist gate={gate} />
       ) : (
@@ -1178,10 +1163,10 @@ function VerificationBlock({ verification }: { verification: VerificationReportI
   // filtered out (`noChecksAfterKnowledge` — the knowledge shows under
   // "Knowledge"; don't claim "nothing was verified").
   const emptyKey = allChecks.length > 0 ? "noChecksAfterKnowledge" : "noChecksDeclared";
+  const passed = verification.outcome === "passed";
   // The verdict tag each row carries — the verification's outcome rendered as a
   // small plain tag (passed / failed / inconclusive), not the raw shell exit.
   const tagKey = `outcomeTag.${verification.outcome}` as const;
-  const passed = verification.outcome === "passed";
   if (checks.length === 0) {
     return <p className="report-checks__none">{t(emptyKey)}</p>;
   }
