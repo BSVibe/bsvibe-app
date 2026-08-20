@@ -14,7 +14,7 @@ into a package whose internals live in sibling modules:
   per-chunk user-message assembly, JSON response parsing, and
   post-parse hygiene (``clean_tags`` / ``clean_entities``).
 - :mod:`._actions` — plan execution + supporting data classes
-  (``UpdateAction`` / ``CompileResult`` / ``IngestBatchRecord``).
+  (``UpdateAction`` / ``CompileResult``).
 - :mod:`._compiler` — :class:`IngestCompiler` orchestration.
 
 This module re-exports the public surface so every external import path
@@ -29,8 +29,6 @@ from __future__ import annotations
 from ._actions import (  # noqa: F401  -- re-exported for facade-shape compat
     _REQUIRED_ACTION_FIELDS,
     CompileResult,
-    IngestBatchRecord,
-    IngestBatchRecorder,
     UpdateAction,
 )
 from ._actions import (  # noqa: F401
@@ -77,8 +75,6 @@ __all__ = [
     "BatchItem",
     "CompileLlm",
     "CompileResult",
-    "IngestBatchRecord",
-    "IngestBatchRecorder",
     "IngestCompiler",
     "LLMClient",
     "UpdateAction",

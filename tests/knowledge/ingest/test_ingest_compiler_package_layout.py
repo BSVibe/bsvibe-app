@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -26,8 +25,6 @@ from backend.knowledge.ingest.ingest_compiler import (
     BatchItem,
     CompileLlm,
     CompileResult,
-    IngestBatchRecord,
-    IngestBatchRecorder,
     IngestCompiler,
     LLMClient,
     UpdateAction,
@@ -46,8 +43,6 @@ class TestPackageLayout:
         assert BatchItem is not None
         assert CompileLlm is not None
         assert CompileResult is not None
-        assert IngestBatchRecord is not None
-        assert IngestBatchRecorder is not None
         assert LLMClient is not None
         assert UpdateAction is not None
         assert derive_batch_char_budget is not None
@@ -208,40 +203,3 @@ class TestFacadeReExportsHelperFunctions:
 
         assert hasattr(pkg, "_DEFAULT_BATCH_CHAR_BUDGET")
         assert isinstance(pkg._DEFAULT_BATCH_CHAR_BUDGET, int)
-
-
-class TestRecorderProtocol:
-    """A trivial smoke test that the recorder Protocol still binds."""
-
-    @pytest.mark.asyncio
-    async def test_recorder_protocol_runtime_checkable(self) -> None:
-        class _OkRecorder:
-            async def record(self, record: IngestBatchRecord) -> None:
-                return None
-
-        recorder = _OkRecorder()
-        assert isinstance(recorder, IngestBatchRecorder)
-
-        # Smoke: feed through the compiler end-to-end with the recorder.
-        writer = _StubWriter()
-        llm = _ScriptedLlm()
-        record_calls: list[IngestBatchRecord] = []
-
-        recorder_mock = AsyncMock(spec=IngestBatchRecorder)
-
-        async def _record(r: IngestBatchRecord) -> None:
-            record_calls.append(r)
-
-        recorder_mock.record.side_effect = _record
-
-        compiler = IngestCompiler(
-            garden_writer=writer,  # type: ignore[arg-type]
-            llm_client=llm,
-            batch_recorder=recorder_mock,
-        )
-        await compiler.compile_batch(
-            [BatchItem(label="a", content="seed-a")],
-            seed_source="recorder-test",
-        )
-        assert len(record_calls) == 1
-        assert record_calls[0].seed_source == "recorder-test"

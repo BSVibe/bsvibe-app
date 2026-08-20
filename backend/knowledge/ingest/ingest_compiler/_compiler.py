@@ -40,8 +40,6 @@ from backend.knowledge._internal.events import emit_event
 
 from ._actions import (
     CompileResult,
-    IngestBatchRecord,
-    IngestBatchRecorder,
     UpdateAction,
     empty_compile_result,
     execute_plan,
@@ -86,7 +84,6 @@ class IngestCompiler:
         batch_char_budget: int | None = None,
         chunk_timeout_s: float | None = 300.0,
         canonicalization_service: CanonicalizationService | None = None,
-        batch_recorder: IngestBatchRecorder | None = None,
         parallelism: int = 3,
     ) -> None:
         self._writer = garden_writer
@@ -97,7 +94,6 @@ class IngestCompiler:
         # Optional analytics seam — when wired, every batch emits one
         # ``ingest_batches`` row. ``None`` (the default) is a no-op so the
         # compiler stays usable without any DB session.
-        self._batch_recorder = batch_recorder
         # ``None`` → conservative default; callers that know the model
         # (AppState construction) should pass a probed value.
         self._batch_char_budget = batch_char_budget or _DEFAULT_BATCH_CHAR_BUDGET
@@ -253,29 +249,11 @@ class IngestCompiler:
             elapsed_ms=elapsed_ms,
         )
 
-        # Record the per-batch analytics row via the optional seam. Failures
-        # here are swallowed: an analytics-row write must never turn a
-        # successful ingest into an error (the notes are already on disk).
-        await self._record_batch(
-            IngestBatchRecord(
-                seed_source=seed_source,
-                seed_count=len(items),
-                notes_created=notes_created,
-                notes_updated=notes_updated,
-                llm_calls=llm_calls,
-                chunk_count=len(chunks),
-                chunk_failures=chunk_failures,
-                elapsed_ms=elapsed_ms,
-            )
-        )
-
         return CompileResult(
             actions_taken=actions_taken,
             notes_updated=notes_updated,
             notes_created=notes_created,
             llm_calls=llm_calls,
-            seed_count=len(items),
-            elapsed_ms=elapsed_ms,
             chunk_failures=chunk_failures,
         )
 
@@ -320,19 +298,6 @@ class IngestCompiler:
                     names.append(name)
                     seen.add(name)
         return names
-
-    async def _record_batch(self, record: IngestBatchRecord) -> None:
-        """Best-effort persist of the ``ingest_batches`` analytics row."""
-        if self._batch_recorder is None:
-            return
-        try:
-            await self._batch_recorder.record(record)
-        except Exception as exc:  # noqa: BLE001 — analytics must never break ingest
-            logger.warning(
-                "ingest_compile_batch_record_failed",
-                source=record.seed_source,
-                error=str(exc),
-            )
 
     async def _find_related(self, seed_content: str) -> str:
         """Search vault for notes related to seed content.

@@ -133,8 +133,11 @@ def test_alembic_head_is_connector_last_import():
     # safe_mode_decision_reason -> one_pr_one_watch (unique ``(repo, pr_number)``
     # on ``github_merge_watch`` — a run that delivers twice found the same open
     # PR and doubled both the polling and the founder's notifications).
+    # one_pr_one_watch -> drop_ingest_batches (``ingest_batches`` — 0 rows, 0
+    # production recorder implementations, 0 construction sites passing one:
+    # a second representation whose producer was never attached).
     # NOTE revision ids are capped at 32 chars by ``alembic_version.version_num``.
-    assert "one_pr_one_watch" in result.stdout
+    assert "drop_ingest_batches" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -147,7 +150,6 @@ def test_target_metadata_covers_all_bases():
     from backend.identity.db import IdentityBase
     from backend.identity.workspaces_db import WorkspacesBase
     from backend.knowledge.canonicalization.db import CanonicalizationBase
-    from backend.knowledge.ingest.db import IngestBase
     from backend.knowledge.retrieval.db import RetrievalBase
     from backend.notifications.db import NotificationsBase
     from backend.router.accounts.models import AccountsBase
@@ -176,7 +178,6 @@ def test_target_metadata_covers_all_bases():
         "canonicalization_proposals",
         "canonicalization_decisions",
         "canonicalization_policies",
-        "ingest_batches",
         "retrieval_queries",
         # Bundle X
         "execution_runs",
@@ -229,7 +230,6 @@ def test_target_metadata_covers_all_bases():
         | set(SupervisorBase.metadata.tables)
         | set(AuditOutboxBase.metadata.tables)
         | set(CanonicalizationBase.metadata.tables)
-        | set(IngestBase.metadata.tables)
         | set(RetrievalBase.metadata.tables)
         | set(ExecutionBase.metadata.tables)
         | set(IntakeBase.metadata.tables)
