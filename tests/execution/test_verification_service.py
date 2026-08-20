@@ -2033,6 +2033,33 @@ class TestDerivedGate:
             assert blob["commands"][0]["status"] == "passed"
             assert "uv run ruff check money.py" in box.exec_calls
 
+    async def test_the_run_baseline_reaches_the_deriver(self, tmp_path, monkeypatch):
+        """A constraint the intent stated ("don't touch X") can only be checked
+        against where the tree STOOD — and the agent commits as it works, so the
+        working tree alone hides everything already committed. The baseline is
+        captured for every run (#774) and reached only the judge; the deriver
+        was authoring blind to it."""
+        async with memory_session() as session:
+            llm = StubLlm([self._gate_turn([{"command": "true", "kind": "quality"}])])
+            svc = VerificationService(session=session, llm=llm)
+            run = await self._seed(session, tmp_path, monkeypatch)
+            await svc._run_derived_gate(run, FakeBox(), ["money.py"], baseline="dead1234")
+            user = llm.calls[0]["messages"][1]["content"]
+            assert "dead1234" in user
+
+    async def test_verify_passes_its_baseline_down_to_the_deriver(self, tmp_path, monkeypatch):
+        """The seam that actually matters: ``verify`` already RECEIVES the
+        baseline (#774 threaded it in for the judge). A deriver that never sees
+        it is the wiring gap, not a missing value."""
+        import inspect
+
+        src = inspect.getsource(VerificationService.verify)
+        assert "_run_derived_gate" in src
+        call = src[src.index("_run_derived_gate") :]
+        assert "baseline" in call[: call.index(")")], (
+            "verify holds a baseline but does not hand it to the deriver"
+        )
+
     async def test_records_whether_a_user_surface_was_exercised(self, tmp_path, monkeypatch):
         """Both execution models record the same thing. The models differ in
         WHERE a command runs, never in what verification MEANS — a property that

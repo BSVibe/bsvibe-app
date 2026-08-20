@@ -184,3 +184,51 @@ class TestSurfaceChecks:
         assert "surface" in scope_line, (
             f"the scoping instruction must say it does not apply to surface checks: {scope_line!r}"
         )
+
+
+class TestStatedConstraints:
+    """An intent does not only say what to BUILD — it often says what NOT to do
+    ("don't touch the tests", "no new dependencies", "don't write any files").
+
+    Those are verifiable, and deterministically so: a constraint is a command
+    whose exit code says whether it held. The deriver already RECEIVES the
+    intent, so nothing needed building — it was simply never told to read the
+    intent for constraints. Hardcoding them backend-side is not an option:
+    constraints are natural language and therefore unbounded, which is exactly
+    why the general mechanism (an LLM that already has the intent) is the right
+    place. 형님: "이건 수많은 예시 케이스 중 하나니."
+    """
+
+    def test_the_prompt_asks_for_constraints_to_become_checks(self) -> None:
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        assert "constraint" in sys, "the deriver was never told constraints are checkable"
+
+    def test_the_prompt_names_no_specific_constraint(self) -> None:
+        """Constraints are unbounded — the prompt teaches the SHAPE, never a
+        list. A named constraint would be the hardcoding this exists to avoid,
+        and would steer the model to look only for that one."""
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        for hardcoded in ("don't touch the tests", "no new dependencies", "pyproject.toml"):
+            assert hardcoded not in sys, f"prompt hardcodes a specific constraint: {hardcoded!r}"
+
+    def test_the_baseline_reaches_the_deriver_when_known(self) -> None:
+        """A constraint check has to compare against where the tree STOOD. The
+        agent commits as it works, so a check that only sees the working tree
+        misses everything already committed — and ``shell_exec`` writes never
+        reach ``written_paths`` at all (run fae09a47: 62 shell_exec calls, every
+        recorded ``writes`` empty, +108/-2 committed). The baseline is the only
+        thing that catches those, and it already exists on the run."""
+        user = derivation_planner_messages(
+            manifests={}, changed_files=[], intent="x", baseline="abc1234"
+        )[1]["content"]
+        assert "abc1234" in user
+
+    def test_no_baseline_is_stated_as_absent_not_invented(self) -> None:
+        """A fabricated baseline would make every constraint check compare
+        against a ref that does not exist — failing for the wrong reason."""
+        user = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[1]["content"]
+        assert "baseline" not in user.lower() or "unknown" in user.lower()
