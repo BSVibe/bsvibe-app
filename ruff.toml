@@ -282,8 +282,6 @@ ignore = [
 # legacy patterns (``str + Enum``). New v8 code in ``backend/workflow/``
 # (state.py / transitions.py / future H2/H3 modules) is held to the
 # standard rules.
-"backend/workflow/domain/_domain.py" = ["UP042"]
-"backend/workflow/domain/state_machine.py" = ["UP042"]
 # Lift H3a — files moved from ``backend/intake/`` retain the
 # default-factory lambdas (PLW0108) ignore that the original location had.
 "backend/workflow/infrastructure/intake/**" = ["PLW0108"]

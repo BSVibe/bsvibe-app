@@ -6,15 +6,16 @@ machine (``workflow_sm.py`` + ``schema.py``), the Frame stage
 ``backend/orchestrator/`` into the Workflow bounded context.
 
 The legacy 4-stage state machine and the ``SafeModeBoundary`` stub have since
-been deleted outright — the v8 ``WorkflowState`` machine
-(:mod:`backend.workflow.domain.state` + :mod:`backend.workflow.domain.transitions`)
-fully supersedes them. What remains worth guarding here are the *structural*
-invariants:
+been deleted outright. Their v8 replacement (``WorkflowState`` /
+``WorkflowEvent`` / the transition matrix) never reached production either and
+was deleted in turn — the lifecycle vocabulary that actually persists lives in
+:mod:`backend.workflow.infrastructure.db`, guarded by
+``tests/workflow/test_the_v8_state_machine_is_gone.py``. What remains worth
+guarding here are the *structural* invariants:
 
 1. The legacy ``backend.orchestrator.{workflow_sm,schema,frame,safe_mode}``
    modules stay removed (regression tripwire).
-2. The v8 enum surface + the absorbed ``FrameStage`` stay reachable at their
-   new homes.
+2. The absorbed ``FrameStage`` stays reachable at its new home.
 3. No file re-introduces an import of the moved-out submodules.
 4. The whole ``backend/orchestrator/`` directory stays collapsed (H2c).
 """
@@ -50,12 +51,6 @@ def test_legacy_safe_mode_module_removed() -> None:
 
 
 # ─────────────────────── Delta 2 — v8 surface reachable at new homes ─────────
-
-
-def test_workflow_state_module_carries_v8_surface() -> None:
-    mod = importlib.import_module("backend.workflow.domain.state")
-    for name in ("WorkflowState", "WorkflowEvent"):
-        assert hasattr(mod, name), f"workflow.domain.state missing {name}"
 
 
 def test_workflow_application_stages_frame_present() -> None:
