@@ -136,8 +136,11 @@ def test_alembic_head_is_connector_last_import():
     # one_pr_one_watch -> drop_ingest_batches (``ingest_batches`` — 0 rows, 0
     # production recorder implementations, 0 construction sites passing one:
     # a second representation whose producer was never attached).
+    # drop_ingest_batches -> drop_gateway_routing (``model_catalog_entries`` /
+    # ``routing_logs`` — the BSGateway routing remnant. 0 rows in prod, 0
+    # production callers; the LiteLLM hook they waited for never landed).
     # NOTE revision ids are capped at 32 chars by ``alembic_version.version_num``.
-    assert "drop_ingest_batches" in result.stdout
+    assert "drop_gateway_routing" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -154,7 +157,6 @@ def test_target_metadata_covers_all_bases():
     from backend.notifications.db import NotificationsBase
     from backend.router.accounts.models import AccountsBase
     from backend.router.budget.models import GatewayBudgetBase
-    from backend.router.routing.db import GatewayRoutingBase
     from backend.workers.db import WorkersBase
     from backend.workflow.infrastructure.db import ExecutionBase
     from backend.workflow.infrastructure.delivery.db import DeliveryBase
@@ -171,8 +173,6 @@ def test_target_metadata_covers_all_bases():
         "account_embedding_settings",
         "intent_definitions",
         "intent_examples",
-        "model_catalog_entries",
-        "routing_logs",
         # Bundle K
         "canonical_anchors",
         "canonicalization_proposals",
@@ -226,7 +226,6 @@ def test_target_metadata_covers_all_bases():
         set(AccountsBase.metadata.tables)
         | set(GatewayBudgetBase.metadata.tables)
         | set(GatewayEmbeddingBase.metadata.tables)
-        | set(GatewayRoutingBase.metadata.tables)
         | set(SupervisorBase.metadata.tables)
         | set(AuditOutboxBase.metadata.tables)
         | set(CanonicalizationBase.metadata.tables)

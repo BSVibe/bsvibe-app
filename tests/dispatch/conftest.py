@@ -21,7 +21,6 @@ import backend.embedding.db  # noqa: F401 — register tables on Base.metadata.
 import backend.identity.workspaces_db  # noqa: F401
 import backend.router.accounts.models  # noqa: F401
 import backend.router.budget.models  # noqa: F401
-import backend.router.routing.db  # noqa: F401
 import backend.router.routing.run_routing.db  # noqa: F401
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
