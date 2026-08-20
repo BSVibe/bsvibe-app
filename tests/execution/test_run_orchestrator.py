@@ -8,8 +8,8 @@ end without touching a real model or Docker.
 
 from __future__ import annotations
 
+import asyncio
 import os
-import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -1017,7 +1017,8 @@ async def test_no_contract_declared_but_the_tree_changed_does_not_pass(tmp_path:
 
     So the question is put to git, which saw it. The run does not pass: it is sent back
     to declare, and when it never does, the round cap — not the founder — ends it."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    git = await asyncio.create_subprocess_exec("git", "init", "-q", cwd=tmp_path)
+    assert await git.wait() == 0
     llm = ScriptedLlm(
         [
             LoopTurn(content="", tool_calls=(_tc("shell_exec", command="echo hi > slipped.txt"),)),
