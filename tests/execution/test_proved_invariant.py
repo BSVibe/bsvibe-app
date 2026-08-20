@@ -360,14 +360,16 @@ def test_known_call_sites_are_in_expected_modules() -> None:
 
 
 # --------------------------------------------------------------------------
-# 4. Honesty ratchet (L-I3c) — a PASSED verdict graded D (product deliverable
-#    with no declared gate) does NOT auto-PROVE; it routes to founder review.
-#    A/B/C still auto-verify. The grade itself is computed in verify() (tested
-#    in test_verification_service); here we craft the verdict to pin the branch.
+# 4. 검증은 통과/실패 둘 뿐 (형님 판정 2026-08-20). A PASSED verdict NEVER parks
+#    for founder review — the honesty ladder's grade-D branch was the only place
+#    a third state existed on this axis, and it is gone. "정말 검증할 게 없어서
+#    아무것도 안 한 것"은 통과다; 실패는 검사가 실제로 돌아서 실패한 경우뿐이다.
 # --------------------------------------------------------------------------
 
 
-def _graded_verify(session, run, grade, *, gate_expected=False):
+def _passing_verify(session, run):
+    """A PASSED verdict carrying NO grade — the ladder no longer exists."""
+
     async def fake_verify(**kwargs):
         ws = kwargs["work_step"]
         vr = VerificationResult(
@@ -377,7 +379,7 @@ def _graded_verify(session, run, grade, *, gate_expected=False):
             workspace_id=run.workspace_id,
             outcome=VerificationOutcome.PASSED,
             contract={},
-            result={"honesty_grade": grade, "gate_expected": gate_expected},
+            result={"gate_expected": True},
         )
         session.add(vr)
         await session.flush()
@@ -387,10 +389,7 @@ def _graded_verify(session, run, grade, *, gate_expected=False):
 
 
 def _declare_and_write_llm(path: str = "a.py") -> _ScriptedLlm:
-    """A run that declares a contract and writes ONE file. The path matters to
-    the ratchet since C4: a ``.md``/``.txt`` deliverable is work no command
-    could have gated, so it is exempt from grade-D review — the default here is
-    CODE so the ladder tests keep exercising the reviewed path."""
+    """A run that declares a contract and writes ONE file."""
     return _ScriptedLlm(
         [
             LoopTurn(
@@ -408,11 +407,12 @@ def _declare_and_write_llm(path: str = "a.py") -> _ScriptedLlm:
     )
 
 
-async def test_native_grade_d_with_expected_gate_routes_to_review(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Grade D AND a gate was expected (the repo has a stack — a real project
-    that should declare a gate) → founder review, not auto-PROVED."""
+async def test_passing_verdict_never_parks_for_review(tmp_path: Path, monkeypatch) -> None:
+    """A PASSED verdict on CODE in a repo that HAS a stack (the exact shape the
+    ladder used to withhold as grade D) auto-verifies and ships.
+
+    This is the founder's ruling made executable: 검증은 통과/실패 둘 뿐이고,
+    돌릴 게이트가 없었다는 것은 실패가 아니다."""
     from backend.workflow.infrastructure.db import Decision, ExecutionRun, RunStatus
 
     async with memory_session() as session:
@@ -427,106 +427,46 @@ async def test_native_grade_d_with_expected_gate_routes_to_review(
         orch = RunOrchestrator(
             session=session, llm=_declare_and_write_llm(), sandbox_manager=NoopSandboxManager()
         )
-        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "D", gate_expected=True))
-        result = await orch.run(run=run, workspace_dir=tmp_path)
-
-        assert result.outcome != "verified"  # routed to review, not auto-verified
-        assert (await session.execute(select(Deliverable))).first() is None
-        steps = (await session.execute(select(WorkStep))).scalars().all()
-        assert all(s.proof_state is not ProofState.PROVED for s in steps)
-        decisions = (await session.execute(select(Decision))).scalars().all()
-        assert any(
-            d.decision == "human_review_required"
-            and d.payload.get("reason") == "weak_evidence_no_gate"
-            and d.payload.get("honesty_grade") == "D"
-            for d in decisions
-        )
-        await _assert_proved_invariant(session)  # holds vacuously (no Deliverable)
-
-
-async def test_native_grade_d_prose_only_work_auto_verifies(tmp_path: Path, monkeypatch) -> None:
-    """C4 — the ratchet asks about the WORK, not the repo.
-
-    A report / plan / piece of research is legitimately gateless however
-    well-equipped its repo is: there is no command to run, so "couldn't verify"
-    is not a weakness of the work. Before this, EVERY non-dev deliverable in a
-    real project interrupted the founder — the complaint that opened this track.
-    """
-    from backend.workflow.infrastructure.db import Decision, ExecutionRun, RunStatus
-
-    async with memory_session() as session:
-        run = ExecutionRun(
-            id=uuid.uuid4(),
-            workspace_id=uuid.uuid4(),
-            status=RunStatus.RUNNING,
-            payload={"intent_text": "write the weekly report"},
-        )
-        session.add(run)
-        await session.flush()
-        orch = RunOrchestrator(
-            session=session,
-            llm=_declare_and_write_llm("docs/weekly.md"),
-            sandbox_manager=NoopSandboxManager(),
-        )
-        # Same weak grade, same manifest-bearing repo as the reviewed case above.
-        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "D", gate_expected=True))
+        monkeypatch.setattr(orch, "_verify", _passing_verify(session, run))
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
         assert result.outcome == "verified"
+        assert (await session.execute(select(Deliverable))).first() is not None
         decisions = (await session.execute(select(Decision))).scalars().all()
         assert not [d for d in decisions if d.payload.get("reason") == "weak_evidence_no_gate"], (
-            "prose work must not interrupt the founder"
+            "a passing verdict must never park — verification is binary"
         )
-
-
-async def test_native_grade_d_greenfield_no_gate_expected_auto_verifies(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Grade D but NO gate was expected (early/greenfield repo with no stack yet)
-    is a legitimate skip — it auto-verifies rather than nagging review (founder:
-    distinguish 'couldn't verify' from 'legitimately skipped')."""
-    from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
-
-    async with memory_session() as session:
-        run = ExecutionRun(
-            id=uuid.uuid4(),
-            workspace_id=uuid.uuid4(),
-            status=RunStatus.RUNNING,
-            payload={"intent_text": "x"},
-        )
-        session.add(run)
-        await session.flush()
-        orch = RunOrchestrator(
-            session=session, llm=_declare_and_write_llm(), sandbox_manager=NoopSandboxManager()
-        )
-        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "D", gate_expected=False))
-        result = await orch.run(run=run, workspace_dir=tmp_path)
-
-        assert result.outcome == "verified"
-        assert (await session.execute(select(Deliverable))).first() is not None
         await _assert_proved_invariant(session)
 
 
-async def test_native_grade_c_still_auto_verifies(tmp_path: Path, monkeypatch) -> None:
-    """Grade C (a discovered-but-unrunnable gate) still auto-accumulates trust —
-    only D is withheld (founder: D-only hard gate)."""
-    from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+def test_no_backend_module_speaks_of_a_grade() -> None:
+    """The honesty ladder is retired — nothing in the backend may compute,
+    persist, or branch on a grade.
 
-    async with memory_session() as session:
-        run = ExecutionRun(
-            id=uuid.uuid4(),
-            workspace_id=uuid.uuid4(),
-            status=RunStatus.RUNNING,
-            payload={"intent_text": "x"},
-        )
-        session.add(run)
-        await session.flush()
-        orch = RunOrchestrator(
-            session=session, llm=_declare_and_write_llm(), sandbox_manager=NoopSandboxManager()
-        )
-        monkeypatch.setattr(orch, "_verify", _graded_verify(session, run, "C"))
-        result = await orch.run(run=run, workspace_dir=tmp_path)
+    A structural pin rather than a behavioural one on purpose: the ladder's
+    failure mode was that a RETIRED concept kept running in prod for two months
+    because deleting it was planned and never executed. A grep-shaped guard is
+    the only thing that fails when someone reintroduces the letter."""
+    offenders: dict[str, list[str]] = {}
+    for path in _backend_root().rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        hits = [
+            token
+            for token in (
+                "honesty_grade",
+                "compute_honesty_grade",
+                "needs_founder_review",
+                "work_is_gateable",
+                "weak_evidence_no_gate",
+            )
+            if token in path.read_text(encoding="utf-8")
+        ]
+        if hits:
+            offenders[path.relative_to(_backend_root()).as_posix()] = hits
+    assert not offenders, f"the retired honesty ladder is still referenced: {offenders}"
 
-        assert result.outcome == "verified"
-        assert (await session.execute(select(Deliverable))).first() is not None
-        await _assert_proved_invariant(session)
+
+def test_honesty_module_is_gone() -> None:
+    """``backend/workflow/domain/honesty.py`` must not exist."""
+    assert not (_backend_root() / "workflow" / "domain" / "honesty.py").exists()

@@ -1,9 +1,9 @@
 """Auto-resolve a run's paused review Decision when its deliverable ships.
 
-Couples delivery-SUCCESS to the run's founder-review gate. A run that finishes
-with WEAK verification evidence raises a ``human_review_required`` Decision
-(reason ``weak_evidence_no_gate``) and PAUSES at ``RUNNING`` — the drive loop
-leaves ``needs_decision`` runs running, paused on the Decision. Meanwhile the
+Couples delivery-SUCCESS to the run's founder-review gate. A run that ends on a
+``human_review_required`` / ``verification_failed`` Decision PAUSES at
+``RUNNING`` — the drive loop leaves ``needs_decision`` runs running, paused on
+the Decision. Meanwhile the
 agent's emitted Deliverable travels the OUTPUT path independently: it lands in
 the Safe Mode queue (or dispatches directly when Safe Mode is off). When the
 founder APPROVES the Safe Mode item the deliverable ships (e.g. a GitHub PR

@@ -737,7 +737,6 @@ describe("Delivery Report (R3)", () => {
                 { command: "pytest -q", passed: true, exit_code: 0, output: "3 passed" },
               ],
             },
-            honesty_grade: "B",
             created_at: NOW,
           },
         ],
@@ -750,28 +749,6 @@ describe("Delivery Report (R3)", () => {
     expect(within(checks).getByText(/pytest -q/)).toBeInTheDocument();
     // The 3 failed retries collapse into a single disclosure summary — NOT a wall.
     expect(within(checks).getByText(/3 earlier attempts/i)).toBeInTheDocument();
-  });
-
-  it("shows the honesty grade on a passing verification", async () => {
-    installFetch({
-      report: () => ({
-        ...REPORT,
-        verifications: [
-          {
-            id: "v1",
-            outcome: "passed",
-            contract: { checks: [passedCheck("pytest -q")] },
-            result: {},
-            honesty_grade: "B",
-            created_at: NOW,
-          },
-        ],
-      }),
-    });
-    render(<DeliveryReport deliverableId="d1" />);
-
-    const checks = await screen.findByRole("region", { name: /how it was verified/i });
-    expect(within(checks).getByText(/evidence\s*b/i)).toBeInTheDocument();
   });
 
   it("surfaces the outcome-demonstration probes (ran-against-the-result)", async () => {
@@ -792,7 +769,6 @@ describe("Delivery Report (R3)", () => {
                 ],
               },
             },
-            honesty_grade: "B",
             created_at: NOW,
           },
         ],
@@ -941,7 +917,6 @@ describe("Delivery Report (R3)", () => {
                 ],
               },
             },
-            honesty_grade: "A",
             created_at: NOW,
           },
         ],

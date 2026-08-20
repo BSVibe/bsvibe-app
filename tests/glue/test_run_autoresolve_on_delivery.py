@@ -1,7 +1,7 @@
 """Auto-resolve a run's paused review Decision when its deliverable ships.
 
 Root-caused in a live soak: a run that finishes with WEAK verification evidence
-raises a ``human_review_required`` Decision (reason ``weak_evidence_no_gate``)
+raises a ``human_review_required`` Decision (reason ``no_verification_declared``)
 and PAUSES at ``RUNNING`` while its Deliverable travels the OUTPUT path
 independently (Safe Mode queue → founder approve → dispatch, OR direct
 delivery). Once the deliverable ships (a PR opens) the run's Decision stayed
@@ -158,7 +158,7 @@ async def _seed_paused_run(
                     run_id=run_id,
                     workspace_id=workspace_id,
                     decision=decision_kind,
-                    payload={"reason": "weak_evidence_no_gate"},
+                    payload={"reason": "no_verification_declared"},
                     status=decision_status,
                     created_at=datetime.now(tz=UTC),
                 )

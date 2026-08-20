@@ -1999,16 +1999,34 @@ async def test_real_github_list_issues_dispatches_through_real_pluginrunner(
 # --------------------------------------------------------------------------
 # Auto-proceeding must never mean proceeding QUIETLY
 #
-# Grade D used to BLOCK the run, so the founder always heard about weak
-# evidence — by being interrupted. Once a non-dev deliverable stops blocking
-# (work_is_gateable), the only thing left saying "this rests on nothing
-# runnable" is the Delivery Report, which the founder has to open. The push
-# they actually receive said "작업 완료" and nothing else. Lesson #742: a run
-# reaching `verified` is not the same as the result reaching the founder.
+# The weak finish used to BLOCK the run, so the founder always heard about weak
+# evidence — by being interrupted. Verification is now binary (형님 판정
+# 2026-08-20: 통과/실패 둘 뿐), so nothing blocks and the only thing left saying
+# "this rests on nothing runnable" is the push they actually receive. Lesson
+# #742: a run reaching `verified` is not the same as the result reaching the
+# founder.
+#
+# The inputs below are the persisted FACTS, not a grade letter — the A–D ladder
+# was a second representation over exactly these.
 # --------------------------------------------------------------------------
 
+#: The gate applies, ran, and passed — the strongest leg. (was grade A/B)
+_GATE_PASSED = {
+    "gate_applicable": True,
+    "derived_gate": {"passed": True, "commands": [{"status": "passed"}]},
+}
+#: A gate was DISCOVERED but every command was unavailable here. (was grade C)
+_GATE_UNRUNNABLE = {
+    "gate_applicable": True,
+    "derived_gate": {"passed": False, "commands": [{"status": "unavailable"}]},
+}
+#: No runnable check existed at all. (was grade D)
+_GATE_ABSENT = {"gate_applicable": True, "derived_gate": None}
+#: A Direct / non-worktree scratch answer — no repo-gate concept. (was grade None)
+_GATE_NA = {"gate_applicable": False, "derived_gate": None}
 
-def _summary_for(grade: str | None, language: str = "ko") -> str:
+
+def _summary_for(evidence: dict, language: str = "ko") -> str:
     from types import SimpleNamespace
 
     from backend.workflow.application.run_persistence import _compose_verified_summary
@@ -2018,15 +2036,15 @@ def _summary_for(grade: str | None, language: str = "ko") -> str:
         run,  # type: ignore[arg-type]
         "",
         ["docs/weekly.md"],
-        {"honesty_grade": grade, "command_results": [], "judge": {"passed": True}},
+        {**evidence, "command_results": [], "judge": {"passed": True}},
         language,
     )
 
 
 def test_a_weak_finish_says_so_in_the_summary() -> None:
-    summary = _summary_for("D")
+    summary = _summary_for(_GATE_ABSENT)
     line = next((ln for ln in summary.splitlines() if ln.startswith("검증")), "")
-    assert line, "a grade-D finish must still carry a verification line"
+    assert line, "a gateless finish must still carry a verification line"
     assert "돌릴" in line, f"it must say WHY the evidence is weak, got: {line}"
 
 
@@ -2037,28 +2055,34 @@ def test_that_line_is_what_the_founder_receives_on_their_phone() -> None:
     the founder never sees."""
     from backend.workflow.domain.verified_deliverable import _shipped_detail
 
-    detail = _shipped_detail(_summary_for("D"))
+    detail = _shipped_detail(_summary_for(_GATE_ABSENT))
     assert "돌릴" in detail, f"the weak-evidence line never reached the push: {detail!r}"
 
 
 def test_a_discovered_but_unrunnable_gate_is_reported_as_its_own_thing() -> None:
-    # Grade C is a different fact from D — a gate EXISTS and could not run here.
-    # Saying "no runnable check" there would be false.
-    line = next((ln for ln in _summary_for("C").splitlines() if ln.startswith("검증")), "")
+    # A different fact: a gate EXISTS and could not run here. Saying "no runnable
+    # check" there would be false.
+    line = next(
+        (ln for ln in _summary_for(_GATE_UNRUNNABLE).splitlines() if ln.startswith("검증")), ""
+    )
     assert line
     assert "돌릴 수 없" in line, line
 
 
-def test_a_strong_grade_adds_no_weak_evidence_line() -> None:
-    for grade in ("A", "B"):
-        summary = _summary_for(grade)
-        assert "돌릴" not in summary, f"grade {grade} must not claim weak evidence"
+def test_strong_evidence_adds_no_weak_evidence_line() -> None:
+    assert "돌릴" not in _summary_for(_GATE_PASSED)
+
+
+def test_a_non_product_run_says_nothing_about_gates() -> None:
+    """A Direct scratch answer has no repo-gate concept to be weak about. This
+    rode the ladder's ``None`` grade; it now rides ``gate_applicable``."""
+    assert "돌릴" not in _summary_for(_GATE_NA)
 
 
 def test_english_workspaces_get_it_too() -> None:
     from backend.workflow.domain.verified_deliverable import _shipped_detail
 
-    detail = _shipped_detail(_summary_for("D", language="en"))
+    detail = _shipped_detail(_summary_for(_GATE_ABSENT, language="en"))
     assert "runnable" in detail.lower(), detail
 
 
@@ -2072,7 +2096,7 @@ def test_a_weak_finish_does_not_also_claim_a_plain_pass() -> None:
     picks up. The judge passing IS "내용만 확인했어요"; saying it twice, once
     unqualified, is the composition lying where neither sentence does.
     """
-    summary = _summary_for("D")
+    summary = _summary_for(_GATE_ABSENT)
     verify_lines = [ln for ln in summary.splitlines() if ln.startswith("검증")]
     assert len(verify_lines) == 1, verify_lines
     assert "검증 통과." not in summary
@@ -2088,7 +2112,7 @@ def test_a_strong_finish_still_reports_the_acceptance_pass() -> None:
         run,  # type: ignore[arg-type]
         "",
         ["backend/x.py"],
-        {"honesty_grade": "B", "command_results": [], "judge": {"passed": True}},
+        {**_GATE_PASSED, "command_results": [], "judge": {"passed": True}},
         "ko",
     )
     assert "검증 통과." in summary

@@ -7273,34 +7273,6 @@ main.login {
   gap: 10px;
 }
 
-/* Honesty grade badge A–D — how strongly a PASS holds. Weak grades read weak. */
-.report-grade {
-  align-self: flex-start;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 2px 9px;
-  border-radius: 999px;
-  border: 1px solid var(--hair-strong);
-  color: var(--ink-2);
-  cursor: default;
-}
-.report-grade--a {
-  color: var(--good-ink, #1a7f4b);
-  border-color: var(--good-dot, #9fd3b4);
-  background: var(--good-bg, #eef8f1);
-}
-.report-grade--b {
-  color: var(--ink-2);
-  border-color: var(--hair-strong);
-}
-.report-grade--c,
-.report-grade--d {
-  color: var(--amber-ink);
-  border-color: var(--amber-dot);
-  background: var(--accent-bg);
-}
-
 /* I2 result-demonstration — "we ran it against the result and saw this". */
 .report-demo__lead {
   font-size: 0.82rem;
