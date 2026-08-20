@@ -1,8 +1,9 @@
-"""Knowledge context — domain layer (Lift I-Repo-Knowledge).
+"""Knowledge context — domain layer.
 
-Houses the Repository Protocols that the Knowledge context's application code
-depends on. Concrete implementations live in
-:mod:`backend.knowledge.infrastructure.repositories`.
+Holds :mod:`.retraction`. The Repository Protocols that used to live here
+(note / proposal / canonical-anchor) were deleted 2026-08-20 along with the
+producer-less Postgres mirror they read: nothing wrote those tables, and the
+vault is the source of truth for knowledge.
 """
 
 from __future__ import annotations

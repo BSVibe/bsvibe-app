@@ -24,7 +24,6 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import get_settings
-from backend.knowledge.canonicalization.db import CanonicalizationBase
 from backend.router.accounts.models import AccountsBase
 
 from .._support import db_engine, fake_current_user
@@ -37,7 +36,7 @@ async def db(monkeypatch):
     # Provide a deterministic KMS key for the cipher init.
     monkeypatch.setenv("BSVIBE_GATEWAY_KMS_KEY_B64", base64.urlsafe_b64encode(b"0" * 32).decode())
     get_settings.cache_clear()
-    async with db_engine(AccountsBase, CanonicalizationBase) as (engine, _is_pg):
+    async with db_engine(AccountsBase) as (engine, _is_pg):
         yield async_sessionmaker(engine, expire_on_commit=False)
     get_settings.cache_clear()
 

@@ -142,8 +142,11 @@ def test_alembic_head_is_connector_last_import():
     # drop_gateway_routing -> drop_budget_policies (``account_budget_policies``
     # — 0 rows in prod with no way to create one, so ``BudgetExceeded`` could
     # never fire; its two dedicated enum types go with it).
+    # drop_budget_policies -> drop_canon_pg_mirror (the producer-less
+    # canonicalization / retrieval mirror — 5 tables, 0 rows, and the codebase
+    # said so itself; reading one of them was a GDPR Art. 15/20 defect).
     # NOTE revision ids are capped at 32 chars by ``alembic_version.version_num``.
-    assert "drop_budget_policies" in result.stdout
+    assert "drop_canon_pg_mirror" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -155,7 +158,6 @@ def test_target_metadata_covers_all_bases():
     from backend.executors.db import ExecutorsBase
     from backend.identity.db import IdentityBase
     from backend.identity.workspaces_db import WorkspacesBase
-    from backend.knowledge.canonicalization.db import CanonicalizationBase
     from backend.knowledge.retrieval.db import RetrievalBase
     from backend.notifications.db import NotificationsBase
     from backend.router.accounts.models import AccountsBase
@@ -175,11 +177,6 @@ def test_target_metadata_covers_all_bases():
         "intent_definitions",
         "intent_examples",
         # Bundle K
-        "canonical_anchors",
-        "canonicalization_proposals",
-        "canonicalization_decisions",
-        "canonicalization_policies",
-        "retrieval_queries",
         # Bundle X
         "execution_runs",
         "execution_run_history",
@@ -228,7 +225,6 @@ def test_target_metadata_covers_all_bases():
         | set(GatewayEmbeddingBase.metadata.tables)
         | set(SupervisorBase.metadata.tables)
         | set(AuditOutboxBase.metadata.tables)
-        | set(CanonicalizationBase.metadata.tables)
         | set(RetrievalBase.metadata.tables)
         | set(ExecutionBase.metadata.tables)
         | set(IntakeBase.metadata.tables)
