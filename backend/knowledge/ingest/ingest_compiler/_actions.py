@@ -3,9 +3,8 @@
 Lift L3 (v8 §17.6) split this off the orchestration class to keep
 ``_compiler.py`` under 400 LOC. The module owns:
 
-- ``UpdateAction`` / ``CompileResult`` / ``IngestBatchRecord`` /
-  ``IngestBatchRecorder`` — the data shapes exchanged across the compile
-  surface.
+- ``UpdateAction`` / ``CompileResult`` — the data shapes exchanged across
+  the compile surface.
 - ``execute_plan`` — turn a validated LLM plan into garden writes.
 - Stub creation, tag canonicalization, action validation.
 
@@ -17,7 +16,7 @@ chunks or retrieval — those concerns live one level up.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 
@@ -90,12 +89,6 @@ class CompileResult:
     notes_created: int
     seed_path: str = ""
     llm_calls: int = 1
-    # Telemetry for the ``ingest_batches`` analytics row (see
-    # :class:`backend.knowledge.ingest.db.IngestBatch`). ``seed_count`` is
-    # the number of input :class:`BatchItem`s; ``elapsed_ms`` the wall-clock
-    # cost of the whole batch compile. Populated by ``compile_batch``.
-    seed_count: int = 0
-    elapsed_ms: int = 0
     # Lift E8 Bug 2 — count of chunks that raised inside ``compile_batch``'s
     # per-chunk try/except. Surfaces the silent-fail signal callers (today the
     # product-bootstrap runtime) need to decide ``failed`` vs ``complete``
@@ -103,41 +96,6 @@ class CompileResult:
     # ``chunk_failures == 0`` while an executor-without-redis bootstrap shows
     # ``chunk_failures == chunk_count``.
     chunk_failures: int = 0
-
-
-@dataclass(frozen=True)
-class IngestBatchRecord:
-    """The data needed to persist one ``ingest_batches`` analytics row.
-
-    Decouples :class:`IngestCompiler` from the DB: the compiler hands this
-    plain record to an optional :class:`IngestBatchRecorder` seam, and the
-    request-handler glue (a later chunk) backs that seam with a SQLAlchemy
-    writer. Keeping the row write behind a Protocol means the compiler core
-    imports no session machinery and stays unit-testable with a fake.
-    """
-
-    seed_source: str
-    seed_count: int
-    notes_created: int
-    notes_updated: int
-    llm_calls: int
-    chunk_count: int
-    chunk_failures: int
-    elapsed_ms: int
-
-
-@runtime_checkable
-class IngestBatchRecorder(Protocol):
-    """Persists an :class:`IngestBatchRecord` (the per-batch analytics row).
-
-    Production binds this to a writer over
-    :class:`backend.knowledge.ingest.db.IngestBatch` (workspace_id + region
-    come from the same :class:`~backend.knowledge.factory.KnowledgeFactory`
-    boundary that scoped the vault). ``None`` keeps the row write optional —
-    a missing recorder must never break ingest.
-    """
-
-    async def record(self, record: IngestBatchRecord) -> None: ...
 
 
 def empty_compile_result() -> CompileResult:
