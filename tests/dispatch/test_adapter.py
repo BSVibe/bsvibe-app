@@ -140,7 +140,7 @@ class TestLiteLLMAdapter:
         finally:
             set_output_language("en")
 
-    async def test_supported_methods_chat_only(self) -> None:
+    async def test_the_adapter_exposes_the_chat_surface(self) -> None:
         adapter = LiteLLMAdapter(
             account=_stub_account(),
             api_key="",
@@ -149,7 +149,8 @@ class TestLiteLLMAdapter:
             account_id=uuid.uuid4(),
             model_account_id=uuid.uuid4(),
         )
-        assert adapter.supported_methods == frozenset({"chat"})
+        # 능력의 정의는 **메서드 표면**이다 — 그것을 미러한 enum 은 2026-08-21 에 지웠다.
+        assert callable(adapter.chat)
 
     async def test_chat_propagates_per_caller_timeout(self) -> None:
         """Lift E9 — when constructed with ``timeout_s`` the adapter folds
@@ -322,7 +323,7 @@ def _stub_await_completion(result: _StubCompletedTask) -> Any:
 
 
 class TestExecutorAdapterChat:
-    async def test_supported_methods_chat_only(self) -> None:
+    async def test_the_adapter_exposes_the_chat_surface(self) -> None:
         async with memory_session() as s:
             adapter = ExecutorAdapter(
                 account=_stub_account("executor"),
@@ -332,7 +333,8 @@ class TestExecutorAdapterChat:
                 session=s,
                 settings=get_settings(),
             )
-            assert adapter.supported_methods == frozenset({"chat"})
+            # 능력의 정의는 **메서드 표면**이다 — 그것을 미러한 enum 은 2026-08-21 에 지웠다.
+        assert callable(adapter.chat)
 
     async def test_chat_with_tools_no_longer_rejects(self) -> None:
         """Lift E30 — passing tools to ExecutorAdapter MUST NOT raise.

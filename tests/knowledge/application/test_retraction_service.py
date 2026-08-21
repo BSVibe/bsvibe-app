@@ -25,11 +25,9 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.knowledge.application.retraction_service import (
-    CorrectionUnavailableError,
     RetractionService,
 )
 from backend.knowledge.domain.retraction import UNDO_WINDOW_SECONDS
@@ -345,50 +343,15 @@ async def test_restore_clears_tombstone(
     assert "retraction_reason" not in text
 
 
-async def test_correct_issue_is_refused_no_row_no_audit(
-    sf: async_sessionmaker[AsyncSession],
-    vault_root: Path,
-    workspace_id: uuid.UUID,
-    actor_id: uuid.UUID,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``correct`` has no in-place field-rewrite implementation, so the service
-    REFUSES it honestly — it must NOT persist a correction row and must NOT
-    emit any audit event. The old behaviour minted a row + emitted a false
-    ``ontology.correction.applied`` for an operation that changed nothing; the
-    honest contract is a hard refusal at intake.
+def test_correct_is_no_longer_an_offerable_action() -> None:
+    """``"correct"`` 는 이제 **고를 수 없다** — 스키마 경계가 먼저 막는다.
+
+    예전에는 ``issue`` 가 런타임에 ``CorrectionUnavailableError`` 로 거절했다.
+    구현되지 않은 선택지를 메뉴에 올려두고 고르면 에러를 주는 모양이었다.
     """
-    emitted: list[str] = []
+    from backend.knowledge.domain.retraction import OntologyAction
 
-    async def _spy_emit(event: object, *, session: object, emitter: object = None) -> None:
-        emitted.append(type(event).__name__)
-
-    monkeypatch.setattr(
-        "backend.knowledge.application.retraction_service.safe_emit",
-        _spy_emit,
-    )
-
-    rel_path = _seed_note(vault_root)
-    async with sf() as session:
-        service = RetractionService(session=session, writer=_writer(vault_root))
-        with pytest.raises(CorrectionUnavailableError):
-            await service.issue(
-                workspace_id=workspace_id,
-                actor_id=actor_id,
-                node_ref=rel_path,
-                action="correct",
-                reason="typo in the answer",
-            )
-        await session.commit()
-        count = (
-            await session.execute(select(func.count()).select_from(OntologyCorrection))
-        ).scalar_one()
-
-    assert count == 0, "a refused correction must not persist a row"
-    assert emitted == [], "a refused correction must not emit any audit event"
-    # The note is untouched.
-    text = (vault_root / rel_path).read_text(encoding="utf-8")
-    assert "retracted_at" not in text
+    assert OntologyAction.__args__ == ("retract",)
 
 
 async def test_apply_pending_never_applies_a_correct_row(

@@ -32,7 +32,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.config import Settings
 from backend.dispatch.adapter import ModelAccountAdapter, adapter_for
 from backend.dispatch.caller_registry import (
-    CallerSpec,
     get_caller_spec,
 )
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
@@ -46,7 +45,6 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 __all__ = [
-    "NoAdapterMethodError",
     "NoMatchingRouteError",
     "ResolvedAccount",
     "ModelAccountResolver",
@@ -68,20 +66,6 @@ class NoMatchingRouteError(Exception):
         )
         self.caller_id = caller_id
         self.workspace_id = workspace_id
-
-
-class NoAdapterMethodError(Exception):
-    """The matched adapter does not support every method the caller needs.
-
-    Rule creation should catch this at write time (the validator lives in
-    the rules service); the resolver still raises defensively in case a
-    rule was created before the spec was tightened.
-    """
-
-    def __init__(self, *, caller_id: str, missing: frozenset[str]) -> None:
-        super().__init__(f"adapter missing methods {sorted(missing)!r} for caller {caller_id!r}")
-        self.caller_id = caller_id
-        self.missing = missing
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,7 +273,6 @@ class ModelAccountResolver:
         # Defensive validation — rule creation is supposed to catch this
         # at write time, but a workspace_default fallback bypasses the
         # rule validator so we re-check here.
-        self._check_supported(spec, adapter)
 
         logger.info(
             "dispatch_resolve_hit",
@@ -522,9 +505,3 @@ class ModelAccountResolver:
             default_account_id=str(default_id),
         )
         return None
-
-    @staticmethod
-    def _check_supported(spec: CallerSpec, adapter: ModelAccountAdapter) -> None:
-        missing = spec.required_methods - adapter.supported_methods
-        if missing:
-            raise NoAdapterMethodError(caller_id=spec.caller_id, missing=missing)
