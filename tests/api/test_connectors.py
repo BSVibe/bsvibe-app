@@ -354,15 +354,24 @@ async def test_catalog_lists_user_connectable_with_flags(client: httpx.AsyncClie
     assert by_name["notion"]["artifact_types"] == ["page", "page_image"]
 
     # Every entry carries the full flag set (extra=forbid enforces exactness).
+    # ``interactive_approval`` (감사 C11) — 버튼 탭 승인 능력이 카탈로그 안에서
+    # 파생된다. 예전엔 ``api/webhooks.py`` 의 딕셔너리로 카탈로그 밖에서 손유지됐다.
     for e in entries:
         assert set(e) == {
             "name",
             "outbound",
             "importable",
             "webhook_trigger",
+            "interactive_approval",
             "artifact_types",
             "import_action",
         }
+    # 세 인터랙티브 커넥터만 True — 등록부에서 파생됐다는 실증.
+    assert {n for n, e in by_name.items() if e["interactive_approval"]} == {
+        "telegram",
+        "slack",
+        "discord",
+    }
 
 
 # --------------------------------------------------------------------------

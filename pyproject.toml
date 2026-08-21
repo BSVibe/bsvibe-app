@@ -306,6 +306,11 @@ ignore_imports = [
     "backend.mcp.tools.connectors_tools -> backend.api.v1.connectors",
     "backend.mcp.tools.connectors_tools -> backend.connectors.catalog",
     "backend.mcp.tools.connectors_tools -> backend.connectors.db",
+    # C4 — MCP 커넥터 목록도 REST 와 같은 배치 조회로 OAuth 라벨 + ``needs_reauth``
+    # 를 채운다. 이 행을 못 읽으면 MCP 사용자는 재연결이 필요한 커넥터를 볼 수
+    # 없다(그게 이 PR 이 고친 드리프트다). ``connectors.db`` 예외와 같은 종류의,
+    # 같은 툴 모듈에 한정된 read-only 엣지다.
+    "backend.mcp.tools.connectors_tools -> backend.connectors.auth.db",
     "backend.mcp.tools.connectors_tools -> backend.extensions.plugin.base",
     "backend.mcp.tools.connectors_tools -> backend.router.accounts.crypto",
     # Lift D3b — UI-parity workflow tools (bindings / decisions / routing
