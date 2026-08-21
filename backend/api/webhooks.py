@@ -38,7 +38,6 @@ Response contract:
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 import structlog
@@ -50,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_db_session
 from backend.config import get_settings
 from backend.connectors.handshake import handshake_response
+from backend.connectors.interactions import interaction_callback
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
 from backend.extensions.plugin.webhook_registry import (
     WebhookParserRegistry,
@@ -65,83 +65,13 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter()
 
+
 # A connector's interactive-approval route entrypoint: settle a held Safe-Mode
 # item from an inline tap. Returns ``True`` when it handled the tap (the route
 # replies its default callback 200), ``False`` to fall through to the
 # handshake/skip path, or its OWN :class:`Response` when the connector must reply
 # a connector-specific body (Discord returns a DEFERRED ``{"type": 6}`` response
 # carrying the background approval task — see ``process_discord_callback``).
-_InteractionCallback = Callable[..., Awaitable[bool | Response]]
-
-
-async def _telegram_interaction_callback(
-    *,
-    raw_body: bytes,
-    account: Any,
-    session: AsyncSession,
-    cipher: CredentialCipher,
-) -> bool:
-    """Delegate a telegram callback_query tap to its handler. The import is LAZY
-    (inside the call) so ``backend.api.webhooks`` keeps ZERO static ``plugin.*``
-    edges (R2c) and tests can monkeypatch the handler at call time."""
-    from backend.connectors.telegram_callback import (  # noqa: PLC0415
-        process_telegram_callback,
-    )
-
-    return await process_telegram_callback(
-        raw_body=raw_body, account=account, session=session, cipher=cipher
-    )
-
-
-async def _slack_interaction_callback(
-    *,
-    raw_body: bytes,
-    account: Any,
-    session: AsyncSession,
-    cipher: CredentialCipher,
-) -> bool:
-    """Delegate a slack block_actions tap to its handler. The import is LAZY
-    (inside the call) so ``backend.api.webhooks`` keeps ZERO static ``plugin.*``
-    edges (R2c) and tests can monkeypatch the handler at call time."""
-    from backend.connectors.slack_callback import (  # noqa: PLC0415
-        process_slack_callback,
-    )
-
-    return await process_slack_callback(
-        raw_body=raw_body, account=account, session=session, cipher=cipher
-    )
-
-
-async def _discord_interaction_callback(
-    *,
-    raw_body: bytes,
-    account: Any,
-    session: AsyncSession,
-    cipher: CredentialCipher,
-) -> bool | Response:
-    """Delegate a discord component tap to its handler. The import is LAZY (inside
-    the call) so ``backend.api.webhooks`` keeps ZERO static ``plugin.*`` edges (R2c)
-    and tests can monkeypatch the handler at call time. Returns a DEFERRED
-    ``{"type": 6}`` :class:`Response` (with the approval scheduled on a background
-    task) for a real tap, or ``False`` to fall through to the PING/skip path."""
-    from backend.connectors.discord_callback import (  # noqa: PLC0415
-        process_discord_callback,
-    )
-
-    return await process_discord_callback(
-        raw_body=raw_body, account=account, session=session, cipher=cipher
-    )
-
-
-# connector -> its interactive-approval entrypoint. Adding a connector is a
-# one-line registration (each keeps its own lazy import, per R2c).
-_INTERACTION_CALLBACKS: dict[str, _InteractionCallback] = {
-    "telegram": _telegram_interaction_callback,
-    "slack": _slack_interaction_callback,
-    "discord": _discord_interaction_callback,
-}
-
-
 def _repo_slug(repo: str) -> str:
     """Normalize a repo URL or ``owner/name`` to a lowercase ``owner/name`` so a
     connector's ``https://github.com/o/r`` matches a product's ``o/r`` binding."""
@@ -252,7 +182,7 @@ async def receive_connector_webhook(  # noqa: PLR0911 — 404/401/handshake/call
         # ``resolver.dispatch`` above (the parser verifies then yields event=None
         # for an interaction). Dispatched by connector via a lazy import so this
         # module keeps zero plugin edges (R2c).
-        callback = _INTERACTION_CALLBACKS.get(connector)
+        callback = interaction_callback(connector)
         if callback is not None:
             handled = await callback(
                 raw_body=raw_body, account=account, session=session, cipher=cipher

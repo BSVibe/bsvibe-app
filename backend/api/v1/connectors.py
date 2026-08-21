@@ -57,6 +57,12 @@ from backend.api.deps import get_db_session, get_workspace_id
 # Reuse the ingress's cipher dependency so the create-side encrypt and the
 # webhook-side decrypt share one (test-overridable) cipher.
 from backend.api.webhooks import get_credential_cipher
+from backend.common.connector_redaction import (
+    public_delivery_config as _public_delivery_config,
+)
+from backend.common.connector_redaction import (
+    token_hint as _token_hint,
+)
 from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.connectors.catalog import ConnectorInfo, get_connector_catalog
@@ -152,6 +158,7 @@ class ConnectorCreated(BaseModel):
     outbound: bool
     importable: bool
     webhook_trigger: bool
+    interactive_approval: bool
 
 
 class ConnectorOut(BaseModel):
@@ -172,6 +179,7 @@ class ConnectorOut(BaseModel):
     outbound: bool
     importable: bool
     webhook_trigger: bool
+    interactive_approval: bool
     last_import_at: datetime | None
     last_import_count: int | None
     # Lift 1 — for oauth2 connectors (github, …): the connected account's
@@ -220,6 +228,7 @@ class CatalogEntry(BaseModel):
     outbound: bool
     importable: bool
     webhook_trigger: bool
+    interactive_approval: bool
     artifact_types: list[str]
     import_action: str | None
 
@@ -230,25 +239,6 @@ class ConnectorCatalog(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     connectors: list[CatalogEntry]
-
-
-# delivery_config keys that carry a SECRET and must never be returned over the
-# API. The inbound ``webhook_secret`` is the signing secret the founder pastes
-# from the external provider's console — it authenticates the provider TO us, so
-# echoing it into a list/create/patch response would leak a live credential to
-# the PWA (and anyone who reads that JSON). Redaction is response-side ONLY: the
-# STORED row keeps the key so the ingress can still verify signatures.
-_SECRET_DELIVERY_KEYS = frozenset({"webhook_secret", "signing_secret", "client_secret"})
-
-
-def _public_delivery_config(cfg: dict[str, Any]) -> dict[str, Any]:
-    """A copy of ``cfg`` with secret-bearing keys dropped (response-side only)."""
-    return {k: v for k, v in cfg.items() if k not in _SECRET_DELIVERY_KEYS}
-
-
-def _token_hint(webhook_token: str) -> str:
-    """Last 4 chars only — enough to recognise, not enough to use."""
-    return f"...{webhook_token[-4:]}"
 
 
 def _capabilities(connector: str) -> ConnectorInfo | None:
@@ -274,6 +264,7 @@ def _row_to_out(
         outbound=bool(info and info.outbound),
         importable=bool(info and info.importable),
         webhook_trigger=bool(info and info.webhook_trigger),
+        interactive_approval=bool(info and info.interactive_approval),
         last_import_at=row.last_import_at,
         last_import_count=row.last_import_count,
         oauth_account_label=oauth_account_label,
@@ -341,6 +332,7 @@ async def get_catalog() -> ConnectorCatalog:
             outbound=info.outbound,
             importable=info.importable,
             webhook_trigger=info.webhook_trigger,
+            interactive_approval=info.interactive_approval,
             artifact_types=list(info.artifact_types),
             import_action=info.import_action,
         )
@@ -383,6 +375,7 @@ async def create_connector(
         outbound=bool(info and info.outbound),
         importable=bool(info and info.importable),
         webhook_trigger=bool(info and info.webhook_trigger),
+        interactive_approval=bool(info and info.interactive_approval),
     )
 
 

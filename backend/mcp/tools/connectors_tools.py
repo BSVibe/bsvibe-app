@@ -32,7 +32,14 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import select
 
 from backend.api.v1.connectors import get_import_dispatcher
+from backend.common.connector_redaction import (
+    public_delivery_config as _public_delivery_config,
+)
+from backend.common.connector_redaction import (
+    token_hint as _token_hint,
+)
 from backend.connectors.auth import service as oauth_service
+from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.catalog import get_connector_catalog
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.base import PluginRunError
@@ -46,16 +53,6 @@ _IMPORTED_COUNT_KEYS = (
     "pages_count",
     "imported_count",
 )
-# Secret-bearing delivery_config keys — redacted response-side only (the stored
-# row keeps them so the ingress can still verify signatures). Mirrors the REST
-# ``_SECRET_DELIVERY_KEYS`` in ``backend/api/v1/connectors.py`` so MCP + PWA are
-# consistent (previously the MCP serializer echoed these unredacted).
-_SECRET_DELIVERY_KEYS = frozenset({"webhook_secret", "signing_secret", "client_secret"})
-
-
-def _public_delivery_config(cfg: dict[str, Any]) -> dict[str, Any]:
-    """A copy of ``cfg`` with secret-bearing keys dropped (response-side only)."""
-    return {k: v for k, v in cfg.items() if k not in _SECRET_DELIVERY_KEYS}
 
 
 class _Envelope(RootModel[Any]):
@@ -65,12 +62,12 @@ class _Envelope(RootModel[Any]):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _token_hint(webhook_token: str) -> str:
-    """Last 4 chars only — enough to recognise, not enough to use."""
-    return f"...{webhook_token[-4:]}"
-
-
-def _row_to_dict(row: ConnectorAccountRow) -> dict[str, Any]:
+def _row_to_dict(
+    row: ConnectorAccountRow,
+    *,
+    oauth_account_label: str | None = None,
+    needs_reauth: bool = False,
+) -> dict[str, Any]:
     info = get_connector_catalog().get(row.connector)
     return {
         "id": str(row.id),
@@ -83,6 +80,12 @@ def _row_to_dict(row: ConnectorAccountRow) -> dict[str, Any]:
         "outbound": bool(info and info.outbound),
         "importable": bool(info and info.importable),
         "webhook_trigger": bool(info and info.webhook_trigger),
+        # C11 — INV-1 카탈로그에서 파생된다. 이 커넥터가 버튼 탭 승인을 받을 수 있나.
+        "interactive_approval": bool(info and info.interactive_approval),
+        "oauth_account_label": oauth_account_label,
+        # C4 드리프트 수정 — REST 응답에는 있고 MCP 에는 없던 필드. 토큰이 죽어
+        # 재연결이 필요한 커넥터를 MCP 사용자도 볼 수 있어야 한다.
+        "needs_reauth": needs_reauth,
         "last_import_at": row.last_import_at.isoformat() if row.last_import_at else None,
         "last_import_count": row.last_import_count,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -133,7 +136,30 @@ async def _h_list(_args: ConnectorsListInput, ctx: ToolContext) -> Any:
         .scalars()
         .all()
     )
-    return _Envelope([_row_to_dict(r) for r in rows])
+    # REST 목록과 같은 한 번의 배치 조회 — 바인딩별 OAuth 라벨 + 상태 (Lift E46).
+    token_rows = (
+        await ctx.session.execute(
+            select(
+                ConnectorOAuthTokenRow.connector_account_id,
+                ConnectorOAuthTokenRow.account_label,
+                ConnectorOAuthTokenRow.status,
+            ).where(ConnectorOAuthTokenRow.connector_account_id.in_([r.id for r in rows]))
+        )
+    ).all()
+    labels = {account_id: label for account_id, label, _status in token_rows}
+    needs_reauth_by_id = {
+        account_id: status == "needs_reauth" for account_id, _label, status in token_rows
+    }
+    return _Envelope(
+        [
+            _row_to_dict(
+                r,
+                oauth_account_label=labels.get(r.id),
+                needs_reauth=needs_reauth_by_id.get(r.id, False),
+            )
+            for r in rows
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------

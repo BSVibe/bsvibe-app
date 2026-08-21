@@ -34,6 +34,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from backend.connectors.hidden import HIDDEN_CONNECTORS
+from backend.connectors.interactions import INTERACTION_CONNECTORS
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.webhook_registry import WebhookParserRegistry
 
@@ -58,6 +59,10 @@ class ConnectorInfo:
     outbound: bool
     importable: bool
     webhook_trigger: bool
+    #: 버튼 탭 승인을 받는가 — :data:`backend.connectors.interactions.
+    #: INTERACTION_CONNECTORS` 에서 파생된다. 예전엔 ``api/webhooks.py`` 의
+    #: 딕셔너리로 이 축이 카탈로그 밖에서 손유지됐다 (감사 C11).
+    interactive_approval: bool
     artifact_types: tuple[str, ...]
     import_action: str | None
     user_connectable: bool
@@ -83,6 +88,7 @@ def build_connector_catalog(
             outbound=bool(meta.outbounds),
             importable=import_action is not None,
             webhook_trigger=webhook_registry.is_known(name),
+            interactive_approval=name in INTERACTION_CONNECTORS,
             artifact_types=artifact_types,
             import_action=import_action,
             user_connectable=name not in HIDDEN_CONNECTORS,
