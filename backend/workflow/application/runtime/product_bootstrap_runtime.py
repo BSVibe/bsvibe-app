@@ -36,6 +36,17 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.common.bootstrap_status import (
+    STATUS_ANALYZING,
+    STATUS_CLONING,
+    STATUS_COMPLETE,
+    STATUS_FAILED_CLONE,
+    STATUS_FAILED_INGEST,
+    STATUS_FAILED_TOO_LARGE,
+    STATUS_INGESTING,
+    STATUS_PENDING,
+    STATUS_SKIPPED_CLIENT_ATTACH,
+)
 from backend.config import Settings, get_settings
 from backend.connectors.auth.resolve import resolve_github_token
 from backend.dispatch.caller_registry import CALLER_KNOWLEDGE_INGEST
@@ -84,21 +95,9 @@ _AUDIT_COMPLETED = "audit.product.bootstrap_completed"
 _AUDIT_FAILED = "audit.product.bootstrap_failed"
 
 
-#: Lifecycle vocabulary — kept here so the API surface + the PWA can
-#: agree on the exact strings without a free-string drift. Mirrors the
-#: migration's docstring.
-STATUS_PENDING = "pending"
-STATUS_CLONING = "cloning"
-STATUS_ANALYZING = "analyzing"
-STATUS_INGESTING = "ingesting"
-STATUS_COMPLETE = "complete"
-#: #692 — the product runs on the founder's OWN machine, so BSVibe must not
-#: clone or ingest its source server-side. Neither ``complete`` (nothing was
-#: ingested) nor ``failed`` (nothing went wrong): an honest third terminal.
-STATUS_SKIPPED_CLIENT_ATTACH = "skipped:client_attach"
-STATUS_FAILED_CLONE = "failed:clone"
-STATUS_FAILED_TOO_LARGE = "failed:too_large"
-STATUS_FAILED_INGEST = "failed:ingest"
+#: 수명주기 어휘는 :mod:`backend.common.bootstrap_status` 가 SoT 다.
+#: 여기서는 기존 이름을 그대로 재수출한다 — 이 모듈의 의존 사슬이 무거워
+#: MCP 가 직접 가져갈 수 없기 때문에 leaf 로 내렸다 (감사 C2).
 
 
 # Module-level scratchpad of running tasks. ``asyncio.create_task`` returns

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from backend.common.bootstrap_status import IN_FLIGHT_STATUSES
 from backend.identity.workspaces_db import ProductRow
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.workflow.application.product_secrets import sealed_product_metadata
@@ -265,7 +266,7 @@ async def _h_products_create(args: ProductsCreateInput, ctx: ToolContext) -> Any
 # status). Both require ``mcp:write`` — the founder is mutating prod
 # state, even when the mutation looks innocuous.
 # ---------------------------------------------------------------------------
-_IN_FLIGHT_STATUSES = frozenset({"pending", "cloning", "analyzing", "ingesting"})
+_IN_FLIGHT_STATUSES = IN_FLIGHT_STATUSES
 _TERMINAL_STATUSES = frozenset(
     {"complete", "failed", "failed:clone", "failed:ingest", "failed:too_large"}
 )

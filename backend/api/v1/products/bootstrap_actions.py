@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.api.deps import get_db_session, get_db_session_factory, get_workspace_id
+from backend.common.bootstrap_status import IN_FLIGHT_STATUSES
 from backend.identity.workspaces_db import ProductRow
 
 from ._schemas import ProductResponse
@@ -38,7 +39,7 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 
-_IN_FLIGHT_STATUSES = frozenset({"pending", "cloning", "analyzing", "ingesting"})
+_IN_FLIGHT_STATUSES = IN_FLIGHT_STATUSES
 
 
 async def _resolve_product(
