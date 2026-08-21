@@ -261,49 +261,6 @@ async def remove_product_workspace(product_id: uuid.UUID) -> None:
     logger.info("product_workspace_removed", product_id=str(product_id), path=str(path))
 
 
-async def push_product_bundle(
-    product_id: uuid.UUID,
-    *,
-    store: ProductBundleStore | None = None,
-) -> bool:
-    """Persist the product's repo to its durable off-box home as a git bundle.
-
-    ``git bundle create --all`` packs objects AND refs, so the stored object
-    restores a COMPLETE repo — history, ``main``, and any in-flight
-    ``bsvibe/run/<id>`` branches. ``--all`` matters: a bundle of ``main`` alone
-    would silently drop an in-flight run's commits the next time the repo is
-    materialised from the bundle.
-
-    Returns ``True`` when a bundle was pushed, ``False`` when the product has no
-    repo on disk (never provisioned, or already reclaimed) — an ordinary state,
-    not an error, since the caller is a ship path whose merge already succeeded.
-
-    Callers MUST hold :func:`product_workspace_lock` across ``merge_to_main`` +
-    this push, so two concurrent ships can't publish out of order and leave the
-    older tree as the product's record.
-    """
-    repo = product_workspace_path(product_id)
-    if not (repo / ".git").exists():
-        return False
-    if store is None:
-        from backend.storage.product_bundle_store import (  # noqa: PLC0415
-            build_bundle_store,
-        )
-
-        store = build_bundle_store()
-
-    if await _is_shallow(repo) and not await _try_unshallow(repo):
-        logger.warning("product_bundle_push_skipped_shallow", product_id=str(product_id))
-        return False
-
-    with tempfile.TemporaryDirectory(prefix="bsvibe-bundle-") as tmp:
-        bundle = Path(tmp) / f"{product_id}.bundle"
-        await _git("bundle", "create", str(bundle), "--all", cwd=repo)
-        await store.put(product_id, bundle)
-    logger.info("product_bundle_persisted", product_id=str(product_id))
-    return True
-
-
 async def ensure_or_init_product_workspace(
     product_id: uuid.UUID,
     *,
@@ -406,11 +363,13 @@ async def publish_product_bundle(
     """Publish the product's repo by MERGING ONTO whatever the store currently
     holds — never by overwriting it.
 
-    :func:`push_product_bundle` replaces the stored object with a snapshot of
-    the local repo. That is last-write-wins at the blob level: if anything
-    published between this box materialising its copy and this call, that work
-    is destroyed with no trace. Since the whole point of moving a product's home
-    off-box is that the box's copy is a *cache*, the publish has to reconcile.
+    A plain "replace the stored object with a snapshot of the local repo" is
+    last-write-wins at the blob level: if anything published between this box
+    materialising its copy and this call, that work is destroyed with no trace.
+    That snapshot variant (``push_product_bundle``) had zero callers and was
+    deleted 2026-08-21 precisely because this note names it as data-destroying.
+    Since the whole point of moving a product's home off-box is that the box's
+    copy is a *cache*, the publish has to reconcile.
 
     So: fetch the store's bundle, ``git fetch`` it as a temporary remote, and
     merge its ``main`` into the local ``main``.
@@ -1071,7 +1030,6 @@ __all__ = [
     "ensure_product_workspace",
     "PublishOutcome",
     "publish_product_bundle",
-    "push_product_bundle",
     "read_product_file",
     "remove_product_workspace",
     "remove_run_worktree",

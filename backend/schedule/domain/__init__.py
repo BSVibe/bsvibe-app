@@ -11,11 +11,9 @@ Two seams live here, both as :mod:`typing.Protocol`:
   ``next_run_at`` after firing; a real-cron implementation can be
   swapped in without rewriting the runner.
 
-The two ``Advancer`` impls shipped today are deliberately small:
-:class:`OneShotScheduleAdvancer` (honestly one-shot — the M1 deferral
-of the cron parser) and :class:`FixedIntervalScheduleAdvancer` (fixed
-``timedelta``, for callers that want recurrence without full cron
-semantics yet).
+The only ``Advancer`` impl is :class:`CronScheduleAdvancer` (standard
+5-field cron, UTC). The one-shot / fixed-interval placeholders that predated
+the cron parser had zero callers and were deleted 2026-08-21.
 """
 
 from __future__ import annotations

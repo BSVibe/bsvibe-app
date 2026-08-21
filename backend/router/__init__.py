@@ -9,7 +9,6 @@ adapter) per founder policy ``bsvibe-no-implicit-routing``.
 
 Public surface (union):
 
-- :mod:`backend.router.facade` — Router Protocol + LLM I/O dataclasses.
 - :mod:`backend.router.accounts` — ``ModelAccount`` entity + CRUD.
 - :mod:`backend.router.dispatch` — dispatch error types.
 - :mod:`backend.router.llm_client` — folded ``bsvibe-llm`` wrapper.
@@ -23,21 +22,11 @@ or the rule-evaluation table directly.
 from __future__ import annotations
 
 from backend.router.dispatch import DispatchError, ModelAccountNotFound
-from backend.router.facade import (
-    LlmRequest,
-    LlmResult,
-    LlmRoutingHints,
-    Router,
-)
 from backend.router.llm_client import LlmClient, LlmResponse
 
 __all__ = [
     "DispatchError",
     "LlmClient",
-    "LlmRequest",
     "LlmResponse",
-    "LlmResult",
-    "LlmRoutingHints",
     "ModelAccountNotFound",
-    "Router",
 ]

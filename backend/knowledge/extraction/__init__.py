@@ -14,7 +14,6 @@ from backend.knowledge.extraction.worth_remembering import (
     RememberableKnowledge,
     is_inherently_notable,
     parse_declared_knowledge,
-    parse_extraction,
 )
 
 __all__ = [
@@ -22,5 +21,4 @@ __all__ = [
     "RememberableKnowledge",
     "is_inherently_notable",
     "parse_declared_knowledge",
-    "parse_extraction",
 ]

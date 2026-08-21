@@ -13,7 +13,7 @@ lands in the diff.
 
 This module is pure + offline: the shape (:class:`RememberableKnowledge`), the
 parse of the agent's declared block (:func:`parse_declared_knowledge`), the
-tolerant dict parser (:func:`parse_extraction`), the "inherently notable" gate
+"inherently notable" gate
 (a user decision / a discard-with-reason is always kept), and the shared bar
 (:data:`WORTH_REMEMBERING_PRINCIPLE`) the ingest compiler embeds + the executor
 knowledge-declaration guidance surfaces.
@@ -47,33 +47,8 @@ def is_inherently_notable(kind: str | None) -> bool:
     """True when a settlement is worth keeping regardless of the LLM verdict — a
     user decision or a discard-with-reason is knowledge by construction. Plain
     verified work (``None`` / ``"verified_work"``) is NOT: it must earn a note
-    through :func:`parse_extraction`, and routine work earns none."""
+    by being declared, and routine work earns none."""
     return kind in _INHERENTLY_NOTABLE_KINDS
-
-
-def parse_extraction(raw: Any) -> RememberableKnowledge | None:
-    """Parse an LLM worth-remembering verdict. Tolerant, and biased to ``None``:
-    the default outcome for routine work is "nothing to keep", so anything that
-    isn't an explicit, substantive memory yields ``None`` (no note written).
-
-    Accepts a couple of key aliases (``remember``/``title``/``note``). ``None``
-    when: not a dict, ``worth_remembering`` is false/absent, or the topic/insight
-    are blank. The topic is trimmed + capped to a short label."""
-    if not isinstance(raw, dict):
-        return None
-    flag = raw.get("worth_remembering")
-    if flag is None:
-        flag = raw.get("remember")
-    if not bool(flag):
-        return None
-    topic = str(raw.get("topic") or raw.get("title") or "").strip()
-    insight = str(raw.get("insight") or raw.get("note") or raw.get("body") or "").strip()
-    if not topic or not insight:
-        return None
-    return RememberableKnowledge(
-        topic=topic[:MAX_TOPIC_CHARS].rstrip(),
-        insight=insight[:MAX_INSIGHT_CHARS].rstrip(),
-    )
 
 
 def _humanize_topic(topic: str) -> str:
@@ -143,5 +118,4 @@ __all__ = [
     "WORTH_REMEMBERING_PRINCIPLE",
     "is_inherently_notable",
     "parse_declared_knowledge",
-    "parse_extraction",
 ]

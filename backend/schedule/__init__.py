@@ -20,10 +20,8 @@ in. It is intentionally small — three concerns:
 * :mod:`backend.schedule.domain` — the published Protocols
   (:class:`ScheduleRunnerProtocol` — the wake-up substrate seam;
   :class:`ScheduleAdvancer` — the cron-algebra seam) and their
-  implementations: the real :class:`CronScheduleAdvancer` (the S1
-  production default — recurs on a standard 5-field cron expr) plus the
-  :class:`OneShotScheduleAdvancer` / :class:`FixedIntervalScheduleAdvancer`
-  test/alternate seams.
+  implementation: :class:`CronScheduleAdvancer` (the S1 production default
+  — recurs on a standard 5-field cron expr).
 * :mod:`backend.schedule.application` — :class:`ScheduleTrigger`, the
   emitter that turns a *fire time* into a Workflow-side TriggerEvent, and
   :class:`ScheduleService`, the authoring producer behind
