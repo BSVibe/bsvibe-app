@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from backend.knowledge.graph.vault import Vault
     from backend.knowledge.ingest.index_reader import IndexReader
     from backend.knowledge.retrieval.embedder import Embedder
-    from backend.knowledge.retrieval.graph_retriever import GraphRetriever
     from backend.knowledge.retrieval.storage.backend import NoteVectorBackend
 
 logger = structlog.get_logger(__name__)
@@ -31,13 +30,11 @@ class VaultRetriever:
         self,
         vault: Vault,
         index_reader: IndexReader | None = None,
-        graph_retriever: GraphRetriever | None = None,
         vector_store: NoteVectorBackend | None = None,
         embedder: Embedder | None = None,
     ) -> None:
         self._vault = vault
         self._index_reader = index_reader
-        self._graph_retriever = graph_retriever
         self._vector_store = vector_store
         self._embedder = embedder
 
@@ -140,15 +137,6 @@ class VaultRetriever:
 
         index_result = "\n".join(lines)
 
-        # Append graph context if available
-        if self._graph_retriever is not None:
-            try:
-                graph_context = await self._graph_retriever.retrieve(query, top_k=top_k)
-                if graph_context:
-                    return index_result + "\n\n" + graph_context
-            except (FileNotFoundError, OSError, ValueError):
-                logger.debug("graph_search_failed", exc_info=True)
-
         return index_result
 
     async def _vector_search(
@@ -196,15 +184,6 @@ class VaultRetriever:
                     lines.append(f"  Date: {summary.captured_at}")
 
         search_result = "\n".join(lines)
-
-        # Append graph context if available
-        if self._graph_retriever is not None:
-            try:
-                graph_context = await self._graph_retriever.retrieve(query, top_k=top_k)
-                if graph_context:
-                    return search_result + "\n\n" + graph_context
-            except (FileNotFoundError, OSError, ValueError):
-                logger.debug("graph_search_failed", exc_info=True)
 
         return search_result
 

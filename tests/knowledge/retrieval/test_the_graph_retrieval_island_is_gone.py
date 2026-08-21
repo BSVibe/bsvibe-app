@@ -36,10 +36,16 @@ _DEAD_MODULES = (
     "backend.knowledge.retrieval.review_queue",
 )
 
-# 삭제 전후 모두 살아 있어야 하는 것 — 감사가 삭제 대상으로 적었던 둘을 포함한다.
+# 삭제 전후 모두 살아 있어야 하는 것.
+#
+# ⚠️ ``ontology`` 는 감사가 삭제 대상으로 적었지만 실측으로 도달한다 — 그대로 남는다.
+# ``graph_backend`` 와 ``graph_retriever`` 는 이 목록에 있었다가 빠졌다. import 로는
+# 도달했지만 **실행으로는 닿지 않았다** — ABC 의 구현체가 둘 다 지워졌고,
+# ``graph_retriever=`` 를 넘기는 프로덕션 호출자가 0곳이었다. 다른 축이라 다음 PR 이
+# 잡았다. ``tests/knowledge/graph/test_the_graph_island_is_gone.py`` 가 이제 그 둘의
+# 부재를 지킨다.
 _LIVE_MODULES = (
     "backend.knowledge.retrieval.ontology",
-    "backend.knowledge.retrieval.graph_retriever",
     "backend.knowledge.retrieval.answer_grounding",
     "backend.knowledge.retrieval.ingest_retriever",
     "backend.knowledge.retrieval.embedder_resolution",
@@ -48,7 +54,6 @@ _LIVE_MODULES = (
     "backend.knowledge.retrieval.decision_note_locator",
     "backend.knowledge.retrieval.semantic_note_retriever",
     "backend.knowledge.retrieval.knowledge_item",
-    "backend.knowledge.graph.graph_backend",
 )
 
 _ROOT = Path(__file__).resolve().parents[3]
