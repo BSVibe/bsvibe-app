@@ -108,7 +108,7 @@ Gate = Ok(...) | NotApplicable(reason) | Failed(reason)
 
 ### INV-6. 기술 스택
 
-- **데이터: Postgres + NetworkX** (파운더 확인, 2026-07-14). `backend/knowledge/graph/graph_store.py`의 **SQLite `GraphStore`는 스택 외**다 — 삭제 대상이며, 그래프 영속화는 Postgres + NetworkX로 **재설계**한다.
+- **데이터: Postgres + NetworkX** (파운더 확인, 2026-07-14). SQLite `GraphStore`는 스택 외였고 **2026-08-21 에 삭제됐다** (`backend/knowledge/graph/` 미도달 절반과 함께). 살아 있는 그래프는 두 갈래다 — PWA `/knowledge` 패널은 `canonicalization/concept_graph.py` 가 **정착된 볼트에서 결정론적으로** 다시 만들고, MCP `bsvibe_graph_*` 은 `backend/knowledge/code_graph/` + NetworkX 를 쓴다. 부재는 `tests/knowledge/graph/test_the_graph_island_is_gone.py` 가 지킨다.
 - Python 3.11+ / uv / pydantic-settings / structlog / async I/O — 기존 규율 유지.
 
 ### INV-7. 툴 계약은 하나다 — chat ≡ executor (파생, 절대 손수 미러링 금지)

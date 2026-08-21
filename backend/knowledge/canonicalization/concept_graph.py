@@ -3,10 +3,10 @@
 The PWA Knowledge surface (`/knowledge`) shows the settled *concepts* the trust
 ratchet has promoted ("What I know"), and a force-directed "Knowledge graph"
 panel beside them. The graph endpoint (:func:`backend.api.v1.inside.get_graph`)
-used to source its picture from a :class:`~backend.knowledge.graph.vault_backend.VaultBackend`
-``.bsage/graph_cache.json`` snapshot — but that cache is produced by a
-GraphSubscriber/extractor path that is NOT wired in this deployment, so the
-graph was *always* empty even when concepts existed ("No connections yet").
+used to source its picture from a ``.bsage/graph_cache.json`` snapshot — but
+that cache was produced by a subscriber/extractor path that was never wired in
+this deployment, so the graph was *always* empty even when concepts existed
+("No connections yet"). That whole unwired path has since been deleted.
 
 This module rebuilds the graph **deterministically from the settled
 canonicalization vault** instead — pure, idempotent, no model call and no

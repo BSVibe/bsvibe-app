@@ -7,8 +7,11 @@ NEVER a real LLM or network call:
     labelled chunks
         -> compile_batch (extraction via the CompileLlm seam)
         -> garden notes + entity stubs written to the workspace vault
-        -> graph nodes/edges materialised by GraphExtractor over the vault
         -> the written knowledge retrievable via VaultRetriever
+
+이 사슬에는 한때 ``GraphExtractor`` 로 그래프 노드/엣지를 materialise 하는 단계가
+있었다. **프로덕션 컴파일 경로는 그것을 한 번도 호출하지 않았다** — 테스트가
+자기 손으로 돌리고 자기가 확인하는 단계였다. 그 모듈과 함께 들어냈다.
 
 Workspace isolation is structural: the vault is rooted at
 ``<vault_root>/<region>/<workspace_id>/`` via :class:`KnowledgeFactory`,
@@ -26,7 +29,6 @@ from typing import Any
 import pytest
 
 from backend.knowledge.factory import KnowledgeFactory
-from backend.knowledge.graph.graph_extractor import GraphExtractor
 from backend.knowledge.ingest.file_index_reader import FileIndexReader
 from backend.knowledge.ingest.ingest_compiler import (
     BatchItem,
@@ -111,30 +113,9 @@ def _build_compiler(
     return compiler, retriever, factory
 
 
-def _materialise_graph(
-    factory: KnowledgeFactory,
-) -> tuple[list[Any], list[Any]]:
-    """Run the deterministic GraphExtractor over every written garden note.
-
-    Returns (entities, relationships) — the graph nodes/edges that emerge
-    from the markdown + wikilinks compile_batch wrote to the vault.
-    """
-    extractor = GraphExtractor()
-    root = factory.vault_path
-    entities: list[Any] = []
-    relationships: list[Any] = []
-    for md_file in sorted(root.rglob("*.md")):
-        rel_path = str(md_file.relative_to(root))
-        content = md_file.read_text(encoding="utf-8")
-        ents, rels = extractor.extract_from_note(rel_path, content)
-        entities.extend(ents)
-        relationships.extend(rels)
-    return entities, relationships
-
-
 @pytest.mark.asyncio
-async def test_compile_batch_writes_graph_and_is_retrievable(tmp_path: Path) -> None:
-    """Labelled chunks -> compile_batch -> vault graph -> retrievable."""
+async def test_compile_batch_writes_notes_and_is_retrievable(tmp_path: Path) -> None:
+    """Labelled chunks -> compile_batch -> vault notes -> retrievable."""
     plan = _plan(
         [
             {
@@ -209,28 +190,12 @@ async def test_compile_batch_writes_graph_and_is_retrievable(tmp_path: Path) -> 
     assert len(seedling) == 2
     # Import-pipeline noise fix — a ``[[Name]]`` mention NO LONGER materialises an
     # empty ``garden/entities/<name>.md`` stub FILE (the E20 auto-stub explosion
-    # that polluted the vault + the embedding index). The graph still derives
-    # wikilink NODES from the note bodies (parse, below) — the stub files were
-    # redundant junk, not the source of the edges.
+    # that polluted the vault + the embedding index). The wikilinks live in the
+    # note bodies — the stub files were redundant junk.
     entity_stubs = {p.stem for p in (ws_root / "garden" / "entities").glob("*.md")}
     assert entity_stubs == set(), f"no empty entity stub files expected, got {entity_stubs}"
 
-    # 3. Graph nodes + edges still materialise from the written vault — both the
-    # garden notes AND their wikilinked concepts (parsed from the bodies).
-    entities, relationships = _materialise_graph(factory)
-    entity_names = {e.name for e in entities}
-    assert "vaultwarden behind caddy" in entity_names
-    assert "bsage graph backend" in entity_names
-    assert "Vaultwarden" in entity_names
-    assert "Caddy" in entity_names
-    assert "BSage" in entity_names
-    assert len(relationships) > 0
-    rel_types = {r.rel_type for r in relationships}
-    assert "tagged_with" in rel_types
-    target_ids = {e.id for e in entities if e.name in {"Vaultwarden", "Caddy", "BSage"}}
-    assert any(r.target_id in target_ids for r in relationships)
-
-    # 4. The written knowledge is retrievable through the real retriever.
+    # 3. The written knowledge is retrievable through the real retriever.
     found = await retriever.search(query="Vaultwarden reverse proxy")
     assert "Vaultwarden behind Caddy" in found
     found_bsage = await retriever.search(query="BSage graph")
