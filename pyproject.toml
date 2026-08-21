@@ -409,6 +409,10 @@ ignore_imports = [
     # view mapping) — one source of truth for the schedule shape, not a copy.
     "backend.mcp.tools.schedule_tools -> backend.schedule.application.schedule_service",
     "backend.mcp.tools.schedule_tools -> backend.schedule.infrastructure.schedule_db",
+    # C7 — 스케줄 응답 모양(``ScheduleView`` + 직렬화)을 REST 와 공유한다. 소유
+    # 컨텍스트에 두되 SQLAlchemy 모듈과는 분리했다(형님 판단 2026-08-21) — 이미
+    # 예외가 걸린 ``schedule_db`` 안에 넣으면 예외는 안 늘지만 계층이 섞인다.
+    "backend.mcp.tools.schedule_tools -> backend.schedule.serialization",
     # Slice C2 — UI-parity for the checkpoint (run-blocking Decision) resolution
     # surface. The checkpoint tools call the SAME
     # ``backend.workflow.application.checkpoint_resolution.resolve_checkpoint``
