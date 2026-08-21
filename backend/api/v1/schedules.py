@@ -21,8 +21,7 @@ contextvar + Postgres RLS GUC. S1 is the ``instruction`` kind only; other kinds
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,8 +34,8 @@ from backend.schedule.application.schedule_service import (
 )
 from backend.schedule.infrastructure.schedule_db import (
     SCHEDULE_KIND_INSTRUCTION,
-    WorkspaceScheduleRow,
 )
+from backend.schedule.serialization import ScheduleView, schedule_view_from_row
 
 router = APIRouter()
 
@@ -64,36 +63,7 @@ class ScheduleEnabledPatch(BaseModel):
     enabled: bool
 
 
-class ScheduleView(BaseModel):
-    """Response shape for a schedule row."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: uuid.UUID
-    kind: str
-    text: str
-    cron_expr: str
-    product_id: uuid.UUID | None
-    title: str | None
-    next_run_at: datetime
-    last_fired_at: datetime | None
-    enabled: bool
-
-
-def _to_view(row: WorkspaceScheduleRow) -> ScheduleView:
-    payload: dict[str, Any] = row.payload or {}
-    text_value = payload.get("text")
-    return ScheduleView(
-        id=row.id,
-        kind=row.kind,
-        text=text_value if isinstance(text_value, str) else "",
-        cron_expr=row.cron_expr,
-        product_id=row.product_id,
-        title=row.title,
-        next_run_at=row.next_run_at,
-        last_fired_at=row.last_fired_at,
-        enabled=row.enabled,
-    )
+_to_view = schedule_view_from_row
 
 
 @router.post(

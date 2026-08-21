@@ -19,7 +19,6 @@ REST models with ``extra=forbid``.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
@@ -31,8 +30,8 @@ from backend.schedule.application.schedule_service import (
 )
 from backend.schedule.infrastructure.schedule_db import (
     SCHEDULE_KIND_INSTRUCTION,
-    WorkspaceScheduleRow,
 )
+from backend.schedule.serialization import ScheduleView, schedule_view_from_row
 
 _MCP_PRODUCER_ID = "mcp:schedules_create"
 
@@ -72,22 +71,6 @@ class ScheduleSetEnabledInput(BaseModel):
     enabled: bool
 
 
-class ScheduleView(BaseModel):
-    """Response shape for a schedule row — mirrors REST ``ScheduleView``."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: uuid.UUID
-    kind: str
-    text: str
-    cron_expr: str
-    product_id: uuid.UUID | None
-    title: str | None
-    next_run_at: datetime
-    last_fired_at: datetime | None
-    enabled: bool
-
-
 class SchedulesListOutput(RootModel[list[ScheduleView]]):
     """List output — a JSON array of schedule views (mirrors REST list body)."""
 
@@ -99,20 +82,7 @@ class ScheduleDeleteOutput(BaseModel):
     schedule_id: str
 
 
-def _to_view(row: WorkspaceScheduleRow) -> ScheduleView:
-    payload: dict[str, Any] = row.payload or {}
-    text_value = payload.get("text")
-    return ScheduleView(
-        id=row.id,
-        kind=row.kind,
-        text=text_value if isinstance(text_value, str) else "",
-        cron_expr=row.cron_expr,
-        product_id=row.product_id,
-        title=row.title,
-        next_run_at=row.next_run_at,
-        last_fired_at=row.last_fired_at,
-        enabled=row.enabled,
-    )
+_to_view = schedule_view_from_row
 
 
 # ---------------------------------------------------------------------------
