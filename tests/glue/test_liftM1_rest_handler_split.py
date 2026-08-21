@@ -90,7 +90,6 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
     "backend.api.v1.safemode": {
         ("GET", "/queue"),
         ("GET", "/queue/by-run"),
-        ("GET", "/resolved"),
         ("POST", "/runs/{run_id}/approve"),
         ("POST", "/runs/{run_id}/deny"),
         ("POST", "/{item_id}/approve"),
@@ -98,7 +97,6 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
     },
     "backend.api.v1.decisions": {
         ("GET", ""),
-        ("GET", "/log"),
         ("POST", "/{proposal_id:path}/accept"),
         ("POST", "/{proposal_id:path}/reject"),
     },

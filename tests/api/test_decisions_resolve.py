@@ -332,33 +332,3 @@ async def test_list_workspace_isolation(client, vault_root) -> None:
     r = await client.get("/api/v1/decisions")
     assert r.status_code == 200, r.text
     assert r.json() == []
-
-
-async def test_decisions_log_returns_vault_decision(client, workspace_storage) -> None:
-    """GET /api/v1/decisions/log surfaces vault decision-memory notes."""
-    service = await _make_service(workspace_storage, safe_mode=False)
-    draft = await service.create_action_draft(
-        kind="create-decision",
-        params={
-            "decision_path": "decisions/cannot-link/self-host-vs-vaultwarden.md",
-            "subjects": ["self-host", "vaultwarden"],
-            "base_confidence": 0.9,
-            "maturity": "budding",
-        },
-    )
-    applied = await service.apply_action(draft, actor="founder")
-    assert applied.final_status == "applied", applied.error
-
-    r = await client.get("/api/v1/decisions/log")
-    assert r.status_code == 200, r.text
-    rows = r.json()
-    assert len(rows) == 1
-    assert rows[0]["decision_kind"] == "cannot-link"
-    assert rows[0]["id"] == "decisions/cannot-link/self-host-vs-vaultwarden.md"
-
-
-async def test_decisions_log_empty(client, workspace_storage) -> None:
-    """No decision notes → empty log."""
-    r = await client.get("/api/v1/decisions/log")
-    assert r.status_code == 200, r.text
-    assert r.json() == []

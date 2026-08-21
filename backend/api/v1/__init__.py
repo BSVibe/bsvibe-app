@@ -29,13 +29,10 @@ from backend.api.v1 import (
     workspace_compliance,
     workspaces,
 )
-from backend.api.v1 import (
-    settings as api_settings,
-)
 
 # Every v1 route requires a verified principal. The per-route workspace
 # resolution (get_workspace_id) layers on top; this router-level dependency
-# guarantees even routes without it (settings, intents list) return 401 when
+# guarantees even routes without it (intents list) return 401 when
 # unauthenticated.
 router = APIRouter(prefix="/v1", dependencies=[Depends(get_current_user)])
 router.include_router(chat.router, prefix="/chat", tags=["chat"])
@@ -64,7 +61,6 @@ router.include_router(intents.router, prefix="/intents", tags=["intents"])
 router.include_router(skills.router, prefix="/skills", tags=["skills"])
 router.include_router(decisions.router, prefix="/decisions", tags=["decisions"])
 router.include_router(checkpoints.router, prefix="/checkpoints", tags=["checkpoints"])
-router.include_router(api_settings.router, prefix="/settings", tags=["settings"])
 router.include_router(runs.router, prefix="/runs", tags=["runs"])
 # Schedule authoring — the producer of the workspace_schedules channel (S1),
 # letting BSVibe start work on its own on a cron.

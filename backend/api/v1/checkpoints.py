@@ -184,27 +184,6 @@ async def list_checkpoints(
     ]
 
 
-@router.get("/resolved")
-async def list_resolved_checkpoints(
-    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    decisions: Annotated[DecisionRepository, Depends(get_decision_repository)],
-    language: Annotated[str, Depends(get_output_language)],
-) -> list[ResolvedCheckpointResponse]:
-    """List RESOLVED execution Decisions for the Decisions "Resolved" tab,
-    most-recently-resolved first (created_at as a stable tiebreaker)."""
-    rows = await decisions.list_resolved_by_workspace(workspace_id)
-    return [
-        ResolvedCheckpointResponse(
-            id=row.id,
-            run_id=row.run_id,
-            question=_question_text(row, language),
-            resolution=row.resolution,
-            resolved_at=row.resolved_at,
-        )
-        for row in rows
-    ]
-
-
 @router.post("/{checkpoint_id}/resolve")
 async def resolve_checkpoint(
     checkpoint_id: uuid.UUID,

@@ -28,7 +28,6 @@ def test_openapi_advertises_all_v1_routes() -> None:
         "/api/v1/intents",
         "/api/v1/skills",
         "/api/v1/decisions",
-        "/api/v1/settings",
         "/api/v1/runs",
     ):
         assert route in paths, f"missing {route} in OpenAPI"
@@ -42,22 +41,6 @@ def test_chat_completions_requires_auth() -> None:
         json={"model": "openai/gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
     )
     assert r.status_code == 401
-
-
-def test_settings_requires_auth() -> None:
-    """Settings exposes deployment config — gated behind auth (all v1 routers)."""
-    r = _client().get("/api/v1/settings")
-    assert r.status_code == 401
-
-
-def test_settings_response_mirrors_test_db_gate() -> None:
-    """The read-only settings surface mirrors the test-PG sidecar gate flag."""
-    from backend.api.v1.settings import SettingsResponse
-
-    fields = SettingsResponse.model_fields
-    assert "sandbox_test_db_enabled" in fields
-    assert "sandbox_test_db_image" in fields
-    assert "github_auto_merge_enabled" in fields
 
 
 def test_intents_list_requires_auth() -> None:
