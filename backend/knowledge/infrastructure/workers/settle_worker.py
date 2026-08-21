@@ -74,6 +74,10 @@ if TYPE_CHECKING:
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.common.settle_kinds import (
+    DECISION_RESOLUTION_SETTLE_KIND,
+    NEGATIVE_PATTERN_SETTLE_KIND,
+)
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.knowledge.extraction.worth_remembering import (
     RememberableKnowledge,
@@ -441,11 +445,11 @@ class KnowledgeSettleSink:
         tags = ["settle", "verified-run", *content_tags]
         # B11b: a decision-resolution settlement gets an extra structural tag
         # so consumers can filter for it without parsing the body.
-        if settlement.kind == "decision_resolution":
+        if settlement.kind == DECISION_RESOLUTION_SETTLE_KIND:
             tags.append("decision-resolution")
         # G1: a negative-pattern settlement (discard-with-reason) gets its own
         # structural tag so the NegativePatternRetriever filters on it cheaply.
-        if settlement.kind == "negative_pattern":
+        if settlement.kind == NEGATIVE_PATTERN_SETTLE_KIND:
             tags.append("negative-pattern")
         extra_fields: dict[str, object | None] = {
             "run_id": str(settlement.run_id),

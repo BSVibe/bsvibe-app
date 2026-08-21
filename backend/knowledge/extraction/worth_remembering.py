@@ -24,6 +24,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from backend.common.settle_kinds import (
+    DECISION_RESOLUTION_SETTLE_KIND,
+    NEGATIVE_PATTERN_SETTLE_KIND,
+)
+
 #: The topic is a short KNOWLEDGE NAME (a noun-phrase-ish label), never a task
 #: sentence or a file path — this is what the "추가한 지식" chip renders.
 MAX_TOPIC_CHARS = 80
@@ -31,7 +36,9 @@ MAX_INSIGHT_CHARS = 2000
 
 #: Settlement kinds that are ALWAYS worth remembering, with no LLM judgement:
 #: a resolved checkpoint is a user CHOICE, a discard-with-reason is a LEARNING.
-_INHERENTLY_NOTABLE_KINDS: frozenset[str] = frozenset({"decision_resolution", "negative_pattern"})
+_INHERENTLY_NOTABLE_KINDS: frozenset[str] = frozenset(
+    {DECISION_RESOLUTION_SETTLE_KIND, NEGATIVE_PATTERN_SETTLE_KIND}
+)
 
 
 @dataclass(frozen=True)
