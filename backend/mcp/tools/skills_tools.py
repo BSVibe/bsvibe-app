@@ -18,13 +18,13 @@ Scopes follow the existing convention: ``mcp:read`` for list / get,
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
+from backend.common.slug import slugify as _slugify
 from backend.config import get_settings
 from backend.extensions.skill import SkillLoader, SkillMeta
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
@@ -32,27 +32,6 @@ from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 
 class _Envelope(RootModel[Any]):
     """Permissive output envelope — preserves the natural JSON shape."""
-
-
-# Slug grammar — mirrors backend.api.v1.skills (the loader enforces the
-# same shape via SkillMeta). Kept local so the MCP module doesn't reach
-# into the forbidden backend.api subtree.
-_SLUG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
-
-
-def _slugify(name: str) -> str | None:
-    """Derive a safe ``^[a-z][a-z0-9-]*$`` slug from a free-form name.
-
-    Returns ``None`` when the name cannot yield a safe slug — including
-    any name carrying a path separator or ``..`` (path-traversal defense).
-    Mirrors :func:`backend.api.v1.skills._slugify` 1:1.
-    """
-    if "/" in name or "\\" in name or ".." in name:
-        return None
-    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
-    if not slug or not _SLUG_RE.match(slug):
-        return None
-    return slug
 
 
 def _skill_markdown(

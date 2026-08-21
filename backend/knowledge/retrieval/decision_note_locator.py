@@ -21,6 +21,10 @@ from __future__ import annotations
 
 import structlog
 
+from backend.common.settle_kinds import (
+    DECISION_RESOLUTION_SETTLE_KIND,
+    NEGATIVE_PATTERN_SETTLE_KIND,
+)
 from backend.knowledge.graph.markdown_utils import extract_frontmatter
 from backend.knowledge.graph.storage import StorageBackend
 
@@ -29,8 +33,8 @@ logger = structlog.get_logger(__name__)
 #: Garden subdir the settle sink writes decision/rejection notes into. Mirrors
 #: both retrievers' ``_SEEDLING_DIR`` — the notes start (and usually stay) here.
 _SEEDLING_DIR = "garden/seedling"
-_DECISION_KIND = "decision_resolution"
-_NEGATIVE_KIND = "negative_pattern"
+_DECISION_KIND = DECISION_RESOLUTION_SETTLE_KIND
+_NEGATIVE_KIND = NEGATIVE_PATTERN_SETTLE_KIND
 
 
 def _statement_for(fm: dict[str, object]) -> str | None:

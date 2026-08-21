@@ -14,7 +14,6 @@ slug is immutable on update (a rename would mean a file rename — deferred).
 
 from __future__ import annotations
 
-import re
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -23,31 +22,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.deps import get_workspace_id
+from backend.common.slug import slugify as _slugify
 from backend.config import get_settings
 from backend.extensions.skill import SkillLoader, SkillMeta
 
 router = APIRouter()
-
-# A created skill's filename + manifest name is this slug (the loader enforces
-# the same grammar via SkillMeta — ^[a-z][a-z0-9-]*$).
-_SLUG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
-
-
-def _slugify(name: str) -> str | None:
-    """Derive a safe ``^[a-z][a-z0-9-]*$`` slug from a free-form name.
-
-    Returns ``None`` when the name cannot yield a safe slug — including any name
-    carrying a path separator or ``..`` (path-traversal defense: a created skill
-    MUST stay inside the per-workspace dir, so we never derive a slug from a name
-    that looks like a path).
-    """
-    if "/" in name or "\\" in name or ".." in name:
-        return None
-    # Lowercase; collapse any run of non-[a-z0-9] into a single hyphen.
-    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
-    if not slug or not _SLUG_RE.match(slug):
-        return None
-    return slug
 
 
 class SkillResponse(BaseModel):
