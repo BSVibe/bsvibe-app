@@ -13,10 +13,9 @@ from typing import Any
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
 
 from backend.config import get_settings
-from backend.identity.workspaces_db import ProductRow
+from backend.identity.product_resolution import resolve_product_for_workspace
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.workers.emit import (
     STREAM_INTAKE,
@@ -44,45 +43,17 @@ class DirectOutput(BaseModel):
 
 
 async def _resolve_product_id(ctx: ToolContext, slug_or_id: str | None) -> uuid.UUID:
-    """Mirror L-P1 product-resolution logic from the REST messages endpoint.
+    """L-P1 규칙은 :func:`~backend.identity.product_resolution.
+    resolve_product_for_workspace` 가 소유한다 — 여기서는 MCP 의 오류 표면만 얹는다.
 
-    Preference order:
-    1. Explicit ``product_slug_or_id`` belonging to the active workspace.
-    2. The workspace's earliest-created product (single-product default).
-    3. A workspace with zero products surfaces ``ToolError`` — the founder
-       must create a product before MCP can submit a Direct message.
+    (규칙: 명시 제품(UUID 또는 슬러그) → 가장 먼저 만들어진 제품 → 없음.)
     """
-    workspace_id = ctx.principal.workspace_id
-    if slug_or_id:
-        try:
-            pid = uuid.UUID(slug_or_id)
-        except ValueError:
-            pid = None
-        if pid is not None:
-            row = await ctx.session.get(ProductRow, pid)
-            if row is not None and row.workspace_id == workspace_id:
-                return row.id
-        row = (
-            await ctx.session.execute(
-                select(ProductRow).where(
-                    ProductRow.workspace_id == workspace_id,
-                    ProductRow.slug == slug_or_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if row is not None:
-            return row.id
-    default_id = (
-        await ctx.session.execute(
-            select(ProductRow.id)
-            .where(ProductRow.workspace_id == workspace_id)
-            .order_by(ProductRow.created_at.asc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if default_id is None:
+    product_id = await resolve_product_for_workspace(
+        ctx.session, workspace_id=ctx.principal.workspace_id, slug_or_id=slug_or_id
+    )
+    if product_id is None:
         raise ToolError("workspace has no products — create one before submitting a Direct message")
-    return default_id
+    return product_id
 
 
 async def _h_direct(args: DirectInput, ctx: ToolContext) -> Any:
