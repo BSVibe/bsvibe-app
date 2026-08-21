@@ -37,10 +37,14 @@ built: no writer primitive rewrites whitelisted fields, and the ``corrections``
 payload is not carried on the (frozen, ``extra="forbid"``) signal. Rather than
 mint a correction row + emit a ``ontology.correction.applied`` audit for an
 operation that mutates nothing — a false success + false audit record —
-:meth:`issue` REFUSES ``action="correct"`` with
-:class:`CorrectionUnavailableError`. ``apply_pending`` filters to ``retract``
-so a legacy ``correct`` row can never be swept into a false "applied" state,
-and :meth:`_apply_row` guards the same invariant. Retract is unaffected.
+:meth:`issue` 는 ``"correct"`` 를 받으면 :class:`CorrectionUnavailableError` 로
+거절**했었다**. 2026-08-21 부터는 ``OntologyAction`` 자체에서 빠져 **고를 수조차
+없다** — 스키마 경계가 먼저 막으므로 런타임 거절 분기가 필요 없다.
+
+저장된 행에 대한 방어는 그대로다: ``apply_pending`` 은 ``retract`` 로 필터하고
+:meth:`_apply_row` 가 같은 불변식을 지킨다 — 레거시 ``correct`` 행이 거짓
+"applied" 상태로 쓸려 들어가지 않는다 (prod 실측 2026-08-21: ``retract`` 1,271행,
+``correct`` **0행**). Retract 는 영향 없다.
 """
 
 from __future__ import annotations
@@ -173,15 +177,6 @@ class RetractionService:
         before calling, (2) ``node_ref`` existence check (so a 404 is
         returned instead of an orphan correction row), (3) commit.
         """
-        if action == "correct":
-            # The in-place field-rewrite editor was never built. Persisting a
-            # row + emitting an "applied" audit for it would be a false success
-            # and a false audit record. Refuse at intake — no row, no audit.
-            raise CorrectionUnavailableError(
-                "correction (in-place field rewrite) is not available yet; "
-                "only 'retract' is supported"
-            )
-
         issued_at = (now or datetime.now(tz=UTC)).astimezone(UTC)
         apply_at = issued_at + timedelta(seconds=UNDO_WINDOW_SECONDS)
         cid = correction_id or uuid.uuid4()

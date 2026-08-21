@@ -21,8 +21,7 @@ Two concrete adapters live in this module:
   turn instead of a whole run. The CLI's response text becomes
   :attr:`ChatResponse.content`.
 
-Both adapters expose the same ``chat`` surface.  ``supported_methods`` is
-checked at rule-creation time so an incompatible binding fails fast.
+Both adapters expose the same ``chat`` surface.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 import structlog
@@ -102,13 +101,9 @@ class ChatResponse:
 class ModelAccountAdapter(Protocol):
     """The single verb dispatch hands to call sites — ``chat``.
 
-    A concrete implementation MUST advertise its supported methods on the
-    ``supported_methods`` attribute so rule creation can validate that the
-    caller's ``required_methods`` is a subset. Today every adapter
-    supports ``{"chat"}``.
+    구현체는 ``chat`` 표면을 제공한다 — 그것이 이 Protocol 이 정의하는 능력이다.
     """
 
-    supported_methods: frozenset[str]
     #: Per-caller request timeout in seconds (Lift E9). Settable so a call site
     #: can tighten the bound for its context — e.g. the inline Direct answer
     #: caps the synchronous HTTP wait below the default frame timeout. ``None``
@@ -312,7 +307,6 @@ class LiteLLMAdapter:
     account_id: uuid.UUID
     model_account_id: uuid.UUID
     timeout_s: float | None = None
-    supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
         self,
@@ -381,9 +375,7 @@ class ExecutorAdapter:
     ``--print`` mode does not surface OpenAI-style tool_calls in its
     stream-json output). A non-empty ``tools`` argument raises
     :class:`NotImplementedError` so the caller sees the mismatch instead
-    of silently dropping the tools. Every static caller in
-    :mod:`backend.dispatch.caller_registry` declares ``required_methods =
-    {"chat"}`` only, so this is invariant-aligned.
+    of silently dropping the tools.
     """
 
     account: ModelAccount
@@ -447,7 +439,6 @@ class ExecutorAdapter:
     # worker host (the run continues the user's work in place). ``None`` under
     # the server model → the worker's throwaway per-task dir (``"."``).
     client_workspace_dir: str | None = None
-    supported_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
 
     async def chat(
         self,

@@ -24,9 +24,11 @@ class TestStaticRegistry:
         assert CALLER_KNOWLEDGE_INGEST in KNOWN_CALLERS
         assert CALLER_FRAME in KNOWN_CALLERS
 
-    def test_every_spec_requires_chat(self) -> None:
-        for spec in KNOWN_CALLERS.values():
-            assert "chat" in spec.required_methods
+    def test_every_spec_declares_its_caller_id(self) -> None:
+        """스펙이 지키는 것은 **정체성**이다 — 값이 하나뿐이던 능력 협상은
+        2026-08-21 에 지웠다 (INV-7: 메서드 표면이 곧 능력의 정의)."""
+        for caller_id, spec in KNOWN_CALLERS.items():
+            assert spec.caller_id == caller_id
 
     def test_specs_are_frozen(self) -> None:
         spec = KNOWN_CALLERS[CALLER_FRAME]
@@ -56,7 +58,6 @@ class TestSkillNamespace:
         )
         assert isinstance(spec, CallerSpec)
         assert spec.caller_id == f"{SKILL_CALLER_PREFIX}widget-builder"
-        assert "chat" in spec.required_methods
 
     def test_skill_lookup_misnamed_still_misses(self) -> None:
         with pytest.raises(KeyError):

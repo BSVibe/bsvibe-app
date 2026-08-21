@@ -47,7 +47,7 @@ def test_chat_completions_is_a_known_caller() -> None:
     assert CALLER_CHAT_COMPLETIONS == "chat.completions"
     assert CALLER_CHAT_COMPLETIONS in KNOWN_CALLERS
     spec = get_caller_spec(CALLER_CHAT_COMPLETIONS)
-    assert "chat" in spec.required_methods
+    assert spec.caller_id == CALLER_CHAT_COMPLETIONS
 
 
 @pytest.mark.asyncio

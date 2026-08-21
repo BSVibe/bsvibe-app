@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +11,6 @@ from backend.dispatch.adapter import ModelAccountAdapter
 from backend.dispatch.caller_registry import CALLER_FRAME
 from backend.dispatch.resolver import (
     ModelAccountResolver,
-    NoAdapterMethodError,
     NoMatchingRouteError,
 )
 from backend.identity.workspaces_db import WorkspaceRow
@@ -205,27 +202,6 @@ class TestResolverHardFail:
         resolver = ModelAccountResolver(session, settings=get_settings())
         with pytest.raises(KeyError):
             await resolver.resolve_for(caller_id="not.a.real.caller", workspace_id=workspace.id)
-
-
-class TestResolverDefensiveValidation:
-    async def test_check_supported_raises_on_missing_method(self) -> None:
-        from backend.dispatch.caller_registry import CallerSpec
-
-        spec = CallerSpec(
-            caller_id="needs.both",
-            required_methods=frozenset({"chat", "execute"}),
-            description="x",
-        )
-
-        class _OnlyChat:
-            supported_methods = frozenset({"chat"})
-
-            async def chat(
-                self, *, system: str, messages: list[dict[str, Any]], tools: Any = None
-            ) -> Any: ...
-
-        with pytest.raises(NoAdapterMethodError):
-            ModelAccountResolver._check_supported(spec, _OnlyChat())  # type: ignore[arg-type]
 
 
 class TestPerCallerTimeoutFlow:

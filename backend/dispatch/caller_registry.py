@@ -5,11 +5,13 @@ mechanism: knowledge ingest's compile pass, an agent-loop act turn,
 the frame stage, a judge, the canonicalization extractor, etc. Each one
 declares an opaque, stable ``caller_id`` plus the adapter methods it
 requires. The resolver matches the ``caller_id`` against the user's
-:class:`~backend.router.routing.run_routing.db.RunRoutingRuleRow` set;
-rule creation cross-checks ``required_methods`` against the
-:class:`~backend.dispatch.adapter.ModelAccountAdapter`'s
-``supported_methods`` so an incompatible binding is rejected at write
-time, never silently at dispatch.
+:class:`~backend.router.routing.run_routing.db.RunRoutingRuleRow` set.
+
+한때 ``required_methods`` / ``supported_methods`` 로 어댑터 호환성을 협상했지만,
+선언된 값이 **전부 ``{"chat"}``** 이라 그 검사는 구조적으로 항상 통과했다 —
+값이 하나뿐인 축은 협상이 아니다 (INV-7: 툴/메서드 표면이 곧 능력의 정의이고,
+그 위의 enum 은 두 번째 소스다). 2026-08-21 에 걷어냈다. 두 번째 메서드가
+실제로 생기면 그때가 그 축이 의미를 갖는 시점이다.
 
 Two sources are merged at lookup:
 
@@ -27,7 +29,7 @@ resolver does not have to discriminate.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 __all__ = [
     "CALLER_AGENT_LOOP_ACT",
@@ -56,10 +58,7 @@ class CallerSpec:
     ``caller_id`` is the opaque identifier a RunRoutingRule matches on.
     Stable across versions — changing one is a routing-rule migration.
 
-    ``required_methods`` is the set of adapter methods the call site will
-    invoke. Only ``"chat"`` exists in E1; ``"execute"`` is reserved for a
-    future verb. Rule creation rejects a binding whose target adapter does
-    not support every required method (validated at write time, not at
+    호출 지점이 실제로 부르는 어댑터 메서드는 ``chat`` 하나다 (E1 이후 그대로).
     dispatch).
 
     ``description`` is for operator-facing surfaces — settings UIs that
@@ -88,7 +87,6 @@ class CallerSpec:
     """
 
     caller_id: str
-    required_methods: frozenset[str] = field(default_factory=lambda: frozenset({"chat"}))
     description: str = ""
     default_timeout_s: float | None = None
     yield_on_saturation: bool = False
@@ -126,7 +124,6 @@ SKILL_CALLER_PREFIX = "skill."
 KNOWN_CALLERS: dict[str, CallerSpec] = {
     CALLER_KNOWLEDGE_INGEST: CallerSpec(
         caller_id=CALLER_KNOWLEDGE_INGEST,
-        required_methods=frozenset({"chat"}),
         description=(
             "Knowledge ingest compile pass — one structured-output chat call per "
             "chunk that produces the JSON garden-action plan."
@@ -143,7 +140,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
     ),
     CALLER_KNOWLEDGE_CANONICALIZATION: CallerSpec(
         caller_id=CALLER_KNOWLEDGE_CANONICALIZATION,
-        required_methods=frozenset({"chat"}),
         description=(
             "BSage canonicalization mutation extractor — proposes cannot-link / "
             "must-link decisions over the canonical graph."
@@ -154,7 +150,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
     ),
     CALLER_FRAME: CallerSpec(
         caller_id=CALLER_FRAME,
-        required_methods=frozenset({"chat"}),
         description=(
             "Frame stage — cheap classify+skill-match completion before the agent loop dispatches."
         ),
@@ -169,7 +164,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
     ),
     CALLER_AGENT_LOOP_ACT: CallerSpec(
         caller_id=CALLER_AGENT_LOOP_ACT,
-        required_methods=frozenset({"chat"}),
         description=(
             "Agent loop act turn — the tool-emitting turn whose response can "
             "include tool_calls the workflow then dispatches."
@@ -185,7 +179,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
     ),
     CALLER_JUDGE: CallerSpec(
         caller_id=CALLER_JUDGE,
-        required_methods=frozenset({"chat"}),
         description=(
             "Judge / verifier — grades a candidate deliverable against the run's "
             "verification contract."
@@ -194,7 +187,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
     ),
     CALLER_SETTLE_EXTRACT: CallerSpec(
         caller_id=CALLER_SETTLE_EXTRACT,
-        required_methods=frozenset({"chat"}),
         description=(
             "Settle worker's entity extractor — single chat call over the "
             "verified deliverable's transcript to populate the ontology."
@@ -203,7 +195,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
     ),
     CALLER_CHAT_COMPLETIONS: CallerSpec(
         caller_id=CALLER_CHAT_COMPLETIONS,
-        required_methods=frozenset({"chat"}),
         description=(
             "External OpenAI-compatible /chat/completions gateway — routes to a "
             "ModelAccount by rule + workspace default, like the internal callers."
@@ -213,7 +204,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
     ),
     CALLER_ROUTING_COMPILE: CallerSpec(
         caller_id=CALLER_ROUTING_COMPILE,
-        required_methods=frozenset({"chat"}),
         description=(
             "NL → routing-rules compiler — one cheap chat call that turns a "
             "plain-language routing description into structured rule proposals."
@@ -249,7 +239,6 @@ def get_caller_spec(caller_id: str, *, skill_names: Iterable[str] | None = None)
         if skill_names is not None and name in set(skill_names):
             return CallerSpec(
                 caller_id=caller_id,
-                required_methods=frozenset({"chat"}),
                 description=f"Skill {name!r} — workspace-managed call site.",
             )
     raise KeyError(f"unknown caller_id {caller_id!r}")
@@ -270,7 +259,6 @@ def list_all_callers(*, skill_names: Iterable[str] | None = None) -> list[Caller
         out.append(
             CallerSpec(
                 caller_id=f"{SKILL_CALLER_PREFIX}{name}",
-                required_methods=frozenset({"chat"}),
                 description=f"Skill {name!r} — workspace-managed call site.",
             )
         )

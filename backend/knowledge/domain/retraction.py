@@ -47,7 +47,10 @@ UNDO_WINDOW_SECONDS: int = 30
 _REASON_MAX_CHARS = 280
 
 
-OntologyAction = Literal["retract", "correct"]
+#: 온톨로지 정정 행위. ``"correct"``(제자리 필드 재작성)는 **끝내 구현되지 않았고**
+#: 서비스가 받자마자 거절했다 — 고를 수 있는 메뉴에 있으면 안 되는 항목이라
+#: 2026-08-21 에 뺐다. 에디터가 실제로 생기면 그때 다시 넣는다.
+OntologyAction = Literal["retract"]
 
 
 class RetractionSignal(BaseModel):

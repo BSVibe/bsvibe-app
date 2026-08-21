@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import select
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.identity.domain.repositories.resource_binding_repository import OUTPUT_MODES
 from backend.identity.infrastructure.repositories import (
     SqlAlchemyResourceBindingRepository,
 )
@@ -34,7 +35,8 @@ class _Envelope(RootModel[Any]):
     """Permissive output envelope — preserves the natural JSON shape."""
 
 
-_VALID_OUTPUT_MODES = ("safe", "direct")
+# 목록의 SoT 는 Protocol 모듈이다 — 두 번째로 적으면 한쪽만 늘어난다.
+_VALID_OUTPUT_MODES = OUTPUT_MODES
 
 
 def _row_to_dict(row: ResourceBindingRow) -> dict[str, Any]:
@@ -121,7 +123,7 @@ class BindingsCreateInput(BaseModel):
 async def _h_create(args: BindingsCreateInput, ctx: ToolContext) -> Any:
     if args.output_mode not in _VALID_OUTPUT_MODES:
         raise ToolError(
-            f"output_mode must be one of {_VALID_OUTPUT_MODES}, got {args.output_mode!r}"
+            f"output_mode must be one of {sorted(_VALID_OUTPUT_MODES)}, got {args.output_mode!r}"
         )
     await _resolve_product(ctx, args.product_id)
     await _resolve_connector_account(ctx, args.connector_account_id)
@@ -157,7 +159,7 @@ class BindingsUpdateInput(BaseModel):
 async def _h_update(args: BindingsUpdateInput, ctx: ToolContext) -> Any:
     if args.output_mode is not None and args.output_mode not in _VALID_OUTPUT_MODES:
         raise ToolError(
-            f"output_mode must be one of {_VALID_OUTPUT_MODES}, got {args.output_mode!r}"
+            f"output_mode must be one of {sorted(_VALID_OUTPUT_MODES)}, got {args.output_mode!r}"
         )
     repo = SqlAlchemyResourceBindingRepository(ctx.session)
     row = await repo.get(workspace_id=ctx.principal.workspace_id, binding_id=args.binding_id)
