@@ -17,13 +17,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
 from backend.config import get_settings
 from backend.identity.db import UserRow
-from backend.identity.workspaces_db import ProductRow
+from backend.identity.product_resolution import resolve_product_for_workspace
 from backend.workers.emit import (
     STREAM_INTAKE,
     emit_stream_notification,
@@ -82,51 +81,23 @@ async def _resolve_product_id(
     requested: uuid.UUID | None,
     session: AsyncSession,
 ) -> uuid.UUID:
-    """L-P1: derive the product binding for a founder-direct submission.
+    """L-P1 규칙은 :func:`~backend.identity.product_resolution.
+    resolve_product_for_workspace` 가 소유한다 — 여기서는 REST 의 오류 표면만 얹는다.
 
-    Preference order:
-
-    1. When the caller supplied ``product_id`` and it belongs to this
-       workspace, use it verbatim.
-    2. Otherwise fall back to the workspace's earliest-created product
-       (the "smart default" — a single-product workspace never bothers
-       the founder; a multi-product workspace can override per-call).
-    3. If the workspace has no products at all, the founder can't bind
-       this submission to anything sensible — surface a 400 so they
-       create a product first rather than silently minting a NULL run.
-
-    The chosen product MUST be in the caller's workspace (any product_id
-    from another workspace silently falls through to the default).
+    (규칙: 명시 제품 → 가장 먼저 만들어진 제품 → 없음. 다른 워크스페이스의 id 는
+    조용히 기본값으로 떨어진다.)
     """
-    if requested is not None:
-        prod = (
-            await session.execute(
-                select(ProductRow).where(
-                    ProductRow.id == requested,
-                    ProductRow.workspace_id == workspace_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if prod is not None:
-            return prod.id
-
-    default_id = (
-        await session.execute(
-            select(ProductRow.id)
-            .where(ProductRow.workspace_id == workspace_id)
-            .order_by(ProductRow.created_at.asc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if default_id is None:
+    product_id = await resolve_product_for_workspace(
+        session,
+        workspace_id=workspace_id,
+        slug_or_id=str(requested) if requested is not None else None,
+    )
+    if product_id is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "workspace has no products — create a product before submitting "
-                "direct messages so the run can be bound to one"
-            ),
+            status_code=400,
+            detail="workspace has no products — create one before submitting a message",
         )
-    return default_id
+    return product_id
 
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)
