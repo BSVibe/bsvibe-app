@@ -43,16 +43,14 @@ def register_all_tools(
 ) -> None:
     """Register every MCP tool onto ``registry``.
 
-    Surfaces (D2 + D3a + D3b + D3c + D3d + E7):
-    knowledge (5), workflow (7), safe-mode (3), direct (1),
-    model-accounts (4 — D3a), connectors (5 — D3a),
-    notifications (2 — D3a),
-    bindings (4 — D3b), decisions (4 — D3b),
-    knowledge-retraction (3 — D3c), skills (4 — D3c), workspace (2 — D3c),
-    inside-trust (2 — D3d), account (2 — D3d),
-    run-routing-rules (3 — E7), intents (3 — NL-native routing N2),
-    schedules (4 — S2: create / list / delete / set_enabled),
-    checkpoints (2 — C2: list_pending / resolve; ship is PWA-only).
+    이 docstring 은 표면별 툴 **개수를 세지 않는다.** 레지스트리가 SoT 이고,
+    그 위에 손으로 센 요약을 얹으면 반드시 드리프트한다 — 2026-08-21 실측에서
+    connectors 5→13 · safe-mode 3→7 · knowledge 5→8 · run-routing 3→6 으로
+    어긋나 있었고 graph / products / runs / deliverables / workers 는 아예
+    빠져 있었다 (요약 ~55 vs 실제 88).
+
+    개수가 필요하면 세지 말고 물어라 — ``ToolRegistry`` 를 만들어 이 함수를
+    돌린 뒤 등록된 이름을 읽으면 된다.
     """
     register_knowledge_tools(registry)
     # T1 — the agent's REMOTE hands on a run (file/shell/declare/knowledge), bound to the
