@@ -20,14 +20,16 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.identity.db import UserRow
+from backend.workflow.application.safe_mode_approval import (
+    approve_and_dispatch,
+    approve_run_and_dispatch,
+)
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.infrastructure.workers.delivery_worker import (
     PluginDispatchAdapter,
-    dispatch_delivery,
-    persist_compensation_handles,
 )
 
-from ._helpers import _artifact_type_for, get_delivery_dispatcher
+from ._helpers import get_delivery_dispatcher
 from ._schemas import (
     SafeModeActionResponse,
     SafeModeDenyRequest,
@@ -56,67 +58,22 @@ async def approve_run(
     pending items (unknown or already settled). A transient dispatch failure
     on one item does NOT revert the approval — the item stays approved.
     """
-    queue = SafeModeQueue(session)
-    pending = await queue.list_pending_for_run(workspace_id=workspace_id, run_id=run_id)
-    if not pending:
+    approved_count, dispatched = await approve_run_and_dispatch(
+        session,
+        workspace_id=workspace_id,
+        run_id=run_id,
+        actor_id=user.id,
+        dispatcher=dispatcher,
+    )
+    if approved_count == 0 and dispatched == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No pending Safe Mode items for run {run_id}",
         )
 
-    # Capture deliverable_ids BEFORE the approve flips state (the row stays
-    # but ``decided_at`` is set; deliverable_id is unaffected, however we
-    # snapshot to keep the dispatch loop independent of the queue rows).
-    targets: list[tuple[uuid.UUID, uuid.UUID]] = [
-        (item.id, item.deliverable_id) for item in pending
-    ]
-    approved_ids: list[uuid.UUID] = []
-    for item_id, _ in targets:
-        ok = await queue.approve(workspace_id=workspace_id, item_id=item_id, actor_id=user.id)
-        if ok:
-            approved_ids.append(item_id)
-    await session.commit()
-
-    dispatched = 0
-    for item_id, deliverable_id in targets:
-        if item_id not in approved_ids:
-            continue
-        artifact_type = await _artifact_type_for(session, deliverable_id)
-        try:
-            result = await dispatch_delivery(
-                dispatcher,
-                workspace_id=workspace_id,
-                deliverable_id=deliverable_id,
-                artifact_type=artifact_type,
-                # Run auto-resolve seam: on delivery success, resolve this run's
-                # pending review Decision + ship the run within the request txn.
-                session=session,
-            )
-            # B12b — capture compensation_handle onto the Deliverable so the
-            # retract endpoint can later revert through @p.compensate. Uses the
-            # request-scoped session so the persist sits inside the caller's
-            # transaction (no extra factory connection).
-            await persist_compensation_handles(
-                session, deliverable_id=deliverable_id, result=result
-            )
-            dispatched += 1
-        except Exception as exc:  # noqa: BLE001, S112 — never revert the approval on a dispatch hiccup
-            # Approval is irreversible (matches the per-item approve path); a
-            # transient connector failure surfaces in the audit log + log here,
-            # and on the next worker tick (the worker re-drains shipped events).
-            import structlog as _structlog  # noqa: PLC0415 — local; avoid top-level churn
-
-            _structlog.get_logger(__name__).warning(
-                "safemode_run_approve_dispatch_failed",
-                run_id=str(run_id),
-                deliverable_id=str(deliverable_id),
-                error=str(exc),
-            )
-            continue
-
     return SafeModeRunApproveResponse(
         run_id=run_id,
-        approved_count=len(approved_ids),
+        approved_count=approved_count,
         dispatched_count=dispatched,
     )
 
@@ -134,39 +91,26 @@ async def approve_item(
     Dispatch runs through the same :func:`dispatch_delivery` helper the worker
     uses for the Safe-Mode-off path — one outbound code path, no duplication.
     """
-    queue = SafeModeQueue(session)
-    pending = {item.id: item for item in await queue.list_pending(workspace_id=workspace_id)}
-    item = pending.get(item_id)
-    if item is None:
+    outcome = await approve_and_dispatch(
+        session,
+        workspace_id=workspace_id,
+        item_id=item_id,
+        actor_id=user.id,
+        dispatcher=dispatcher,
+    )
+    if not outcome.found:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No pending Safe Mode item {item_id}",
         )
-    deliverable_id = item.deliverable_id
-
-    ok = await queue.approve(workspace_id=workspace_id, item_id=item_id, actor_id=user.id)
-    if not ok:  # lost a race — re-fetched as no longer pending
+    if not outcome.approved:  # lost a race — re-fetched as no longer pending
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Safe Mode item {item_id} is no longer pending",
         )
-    await session.commit()
-
-    artifact_type = await _artifact_type_for(session, deliverable_id)
-    result = await dispatch_delivery(
-        dispatcher,
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type=artifact_type,
-        # Run auto-resolve seam: on delivery success, resolve this run's pending
-        # review Decision + ship the run within the request transaction.
-        session=session,
-    )
-    # B12b — capture compensation_handle onto the Deliverable so the retract
-    # endpoint can later revert through @p.compensate. Uses the request-scoped
-    # session so the persist sits inside the caller's transaction.
-    await persist_compensation_handles(session, deliverable_id=deliverable_id, result=result)
-    return SafeModeActionResponse(item_id=item_id, status="approved", dispatched=True)
+    # ``dispatched`` 는 이제 실제 결과다. 예전에는 ``True`` 를 하드코딩했고, dispatch 가
+    # 터지면 **승인이 이미 커밋된 뒤** HTTP 500 이 나갔다 — 재시도하면 404 였다.
+    return SafeModeActionResponse(item_id=item_id, status="approved", dispatched=outcome.dispatched)
 
 
 @router.post("/runs/{run_id}/deny")

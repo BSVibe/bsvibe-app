@@ -233,54 +233,34 @@ async def _approve(
     actor_id: uuid.UUID,
     dispatcher: Any | None,
 ) -> None:
-    """Flip pending→approved AND dispatch the delivery — mirroring the REST
-    approve so there is one outbound code path. Approval is irreversible: a
-    transient dispatch failure does NOT revert the approve (it surfaces in logs +
-    on the next worker tick)."""
-    ok = await queue.approve(workspace_id=account.workspace_id, item_id=item_id, actor_id=actor_id)
-    await session.commit()
-    if not ok:  # lost a race — no longer pending; nothing to dispatch
-        return
-    # Local imports keep the heavy delivery graph off this module's import chain,
-    # so ``backend.api.webhooks`` (which reaches this handler) stays free of any
-    # transitive ``plugin`` edge (the R2c inbound-layer contract).
-    from backend.workflow.application.runtime.delivery_runtime import (  # noqa: PLC0415
-        build_delivery_adapter,
-    )
-    from backend.workflow.infrastructure.db import Deliverable  # noqa: PLC0415
-    from backend.workflow.infrastructure.workers.delivery_worker import (  # noqa: PLC0415
-        dispatch_delivery,
-        persist_compensation_handles,
-    )
+    """pending→approved 로 뒤집고 배달까지 내보낸다.
 
-    deliverable = await session.get(Deliverable, deliverable_id)
-    artifact_type = (
-        deliverable.deliverable_type.value if deliverable is not None else "direct_output"
+    오케스트레이션은 :func:`~backend.workflow.application.safe_mode_approval.
+    approve_and_dispatch` 가 소유한다 — 세 표면이 공유하는 하나의 outbound 경로다.
+    승인은 되돌리지 않는다: 배달 실패는 로그로만 표면화된다.
+    """
+    # 지연 import — 무거운 delivery 그래프를 이 모듈의 import 사슬에서 뺀다.
+    # ``backend.api.webhooks`` (이 핸들러에 닿는다)가 ``plugin.*`` 정적 엣지를
+    # 얻지 않게 하는 R2c inbound-layer 계약이다.
+    from backend.workflow.application.safe_mode_approval import (  # noqa: PLC0415
+        approve_and_dispatch,
     )
 
     if dispatcher is None:
         from backend.api.deps import _get_session_factory  # noqa: PLC0415
+        from backend.workflow.application.runtime.delivery_runtime import (  # noqa: PLC0415
+            build_delivery_adapter,
+        )
 
         dispatcher = await build_delivery_adapter(session_factory=_get_session_factory())
 
-    try:
-        result = await dispatch_delivery(
-            dispatcher,
-            workspace_id=account.workspace_id,
-            deliverable_id=deliverable_id,
-            artifact_type=artifact_type,
-            # Run auto-resolve seam: on delivery success, resolve this run's
-            # pending review Decision + ship the run within this session.
-            session=session,
-        )
-        await persist_compensation_handles(session, deliverable_id=deliverable_id, result=result)
-    except Exception:  # noqa: BLE001 — irreversible approve; never revert on a dispatch hiccup
-        logger.warning(
-            "approval_callback_dispatch_failed",
-            workspace_id=str(account.workspace_id),
-            deliverable_id=str(deliverable_id),
-            exc_info=True,
-        )
+    await approve_and_dispatch(
+        session,
+        workspace_id=account.workspace_id,
+        item_id=item_id,
+        actor_id=actor_id,
+        dispatcher=dispatcher,
+    )
 
 
 async def _pending_items_for(

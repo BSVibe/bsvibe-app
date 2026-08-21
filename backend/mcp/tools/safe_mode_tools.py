@@ -20,11 +20,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
-from backend.workflow.application.safe_mode_queue import SafeModeQueue
-from backend.workflow.infrastructure.workers.delivery_worker import (
-    dispatch_delivery,
-    persist_compensation_handles,
+from backend.workflow.application.safe_mode_approval import (
+    approve_and_dispatch,
+    approve_run_and_dispatch,
 )
+from backend.workflow.application.safe_mode_queue import SafeModeQueue
 
 logger = structlog.get_logger(__name__)
 
@@ -97,98 +97,23 @@ class SafeModeActionOutput(_Output):
 
 
 async def _h_approve(args: SafeModeApproveInput, ctx: ToolContext) -> Any:
-    queue = SafeModeQueue(ctx.session)
-    pending = {
-        item.id: item for item in await queue.list_pending(workspace_id=ctx.principal.workspace_id)
-    }
-    item = pending.get(args.item_id)
-    if item is None:
-        raise ToolError(f"no pending Safe Mode item {args.item_id}")
-    deliverable_id = item.deliverable_id
-
-    ok = await queue.approve(
+    outcome = await approve_and_dispatch(
+        ctx.session,
         workspace_id=ctx.principal.workspace_id,
         item_id=args.item_id,
         actor_id=ctx.principal.user_id,
+        dispatcher=await _resolve_delivery_dispatcher(ctx),
     )
-    if not ok:
+    if not outcome.found:
+        raise ToolError(f"no pending Safe Mode item {args.item_id}")
+    if not outcome.approved:
         raise ToolError(f"Safe Mode item {args.item_id} is no longer pending")
-    await ctx.session.commit()
-
-    # Lift E40 — mirror the REST `POST /api/v1/safemode/{id}/approve` parity
-    # ([[bsvibe-mcp-ui-parity]]): the MCP path MUST run the outbound dispatch
-    # through the same ``dispatch_delivery`` helper the REST route uses so
-    # an approved item lands as a real PR / page / channel post instead of
-    # rotting in the approved state. Pre-E40 the handler only flipped the
-    # queue row and returned ``dispatched=False``, relying on "the worker's
-    # next tick" — but the worker drains ``delivery_events``, not the
-    # safe_mode queue. The dogfood retrace (run 1079bff5, 2026-06-17)
-    # caught this: the run reached ``review_ready``, the MCP tool flipped
-    # the queue row, but the PR never opened. Approval stays irreversible:
-    # a transient dispatch failure does NOT revert the approve.
-    dispatched = await _dispatch_approved(ctx, deliverable_id=deliverable_id)
 
     return SafeModeActionOutput(
         item_id=str(args.item_id),
         status="approved",
-        dispatched=dispatched,
+        dispatched=outcome.dispatched,
     )
-
-
-async def _dispatch_approved(ctx: ToolContext, *, deliverable_id: uuid.UUID) -> bool:
-    """The ONE outbound path both MCP approves share (item-scoped + run-scoped).
-
-    Lift E40 established that MCP approve must dispatch through the same
-    ``dispatch_delivery`` helper the REST route uses — the worker drains
-    ``delivery_events``, not the safe_mode queue, so a flipped row alone never
-    ships. This helper additionally persists the **compensation handle**, which
-    the MCP path was silently dropping.
-
-    Every other approve surface captures it — REST
-    (``api/v1/safemode/mutations.py``), the Telegram callback
-    (``connectors/approval_callback.py``), and the delivery worker itself — so a
-    deliverable approved via MCP was the only one that could never be
-    RETRACTED: the plugin-private revert token was thrown away while the call
-    still returned ``dispatched=True``. Nothing looked wrong until someone tried
-    to undo it.
-
-    Approval stays irreversible: a transient dispatch failure does NOT revert
-    the approve, it just leaves ``dispatched=False``.
-    """
-    dispatcher = await _resolve_delivery_dispatcher(ctx)
-    if dispatcher is None:
-        logger.warning(
-            "mcp_safe_mode_approve_no_dispatcher_configured",
-            deliverable_id=str(deliverable_id),
-            hint=(
-                "wire a delivery_dispatcher into ToolContext.extras at MCP "
-                "server boot to enable end-to-end approve+dispatch parity"
-            ),
-        )
-        return False
-
-    artifact_type = await _artifact_type_for_deliverable(ctx.session, deliverable_id)
-    try:
-        result = await dispatch_delivery(
-            dispatcher,
-            workspace_id=ctx.principal.workspace_id,
-            deliverable_id=deliverable_id,
-            artifact_type=artifact_type,
-            # Run auto-resolve seam: on delivery success, resolve this run's
-            # pending review Decision + ship the run within this session.
-            session=ctx.session,
-        )
-    except Exception:  # noqa: BLE001 — approval already committed; dispatch is best-effort
-        logger.warning(
-            "mcp_safe_mode_approve_dispatch_failed",
-            deliverable_id=str(deliverable_id),
-            exc_info=True,
-        )
-        return False
-
-    # B12b — without this the retract endpoint has nothing to revert through.
-    await persist_compensation_handles(ctx.session, deliverable_id=deliverable_id, result=result)
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -210,34 +135,19 @@ class SafeModeRunApproveOutput(_Output):
 
 
 async def _h_approve_run(args: SafeModeApproveRunInput, ctx: ToolContext) -> Any:
-    queue = SafeModeQueue(ctx.session)
-    pending = await queue.list_pending_for_run(
-        workspace_id=ctx.principal.workspace_id, run_id=args.run_id
+    approved_count, dispatched = await approve_run_and_dispatch(
+        ctx.session,
+        workspace_id=ctx.principal.workspace_id,
+        run_id=args.run_id,
+        actor_id=ctx.principal.user_id,
+        dispatcher=await _resolve_delivery_dispatcher(ctx),
     )
-    if not pending:
+    if approved_count == 0 and dispatched == 0:
         raise ToolError(f"no pending Safe Mode items for run {args.run_id}")
-
-    # Snapshot (item_id, deliverable_id) BEFORE approving so the dispatch loop
-    # does not depend on the mutated queue rows.
-    targets = [(item.id, item.deliverable_id) for item in pending]
-    approved: list[uuid.UUID] = []
-    for item_id, _ in targets:
-        if await queue.approve(
-            workspace_id=ctx.principal.workspace_id,
-            item_id=item_id,
-            actor_id=ctx.principal.user_id,
-        ):
-            approved.append(item_id)
-    await ctx.session.commit()
-
-    dispatched = 0
-    for item_id, deliverable_id in targets:
-        if item_id in approved and await _dispatch_approved(ctx, deliverable_id=deliverable_id):
-            dispatched += 1
 
     return SafeModeRunApproveOutput(
         run_id=str(args.run_id),
-        approved_count=len(approved),
+        approved_count=approved_count,
         dispatched_count=dispatched,
     )
 
@@ -259,17 +169,6 @@ async def _resolve_delivery_dispatcher(ctx: ToolContext) -> Any:
     back to ``dispatched=False`` instead of crashing the approve.
     """
     return ctx.extras.get("delivery_dispatcher") if ctx.extras else None
-
-
-async def _artifact_type_for_deliverable(session: Any, deliverable_id: uuid.UUID) -> str:
-    """Resolve the deliverable's artifact_type for ``dispatch_delivery``.
-    Mirrors :func:`backend.api.v1.safemode._helpers._artifact_type_for`."""
-    from backend.workflow.infrastructure.db import Deliverable  # noqa: PLC0415
-
-    deliverable = await session.get(Deliverable, deliverable_id)
-    if deliverable is None:
-        return "direct_output"
-    return str(deliverable.deliverable_type.value)
 
 
 # ---------------------------------------------------------------------------
