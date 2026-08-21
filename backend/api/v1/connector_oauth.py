@@ -15,7 +15,7 @@ from :mod:`backend.identity.oauth_service`). Two endpoints:
   code, persist an encrypted token linked to a ``connector_accounts`` binding,
   and 302 the browser back to the PWA settings.
 
-Lift 0 ships only the StubProvider; real providers register from Lift 1.
+실제 provider 는 App 크리덴셜이 있을 때만 등록된다 (Lift 1 이후).
 """
 
 from __future__ import annotations

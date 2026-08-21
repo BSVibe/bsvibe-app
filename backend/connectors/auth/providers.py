@@ -135,8 +135,13 @@ def registered_providers() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRY))
 
 
-# Seed the stub so the skeleton is exercisable out of the box.
-register_provider(StubProvider())
+# ⚠️ 여기서 ``register_provider(StubProvider())`` 를 부르지 않는다.
+#
+# 예전에는 *"skeleton 을 바로 굴려볼 수 있게"* 라며 import 시점에 씨를 뿌렸다.
+# 그런데 ``provider`` 는 **경로 파라미터**다 — ``get_provider(provider)`` 가 그대로
+# 조회하므로 프로덕션에서 ``/api/v1/connectors/oauth/stub/callback`` 이 테스트
+# 더블에 닿았다. 클래스는 남는다: 테스트가 자기 이름으로 등록해서 쓴다
+# (``StubProvider(name="resolve-stub")``).
 
 
 __all__ = [
