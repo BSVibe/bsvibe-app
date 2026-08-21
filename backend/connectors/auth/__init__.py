@@ -16,14 +16,6 @@ from backend.connectors.auth.providers import (
     register_provider,
     registered_providers,
 )
-from backend.connectors.auth.spec import (
-    CONNECTOR_AUTH,
-    AuthMethod,
-    AuthRequirement,
-    ConnectorAuthSpec,
-    auth_spec_for,
-    oauth_connectors,
-)
 from backend.connectors.auth.tokenset import TokenSet
 
 __all__ = [

@@ -57,19 +57,20 @@ def test_router_accounts_subpackage_importable() -> None:
     assert not missing, f"backend.router.accounts missing: {missing}"
 
 
-def test_router_root_unifies_lift_a_and_post_e2_exports() -> None:
+def test_router_root_exports_the_surface_callers_actually_use() -> None:
+    """Lift A 의 facade Protocol + dataclasses(``Router`` / ``LlmRequest`` /
+    ``LlmResult`` / ``LlmRoutingHints``)는 여기 있었지만 **소비자가 0** 이라
+    2026-08-21 에 지웠다 — ``Router`` 의 "소비자 13곳"은 전부 v8 6-context 모델의
+    *Router 컨텍스트*를 가리키는 docstring 산문이었다. 남은 것이 실제 표면이다."""
     router = importlib.import_module("backend.router")
-    # From Lift A (facade Protocol + dataclasses).
-    lift_a = {"Router", "LlmRequest", "LlmResult", "LlmRoutingHints"}
-    # Surviving the Lift E2 classifier removal.
-    post_e2 = {
+    expected = {
         "DispatchError",
         "LlmClient",
         "LlmResponse",
         "ModelAccountNotFound",
     }
     available = set(dir(router))
-    missing = (lift_a | post_e2) - available
+    missing = expected - available
     assert not missing, f"backend.router missing exports: {missing}"
 
 

@@ -416,17 +416,22 @@ async def test_remove_product_workspace_is_idempotent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# push_product_bundle — the product's state, made durable off-box
+# 번들 완전성 — 저장된 객체는 COMPLETE 한 repo 로 복원돼야 한다
+#
+# 이 두 속성은 원래 ``push_product_bundle`` (스냅샷 덮어쓰기 변종) 을 대상으로
+# 시험했다. 그 함수는 프로덕션 호출자가 0이었고 형제 함수의 docstring 이
+# "데이터를 파괴한다"고 적어둬서 2026-08-21 에 지웠다. 속성 자체는 프로덕션이
+# 실제로 부르는 ``publish_product_bundle`` 에도 그대로 필요하므로 이관했다.
 # ---------------------------------------------------------------------------
 
 
-async def test_push_product_bundle_round_trips_the_whole_repo(tmp_path) -> None:
+async def test_publish_round_trips_the_whole_repo(tmp_path) -> None:
     """The pushed bundle must restore a COMPLETE repo — same HEAD, same
     history, branches intact. That property is what keeps git's merge/conflict
     machinery alive across a materialise → work → persist cycle; a working-tree
     snapshot would force last-write-wins and lose concurrent work."""
     from backend.storage.product_bundle_store import LocalFilesystemBundleStore
-    from backend.storage.product_workspace import push_product_bundle
+    from backend.storage.product_workspace import publish_product_bundle
 
     product_id = uuid.uuid4()
     await init_product_workspace(product_id)
@@ -437,7 +442,7 @@ async def test_push_product_bundle_round_trips_the_whole_repo(tmp_path) -> None:
     head = await _git("rev-parse", "HEAD", cwd=repo)
 
     store = LocalFilesystemBundleStore(tmp_path / "bundles")
-    await push_product_bundle(product_id, store=store)
+    await publish_product_bundle(product_id, store=store)
 
     assert await store.exists(product_id) is True
     fetched = tmp_path / "fetched.bundle"
@@ -449,11 +454,11 @@ async def test_push_product_bundle_round_trips_the_whole_repo(tmp_path) -> None:
     assert (restored / "app.py").read_text() == "print('v1')\n"
 
 
-async def test_push_product_bundle_includes_run_branches(tmp_path) -> None:
+async def test_publish_includes_run_branches(tmp_path) -> None:
     """``--all``, not just ``main``: an in-flight run's branch must survive the
     round-trip or resuming that run after a materialise would lose its work."""
     from backend.storage.product_bundle_store import LocalFilesystemBundleStore
-    from backend.storage.product_workspace import push_product_bundle
+    from backend.storage.product_workspace import publish_product_bundle
 
     product_id = uuid.uuid4()
     run_id = uuid.uuid4()
@@ -464,7 +469,7 @@ async def test_push_product_bundle_includes_run_branches(tmp_path) -> None:
     await _git("commit", "-m", "wip", cwd=worktree)
 
     store = LocalFilesystemBundleStore(tmp_path / "bundles")
-    await push_product_bundle(product_id, store=store)
+    await publish_product_bundle(product_id, store=store)
 
     fetched = tmp_path / "f.bundle"
     await store.get(product_id, fetched)
@@ -472,18 +477,6 @@ async def test_push_product_bundle_includes_run_branches(tmp_path) -> None:
     await _git("clone", str(fetched), str(restored), cwd=tmp_path)
     branches = await _git("branch", "-a", cwd=restored)
     assert run_branch_name(run_id) in branches
-
-
-async def test_push_product_bundle_missing_repo_is_noop(tmp_path) -> None:
-    """A product whose repo is absent (never provisioned / already reclaimed)
-    must not raise — the caller is a ship path that already succeeded."""
-    from backend.storage.product_bundle_store import LocalFilesystemBundleStore
-    from backend.storage.product_workspace import push_product_bundle
-
-    store = LocalFilesystemBundleStore(tmp_path / "bundles")
-    product_id = uuid.uuid4()
-    await push_product_bundle(product_id, store=store)  # must not raise
-    assert await store.exists(product_id) is False
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +492,7 @@ async def test_ensure_materialises_repo_from_bundle_when_absent(tmp_path) -> Non
     from backend.storage.product_bundle_store import LocalFilesystemBundleStore
     from backend.storage.product_workspace import (
         ensure_product_workspace,
-        push_product_bundle,
+        publish_product_bundle,
     )
 
     product_id = uuid.uuid4()
@@ -511,7 +504,7 @@ async def test_ensure_materialises_repo_from_bundle_when_absent(tmp_path) -> Non
     head = await _git("rev-parse", "HEAD", cwd=repo)
 
     store = LocalFilesystemBundleStore(tmp_path / "bundles")
-    await push_product_bundle(product_id, store=store)
+    await publish_product_bundle(product_id, store=store)
 
     # The repo leaves the disk entirely (what PR 7/8 will do after every run).
     shutil.rmtree(repo)
@@ -530,14 +523,14 @@ async def test_ensure_is_a_noop_when_repo_is_present(tmp_path) -> None:
     from backend.storage.product_bundle_store import LocalFilesystemBundleStore
     from backend.storage.product_workspace import (
         ensure_product_workspace,
-        push_product_bundle,
+        publish_product_bundle,
     )
 
     product_id = uuid.uuid4()
     await init_product_workspace(product_id)
     repo = product_workspace_path(product_id)
     store = LocalFilesystemBundleStore(tmp_path / "bundles")
-    await push_product_bundle(product_id, store=store)  # bundle == empty product
+    await publish_product_bundle(product_id, store=store)  # bundle == empty product
 
     # Local work lands AFTER the bundle was published.
     (repo / "newer.py").write_text("local work\n")
@@ -565,7 +558,7 @@ async def test_ensure_preserves_run_branches_through_the_round_trip(tmp_path) ->
     from backend.storage.product_bundle_store import LocalFilesystemBundleStore
     from backend.storage.product_workspace import (
         ensure_product_workspace,
-        push_product_bundle,
+        publish_product_bundle,
     )
 
     product_id = uuid.uuid4()
@@ -577,7 +570,7 @@ async def test_ensure_preserves_run_branches_through_the_round_trip(tmp_path) ->
     await _git("commit", "-m", "wip", cwd=worktree)
 
     store = LocalFilesystemBundleStore(tmp_path / "bundles")
-    await push_product_bundle(product_id, store=store)
+    await publish_product_bundle(product_id, store=store)
 
     shutil.rmtree(product_workspace_path(product_id))
     shutil.rmtree(worktree, ignore_errors=True)
@@ -592,7 +585,7 @@ async def test_list_product_tree_materialises_instead_of_failing_open(tmp_path) 
     PWA showed an EMPTY product with no error. Once the repo lives off-box that
     silent lie would be the normal case — restore it instead."""
     from backend.storage.product_bundle_store import LocalFilesystemBundleStore
-    from backend.storage.product_workspace import push_product_bundle
+    from backend.storage.product_workspace import publish_product_bundle
 
     product_id = uuid.uuid4()
     await init_product_workspace(product_id)
@@ -602,7 +595,7 @@ async def test_list_product_tree_materialises_instead_of_failing_open(tmp_path) 
     await _git("commit", "-m", "docs", cwd=repo)
 
     store = LocalFilesystemBundleStore(tmp_path / "bundles")
-    await push_product_bundle(product_id, store=store)
+    await publish_product_bundle(product_id, store=store)
     shutil.rmtree(repo)
 
     entries = await list_product_tree(product_id, store=store)

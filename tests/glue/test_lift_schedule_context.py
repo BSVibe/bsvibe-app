@@ -11,8 +11,7 @@ across ``backend/intake/`` + ``backend/workers/`` into a unified
 * ``backend/workers/schedule_runner.py`` is split:
     * ``ScheduleRunnerProtocol`` →
       ``backend/schedule/domain/runner_protocol.py``.
-    * ``ScheduleAdvancer`` Protocol + ``OneShotScheduleAdvancer`` +
-      ``FixedIntervalScheduleAdvancer`` →
+    * ``ScheduleAdvancer`` Protocol + its impl →
       ``backend/schedule/domain/advancer.py``.
     * ``DbPollScheduleRunner`` + ``build_db_poll_schedule_runner`` →
       ``backend/schedule/infrastructure/db_poll_runner.py``.
@@ -63,8 +62,7 @@ def test_schedule_runner_protocol_at_new_location() -> None:
 def test_schedule_advancer_at_new_location() -> None:
     mod = importlib.import_module("backend.schedule.domain.advancer")
     assert hasattr(mod, "ScheduleAdvancer")
-    assert hasattr(mod, "OneShotScheduleAdvancer")
-    assert hasattr(mod, "FixedIntervalScheduleAdvancer")
+    assert hasattr(mod, "CronScheduleAdvancer")
 
 
 # ---------------------------------------------------------------------------

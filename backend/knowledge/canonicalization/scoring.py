@@ -7,9 +7,11 @@ Produces a ``ScoreResult`` with envelope-shaped, source-separated
 - ``prior_decision_conflict`` — cannot-link decision below hard_block but
   above review threshold (review-warning band)
 
-LLM-as-judge / model evidence is reserved for slice 5 (BalancedProposer
-verifier integration). Per §13: model evidence MUST live under
-``model_evidence``, never as deterministic risk_reasons.
+LLM-as-judge / model evidence was reserved for a slice-5 verifier integration
+that never shipped (its only proposer had zero callers and was deleted
+2026-08-21). The invariant stands for whatever lands next — per §13, model
+evidence MUST live under ``model_evidence``, never as deterministic
+risk_reasons.
 """
 
 from __future__ import annotations

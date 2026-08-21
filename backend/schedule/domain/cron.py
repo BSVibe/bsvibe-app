@@ -14,9 +14,8 @@ founder's canonical example — "매주 월요일" / "every Monday 09:00" → ``
 — is covered by the day-of-week handling + the standard cron OR-semantics
 between day-of-month and day-of-week.
 
-All computation is in UTC (naive-vs-aware handled by the caller); this matches
-the existing :class:`~backend.schedule.domain.advancer.OneShotScheduleAdvancer`,
-which treats the clock as UTC.
+All computation is in UTC (naive-vs-aware handled by the caller), matching how
+:class:`~backend.schedule.domain.advancer.CronScheduleAdvancer` treats the clock.
 """
 
 from __future__ import annotations
