@@ -4,7 +4,7 @@ Per v8 D34 (Lift H3c) the per-context workers moved to their owning
 contexts. What stays here is the cross-context common worker infra:
 
 * :class:`~backend.workers.base.BaseWorker` — the poll-loop base.
-* :mod:`backend.workers.db` — worker registration + drain marker tables.
+* :mod:`backend.workers.db` — the settle-drain marker table.
 * :mod:`backend.workers.emit` — Redis Streams emit helpers + stream names.
 * :mod:`backend.workers.streams` — :class:`RedisStreamConsumer` +
   :class:`StreamHandler` (consumer-group plumbing).
@@ -23,22 +23,14 @@ The per-context workers now live at:
 from __future__ import annotations
 
 from backend.workers.db import (
-    AuditRelayStateRow,
     SettleDrainRow,
-    WorkerInstallTokenRow,
-    WorkerRow,
     WorkersBase,
-    WorkerStatus,
 )
 from backend.workers.streams import RedisStreamConsumer, StreamHandler
 
 __all__ = [
-    "AuditRelayStateRow",
     "RedisStreamConsumer",
     "SettleDrainRow",
     "StreamHandler",
-    "WorkerInstallTokenRow",
-    "WorkerRow",
-    "WorkerStatus",
     "WorkersBase",
 ]

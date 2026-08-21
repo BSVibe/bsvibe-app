@@ -18,8 +18,10 @@ The name ``workers`` is already taken there, so this subsystem owns its own
 table: ``executor_workers``.
 
 Lift E5 (2026-06-06) — the legacy ``executor_install_tokens`` table and its
-``WorkerInstallTokenRow`` ORM are gone. The host now registers with its
-OAuth bearer; there is no install-token paste step.
+ORM are gone. The host now registers with its OAuth bearer; there is no
+install-token paste step. (``backend.workers.db`` carried a *separate*
+``worker_install_tokens`` table for the same idea; it was never written to
+and was dropped 2026-08-21.)
 """
 
 from __future__ import annotations

@@ -142,11 +142,11 @@ def test_alembic_head_is_connector_last_import():
     # drop_gateway_routing -> drop_budget_policies (``account_budget_policies``
     # — 0 rows in prod with no way to create one, so ``BudgetExceeded`` could
     # never fire; its two dedicated enum types go with it).
-    # drop_budget_policies -> drop_canon_pg_mirror (the producer-less
+    # drop_budget_policies -> drop_canon_pg_mirror -> drop_dead_worker_tables (the producer-less
     # canonicalization / retrieval mirror — 5 tables, 0 rows, and the codebase
     # said so itself; reading one of them was a GDPR Art. 15/20 defect).
     # NOTE revision ids are capped at 32 chars by ``alembic_version.version_num``.
-    assert "drop_canon_pg_mirror" in result.stdout
+    assert "drop_dead_worker_tables" in result.stdout
 
 
 def test_target_metadata_covers_all_bases():
@@ -191,9 +191,8 @@ def test_target_metadata_covers_all_bases():
         "requests",
         "delivery_events",
         "safe_mode_queue_items",
-        "workers",
-        "worker_install_tokens",
-        "audit_relay_state",
+        # ``workers`` / ``worker_install_tokens`` / ``audit_relay_state`` 는
+        # 2026-08-21 에 드롭됐다 (prod 0행). 워커 등록의 SoT 는 ``executor_workers``.
         # M1 — schedule runner emitter source
         "workspace_schedules",
         # Bundle H
