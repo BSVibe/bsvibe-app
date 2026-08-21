@@ -40,8 +40,6 @@ def test_new_engine_paths_importable() -> None:
 def test_extension_protocols_importable() -> None:
     protocols = importlib.import_module("backend.extensions.domain.protocols")
     for name in (
-        "ActionDispatchInterceptor",
-        "SettlementSubscriber",
         "EventBus",
         "EventBusSubscriber",
         "Plugin",

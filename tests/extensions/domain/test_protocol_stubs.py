@@ -1,24 +1,24 @@
-"""Lift G — extension Protocol stubs are runtime_checkable + zero registered impl.
+"""확장 Protocol 스텁이 ``runtime_checkable`` 인지.
 
-Per the Lift G plan (no live wiring this lift):
+Lift G 는 훅 표면 넷을 "구현 0개"로 발행했다. 그중 pre-dispatch 인터셉터와
+settlement 구독자 둘은 끝내 구현을 얻지 못했고 2026-08-21 에 지웠다 —
+이 파일의 ``test_hook_protocol_has_zero_registered_impl`` 이 **"아무도 구현하지
+않음"을 계약으로 박아두고 있었다.** 발행-미사용 상태를 명세로 고정하면 그 상태가
+영원해진다.
 
-* ``ActionDispatchInterceptor`` — pre-action gate, no registered impl.
-* ``SettlementSubscriber`` — settlement / rollback hook, no registered impl.
-* ``EventBus`` + ``EventBusSubscriber`` — pub/sub Protocols, audit is the
-  first *concrete* user but registers no subscriber in this lift.
-* ``Plugin`` / ``Skill`` / ``Action`` — formalize what plugin/skill loaders
-  already produce.
+남은 것은 실제로 쓰이는 표면이다:
 
-We assert each Protocol is ``runtime_checkable`` and that the codebase has
-*zero* live ``register_*`` call sites for the new hook Protocols — the
-contract is published-but-unused this lift.
+* ``EventBus`` + ``EventBusSubscriber`` — pub/sub Protocols. 구독자 등록이
+  아직 0이라 zero-registration 검사는 이쪽에만 남긴다.
+* ``Plugin`` / ``Skill`` / ``Action`` — 플러그인/스킬 로더가 이미 만들어내는 것을
+  형식화한다.
 """
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Protocol, get_type_hints
+from typing import Protocol
 
 import pytest
 
@@ -28,8 +28,6 @@ from backend.extensions.domain import protocols
 @pytest.mark.parametrize(
     "name",
     [
-        "ActionDispatchInterceptor",
-        "SettlementSubscriber",
         "EventBus",
         "EventBusSubscriber",
         "Plugin",
@@ -48,7 +46,7 @@ def test_protocol_is_runtime_checkable(name: str) -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["ActionDispatchInterceptor", "SettlementSubscriber", "EventBusSubscriber"],
+    ["EventBusSubscriber"],
 )
 def test_hook_protocol_has_zero_registered_impl(name: str) -> None:
     """Lift G publishes hook surfaces but does not wire any concrete impl.
@@ -70,13 +68,3 @@ def test_hook_protocol_has_zero_registered_impl(name: str) -> None:
     )
     hits = [line for line in result.stdout.splitlines() if line.strip()]
     assert hits == [], f"Lift G expects zero live registrations of {pattern}; found: {hits}"
-
-
-def test_action_dispatch_interceptor_signature() -> None:
-    """The interceptor protocol must take a context-ish payload and return
-    a decision (allow / deny). Keep the surface tiny — Lift G is publication
-    only."""
-    hints = get_type_hints(protocols.ActionDispatchInterceptor.before_dispatch)
-    # Argument names: self, context — we just assert the method exists.
-    assert callable(protocols.ActionDispatchInterceptor.before_dispatch)
-    assert "return" in hints

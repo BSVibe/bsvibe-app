@@ -18,7 +18,6 @@ from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from ._helpers import _to_item_response
 from ._schemas import (
     SafeModeItemResponse,
-    SafeModeResolvedResponse,
     SafeModeRunGroupResponse,
 )
 
@@ -60,27 +59,3 @@ async def list_queue_by_run(
             order.append(key)
         by_run[key].append(_to_item_response(item))
     return [SafeModeRunGroupResponse(run_id=k, items=by_run[k]) for k in order]
-
-
-@router.get("/resolved")
-async def list_resolved(
-    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> list[SafeModeResolvedResponse]:
-    """List decided Safe-Mode deliveries (approved / denied / expired) for the
-    Decisions "Resolved" tab, most-recently-decided first."""
-    queue = SafeModeQueue(session)
-    items = await queue.list_resolved(workspace_id=workspace_id)
-    return [
-        SafeModeResolvedResponse(
-            id=item.id,
-            deliverable_id=item.deliverable_id,
-            status=item.status.value,
-            decided_at=item.decided_at,
-            created_at=item.created_at,
-        )
-        for item in items
-    ]
-
-
-__all__ = ["router"]

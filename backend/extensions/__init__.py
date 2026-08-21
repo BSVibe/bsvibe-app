@@ -3,8 +3,8 @@
 Contract (Lift N-Coverage pattern #8):
 
 * **Owns** the BSVibe extensibility surface — the capability decorator
-  framework, the Markdown-manifest skill engine, the EventBus +
-  ActionDispatchInterceptor seams in ``domain/protocols.py``, and the
+  framework, the Markdown-manifest skill engine, the EventBus seam in
+  ``domain/protocols.py``, and the
   concrete extension implementations under ``implementations/``.
 * **Facade**: ``backend.extensions.domain.protocols`` — the published
   Protocol surface (Lift G).

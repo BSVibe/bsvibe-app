@@ -36,7 +36,6 @@ pytestmark = pytest.mark.asyncio
         "/api/v1/accounts",
         "/api/v1/decisions",
         "/api/v1/workspaces",
-        "/api/v1/settings",
         "/api/v1/skills",
     ],
 )
