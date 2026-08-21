@@ -37,6 +37,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.api.v1.run_routing import (
     ApplyError,
     ApplyProposal,
+    ConditionPayload,
     NoCompileModelError,
     SourceTextUninterpretableError,
     _conditions_from_compiled,
@@ -48,7 +49,6 @@ from backend.api.v1.run_routing import (
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.infrastructure.repositories import SqlAlchemyRunRoutingRuleRepository
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
-from backend.router.routing.run_routing.engine import ALLOWED_FIELDS, VALID_OPERATORS
 from backend.router.routing.run_routing.nl_compile import CompileLlmUnavailable
 
 # MCP parity for the REST 502 (see :mod:`backend.api.v1.run_routing`): a compile
@@ -81,30 +81,6 @@ def _row_to_dict(row: RunRoutingRuleRow) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Schemas (mirror /api/v1/run-routing — RunRuleCreate)
 # ---------------------------------------------------------------------------
-class ConditionPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    field: str = Field(min_length=1)
-    operator: str = "eq"
-    value: Any = None
-    negate: bool = False
-
-    @field_validator("field")
-    @classmethod
-    def _field_allowed(cls, v: str) -> str:
-        if v not in ALLOWED_FIELDS:
-            allowed = ", ".join(sorted(ALLOWED_FIELDS))
-            raise ValueError(f"unknown condition field {v!r}; allowed: {allowed}")
-        return v
-
-    @field_validator("operator")
-    @classmethod
-    def _operator_valid(cls, v: str) -> str:
-        if v not in VALID_OPERATORS:
-            raise ValueError(
-                f"unknown operator {v!r}; allowed: {', '.join(sorted(VALID_OPERATORS))}"
-            )
-        return v
 
 
 # ---------------------------------------------------------------------------

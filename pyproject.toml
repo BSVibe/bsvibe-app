@@ -371,7 +371,6 @@ ignore_imports = [
     "backend.mcp.tools.run_routing_rules_tools -> backend.api.v1.run_routing",
     "backend.mcp.tools.run_routing_rules_tools -> backend.router.infrastructure.repositories",
     "backend.mcp.tools.run_routing_rules_tools -> backend.router.routing.run_routing.db",
-    "backend.mcp.tools.run_routing_rules_tools -> backend.router.routing.run_routing.engine",
     # The compile contract's error taxonomy — the MCP tool must tell an
     # UNREACHABLE compile model (infrastructure → "couldn't reach", the REST
     # 502) apart from an uninterpretable phrase (→ "rephrase", the REST 422).
