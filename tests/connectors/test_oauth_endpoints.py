@@ -12,7 +12,7 @@ test harness) so the wiring bugs that dependency_overrides+pre-seeding hide
   pending row (single-use), exchanges the code, persists an encrypted token
   row linked to a connector_account, redirects back to the PWA.
 
-Built against StubProvider — no real provider until Lift 1.
+Built against ``StubProvider`` — 이 파일의 픽스처가 직접 등록한다.
 """
 
 from __future__ import annotations
@@ -39,7 +39,25 @@ from .._support import db_engine, fake_current_user
 pytestmark = pytest.mark.asyncio
 
 TEST_KEY = b"0123456789abcdef0123456789abcdef"
-PROVIDER = "stub"  # the only provider registered in Lift 0
+PROVIDER = "stub"
+
+
+@pytest.fixture(autouse=True)
+def _register_stub_provider():
+    """이 파일은 ``StubProvider`` 를 상대로 OAuth 엔드포인트를 시험한다.
+
+    예전에는 ``providers.py`` 가 **import 시점에** 그것을 프로덕션 레지스트리에
+    씨 뿌려서 여기가 공짜로 얻어 썼다. 그 씨뿌리기는 프로덕션에서
+    ``/api/v1/connectors/oauth/stub/callback`` 을 열어놓기 때문에 제거했다 —
+    테스트가 필요하면 **테스트가 등록한다.**
+    """
+    from backend.connectors.auth import providers as _providers
+
+    _providers.register_provider(_providers.StubProvider())
+    try:
+        yield
+    finally:
+        _providers._REGISTRY.pop(PROVIDER, None)
 
 
 @pytest_asyncio.fixture

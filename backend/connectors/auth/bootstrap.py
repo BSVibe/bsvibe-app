@@ -1,8 +1,8 @@
 """Register the credential-gated OAuth providers (Lift 1 env + Lift 1.5 DB).
 
-The Lift 0 skeleton seeds only the StubProvider at import time (so the
-storage / endpoint / resolution layers are exercisable without secrets). Real
-providers are registered ONLY when their App credentials exist — a deployment
+Lift 0 는 import 시점에 ``StubProvider`` 를 씨 뿌렸지만, 그 더블이 프로덕션
+레지스트리에 남아 경로 파라미터로 닿을 수 있어 2026-08-21 에 제거했다 — 테스트는
+자기 이름으로 직접 등록한다. 실제 provider 는 App 크리덴셜이 있을 때만 등록된다 — a deployment
 with none keeps a github connector working via the legacy signing-secret path
 (resolve_connector_credentials falls back), it just can't offer "Connect with
 GitHub".
