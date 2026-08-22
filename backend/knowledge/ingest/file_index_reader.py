@@ -308,7 +308,7 @@ class FileIndexReader:
         return ""
 
     async def index_note_from_content(self, note_path: str, content: str) -> None:
-        """Parse a note and update the index — called by IndexSubscriber."""
+        """Parse a note and update the index."""
         summary = _note_to_summary(note_path, content)
         await self.update_entry(note_path, summary)
 

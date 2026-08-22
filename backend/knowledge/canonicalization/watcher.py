@@ -3,7 +3,8 @@
 Per Handoff §15.3: ``self-host only``. Detects external edits (Obsidian,
 git checkout, manual file ops) under ``concepts/`` / ``proposals/`` /
 ``actions/`` / ``decisions/`` and emits ``NOTE_UPDATED`` /
-``NOTE_DELETED`` events. ``CanonicalizationIndexSubscriber`` (slice 5)
+``NOTE_DELETED`` events. (그 이벤트를 받던 canon 인덱스 구독자는 인스턴스화되는
+곳이 없어 2026-08-21 에 지웠다 — slice 5)
 already listens to those and calls ``index.invalidate(path)``.
 
 Implementation note (slice 6 deviation): the spec describes this as a
@@ -142,7 +143,7 @@ class _CanonFsEventHandler:
         if rel is None or not is_canon_path(rel):
             return
         # Emit absolute path so existing event consumers
-        # (GraphSubscriber / IndexSubscriber / VectorSubscriber) — which
+        # (한때 있던 구독자들 — 전부 인스턴스화되지 않아 제거됐다) — which
         # are tuned to GardenWriter's ``str(resolved)`` convention — can
         # process the event uniformly. The canon subscriber normalizes
         # both forms via :func:`is_canon_path` substring detection.
