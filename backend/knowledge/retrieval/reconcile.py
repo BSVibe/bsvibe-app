@@ -1,7 +1,7 @@
 """Embedding reconcile / backfill (Lift 3).
 
 The vector index (``note_embeddings``) is populated event-driven on note writes
-(:class:`~backend.knowledge.retrieval.vector_subscriber.VectorSubscriber` +
+(:func:`~backend.knowledge.retrieval.vector_subscriber.embed_and_store_note` +
 the settle hook). Two gaps leave knowledge un-retrievable:
 
 * **bulk-imported notes** that predate / bypassed the event path, and

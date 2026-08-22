@@ -1,4 +1,4 @@
-"""Embedder protocol — minimal surface VaultRetriever / VectorSubscriber need.
+"""Embedder protocol — minimal surface VaultRetriever / 임베딩 저장 경로가 쓰는 것.
 
 BSage's concrete ``Embedder`` is dropped in favor of structural typing. Wire-time
 adapters can wrap ``backend.embedding.EmbeddingService`` (or any other

@@ -1,4 +1,10 @@
-"""VectorSubscriber — computes and stores embeddings on vault write events."""
+"""노트 임베딩 계산 + 저장.
+
+한때 ``VectorSubscriber`` 클래스가 vault write 이벤트를 구독하는 모양이었지만,
+**어디서도 인스턴스화되지 않았다** (backend·tests 통틀어 0). 2026-08-21 에 지웠다.
+남은 :func:`embed_and_store_note` 는 :mod:`backend.knowledge.retrieval.reconcile`
+이 직접 부른다 — 구독이 아니라 명시적 호출이 실제 배선이다.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,6 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from backend.knowledge._internal.events import Event, EventType
 from backend.knowledge.graph.markdown_utils import body_after_frontmatter, extract_frontmatter
 
 if TYPE_CHECKING:
@@ -65,55 +70,3 @@ async def embed_and_store_note(
     await vector_store.store(note_path, embedding)
     logger.debug("vector_stored", path=note_path, dim=len(embedding))
     return True
-
-
-class VectorSubscriber:
-    """Listens for vault events and updates the vector store.
-
-    Computes embeddings from note title + body on every write event.
-    Removes embeddings on delete.
-    """
-
-    def __init__(
-        self,
-        vector_store: NoteVectorBackend,
-        vault: Vault,
-        embedder: Embedder,
-        *,
-        max_embed_chars: int = _DEFAULT_MAX_EMBED_CHARS,
-    ) -> None:
-        self._vector_store = vector_store
-        self._vault = vault
-        self._embedder = embedder
-        self._max_embed_chars = max_embed_chars
-
-    async def on_event(self, event: Event) -> None:
-        """Handle an event from the EventBus."""
-        if not self._embedder.enabled:
-            return
-
-        if event.event_type == EventType.NOTE_DELETED:
-            note_path = event.payload.get("path", "")
-            if note_path:
-                await self._vector_store.remove(note_path)
-                logger.debug("vector_removed", path=note_path)
-            return
-
-        if event.event_type not in (
-            EventType.SEED_WRITTEN,
-            EventType.GARDEN_WRITTEN,
-            EventType.NOTE_UPDATED,
-        ):
-            return
-
-        note_path = event.payload.get("path", "")
-        if not note_path:
-            return
-
-        await embed_and_store_note(
-            self._vault,
-            self._embedder,
-            self._vector_store,
-            note_path,
-            max_embed_chars=self._max_embed_chars,
-        )

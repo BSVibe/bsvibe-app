@@ -9,7 +9,7 @@ ingest and settle compile has decided against nothing.
 The structure audit (2026-08-19) read this as "two call sites forgot an
 argument". It was a layer worse: ``VaultRetriever`` had **zero** production
 construction sites (tests only), as did ``FileIndexReader`` and
-``IndexSubscriber`` — the vault ``_index`` was never written. There was no
+인덱스 구독자 — the vault ``_index`` was never written. There was no
 object to forget to pass.
 
 What DOES exist, and is current, is the semantic store: prod measured 1,714

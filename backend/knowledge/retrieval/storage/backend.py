@@ -8,7 +8,7 @@ production uses :class:`~backend.knowledge.retrieval.storage.pg.PgNoteVectorBack
 
 The method signatures match the retired SQLite ``VectorStore`` exactly
 (``store`` / ``remove`` / ``search``) so the existing consumers
-(:class:`~backend.knowledge.retrieval.vector_subscriber.VectorSubscriber`,
+(:func:`~backend.knowledge.retrieval.vector_subscriber.embed_and_store_note`,
 :class:`~backend.knowledge.retrieval.retriever.VaultRetriever`) depend only on
 this Protocol. Workspace scoping is per-backend-instance (one per vault), so the
 note-facing methods carry no workspace argument.

@@ -17,17 +17,8 @@ class EventType(Enum):
     """All event types that can be emitted through the EventBus."""
 
     # Plugin lifecycle
-    PLUGIN_RUN_START = "plugin_run_start"
-    PLUGIN_RUN_COMPLETE = "plugin_run_complete"
-    PLUGIN_RUN_ERROR = "plugin_run_error"
 
     # Skill lifecycle
-    SKILL_RUN_START = "skill_run_start"
-    SKILL_GATHER_COMPLETE = "skill_gather_complete"
-    SKILL_LLM_RESPONSE = "skill_llm_response"
-    SKILL_APPLY_COMPLETE = "skill_apply_complete"
-    SKILL_RUN_COMPLETE = "skill_run_complete"
-    SKILL_RUN_ERROR = "skill_run_error"
 
     # Vault writes
     SEED_WRITTEN = "seed_written"
@@ -39,19 +30,12 @@ class EventType(Enum):
     NOTE_DELETED = "note_deleted"
 
     # Scheduler
-    TRIGGER_FIRED = "trigger_fired"
 
     # Tool calls (from AgentLoop)
-    TOOL_CALL_START = "tool_call_start"
-    TOOL_CALL_COMPLETE = "tool_call_complete"
 
     # Agent loop
-    INPUT_RECEIVED = "input_received"
-    INPUT_COMPLETE = "input_complete"
 
     # Ingest compiler
-    INGEST_COMPILE_START = "ingest_compile_start"
-    INGEST_COMPILE_COMPLETE = "ingest_compile_complete"
     INGEST_COMPILE_BATCH_START = "ingest_compile_batch_start"
     INGEST_COMPILE_BATCH_CHUNK_START = "ingest_compile_batch_chunk_start"
     INGEST_COMPILE_BATCH_CHUNK_DONE = "ingest_compile_batch_chunk_done"
@@ -59,18 +43,14 @@ class EventType(Enum):
     INGEST_COMPILE_BATCH_COMPLETE = "ingest_compile_batch_complete"
 
     # Credentials
-    CREDENTIAL_SETUP_REQUIRED = "credential_setup_required"
 
     # Canonicalization (Handoff §14)
-    CANONICALIZATION_PROPOSAL_CREATED = "canonicalization_proposal_created"
     CANONICALIZATION_PROPOSAL_STATUS_CHANGED = "canonicalization_proposal_status_changed"
     CANONICALIZATION_ACTION_DRAFTED = "canonicalization_action_drafted"
     CANONICALIZATION_ACTION_STATUS_CHANGED = "canonicalization_action_status_changed"
     CANONICALIZATION_ACTION_APPLIED = "canonicalization_action_applied"
     CANONICALIZATION_DECISION_CREATED = "canonicalization_decision_created"
     CANONICALIZATION_DECISION_SUPERSEDED = "canonicalization_decision_superseded"
-    CANONICALIZATION_POLICY_UPDATED = "canonicalization_policy_updated"
-    CANONICALIZATION_POLICY_CONFLICT = "canonicalization_policy_conflict"
 
 
 @dataclass
