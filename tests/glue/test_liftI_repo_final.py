@@ -59,12 +59,17 @@ def test_phaseA_rows_at_new_identity_location(name: str) -> None:
     assert hasattr(mod, name), f"{name} missing from backend.identity.workspaces_db"
 
 
-def test_phaseA_resource_binding_repository_protocol() -> None:
-    """Protocol lives in identity.domain.repositories.resource_binding_repository."""
+def test_phaseA_resource_binding_module_keeps_its_value_set() -> None:
+    """이 모듈은 남지만 **Protocol 은 빠졌다** (2026-08-21).
+
+    형제 Protocol 셋(``User`` · ``Workspace`` · ``Membership``)과 달리
+    ``ResourceBindingRepository`` 는 타입 주석으로도 붙는 곳이 없었다. 반면
+    ``OUTPUT_MODES`` 는 MCP 바인딩 툴이 SoT 로 쓴다(#804)."""
     mod = importlib.import_module(
         "backend.identity.domain.repositories.resource_binding_repository"
     )
-    assert hasattr(mod, "ResourceBindingRepository")
+    assert not hasattr(mod, "ResourceBindingRepository")
+    assert mod.OUTPUT_MODES == frozenset({"safe", "direct"})
 
 
 def test_phaseA_resource_binding_repository_sql_at_new_location() -> None:

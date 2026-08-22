@@ -7,7 +7,7 @@ holds the per-workspace LLM account roster (native api-llm models + the
 executor worker register/revoke, the agent_runner Workflow→Router
 cross-reference — calls this Protocol instead of issuing raw
 ``select(ModelAccount)`` queries or instantiating the legacy
-:class:`backend.router.accounts.repository.ModelAccountRepository` concrete
+:class:`~backend.router.infrastructure.repositories.SqlAlchemyModelAccountRepository` concrete
 class directly.
 
 The method surface mirrors what the legacy class shipped today plus the two

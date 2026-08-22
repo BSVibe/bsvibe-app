@@ -47,7 +47,10 @@ def test_router_accounts_subpackage_importable() -> None:
         "ModelAccount",
         "ModelAccountCreate",
         "ModelAccountOut",
-        "ModelAccountRepository",
+        # ``ModelAccountRepository`` 는 back-compat shim 의 재수출이었다 —
+        # shim 과 함께 2026-08-21 에 빠졌다. 구체 구현은
+        # ``router.infrastructure.repositories`` 가, Protocol 은
+        # ``router.domain.repositories`` 가 갖는다.
         "ModelAccountService",
         "ModelAccountUpdate",
         "decrypt_credentials",
@@ -87,9 +90,13 @@ def test_router_dispatch_strategies_removed_by_lift_e2() -> None:
         importlib.import_module("backend.router.dispatch.strategies")
 
 
-def test_router_accounts_repository_importable() -> None:
-    mod = importlib.import_module("backend.router.accounts.repository")
-    assert hasattr(mod, "ModelAccountRepository")
+def test_router_accounts_repository_shim_is_gone() -> None:
+    """Lift I-Repo 가 남긴 back-compat shim — 스스로 *"the lift's diff stays
+    narrow"* 를 위한 임시라고 적었고, 2026-08-21 에 rename 을 완료하며 지웠다.
+    구체 구현은 ``router.infrastructure.repositories`` 에, Protocol 은
+    ``router.domain.repositories`` 에 있다."""
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend.router.accounts.repository")
 
 
 def test_router_dispatch_importable() -> None:
