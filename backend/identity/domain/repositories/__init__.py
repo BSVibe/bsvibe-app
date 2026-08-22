@@ -23,7 +23,8 @@ Lift I-Repo-Final (Phase A) closes out the Identity Repository pass by
 absorbing the deleted ``backend.workspaces.resource_bindings`` module into
 the Identity context as a proper Protocol + concrete pair:
 
-* :class:`ResourceBindingRepository` — workspace-scoped CRUD + Receive-stage
+* (``ResourceBindingRepository`` Protocol 은 타입 주석으로도 붙는 곳이 없어
+  2026-08-21 에 지웠다 — 구체 구현과 ``OUTPUT_MODES`` 는 그대로다.) Receive-stage
   ``find_binding`` lookup for the 3-knob (selection / trigger / output_mode)
   binding (Workflow §3). Concrete impl is
   :class:`SqlAlchemyResourceBindingRepository`.
@@ -47,7 +48,6 @@ from backend.identity.domain.repositories.membership_repository import (
 )
 from backend.identity.domain.repositories.resource_binding_repository import (
     OUTPUT_MODES,
-    ResourceBindingRepository,
 )
 from backend.identity.domain.repositories.user_repository import UserRepository
 from backend.identity.domain.repositories.workspace_repository import (
@@ -57,7 +57,6 @@ from backend.identity.domain.repositories.workspace_repository import (
 __all__ = [
     "OUTPUT_MODES",
     "MembershipRepository",
-    "ResourceBindingRepository",
     "UserRepository",
     "WorkspaceRepository",
 ]

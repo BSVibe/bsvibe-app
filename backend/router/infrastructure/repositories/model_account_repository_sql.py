@@ -2,7 +2,8 @@
 
 v8 D44/D45 — infrastructure-layer SQL adapter for the Router context's
 ModelAccount aggregate. Folds in the queries the legacy
-:mod:`backend.router.accounts.repository` shipped today PLUS the
+the legacy ``router.accounts.repository`` shim shipped (그 shim 은 2026-08-21 에
+제거됐다) PLUS the
 ``list_active_for_workspace`` query the run resolver needs (which the
 legacy class never exposed — workflow/infrastructure/workers/run.py issued
 the raw ``select(ModelAccount)`` inline, the violation this lift removes).

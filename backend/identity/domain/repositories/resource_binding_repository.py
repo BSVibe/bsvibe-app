@@ -28,12 +28,6 @@ Concrete impl:
 
 from __future__ import annotations
 
-import uuid
-from collections.abc import Sequence
-from typing import Any, Protocol, runtime_checkable
-
-from backend.identity.workspaces_db import ResourceBindingRow
-
 # Allowed values for the ``output_mode`` knob (Workflow §3 / §1). Kept here so
 # the Protocol module is the single import source for both the seam type AND
 # the wire-validated value set callers + tests rely on (mirrors the old
@@ -41,50 +35,4 @@ from backend.identity.workspaces_db import ResourceBindingRow
 OUTPUT_MODES: frozenset[str] = frozenset({"safe", "direct"})
 
 
-@runtime_checkable
-class ResourceBindingRepository(Protocol):
-    """Persistence seam for ``resource_bindings`` rows."""
-
-    async def create(
-        self,
-        *,
-        workspace_id: uuid.UUID,
-        product_id: uuid.UUID,
-        connector_account_id: uuid.UUID,
-        resource_id: str,
-        selection: dict[str, Any] | None = ...,
-        trigger: dict[str, Any] | None = ...,
-        output_mode: str = ...,
-    ) -> ResourceBindingRow:
-        """Insert a new binding; validates ``output_mode`` against ``OUTPUT_MODES``."""
-
-    async def get(
-        self, *, workspace_id: uuid.UUID, binding_id: uuid.UUID
-    ) -> ResourceBindingRow | None:
-        """Workspace-scoped lookup by binding id."""
-
-    async def list_for_product(
-        self, *, workspace_id: uuid.UUID, product_id: uuid.UUID
-    ) -> Sequence[ResourceBindingRow]:
-        """Workspace-scoped listing of one Product's bindings, oldest-first."""
-
-    async def update(
-        self,
-        row: ResourceBindingRow,
-        *,
-        selection: dict[str, Any] | None = ...,
-        trigger: dict[str, Any] | None = ...,
-        output_mode: str | None = ...,
-    ) -> ResourceBindingRow:
-        """Patch a subset of the 3 knobs (``None`` = leave as-is)."""
-
-    async def delete(self, *, workspace_id: uuid.UUID, binding_id: uuid.UUID) -> bool:
-        """Hard-delete the binding. Returns ``False`` if not present or other workspace."""
-
-    async def find_binding(
-        self, *, connector_account_id: uuid.UUID, resource_id: str
-    ) -> ResourceBindingRow | None:
-        """Receive-stage lookup — resolve ``(account, resource)`` to a binding (or ``None``)."""
-
-
-__all__ = ["OUTPUT_MODES", "ResourceBindingRepository"]
+__all__ = ["OUTPUT_MODES"]

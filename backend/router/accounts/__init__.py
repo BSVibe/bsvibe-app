@@ -18,7 +18,6 @@ from backend.router.accounts.crypto import (
     encrypt_credentials,
 )
 from backend.router.accounts.models import AccountsBase, ModelAccount
-from backend.router.accounts.repository import ModelAccountRepository
 from backend.router.accounts.schemas import (
     ModelAccountCreate,
     ModelAccountOut,
@@ -36,7 +35,6 @@ __all__ = [
     "ModelAccount",
     "ModelAccountCreate",
     "ModelAccountOut",
-    "ModelAccountRepository",
     "ModelAccountService",
     "ModelAccountUpdate",
     "decrypt_credentials",

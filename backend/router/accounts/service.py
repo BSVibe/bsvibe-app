@@ -13,12 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.router.accounts.crypto import CredentialCipher
 from backend.router.accounts.models import ModelAccount
-from backend.router.accounts.repository import ModelAccountRepository
 from backend.router.accounts.schemas import (
     ModelAccountCreate,
     ModelAccountOut,
     ModelAccountUpdate,
 )
+from backend.router.infrastructure.repositories import SqlAlchemyModelAccountRepository
 
 # Stable label used by the workspace-bootstrap path to seed a default
 # personal account so single-user flows don't have to mint one manually.
@@ -35,7 +35,7 @@ _NULL_KEY_TOLERANT_PROVIDERS = frozenset({"ollama", "lmstudio", "llama_cpp", "vl
 
 class ModelAccountService:
     def __init__(self, session: AsyncSession, *, cipher: CredentialCipher) -> None:
-        self._repo = ModelAccountRepository(session)
+        self._repo = SqlAlchemyModelAccountRepository(session)
         self._cipher = cipher
 
     async def create(
@@ -66,7 +66,7 @@ class ModelAccountService:
         account_id: uuid.UUID,
         only_active: bool = False,
     ) -> list[ModelAccountOut]:
-        rows = await self._repo.list_(
+        rows = await self._repo.list_for_account(
             workspace_id=workspace_id,
             account_id=account_id,
             only_active=only_active,

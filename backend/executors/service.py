@@ -19,7 +19,7 @@ DB-stored install token. ``mint_install_token`` /
 Lift M2 (v8 §20.3 Pattern B audit, 2026-06-02) — module-level function
 decomposition (Pattern E). Token-hashing primitives (``_hash_token``,
 ``_generate_token``) are module-level helpers; executor-model-account
-persistence is delegated to ``ModelAccountRepository`` (Lift I-Repo seam).
+persistence is delegated to ``SqlAlchemyModelAccountRepository`` (Lift I-Repo seam).
 Each function has a single, narrow responsibility.
 """
 
@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.executors.db import WorkerRow
 from backend.router.accounts.account_service import ensure_personal_account
 from backend.router.accounts.predicates import EXECUTOR_PROVIDER
-from backend.router.accounts.repository import ModelAccountRepository
+from backend.router.infrastructure.repositories import SqlAlchemyModelAccountRepository
 
 logger = structlog.get_logger(__name__)
 
@@ -81,7 +81,7 @@ async def _upsert_executor_model_accounts(
     worker reuses the existing rows (keyed by the ``extra_params.worker_id`` tag
     plus the capability) instead of duplicating them.
     """
-    repo = ModelAccountRepository(session)
+    repo = SqlAlchemyModelAccountRepository(session)
     existing = await repo.list_executor_accounts_for_worker(
         workspace_id=workspace_id, worker_id=worker_id
     )
@@ -107,7 +107,7 @@ async def _remove_executor_model_accounts(
     session: AsyncSession, *, workspace_id: uuid.UUID, worker_id: uuid.UUID
 ) -> None:
     """Delete the routable executor model rows bound to ``worker_id``."""
-    repo = ModelAccountRepository(session)
+    repo = SqlAlchemyModelAccountRepository(session)
     rows = await repo.list_executor_accounts_for_worker(
         workspace_id=workspace_id, worker_id=worker_id
     )
