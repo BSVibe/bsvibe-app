@@ -44,7 +44,10 @@ from typing import Any
 #: Default per-file byte cap. Tighter than the walker's 500KB ceiling so
 #: a 100KB minified-but-not-binary blob still drops before it hits the
 #: graph builder. Graphify's packer baseline runs ~50KB; we mirror it.
-DEFAULT_MAX_FILE_BYTES = 50 * 1024
+#: packer 가 한 파일에서 담는 최대 바이트. ``walker.DEFAULT_MAX_FILE_BYTES``(500KB)
+#: 와 **다른 축**이다 — walker 는 '이 파일을 볼 것인가', 여기는 '얼마나 담을 것인가'.
+#: 예전엔 두 상수가 같은 이름이라 잘못된 import 하나로 조용히 10배가 바뀔 수 있었다.
+DEFAULT_MAX_PACKED_FILE_BYTES = 50 * 1024
 
 #: Lockfile filenames (case-sensitive — matches what's actually on disk
 #: in the repos the founder is bootstrapping). Suffix matchers
@@ -192,7 +195,7 @@ class BootstrapFileFilter:
     """
 
     repo_root: Path
-    max_file_bytes: int = DEFAULT_MAX_FILE_BYTES
+    max_file_bytes: int = DEFAULT_MAX_PACKED_FILE_BYTES
     _counters: dict[FilterReason, int] = field(default_factory=dict)
     _gitignore_spec: Any | None = field(default=None, init=False, repr=False)
     _gitignore_loaded: bool = field(default=False, init=False, repr=False)
@@ -297,7 +300,7 @@ class BootstrapFileFilter:
 
 
 __all__ = [
-    "DEFAULT_MAX_FILE_BYTES",
+    "DEFAULT_MAX_PACKED_FILE_BYTES",
     "BootstrapFileFilter",
     "FilterReason",
 ]
