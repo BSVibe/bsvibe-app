@@ -28,6 +28,9 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import PurePosixPath
 
+# 잠금파일 어휘의 SoT 는 packer filter 다 — 두 곳에 적으면 한쪽만 늘어난다.
+from backend.products.application.bootstrap.bootstrap_filter import _LOCKFILE_NAMES
+
 #: Filenames the structural bucket cares about. Each matches at the
 #: BASE-NAME level (so ``backend/pyproject.toml`` and root
 #: ``pyproject.toml`` both qualify). ``.gitignore`` is intentionally NOT
@@ -59,19 +62,6 @@ _MANIFEST_NAMES: frozenset[str] = frozenset(
 #: Lockfiles we explicitly drop from the manifest bucket (they're huge
 #: and add no design-time signal). Kept separate so the manifest set
 #: above can remain a simple membership check.
-_LOCKFILE_NAMES: frozenset[str] = frozenset(
-    {
-        "Pipfile.lock",
-        "poetry.lock",
-        "uv.lock",
-        "package-lock.json",
-        "yarn.lock",
-        "pnpm-lock.yaml",
-        "Cargo.lock",
-        "Gemfile.lock",
-        "composer.lock",
-    }
-)
 
 #: Top-level doc filenames (case-insensitive prefix match). README +
 #: ARCHITECTURE + CLAUDE-style instructions + CONTRIBUTING.

@@ -27,6 +27,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from backend.products.application.bootstrap.bootstrap_filter import (
+    _IDE_CRUFT_DIRS,
+    _VENDOR_DIRS,
+)
+
 if TYPE_CHECKING:
     from backend.products.application.bootstrap.bootstrap_filter import BootstrapFileFilter
 
@@ -53,46 +58,15 @@ _BINARY_SAMPLE_BYTES = 8 * 1024
 
 #: Directory names that get pruned at the walker. Vendored deps + build
 #: outputs + IDE caches. ``set`` for O(1) membership test.
-DEFAULT_SKIP_DIRS: frozenset[str] = frozenset(
-    {
-        ".git",
-        ".hg",
-        ".svn",
-        ".idea",
-        ".vscode",
-        ".cache",
-        ".pytest_cache",
-        ".mypy_cache",
-        ".ruff_cache",
-        ".turbo",
-        ".next",
-        ".nuxt",
-        ".svelte-kit",
-        ".vercel",
-        ".terraform",
-        "node_modules",
-        "bower_components",
-        "vendor",
-        ".venv",
-        "venv",
-        "env",
-        ".tox",
-        "__pycache__",
-        "dist",
-        "build",
-        "out",
-        "target",
-        "coverage",
-        ".coverage",
-        ".gradle",
-        ".bundle",
-        ".serverless",
-        ".parcel-cache",
-        ".angular",
-        ".direnv",
-        ".pnpm-store",
-    }
-)
+#: 내려가지 않을 디렉터리. **packer filter 의 어휘에서 파생한다** — 예전엔 두 목록이
+#: 따로 있었고 walker 쪽이 우연히 상위집합이라 filter 의 vendor/IDE 분기가 합성
+#: 경로에서 발화하지 않았다. 우연이라서 한쪽에만 추가하면 바로 어긋난다.
+#:
+#: ``.coverage`` / ``.terraform`` 은 "벤더된 코드"도 "에디터 크러프트"도 아닌,
+#: 순수하게 **내려갈 이유가 없는** 산출물이라 여기서만 더한다.
+_WALK_ONLY_SKIP_DIRS: frozenset[str] = frozenset({".coverage", ".terraform"})
+
+DEFAULT_SKIP_DIRS: frozenset[str] = _VENDOR_DIRS | _IDE_CRUFT_DIRS | _WALK_ONLY_SKIP_DIRS
 
 
 @dataclass(frozen=True, slots=True)
