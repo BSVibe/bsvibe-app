@@ -1,4 +1,4 @@
-"""Tests for CanonicalizationIndex ABC + InMemoryCanonicalizationIndex (Handoff §10)."""
+"""Tests for CanonicalizationIndex ABC + CanonicalizationIndex (Handoff §10)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import pytest
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.index import (
     CanonicalizationIndex,
-    InMemoryCanonicalizationIndex,
 )
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import FileSystemStorage
@@ -23,7 +22,7 @@ def storage(tmp_path: Path) -> FileSystemStorage:
 
 @pytest.fixture
 async def index(storage: FileSystemStorage) -> CanonicalizationIndex:
-    idx = InMemoryCanonicalizationIndex()
+    idx = CanonicalizationIndex()
     await idx.initialize(storage)
     return idx
 

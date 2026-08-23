@@ -22,7 +22,7 @@ import pytest
 
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.decisions import DecisionMemory
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.policies import PolicyResolver
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -41,7 +41,7 @@ def storage(tmp_path: Path) -> FileSystemStorage:
 async def _wired_service(storage: FileSystemStorage, *, safe_mode: bool) -> CanonicalizationService:
     """A fully-wired service (policies + decisions → scorer present), exactly
     like the production promoter path after Lift B."""
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     store = NoteStore(storage)
     policies = PolicyResolver(index=index, store=store, clock=lambda: _FIXED_NOW)
@@ -156,7 +156,7 @@ class TestRiskAwareSafeModeGate:
 
         This preserves the original behaviour for callers that have not opted
         into scoring (the prior promotion-e2e default-policy contract)."""
-        index = InMemoryCanonicalizationIndex()
+        index = CanonicalizationIndex()
         await index.initialize(storage)
         service = CanonicalizationService(
             store=NoteStore(storage),

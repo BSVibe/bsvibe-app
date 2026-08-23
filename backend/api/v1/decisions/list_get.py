@@ -12,7 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 
 from ._helpers import _action_handle, build_canonicalization_index
 from ._schemas import ProposalResponse
@@ -22,7 +22,7 @@ router = APIRouter()
 
 @router.get("")
 async def list_proposals(
-    index: Annotated[InMemoryCanonicalizationIndex, Depends(build_canonicalization_index)],
+    index: Annotated[CanonicalizationIndex, Depends(build_canonicalization_index)],
     status_filter: str | None = None,
     limit: int = 50,
 ) -> list[ProposalResponse]:

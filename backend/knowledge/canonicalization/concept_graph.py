@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import networkx as nx
 
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import StorageBackend
@@ -72,7 +72,7 @@ async def build_concept_graph(
     the human-facing label localizes. ``None`` / ``"en"`` / an unlabelled tag
     keep the English display.
     """
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     resolver = TagResolver(index=index)
     store = NoteStore(storage)

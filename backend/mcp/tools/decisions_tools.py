@@ -8,7 +8,7 @@ write lands on the per-workspace
 the same way the REST surface does so a listed ``proposal_id`` round-trips
 back into accept / reject.
 
-Read tools wrap :meth:`InMemoryCanonicalizationIndex.list_proposals` /
+Read tools wrap :meth:`CanonicalizationIndex.list_proposals` /
 ``list_decisions``; write tools wrap
 :meth:`CanonicalizationService.accept_proposal` / ``reject_proposal``.
 Storage rooting is replicated from
@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 from backend.config import get_settings
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.index import (
-    InMemoryCanonicalizationIndex,
+    CanonicalizationIndex,
     _is_canon_proposal_path,
 )
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
@@ -56,7 +56,7 @@ def _vault_root(workspace_id: uuid.UUID) -> Path:
     )
 
 
-async def _build_index(ctx: ToolContext) -> InMemoryCanonicalizationIndex:
+async def _build_index(ctx: ToolContext) -> CanonicalizationIndex:
     """Return a fresh per-workspace vault index.
 
     Tests inject a pre-built index into ``ctx.extras["canon_index"]`` so a
@@ -67,7 +67,7 @@ async def _build_index(ctx: ToolContext) -> InMemoryCanonicalizationIndex:
         return cached  # type: ignore[no-any-return]
     root = _vault_root(ctx.principal.workspace_id)
     root.mkdir(parents=True, exist_ok=True)
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(FileSystemStorage(root))
     return index
 
@@ -79,7 +79,7 @@ async def _build_service(ctx: ToolContext) -> CanonicalizationService:
     root = _vault_root(ctx.principal.workspace_id)
     root.mkdir(parents=True, exist_ok=True)
     storage = FileSystemStorage(root)
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     return CanonicalizationService(
         store=NoteStore(storage),

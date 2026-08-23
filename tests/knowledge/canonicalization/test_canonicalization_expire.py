@@ -10,7 +10,7 @@ import pytest
 from backend.knowledge._internal.events import EventBus, EventType
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.decisions import DecisionMemory
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.policies import PolicyResolver
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -31,7 +31,7 @@ def _now() -> datetime:
 
 @pytest.fixture
 async def service(storage: FileSystemStorage):
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     store = NoteStore(storage)
     return CanonicalizationService(
@@ -185,7 +185,7 @@ class TestExpireEmitsEvents:
         bus = EventBus()
         bus.subscribe(_Cap())
 
-        index = InMemoryCanonicalizationIndex()
+        index = CanonicalizationIndex()
         await index.initialize(storage)
         store = NoteStore(storage)
         svc = CanonicalizationService(

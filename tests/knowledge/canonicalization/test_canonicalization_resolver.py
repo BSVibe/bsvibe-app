@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend.knowledge.canonicalization import models
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import FileSystemStorage
@@ -26,7 +26,7 @@ def store(storage: FileSystemStorage) -> NoteStore:
 
 @pytest.fixture
 async def resolver(storage: FileSystemStorage) -> TagResolver:
-    idx = InMemoryCanonicalizationIndex()
+    idx = CanonicalizationIndex()
     await idx.initialize(storage)
     return TagResolver(index=idx)
 

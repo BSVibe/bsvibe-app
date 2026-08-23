@@ -409,7 +409,7 @@ def _build_bootstrap_knowledge_inner(
     # heavy Knowledge subsystem at module load.
     from backend.knowledge._internal.events import EventBus  # noqa: PLC0415
     from backend.knowledge.canonicalization.index import (  # noqa: PLC0415
-        InMemoryCanonicalizationIndex,
+        CanonicalizationIndex,
     )
     from backend.knowledge.canonicalization.lock import AsyncIOMutationLock  # noqa: PLC0415
     from backend.knowledge.canonicalization.resolver import TagResolver  # noqa: PLC0415
@@ -438,7 +438,7 @@ def _build_bootstrap_knowledge_inner(
         vault_root = Path(settings.knowledge_vault_root) / region_str / str(ws_id)
         vault_root.mkdir(parents=True, exist_ok=True)
         storage = FileSystemStorage(vault_root)
-        index = InMemoryCanonicalizationIndex()
+        index = CanonicalizationIndex()
         await index.initialize(storage)
         return CanonicalizationService(
             store=NoteStore(storage),
@@ -1052,7 +1052,7 @@ async def _register_anchors_soft(
     Lift A-fix — after ingest writes seedlings + entity stubs the bootstrap
     needs one promotion pass to land ``concepts/active/<id>.md`` canonical
     anchors, otherwise the PWA Knowledge graph view stays empty (it reads
-    :meth:`InMemoryCanonicalizationIndex.list_active_concepts` which scans
+    :meth:`CanonicalizationIndex.list_active_concepts` which scans
     ``concepts/active/``). The vault path mirrors
     :class:`KnowledgeFactory`'s per-workspace root so the promoter and the
     graph endpoint address the same notes.

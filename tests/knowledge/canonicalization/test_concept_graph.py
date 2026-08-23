@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from backend.knowledge.canonicalization.concept_graph import build_concept_graph
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.service import CanonicalizationService
@@ -44,7 +44,7 @@ def workspace_storage(tmp_path: Path) -> FileSystemStorage:
 
 
 async def _make_permissive_service(storage: FileSystemStorage) -> CanonicalizationService:
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     return CanonicalizationService(
         store=NoteStore(storage),

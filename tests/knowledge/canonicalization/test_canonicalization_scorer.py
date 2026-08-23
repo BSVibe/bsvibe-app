@@ -9,7 +9,7 @@ import pytest
 
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.decisions import DecisionMemory
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.policies import PolicyResolver
 from backend.knowledge.canonicalization.scoring import CanonicalizationScorer
 from backend.knowledge.canonicalization.store import NoteStore
@@ -22,8 +22,8 @@ def storage(tmp_path: Path) -> FileSystemStorage:
 
 
 @pytest.fixture
-async def index(storage: FileSystemStorage) -> InMemoryCanonicalizationIndex:
-    idx = InMemoryCanonicalizationIndex()
+async def index(storage: FileSystemStorage) -> CanonicalizationIndex:
+    idx = CanonicalizationIndex()
     await idx.initialize(storage)
     return idx
 
@@ -34,14 +34,14 @@ def store(storage: FileSystemStorage) -> NoteStore:
 
 
 @pytest.fixture
-async def policies(index: InMemoryCanonicalizationIndex, store: NoteStore) -> PolicyResolver:
+async def policies(index: CanonicalizationIndex, store: NoteStore) -> PolicyResolver:
     pr = PolicyResolver(index=index, store=store, clock=lambda: datetime(2026, 5, 7, 14, 0, 0))
     await pr.bootstrap_defaults()
     return pr
 
 
 @pytest.fixture
-def decisions(index: InMemoryCanonicalizationIndex, store: NoteStore) -> DecisionMemory:
+def decisions(index: CanonicalizationIndex, store: NoteStore) -> DecisionMemory:
     return DecisionMemory(index=index, store=store)
 
 
@@ -127,7 +127,7 @@ class TestRiskReasonsEnvelopeShape:
         self,
         scorer: CanonicalizationScorer,
         store: NoteStore,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
     ) -> None:
         # Below hard_block threshold (0.85) but above review (0.6)
         d = models.DecisionEntry(
@@ -162,7 +162,7 @@ class TestRiskReasonsEnvelopeShape:
         self,
         scorer: CanonicalizationScorer,
         store: NoteStore,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
     ) -> None:
         # Cannot-link on (ci, cd), but action merges (a, b)
         d = models.DecisionEntry(

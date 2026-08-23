@@ -29,7 +29,7 @@ from backend.api.v1.decisions import (
     build_canonicalization_index,
     build_canonicalization_service,
 )
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.promotion import GardenObservationPromoter
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -44,7 +44,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _make_service(storage: FileSystemStorage, *, safe_mode: bool) -> CanonicalizationService:
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     return CanonicalizationService(
         store=NoteStore(storage),
@@ -133,10 +133,10 @@ async def client(vault_root: Path, workspace_id: uuid.UUID):
         storage = FileSystemStorage(vault_root / "us-1" / str(ws))
         return await _make_service(storage, safe_mode=False)
 
-    async def _index(ws: uuid.UUID = workspace_id) -> InMemoryCanonicalizationIndex:
+    async def _index(ws: uuid.UUID = workspace_id) -> CanonicalizationIndex:
         # Read-only listing index rooted at the SAME per-workspace vault as the
         # resolution service, so a listed proposal id resolves via accept/reject.
-        index = InMemoryCanonicalizationIndex()
+        index = CanonicalizationIndex()
         await index.initialize(FileSystemStorage(vault_root / "us-1" / str(ws)))
         return index
 

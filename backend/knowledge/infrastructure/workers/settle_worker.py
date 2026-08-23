@@ -773,7 +773,7 @@ class _LazyGardenPromoter:
         # Lazy heavy imports — keep the worker entrypoint cheap.
         from backend.knowledge.canonicalization.decisions import DecisionMemory  # noqa: PLC0415
         from backend.knowledge.canonicalization.index import (  # noqa: PLC0415
-            InMemoryCanonicalizationIndex,
+            CanonicalizationIndex,
         )
         from backend.knowledge.canonicalization.lock import AsyncIOMutationLock  # noqa: PLC0415
         from backend.knowledge.canonicalization.policies import PolicyResolver  # noqa: PLC0415
@@ -792,7 +792,7 @@ class _LazyGardenPromoter:
         ws_root.mkdir(parents=True, exist_ok=True)
         storage = FileSystemStorage(ws_root)
 
-        index = InMemoryCanonicalizationIndex()
+        index = CanonicalizationIndex()
         await index.initialize(storage)
         store = NoteStore(storage)
         # Wire the policy + decision memory so the service has a risk SIGNAL: the

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from backend.knowledge.canonicalization import models
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lint import (
     LintFinding,
     find_alias_collisions,
@@ -34,8 +34,8 @@ def storage(tmp_path: Path) -> FileSystemStorage:
 
 
 @pytest.fixture
-async def index(storage: FileSystemStorage) -> InMemoryCanonicalizationIndex:
-    idx = InMemoryCanonicalizationIndex()
+async def index(storage: FileSystemStorage) -> CanonicalizationIndex:
+    idx = CanonicalizationIndex()
     await idx.initialize(storage)
     return idx
 
@@ -71,7 +71,7 @@ class TestFindOrphanTags:
     @pytest.mark.asyncio
     async def test_garden_tag_with_no_concept_is_orphan(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         storage: FileSystemStorage,
     ) -> None:
@@ -93,7 +93,7 @@ class TestFindOrphanTags:
     @pytest.mark.asyncio
     async def test_alias_match_is_not_orphan(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         storage: FileSystemStorage,
     ) -> None:
@@ -109,7 +109,7 @@ class TestFindOrphanTags:
     @pytest.mark.asyncio
     async def test_tombstone_redirect_resolves_not_orphan(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         storage: FileSystemStorage,
     ) -> None:
@@ -128,7 +128,7 @@ class TestFindOrphanTags:
     @pytest.mark.asyncio
     async def test_payload_includes_garden_paths(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         storage: FileSystemStorage,
     ) -> None:
@@ -149,7 +149,7 @@ class TestFindAliasCollisions:
     @pytest.mark.asyncio
     async def test_two_concepts_sharing_alias(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
     ) -> None:
         await _seed_concept(store, "machine-learning", aliases=["ml-thing"])
@@ -169,7 +169,7 @@ class TestFindAliasCollisions:
     @pytest.mark.asyncio
     async def test_unique_alias_no_finding(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
     ) -> None:
         await _seed_concept(store, "machine-learning", aliases=["ml"])
@@ -183,7 +183,7 @@ class TestFindRedirectAnomalies:
     @pytest.mark.asyncio
     async def test_tombstone_to_missing_concept(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         storage: FileSystemStorage,
     ) -> None:
@@ -200,7 +200,7 @@ class TestFindRedirectAnomalies:
     @pytest.mark.asyncio
     async def test_tombstone_chain_cycle(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         storage: FileSystemStorage,
     ) -> None:
@@ -215,7 +215,7 @@ class TestFindRedirectAnomalies:
     @pytest.mark.asyncio
     async def test_tombstone_to_active_concept_clean(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         storage: FileSystemStorage,
     ) -> None:
@@ -230,7 +230,7 @@ class TestRunLint:
     @pytest.mark.asyncio
     async def test_aggregates_all_three(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         storage: FileSystemStorage,
     ) -> None:

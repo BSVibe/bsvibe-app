@@ -26,7 +26,7 @@ from backend.api.deps import get_output_language, get_workspace_id
 # knowledge surface addresses ONE root.
 from backend.api.v1.decisions import _vault_root
 from backend.knowledge.canonicalization.concept_graph import build_concept_graph
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.graph.storage import FileSystemStorage, StorageBackend
 
 
@@ -51,7 +51,7 @@ async def build_inside_storage(
 
 async def build_inside_index(
     storage: Annotated[StorageBackend, Depends(build_inside_storage)],
-) -> InMemoryCanonicalizationIndex:
+) -> CanonicalizationIndex:
     """Vault-derived canonicalization index for listing canonical anchors.
 
     Rebuilds from the workspace vault markdown alone (Handoff §10) — a pure
@@ -59,7 +59,7 @@ async def build_inside_index(
     :func:`build_inside_storage` so the index never sees another workspace's
     concepts.
     """
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     return index
 

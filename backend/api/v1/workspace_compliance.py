@@ -51,7 +51,7 @@ from backend.identity.workspaces_db import (
     ResourceBindingRow,
     WorkspaceRow,
 )
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.graph.markdown_utils import body_after_frontmatter
 from backend.knowledge.graph.storage import StorageBackend
 from backend.workflow.domain.repositories import RequestRepository
@@ -167,7 +167,7 @@ async def _build_export(
     workspace: WorkspaceRow,
     user: UserRow,
     memberships: MembershipRepository,
-    concept_index: InMemoryCanonicalizationIndex,
+    concept_index: CanonicalizationIndex,
     concept_storage: StorageBackend,
 ) -> dict[str, Any]:
     """Materialise the export document. All children are workspace-scoped by
@@ -392,7 +392,7 @@ async def export_workspace(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
     memberships: Annotated[MembershipRepository, Depends(get_membership_repository)],
-    concept_index: Annotated[InMemoryCanonicalizationIndex, Depends(build_inside_index)],
+    concept_index: Annotated[CanonicalizationIndex, Depends(build_inside_index)],
     concept_storage: Annotated[StorageBackend, Depends(build_inside_storage)],
 ) -> dict[str, Any]:
     """Return the caller's workspace data as a single JSON document.

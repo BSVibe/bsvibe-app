@@ -1,6 +1,6 @@
 """Decision tool handler tests — Lift D3b.
 
-Injects fake :class:`InMemoryCanonicalizationIndex` / :class:`CanonicalizationService`
+Injects fake :class:`CanonicalizationIndex` / :class:`CanonicalizationService`
 into ``ctx.extras`` so the unit run never touches the on-disk vault. The
 behaviour under test is the tool wrapper (input → service call → output
 shape) — the real index + service are covered by their own suites under
@@ -128,7 +128,7 @@ def _decision(
 
 
 class _FakeIndex:
-    """Duck-typed stand-in for InMemoryCanonicalizationIndex."""
+    """Duck-typed stand-in for CanonicalizationIndex."""
 
     def __init__(
         self,

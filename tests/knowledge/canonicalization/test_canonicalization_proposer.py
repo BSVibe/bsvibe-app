@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.proposals import DeterministicProposer
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -25,7 +25,7 @@ def storage(tmp_path: Path) -> FileSystemStorage:
 @pytest.fixture
 async def service(storage: FileSystemStorage) -> CanonicalizationService:
     fixed_now = datetime(2026, 5, 6, 15, 0, 12)
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     return CanonicalizationService(
         store=NoteStore(storage),
