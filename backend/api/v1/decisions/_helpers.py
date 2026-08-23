@@ -19,7 +19,7 @@ from backend.api.deps import get_workspace_id
 from backend.config import get_settings
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.index import (
-    InMemoryCanonicalizationIndex,
+    CanonicalizationIndex,
     _is_canon_proposal_path,
 )
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
@@ -43,7 +43,7 @@ def _vault_root(workspace_id: uuid.UUID) -> Path:
 
 async def build_canonicalization_index(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
-) -> InMemoryCanonicalizationIndex:
+) -> CanonicalizationIndex:
     """Read-only vault index for the caller's workspace queue listing.
 
     Same per-workspace vault root (and therefore the same proposal/decision
@@ -57,7 +57,7 @@ async def build_canonicalization_index(
     """
     vault_root = _vault_root(workspace_id)
     vault_root.mkdir(parents=True, exist_ok=True)
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(FileSystemStorage(vault_root))
     return index
 
@@ -82,7 +82,7 @@ async def build_canonicalization_service(
     vault_root = _vault_root(workspace_id)
     vault_root.mkdir(parents=True, exist_ok=True)
     storage = FileSystemStorage(vault_root)
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     return CanonicalizationService(
         store=NoteStore(storage),

@@ -36,7 +36,7 @@ import re
 import structlog
 
 from backend.knowledge.canonicalization import paths
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.graph.markdown_utils import body_after_frontmatter
 from backend.knowledge.graph.storage import StorageBackend
@@ -111,7 +111,7 @@ class CanonConceptRetriever:
         if not candidates:
             return []
 
-        index = InMemoryCanonicalizationIndex()
+        index = CanonicalizationIndex()
         await index.initialize(self._storage)
         # Empty-knowledge workspace → no active concepts → no fold. Cheap exit
         # that also avoids resolving every token against an empty registry.

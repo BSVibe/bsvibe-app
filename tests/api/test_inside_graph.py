@@ -33,7 +33,7 @@ import pytest_asyncio
 from backend.api.deps import get_current_user, get_output_language, get_workspace_id
 from backend.api.main import create_app
 from backend.api.v1.inside import build_inside_storage
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.service import CanonicalizationService
@@ -52,7 +52,7 @@ _FIXED_NOW = datetime(2026, 5, 24, 12, 0, 0)
 # Seed helpers — create REAL active concepts + garden observations.
 # ---------------------------------------------------------------------------
 async def _make_permissive_service(storage: FileSystemStorage) -> CanonicalizationService:
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     return CanonicalizationService(
         store=NoteStore(storage),

@@ -125,12 +125,11 @@ async def find_redirect_anomalies(
     targets. Per Handoff §3.2 — ``merged_into`` MUST point at active.
     """
     findings: list[LintFinding] = []
-    # The InMemory impl exposes ``_tombstones`` as the canonical source;
-    # we consult it directly because ``CanonicalizationIndex`` doesn't
-    # have a public ``list_tombstones`` (intentional: redirects are
-    # consulted via ``get_tombstone(old_id)`` only). Iterating private
-    # state is acceptable here since this is the sister module.
-    tombstones: dict[str, Any] = getattr(index, "_tombstones", {}) or {}
+    # ``_tombstones`` 가 리다이렉트의 정본이다. 공개 ``list_tombstones`` 는 없다
+    # (의도적: 리다이렉트는 ``get_tombstone(old_id)`` 로만 조회한다). 자매 모듈이라
+    # private 접근은 감수하되, **``getattr`` 기본값은 쓰지 않는다** — 예전엔 속성이
+    # 없으면 조용히 빈 dict 가 되어 린트가 아무것도 못 찾고 통과했다.
+    tombstones: dict[str, Any] = index._tombstones  # noqa: SLF001 — 자매 모듈
     for old_id, ts in tombstones.items():
         target = ts.merged_into
         visited: set[str] = {old_id}

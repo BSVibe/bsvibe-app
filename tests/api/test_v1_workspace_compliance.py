@@ -24,7 +24,7 @@ from backend.api.v1.inside import build_inside_index, build_inside_storage
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from backend.knowledge.canonicalization import models
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import FileSystemStorage
 
@@ -68,8 +68,8 @@ async def client_with_ws(db, tmp_path):
     async def _storage() -> FileSystemStorage:
         return FileSystemStorage(ws_vault)
 
-    async def _index() -> InMemoryCanonicalizationIndex:
-        index = InMemoryCanonicalizationIndex()
+    async def _index() -> CanonicalizationIndex:
+        index = CanonicalizationIndex()
         await index.initialize(FileSystemStorage(ws_vault))
         return index
 

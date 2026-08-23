@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend.knowledge.canonicalization import models
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.policies import PolicyResolver
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.markdown_utils import extract_frontmatter
@@ -26,15 +26,15 @@ def store(storage: FileSystemStorage) -> NoteStore:
 
 
 @pytest.fixture
-async def index(storage: FileSystemStorage) -> InMemoryCanonicalizationIndex:
-    idx = InMemoryCanonicalizationIndex()
+async def index(storage: FileSystemStorage) -> CanonicalizationIndex:
+    idx = CanonicalizationIndex()
     await idx.initialize(storage)
     return idx
 
 
 @pytest.fixture
 def resolver(
-    index: InMemoryCanonicalizationIndex,
+    index: CanonicalizationIndex,
     store: NoteStore,
 ) -> PolicyResolver:
     return PolicyResolver(
@@ -50,7 +50,7 @@ class TestBootstrapDefaults:
         self,
         resolver: PolicyResolver,
         storage: FileSystemStorage,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
     ) -> None:
         await resolver.bootstrap_defaults()
 
@@ -109,7 +109,7 @@ class TestSelectPolicy:
     async def test_select_returns_active_policy(
         self,
         resolver: PolicyResolver,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
     ) -> None:
         await resolver.bootstrap_defaults()
         result = await resolver.select(kind="merge-auto-apply", scope={})
@@ -125,7 +125,7 @@ class TestSelectPolicy:
         self,
         resolver: PolicyResolver,
         store: NoteStore,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
     ) -> None:
         # Two active policies for same kind, different priority
         for prio, name in [(100, "low-prio"), (200, "high-prio")]:
@@ -154,7 +154,7 @@ class TestSelectPolicy:
         self,
         resolver: PolicyResolver,
         store: NoteStore,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
     ) -> None:
         expired_entry = models.PolicyEntry(
             path="decisions/policy/staleness/expired-default.md",
@@ -183,7 +183,7 @@ class TestSelectPolicy:
         self,
         resolver: PolicyResolver,
         store: NoteStore,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
     ) -> None:
         await resolver.bootstrap_defaults()
         # Add a higher-priority but draft policy — should not be selected

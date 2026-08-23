@@ -1,9 +1,15 @@
 """CanonicalizationIndex — derived lookup over vault notes (Handoff §10).
 
-Slice 2 ships only ``InMemoryCanonicalizationIndex`` (self-host v1). SaaS
-``PostgresCanonicalizationIndex`` is deferred to v1.x. Pattern follows
-existing ``GraphBackend`` ABC + ``VaultBackend`` (NetworkX) duality at
-``bsage/garden/graph_backend.py`` (Class_Diagram §10.2).
+한때 ABC + ``CanonicalizationIndex`` 두 겹이었다. 그 seam 이 지키려던
+두 번째 구현(SaaS Postgres 인덱스)은 **왔다가 갔다** — producer 가 붙은 적이 없어
+2026-08-21 에 삭제됐다(#789). 따라 만들었던 ``GraphBackend`` ABC + ``VaultBackend``
+duality 도 같은 이유로 사라졌다(#793).
+
+seam 은 이미 새고 있었다: ``lint.py`` 가 구현의 private ``_tombstones`` 를
+``getattr`` 로 읽었고 — ABC 에 ``list_tombstones`` 가 (의도적으로) 없기 때문 —
+두 번째 구현이 왔다면 기본값 ``{}`` 때문에 **에러 없이 빈 findings** 를 냈을 것이다.
+
+그래서 지우지 않고 **합쳤다.** 8개 의존 모듈이 이미 쓰는 이름을 그대로 둔다.
 
 Per §0.1 the vault is SoT. The index is rebuildable from vault markdown
 alone; cold start scans ``StorageBackend.list_files()`` and reads each note.
@@ -11,7 +17,6 @@ alone; cold start scans ``StorageBackend.list_files()`` and reads each note.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any
@@ -26,78 +31,18 @@ from backend.knowledge.graph.storage import StorageBackend
 logger = structlog.get_logger(__name__)
 
 
-class CanonicalizationIndex(ABC):
-    """Derived lookup ABC (Handoff §10).
-
-    All canonicalization status queries from API/MCP/frontend MUST go
-    through this interface; the underlying index MUST be rebuildable from
-    vault markdown alone.
-    """
-
-    @abstractmethod
-    async def initialize(self, storage: StorageBackend) -> None: ...
-
-    @abstractmethod
-    async def close(self) -> None: ...
-
-    # Concept lookup
-    @abstractmethod
-    async def get_active_concept(self, concept_id: str) -> models.ConceptEntry | None: ...
-
-    @abstractmethod
-    async def list_active_concepts(self) -> list[models.ConceptEntry]: ...
-
-    @abstractmethod
-    async def find_concepts_by_alias(self, alias: str) -> list[models.ConceptEntry]: ...
-
-    @abstractmethod
-    async def get_tombstone(self, old_id: str) -> models.TombstoneEntry | None: ...
-
-    @abstractmethod
-    async def get_deprecated(self, concept_id: str) -> models.DeprecatedEntry | None: ...
-
-    # Action queue
-    @abstractmethod
-    async def list_actions(
-        self, *, status: str | None = None, kind: str | None = None
-    ) -> list[models.ActionEntry]: ...
-
-    @abstractmethod
-    async def list_proposals(
-        self, *, status: str | None = None, kind: str | None = None
-    ) -> list[models.ProposalEntry]: ...
-
-    @abstractmethod
-    async def find_pending_concept_draft(
-        self, normalized_tag: str
-    ) -> models.ActionEntry | None: ...
-
-    # Decision / policy lookup
-    @abstractmethod
-    async def list_decisions(
-        self, *, kind: str | None = None, status: str | None = None
-    ) -> list[models.DecisionEntry]: ...
-
-    @abstractmethod
-    async def list_policies(
-        self, *, kind: str | None = None, status: str | None = None
-    ) -> list[models.PolicyEntry]: ...
-
-    # Lifecycle
-    @abstractmethod
-    async def invalidate(self, path: str) -> None: ...
-
-    @abstractmethod
-    async def rebuild_from_vault(self, storage: StorageBackend) -> None: ...
-
-
 # Per Handoff §6 — `applied`, `rejected`, `expired`, `superseded`, `failed`
 # are terminal. `blocked` is recoverable (a redraft can re-apply).
 _PENDING_ACTION_STATUSES: frozenset[str] = frozenset({"draft", "pending_approval"})
 
 
-class InMemoryCanonicalizationIndex(CanonicalizationIndex):
-    """In-process dict-of-dicts index (self-host v1)."""
+class CanonicalizationIndex:
+    """볼트 마크다운에서 재구축되는 in-process 인덱스 (Handoff §10).
+
+    API/MCP/frontend 의 모든 캐노니컬라이제이션 상태 질의가 여기를 지난다.
+    §0.1 대로 볼트가 SoT 이고, 이 인덱스는 마크다운만으로 재구축 가능하다 —
+    콜드 스타트는 ``StorageBackend.list_files()`` 를 훑어 각 노트를 읽는다.
+    """
 
     def __init__(self) -> None:
         self._storage: StorageBackend | None = None

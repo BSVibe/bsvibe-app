@@ -3,7 +3,7 @@
 Diagnostic: Lift A's bootstrap built a Knowledge facade whose IngestCompiler
 was constructed WITHOUT a ``canonicalization_service``, so per-tag canonicalize
 silently no-op'd and ``concepts/active/<id>.md`` files were never created. The
-PWA Knowledge graph reads ``InMemoryCanonicalizationIndex.list_active_concepts``
+PWA Knowledge graph reads ``CanonicalizationIndex.list_active_concepts``
 which scans ``concepts/active/`` — empty directory → empty graph.
 
 These tests pin the fix: bootstrap must run promotion against the workspace
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.paths import active_concept_path
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.products.application.bootstrap.anchor_backfill import (
@@ -65,7 +65,7 @@ async def test_register_bootstrap_anchors_creates_active_concept_for_recurring_t
     assert "# Self-hosting" in text or "# Self-Hosting" in text
 
     # The graph view's source-of-truth index sees the new concept.
-    fresh_index = InMemoryCanonicalizationIndex()
+    fresh_index = CanonicalizationIndex()
     await fresh_index.initialize(storage)
     concepts = await fresh_index.list_active_concepts()
     assert any(c.concept_id == "self-hosting" for c in concepts)
@@ -104,7 +104,7 @@ async def test_register_bootstrap_anchors_idempotent_on_rerun(tmp_path: Path) ->
     second = await register_bootstrap_anchors(storage)
     assert "graph-view" not in second.created_concepts  # already exists, resolved
 
-    fresh_index = InMemoryCanonicalizationIndex()
+    fresh_index = CanonicalizationIndex()
     await fresh_index.initialize(storage)
     ids = [c.concept_id for c in await fresh_index.list_active_concepts()]
     # Exactly one concept survives — no duplicates.

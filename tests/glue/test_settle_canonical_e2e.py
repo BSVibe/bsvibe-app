@@ -44,7 +44,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.models import DecisionEntry
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.store import NoteStore
@@ -243,7 +243,7 @@ async def test_drain_then_promote_permissive_creates_canonical_anchor(sf, tmp_pa
     assert await storage.exists(f"concepts/merged/{merged}.md")
 
     # Deterministic retrieval: both variant spellings resolve to the survivor.
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     resolver = TagResolver(index=index)
     canonical = next(iter(self_host_survivors))
@@ -518,7 +518,7 @@ async def test_loop_produces_canon_from_sink_derived_tags_no_seeding(sf, tmp_pat
     assert "verified-run" not in active
 
     # Deterministic retrieval resolves the recurring pattern to its anchor.
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     resolver = TagResolver(index=index)
     resolved = await resolver.resolve("auth")
@@ -588,7 +588,7 @@ async def test_loop_clusters_two_runs_by_shared_product_and_intent(sf, tmp_path)
     assert "verified-run" not in active
 
     # Deterministic retrieval resolves the product cluster key to its anchor.
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     resolver = TagResolver(index=index)
     resolved = await resolver.resolve("vaultwarden-selfhost")

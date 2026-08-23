@@ -5,7 +5,7 @@ the per-workspace vault, but did NOT register any of them as **canonical
 anchors** (``concepts/active/<id>.md`` files). The PWA Knowledge graph view
 sources its picture from
 :func:`~backend.knowledge.canonicalization.concept_graph.build_concept_graph`
-which reads :meth:`~backend.knowledge.canonicalization.index.InMemoryCanonicalizationIndex.list_active_concepts`
+which reads :meth:`~backend.knowledge.canonicalization.index.CanonicalizationIndex.list_active_concepts`
 — a scan of ``concepts/active/``. Empty directory → empty graph, even when
 the LLM-classified ingest produced thousands of high-signal entity files.
 
@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import structlog
 
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.promotion import (
     GardenObservationPromoter,
@@ -73,7 +73,7 @@ async def register_bootstrap_anchors(
     fill in later as more bootstrap passes run or the founder promotes
     manually).
     """
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     service = CanonicalizationService(
         store=NoteStore(storage),

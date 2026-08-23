@@ -34,7 +34,7 @@ import pytest_asyncio
 from backend.api.deps import get_current_user, get_workspace_id
 from backend.api.main import create_app
 from backend.api.v1.inside import build_inside_index, build_inside_storage
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.promotion import GardenObservationPromoter
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -55,7 +55,7 @@ _REGION = "us-1"
 # Seed helpers — drive the REAL engine / writer, not hand-written fixtures.
 # ---------------------------------------------------------------------------
 async def _make_service(storage: FileSystemStorage, *, safe_mode: bool) -> CanonicalizationService:
-    index = InMemoryCanonicalizationIndex()
+    index = CanonicalizationIndex()
     await index.initialize(storage)
     return CanonicalizationService(
         store=NoteStore(storage),
@@ -159,8 +159,8 @@ async def client(vault_root: Path, workspace_id: uuid.UUID):
         root.mkdir(parents=True, exist_ok=True)
         return FileSystemStorage(root)
 
-    async def _index(ws: uuid.UUID = workspace_id) -> InMemoryCanonicalizationIndex:
-        index = InMemoryCanonicalizationIndex()
+    async def _index(ws: uuid.UUID = workspace_id) -> CanonicalizationIndex:
+        index = CanonicalizationIndex()
         await index.initialize(FileSystemStorage(vault_root / _REGION / str(ws)))
         return index
 

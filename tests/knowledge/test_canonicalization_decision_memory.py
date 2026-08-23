@@ -9,7 +9,7 @@ import pytest
 
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.decisions import DecisionMemory
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import FileSystemStorage
 
@@ -25,14 +25,14 @@ def store(storage: FileSystemStorage) -> NoteStore:
 
 
 @pytest.fixture
-async def index(storage: FileSystemStorage) -> InMemoryCanonicalizationIndex:
-    idx = InMemoryCanonicalizationIndex()
+async def index(storage: FileSystemStorage) -> CanonicalizationIndex:
+    idx = CanonicalizationIndex()
     await idx.initialize(storage)
     return idx
 
 
 @pytest.fixture
-def memory(index: InMemoryCanonicalizationIndex, store: NoteStore) -> DecisionMemory:
+def memory(index: CanonicalizationIndex, store: NoteStore) -> DecisionMemory:
     return DecisionMemory(index=index, store=store)
 
 
@@ -112,7 +112,7 @@ class TestFindCannotLink:
     @pytest.mark.asyncio
     async def test_finds_decision_by_subject_pair(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         memory: DecisionMemory,
         storage: FileSystemStorage,
@@ -130,7 +130,7 @@ class TestFindCannotLink:
     @pytest.mark.asyncio
     async def test_excludes_inactive(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         memory: DecisionMemory,
     ) -> None:
@@ -147,7 +147,7 @@ class TestFindCannotLink:
     @pytest.mark.asyncio
     async def test_does_not_match_wrong_kind(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         memory: DecisionMemory,
     ) -> None:
@@ -162,7 +162,7 @@ class TestMaxEffectiveStrength:
     @pytest.mark.asyncio
     async def test_returns_max_across_matching(
         self,
-        index: InMemoryCanonicalizationIndex,
+        index: CanonicalizationIndex,
         store: NoteStore,
         memory: DecisionMemory,
     ) -> None:

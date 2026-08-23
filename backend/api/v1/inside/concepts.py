@@ -1,7 +1,7 @@
 """Concepts endpoints for ``/api/v1/inside`` — list canonical anchors + detail.
 
 Both endpoints read the workspace canonicalization vault via the
-:class:`InMemoryCanonicalizationIndex` (FS-as-SoT). The detail endpoint also
+:class:`CanonicalizationIndex` (FS-as-SoT). The detail endpoint also
 walks the deterministic concept graph (the same one :func:`build_concept_graph`
 emits) to surface related concepts + origin observations.
 """
@@ -15,7 +15,7 @@ import networkx as nx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.knowledge.canonicalization.concept_graph import concept_ids_in_observation
-from backend.knowledge.canonicalization.index import InMemoryCanonicalizationIndex
+from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.markdown_utils import (
@@ -44,13 +44,13 @@ router = APIRouter()
 
 @router.get("/concepts")
 async def list_concepts(
-    index: Annotated[InMemoryCanonicalizationIndex, Depends(build_inside_index)],
+    index: Annotated[CanonicalizationIndex, Depends(build_inside_index)],
     storage: Annotated[StorageBackend, Depends(build_inside_storage)],
     limit: Annotated[int, Query(ge=1, le=_MAX_CONCEPT_LIMIT)] = _DEFAULT_CONCEPT_LIMIT,
 ) -> list[ConceptResponse]:
     """List the workspace's canonical anchors (active concepts), newest first.
 
-    Sourced through :meth:`InMemoryCanonicalizationIndex.list_active_concepts`
+    Sourced through :meth:`CanonicalizationIndex.list_active_concepts`
     — the existing vault-derived enumeration, NOT a new engine method. Sorted
     by ``updated_at`` so the most recently-settled anchors lead. The concept
     body (if any) is read to build a short excerpt; a freshly-promoted anchor
@@ -85,7 +85,7 @@ async def list_concepts(
 @router.get("/concepts/{concept_id}")
 async def get_concept_detail(
     concept_id: str,
-    index: Annotated[InMemoryCanonicalizationIndex, Depends(build_inside_index)],
+    index: Annotated[CanonicalizationIndex, Depends(build_inside_index)],
     storage: Annotated[StorageBackend, Depends(build_inside_storage)],
     graph: Annotated[nx.MultiDiGraph, Depends(build_inside_graph)],
 ) -> ConceptDetailResponse:
