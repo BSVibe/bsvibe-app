@@ -45,10 +45,6 @@ class _WriterMutationMixin:
     def _find_dedup_path(directory: Path, slug: str) -> Path:  # pragma: no cover - in GardenWriter
         raise NotImplementedError
 
-    async def _notify_sync(  # pragma: no cover - in GardenWriter
-        self, event_type_str: str, path: Path, source: str
-    ) -> None: ...
-
     async def _emit_vault_modified(  # pragma: no cover - in GardenWriter
         self,
         *,
@@ -246,7 +242,6 @@ class _WriterMutationMixin:
 
         await asyncio.to_thread(resolved.write_text, content, encoding="utf-8")
         logger.info("note_updated", path=str(resolved))
-        await self._notify_sync("garden", resolved, "update")
         await emit_event(self._event_bus, "NOTE_UPDATED", {"path": str(resolved)})
         await self._emit_vault_modified(
             path=resolved,
@@ -297,7 +292,6 @@ class _WriterMutationMixin:
         new_content = f"{new_fm}\n{body}"
         await asyncio.to_thread(abs_path.write_text, new_content, encoding="utf-8")
         logger.debug("note_related_updated", note_path=note_path, links=len(merged))
-        await self._notify_sync("garden", abs_path, "update")
         await emit_event(self._event_bus, "NOTE_UPDATED", {"path": note_path})
 
     async def append_to_note(self, path: str, text: str) -> Path:
@@ -312,7 +306,6 @@ class _WriterMutationMixin:
 
         await asyncio.to_thread(_append)
         logger.info("note_appended", path=str(resolved))
-        await self._notify_sync("garden", resolved, "update")
         await emit_event(self._event_bus, "NOTE_UPDATED", {"path": str(resolved)})
         await self._emit_vault_modified(
             path=resolved,
@@ -335,7 +328,6 @@ class _WriterMutationMixin:
 
         await asyncio.to_thread(resolved.unlink)
         logger.info("note_deleted", path=str(resolved))
-        await self._notify_sync("garden", resolved, "delete")
         await emit_event(self._event_bus, "NOTE_DELETED", {"path": str(resolved)})
         await self._emit_vault_modified(
             path=resolved,

@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 
     # TODO(bundle-k-integration): wire to plugin.audit
     AiosqliteAuditOutbox = Any
-    from backend.knowledge.graph.sync import SyncManager
     from backend.knowledge.retrieval.ontology import OntologyRegistry
 
 logger = structlog.get_logger(__name__)
@@ -40,7 +39,6 @@ class GardenWriter(
 ):
     """Writes seeds, garden notes, and action logs to the vault.
 
-    Optionally notifies a SyncManager after each write so that
     registered backends (S3, Git, etc.) can sync the vault.
 
     Attributes:
@@ -50,14 +48,12 @@ class GardenWriter(
     def __init__(
         self,
         vault: Vault,
-        sync_manager: SyncManager | None = None,
         event_bus: EventBus | None = None,
         ontology: OntologyRegistry | None = None,
         default_tenant_id: str | None = None,
         audit_outbox: AiosqliteAuditOutbox | None = None,
     ) -> None:
         self._vault = vault
-        self._sync_manager = sync_manager
         self._event_bus = event_bus
         self._ontology = ontology
         # Phase 0 P0.5 — fallback tenant id used when GardenNote.tenant_id is
@@ -71,19 +67,6 @@ class GardenWriter(
         self._log_lock = asyncio.Lock()
         self._garden_lock = asyncio.Lock()
         self._seed_lock = asyncio.Lock()
-
-    async def _notify_sync(self, event_type_str: str, path: Path, source: str) -> None:
-        """Notify sync manager of a write event, if configured."""
-        if self._sync_manager is None:
-            return
-        from backend.knowledge.graph.sync import WriteEvent, WriteEventType
-
-        event = WriteEvent(
-            event_type=WriteEventType(event_type_str),
-            path=path,
-            source=source,
-        )
-        await self._sync_manager.notify(event)
 
     async def _emit_vault_modified(
         self,

@@ -88,7 +88,7 @@ class KnowledgeFactory:
 
         The writer hangs off the same Vault as :meth:`vault`, so paths are
         already constrained to ``<vault_root>/<region>/<workspace_id>/``.
-        Audit emit + sync_manager + ontology + event_bus default to None;
+        Audit emit + ontology + event_bus default to None;
         request-handler glue injects them when needed.
         """
         if self._writer is None:
