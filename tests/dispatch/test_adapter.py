@@ -710,15 +710,13 @@ class TestExecutorAdapterChat:
         # server_sandbox agentic run hands the worker BSVibe's MCP tool surface.
         assert entry.get("mcp_config")
 
-    async def test_client_attach_agent_run_gets_native_tools_and_the_platform_axis(self) -> None:
-        """#692 parity — a ``client_attach`` run keeps the CLI's OWN tools for the
-        WORKSPACE half (that is the model), and still receives BSVibe's PLATFORM
-        half over MCP.
+    async def test_client_attach_gets_the_same_whole_surface(self) -> None:
+        """형님 판정 2026-08-24 — client_attach 도 BSVibe 툴만 쓴다.
 
-        Withholding MCP entirely also withheld ``emit_deliverable``, so such a run
-        could not produce a Deliverable — and ``connector_dispatch`` loads by
-        deliverable id, so NOTHING was ever delivered out (measured 2026-08-09,
-        BStockReport M5 structurally impossible in this mode)."""
+        #692 는 이 런에서 워크툴을 빼고 CLI 자기 손(``native_tools``)을 쥐여줬다.
+        prod 실측(런 ``53f2cbce``): allowlist 는 플랫폼 4개뿐이고 ``acceptEdits`` 는
+        Bash 를 승인하지 않는다 → 셸 실행 경로가 0개 → 주간 리포트 0 딜리버러블.
+        소스가 파운더 머신에 있다는 사실은 **샌드박스**가 처리한다, 표면이 아니라."""
         tools = [{"type": "function", "function": {"name": "write_file"}}]
         entry = await self._dispatch_and_read_entry(
             tools=tools,
@@ -728,32 +726,22 @@ class TestExecutorAdapterChat:
         assert entry["agentic"] == "1"
         assert entry["execution_target"] == "client_attach"
         assert entry["workspace_dir"] == "/home/u/proj"
-        # The CLI keeps its own hands — the worker's third execution shape.
-        assert entry["native_tools"] == "1"
-        # ...and BSVibe still serves the platform axis over MCP.
-        assert entry.get("mcp_config")
+        # 실행모델은 스트림에 남지만, 툴 표면을 가르지는 않는다.
+        assert "native_tools" not in entry
         allowed = entry["allowed_tools"].split()
-        assert allowed == [
-            "mcp__bsvibe__bsvibe_work_knowledge_search",
-            # Declaring a verification contract is a statement to BSVibe, not a
-            # mutation of the working tree — the two execution models must not
-            # differ on what verification MEANS, only on where commands run.
-            "mcp__bsvibe__bsvibe_work_declare_verification",
-            "mcp__bsvibe__bsvibe_work_ask_user_question",
-            "mcp__bsvibe__bsvibe_work_emit_deliverable",
-        ]
-        # The workspace axis is NOT offered: those are the CLI's to supply here.
-        assert not [t for t in allowed if "file_" in t or "shell_exec" in t]
-
-    async def test_server_sandbox_run_is_exclusive_as_before(self) -> None:
-        """The other model is untouched: whole surface, and the CLI's own tools taken away."""
-        entry = await self._dispatch_and_read_entry(
-            tools=[{"type": "function", "function": {"name": "write_file"}}]
-        )
-        assert entry["native_tools"] == "0"
-        allowed = entry["allowed_tools"].split()
+        assert "mcp__bsvibe__bsvibe_work_shell_exec" in allowed
         assert "mcp__bsvibe__bsvibe_work_file_write" in allowed
         assert "mcp__bsvibe__bsvibe_work_emit_deliverable" in allowed
+
+    async def test_server_sandbox_run_gets_exactly_the_same_surface(self) -> None:
+        """양성 대조군 — 두 실행모델의 allowlist 가 문자 그대로 같다."""
+        tools = [{"type": "function", "function": {"name": "write_file"}}]
+        server = await self._dispatch_and_read_entry(tools=tools)
+        client = await self._dispatch_and_read_entry(
+            tools=tools, execution_target="client_attach", client_workspace_dir="/home/u/proj"
+        )
+        assert server["allowed_tools"] == client["allowed_tools"]
+        assert "mcp__bsvibe__bsvibe_work_file_write" in server["allowed_tools"]
 
     async def test_extra_system_messages_reach_the_model(self) -> None:
         """Grounding rides in system-role MESSAGES, and it must survive the executor

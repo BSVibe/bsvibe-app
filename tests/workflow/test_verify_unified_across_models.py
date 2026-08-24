@@ -27,16 +27,13 @@ pytestmark = pytest.mark.asyncio
 
 
 def test_declare_verification_is_offered_to_every_execution_model() -> None:
-    """It is a declaration to BSVibe, not a mutation of the working tree — the
-    same test that put knowledge/ask/emit on the platform axis."""
-    from backend.workflow.application.tool_registry import (
-        PLATFORM_TOOL_MCP_NAMES,
-        mcp_tool_names_for,
-    )
+    """It is a declaration to BSVibe, not a mutation of the working tree.
 
-    assert "bsvibe_work_declare_verification" in PLATFORM_TOOL_MCP_NAMES
-    for target in ("server_sandbox", "client_attach"):
-        assert "bsvibe_work_declare_verification" in mcp_tool_names_for(target), target
+    There is one surface now, so this holds by construction rather than by an
+    axis rule — assert it anyway: it is the property that mattered."""
+    from backend.workflow.application.tool_registry import WORK_TOOL_MCP_NAMES
+
+    assert "bsvibe_work_declare_verification" in WORK_TOOL_MCP_NAMES
 
 
 class _Box:

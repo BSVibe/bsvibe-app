@@ -43,7 +43,7 @@ logger = structlog.get_logger(__name__)
 WORK_TOOL_STATE_KEY = _WORK_TOOL_STATE_KEY
 
 
-async def _sandbox_for(run: ExecutionRun, workspace_dir: Path) -> Any:
+async def _sandbox_for(run: ExecutionRun, workspace_dir: Path, ctx: ToolContext) -> Any:
     """The run's sandbox session — the same box the verifier runs in.
 
     Resolved through the process singleton (``get_sandbox_manager``), NOT a fresh build: this
@@ -54,13 +54,40 @@ async def _sandbox_for(run: ExecutionRun, workspace_dir: Path) -> Any:
     the container is created once and reused across a run's tool calls. A run with no product
     (substrate-only) gets no sandbox: the tool layer then refuses ``shell_exec`` rather than
     silently running it on the host.
+
+    A ``client_attach`` run is the exception, and it is a difference of MACHINE, not of
+    surface: its source exists only on the founder's own box, so the server container has
+    nothing to read and nothing to run. Such a run gets the client-worker session instead —
+    each command dispatched as an ``exec`` task to the worker the agent is running on, exit
+    code as the verdict. That is the same session the in-place verification gate has used
+    since #702; wiring it here is what lets a client_attach agent hold BSVibe's work tools at
+    all (before this it was handed the CLI's NATIVE tools instead — the shape three prod
+    incidents came from, and the reason run ``53f2cbce`` could not run one command).
     """
     if run.product_id is None:
         return None
+    client_box = await _client_sandbox_for(run, ctx)
+    if client_box is not None:
+        return client_box
     manager = get_sandbox_manager()
     if manager is None:
         return None
     return await manager.acquire(run.product_id, str(workspace_dir))
+
+
+async def _client_sandbox_for(run: ExecutionRun, ctx: ToolContext) -> Any:
+    """The founder's own machine, when this run acts there — otherwise ``None``.
+
+    Injected at the composition root (``extras["client_sandbox"]``): addressing that machine
+    means reaching :mod:`backend.executors`, which the MCP import contract forbids this
+    context. Absent injection there is no client box — the caller keeps the server sandbox,
+    and for a client_attach run its tools then refuse rather than act on a tree that does not
+    hold the founder's source.
+    """
+    resolve = ctx.extras.get("client_sandbox")
+    if resolve is None:
+        return None
+    return await resolve(run, ctx)
 
 
 async def load_run(run_id: uuid.UUID, ctx: ToolContext) -> ExecutionRun:
@@ -132,7 +159,7 @@ async def build_run_tool_registry(run_id: uuid.UUID, ctx: ToolContext) -> ToolRe
 
     workspace_dir = run_worktree_path(run_id)
     workspace_dir.mkdir(parents=True, exist_ok=True)
-    sandbox = await _sandbox_for(run, workspace_dir)
+    sandbox = await _sandbox_for(run, workspace_dir, ctx)
     registry = assemble_run_tool_registry(
         workspace_dir=workspace_dir,
         sandbox=sandbox,

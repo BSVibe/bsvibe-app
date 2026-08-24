@@ -56,6 +56,7 @@ def build_server(
     session_factory: async_sessionmaker[Any],
     registry: ToolRegistry | None = None,
     delivery_dispatcher: Any | None = None,
+    client_sandbox: Any | None = None,
 ) -> Server:
     """Construct an MCP :class:`Server` wired to ``session_factory``.
 
@@ -113,6 +114,11 @@ def build_server(
             extras: dict[str, Any] = {}
             if delivery_dispatcher is not None:
                 extras["delivery_dispatcher"] = delivery_dispatcher
+            if client_sandbox is not None:
+                # Which BOX does this run act in? A client_attach run acts on the
+                # founder's own machine, and addressing it means reaching the executor
+                # dispatch substrate — forbidden to this context, so it is handed in.
+                extras["client_sandbox"] = client_sandbox
             ctx = ToolContext(
                 principal=principal,
                 session=session,

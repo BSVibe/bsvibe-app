@@ -97,12 +97,14 @@ def create_app() -> FastAPI:
             record_deliverable,
             record_progress,
             record_question,
+            resolve_client_sandbox,
         )
 
         async with mcp_lifespan(
             app,
             session_factory=session_factory,
             delivery_dispatcher=delivery_dispatcher,
+            client_sandbox=resolve_client_sandbox,
             record_question=record_question,
             record_deliverable=record_deliverable,
             record_progress=record_progress,

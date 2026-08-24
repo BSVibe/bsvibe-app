@@ -185,6 +185,6 @@ async def test_knowledge_search_is_invokable_through_the_factory(
     assert isinstance(out, str) and out
 
 
-async def _no_sandbox(_run: Any, _workspace_dir: Path) -> None:
+async def _no_sandbox(_run: Any, _workspace_dir: Path, _ctx: Any) -> None:
     """Tool handlers accept ``sandbox=None`` (host execution is refused at that seam)."""
     return None

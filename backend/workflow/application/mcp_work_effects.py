@@ -1,11 +1,16 @@
-"""The two LOOP-owned effects behind the MCP work tools (T1b).
+"""The LOOP-owned effects behind the MCP work tools (T1b).
 
 They live here, not in :mod:`backend.mcp`, because the MCP import contract forbids that
 context from importing :mod:`backend.api` — and ``handle_emit_deliverable`` reaches
 ``backend.api.v1.live_events`` for the live bus. The composition root wires these in, so
 ``backend.mcp`` stays a transport: it decides who may act on which run, never what the act is.
 
-Both COMMIT. The MCP dispatcher opens the request session and never commits it
+``resolve_client_sandbox`` is here for the same reason: reaching the founder's own machine
+means reaching the executor dispatch substrate, and the MCP contract forbids
+:mod:`backend.executors` too. The transport asks "which box does this run act in?" and is
+handed one; it never learns how that box is addressed.
+
+The two recording effects COMMIT. The MCP dispatcher opens the request session and never commits it
 (``backend/mcp/server.py``), so an uncommitted write is rolled back when the request ends and
 the effect silently never happens — the founder is never asked, the deliverable never appears.
 Every MCP write tool commits for itself; these are no different.
@@ -86,3 +91,34 @@ async def record_progress(run_id: uuid.UUID, ctx: ToolContext, payload: dict[str
 
 
 __all__ = ["_ask_decision_kind", "record_deliverable", "record_progress", "record_question"]
+
+
+async def resolve_client_sandbox(run: Any, ctx: ToolContext) -> Any:
+    """The founder's own machine for this run — or ``None`` when it does not act there.
+
+    A ``client_attach`` product's source exists ONLY on the founder's box, so BSVibe's work
+    tools must run their commands there. That is a difference of MACHINE, not of surface:
+    the agent holds the same tools either way (형님 판정 2026-08-24 — an agent never acts
+    with the CLI's own native hands, because a worker is not guaranteed to be the client).
+    """
+    from backend.config import get_settings  # noqa: PLC0415
+    from backend.workers.emit import get_dispatch_redis_client  # noqa: PLC0415
+    from backend.workflow.application.runtime.sandbox_selection import (  # noqa: PLC0415
+        client_sandbox_manager_for_run,
+    )
+
+    settings = get_settings()
+    manager = await client_sandbox_manager_for_run(
+        session=ctx.session,
+        run_id=run.id,
+        product_id=run.product_id,
+        redis_client=get_dispatch_redis_client(settings),
+        session_factory=ctx.session_factory,
+        workspace_id=run.workspace_id,
+        timeout_s=settings.verify_gate_command_timeout_s,
+    )
+    if manager is None:
+        return None
+    # The manager owns the path (the founder's dir, then this run's worktree inside it);
+    # the server-side workspace dir does not exist on that machine.
+    return await manager.acquire(run.product_id, "")

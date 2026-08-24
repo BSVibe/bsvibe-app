@@ -202,9 +202,11 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     written_paths: list[str] = []
     final_text = ""
     no_work_nudges = 0
-    # #692 — a client_attach run executes NATIVELY in the user's own directory on
-    # the worker, so the server never sees written_paths and holds no copy of the
-    # source. Resolved once here; consumed at the "model is done" branch below.
+    # #692 — a client_attach run works in the founder's own directory on the worker
+    # (through BSVibe's tools, backed by ``ClientWorkerSandboxSession``), so the
+    # server holds no copy of the source and settles on the in-place gate rather
+    # than on a server-side diff. Resolved once here; consumed at the "model is
+    # done" branch below.
     client_attach = await is_client_attach_run(orch._session, run)
     # Where the tree stood BEFORE the agent touched it — knowable only here, since
     # the agent's commits then move HEAD. Two consumers: the in-place gate, and the

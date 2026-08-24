@@ -39,7 +39,7 @@ from backend.config import Settings
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.predicates import is_executor_account
 from backend.router.llm_client import LlmClient, LlmResponse
-from backend.workflow.application.tool_registry import WORK_TOOL_MCP_NAMES, mcp_tool_names_for
+from backend.workflow.application.tool_registry import WORK_TOOL_MCP_NAMES
 
 logger = structlog.get_logger(__name__)
 
@@ -183,19 +183,24 @@ async def _founder_of(session: Any, workspace_id: uuid.UUID) -> uuid.UUID:
     return uuid.UUID(str(row.user_id))
 
 
-def build_work_tool_dispatch(
-    *, token: str, issuer: str, execution_target: str = "server_sandbox"
-) -> dict[str, Any]:
+def build_work_tool_dispatch(*, token: str, issuer: str) -> dict[str, Any]:
     """The MCP surface a dispatched agentic task carries: BSVibe's tools, a run-scoped token.
 
     The run is NOT in the URL — it rides in the token's ``run_id`` claim, so an agent cannot
     redirect its writes by editing an argument (see :mod:`backend.mcp.tools.work_tools`).
 
-    ``execution_target`` picks the surface (#692 parity). A ``client_attach`` run acts on the
-    founder's own tree with the CLI's NATIVE tools, so BSVibe offers only the PLATFORM axis —
-    knowledge, asking the founder, emitting a deliverable — which the server serves wherever
-    the source lives. ``native_tools`` tells the worker to keep the CLI's own hands rather
-    than strip them; it is an execution instruction, not product state.
+    ONE surface, no per-execution-model branch. #692 gave ``client_attach`` the CLI's NATIVE
+    tools instead of BSVibe's — the very shape the module docstring above records as the cause
+    of three prod incidents — on the reasoning that the founder's source is not on the server.
+    True, and irrelevant: WHERE a work tool runs is the sandbox's job, and a client_attach run
+    already binds ``ClientWorkerSandboxSession``, which dispatches each command to the
+    founder's machine (the in-place verification gate has run that way since #702). The tool
+    SURFACE and the machine are orthogonal, so only the sandbox needs to know the difference.
+
+    Measured cost of the branch (prod run ``53f2cbce``, 2026-08-24): the CLI got four platform
+    tools, no ``shell_exec``, and ``--permission-mode acceptEdits`` — which auto-approves edits
+    but NOT Bash. Headless, so no prompt could grant it either. The agent had no way to run a
+    command at all and the weekly report produced zero deliverables.
     """
     config = {
         "mcpServers": {
@@ -208,8 +213,7 @@ def build_work_tool_dispatch(
     }
     return {
         "mcp_config": json.dumps(config),
-        "allowed_tools": [f"mcp__bsvibe__{name}" for name in mcp_tool_names_for(execution_target)],
-        "native_tools": execution_target == "client_attach",
+        "allowed_tools": [f"mcp__bsvibe__{name}" for name in WORK_TOOL_MCP_NAMES],
     }
 
 
@@ -616,11 +620,7 @@ class ExecutorAdapter:
             user_id=await _founder_of(session, self.workspace_id),
             issuer=self.settings.oauth_issuer,
         )
-        return build_work_tool_dispatch(
-            token=token,
-            issuer=self.settings.oauth_issuer,
-            execution_target=self.execution_target,
-        )
+        return build_work_tool_dispatch(token=token, issuer=self.settings.oauth_issuer)
 
     async def _chat_with_session(
         self,
@@ -690,12 +690,8 @@ class ExecutorAdapter:
         # endpoint, a token scoped to THIS run, and the exact tool names it may use. The CLI's
         # own tools are taken away, so there is no local temp dir to invent code in and nothing
         # for the worker to scrape back.
-        # #692 parity — client_attach keeps the CLI's NATIVE tools for the WORKSPACE
-        # half (acting in place on the user's own directory), and STILL receives the
-        # PLATFORM half over MCP. Withholding the surface entirely also withheld
-        # ``emit_deliverable``, and since outbound delivery loads by deliverable id,
-        # such a run could never deliver anything at all. The per-model surface is
-        # derived in ``build_work_tool_dispatch``.
+        # EVERY execution model gets that same surface, client_attach included: which
+        # MACHINE a work tool runs on is the sandbox's business, not the surface's.
         mcp = await self._work_tool_surface(session, agentic=agentic)
         await dispatch.dispatch_task(
             self.redis, session=session, task=task, worker_id=worker.id, mcp=mcp
