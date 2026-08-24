@@ -91,7 +91,7 @@ def _stub_embedder(monkeypatch) -> None:
     """Replace the embedder builder so category applies never hit a provider."""
     import backend.api.v1.run_routing as rr
 
-    async def _fake_builder(session, *, workspace_id, account_id):
+    async def _fake_builder(session, *, settings, workspace_id, account_id):
         return _StubEmbedder()
 
     monkeypatch.setattr("backend.embedding.authoring.build_account_embedder", _fake_builder)

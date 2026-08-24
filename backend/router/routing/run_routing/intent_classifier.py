@@ -131,23 +131,27 @@ class IntentClassifier:
 
 async def build_intent_classifier(
     session: AsyncSession,
-    settings: Settings,  # noqa: ARG001 — reserved for a deployment-level fallback model
+    settings: Settings,
     *,
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
 ) -> IntentClassifier | None:
     """Build the workspace's classifier from surviving infra, or ``None``.
 
-    ``None`` (a clean no-op — classified_intent stays frame-derived) when the
-    account has no embedding model configured OR no intents defined yet. Two
-    small indexed reads; the resolver only classifies when a rule needs it."""
+    ``None`` (a clean no-op — the rule simply does not match) when no embedding
+    model is in force at all OR no intents are defined yet. Two small indexed
+    reads; the resolver only classifies when a rule needs it.
+
+    The model comes from
+    :func:`~backend.embedding.settings.resolve_embedding_settings` — the same
+    seam the authoring side uses, so what was embedded is what gets searched."""
     from sqlalchemy import select  # noqa: PLC0415
 
     from backend.embedding.db import AccountEmbeddingSettingsRow  # noqa: PLC0415
     from backend.embedding.provider import LiteLLMEmbeddingProvider  # noqa: PLC0415
     from backend.embedding.repository import IntentRepository  # noqa: PLC0415
     from backend.embedding.service import EmbeddingService  # noqa: PLC0415
-    from backend.embedding.settings import EmbeddingSettings  # noqa: PLC0415
+    from backend.embedding.settings import resolve_embedding_settings  # noqa: PLC0415
     from backend.embedding.storage.pg import PgVectorBackend  # noqa: PLC0415
 
     config = await session.scalar(
@@ -156,7 +160,7 @@ async def build_intent_classifier(
             AccountEmbeddingSettingsRow.account_id == account_id,
         )
     )
-    emb_settings = EmbeddingSettings.from_account_settings(config)
+    emb_settings = resolve_embedding_settings(config, settings)
     if emb_settings is None:
         return None
 

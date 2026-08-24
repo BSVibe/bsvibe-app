@@ -89,7 +89,7 @@ async def seeded(maker, workspace_id) -> AsyncIterator[None]:
 
 @pytest.fixture(autouse=True)
 def _stub_embedder(monkeypatch) -> None:
-    async def _fake_builder(session, *, workspace_id, account_id):
+    async def _fake_builder(session, *, settings, workspace_id, account_id):
         return _StubEmbedder()
 
     monkeypatch.setattr("backend.embedding.authoring.build_account_embedder", _fake_builder)

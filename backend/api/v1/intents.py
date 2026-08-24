@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
+from backend.config import get_settings
 from backend.embedding.authoring import (
     IntentAuthoringDuplicateError,
     IntentNotFoundError,
@@ -85,14 +86,15 @@ async def create_intent(
 ) -> IntentResponse:
     """Create an intent definition + its seed examples.
 
-    Each example is embedded via the account's ``EmbeddingService`` and the
-    vector stored on the example row. When no embedding model is configured the
-    intent + examples are still created (``embedding=None``) — nothing is lost
-    and the classifier won't match until embeddings exist. 409 on a duplicate
-    name for the account.
+    Each example is embedded via the resolved ``EmbeddingService`` (the
+    account's own model if it has one, else the deployment's) and the vector
+    stored on the example row. When NEITHER configures a model the intent +
+    examples are still created (``embedding=None``) — nothing is lost and the
+    classifier won't match until embeddings exist. 409 on a duplicate name for
+    the account.
     """
     embedder = await build_account_embedder(
-        session, workspace_id=workspace_id, account_id=account_id
+        session, settings=get_settings(), workspace_id=workspace_id, account_id=account_id
     )
     try:
         intent = await create_intent_with_examples(

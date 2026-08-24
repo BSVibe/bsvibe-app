@@ -25,6 +25,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
+from backend.config import get_settings
 from backend.embedding.authoring import (
     IntentAuthoringDuplicateError,
     IntentNotFoundError,
@@ -88,7 +89,10 @@ class IntentsCreateInput(BaseModel):
 async def _h_create(args: IntentsCreateInput, ctx: ToolContext) -> Any:
     account_id = await _account_id(ctx)
     embedder = await build_account_embedder(
-        ctx.session, workspace_id=ctx.principal.workspace_id, account_id=account_id
+        ctx.session,
+        settings=get_settings(),
+        workspace_id=ctx.principal.workspace_id,
+        account_id=account_id,
     )
     try:
         intent = await create_intent_with_examples(
