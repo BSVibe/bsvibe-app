@@ -33,7 +33,6 @@ if TYPE_CHECKING:
 
     # TODO(bundle-k-integration): wire to plugin.audit -- original: from bsage.garden.audit_outbox import AiosqliteAuditOutbox
     AiosqliteAuditOutbox = Any
-    from backend.knowledge.graph.sync import SyncManager
     from backend.knowledge.retrieval.ontology import OntologyRegistry
 
 logger = structlog.get_logger(__name__)
@@ -49,7 +48,6 @@ class _WriterIOMixin:
 
     # --- attribute declarations for type checkers --------------------------
     _vault: Vault
-    _sync_manager: SyncManager | None
     _event_bus: EventBus | None
     _ontology: OntologyRegistry | None
     _audit_outbox: AiosqliteAuditOutbox | None
@@ -59,10 +57,6 @@ class _WriterIOMixin:
     _seed_lock: asyncio.Lock
 
     # --- helpers expected to be provided by GardenWriter -------------------
-    async def _notify_sync(
-        self, event_type_str: str, path: Path, source: str
-    ) -> None:  # pragma: no cover - implemented in GardenWriter
-        ...
 
     async def _emit_vault_modified(
         self,
@@ -148,7 +142,6 @@ class _WriterIOMixin:
             await asyncio.to_thread(file_path.write_text, content, encoding="utf-8")
 
         logger.info("seed_written", source=source, path=str(file_path))
-        await self._notify_sync("seed", file_path, source)
         await emit_event(
             self._event_bus, "SEED_WRITTEN", {"path": str(file_path), "source": source}
         )
@@ -225,7 +218,6 @@ class _WriterIOMixin:
             note_type=note.note_type,
             path=str(file_path),
         )
-        await self._notify_sync("garden", file_path, note.source)
         await emit_event(
             self._event_bus, "GARDEN_WRITTEN", {"path": str(file_path), "source": note.source}
         )
@@ -290,7 +282,6 @@ class _WriterIOMixin:
         async with self._log_lock:
             await asyncio.to_thread(_write)
         logger.info("action_logged", skill_name=skill_name, path=str(log_path))
-        await self._notify_sync("action", log_path, skill_name)
         await emit_event(
             self._event_bus, "ACTION_LOGGED", {"path": str(log_path), "source": skill_name}
         )

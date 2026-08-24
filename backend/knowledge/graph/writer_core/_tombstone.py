@@ -44,10 +44,6 @@ class _WriterTombstoneMixin:
     _audit_outbox: AiosqliteAuditOutbox | None
     _garden_lock: asyncio.Lock
 
-    async def _notify_sync(  # pragma: no cover - in GardenWriter
-        self, event_type_str: str, path: Path, source: str
-    ) -> None: ...
-
     async def _emit_vault_modified(  # pragma: no cover - in GardenWriter
         self,
         *,
@@ -105,7 +101,6 @@ class _WriterTombstoneMixin:
             "NOTE_UPDATED",
             {"path": rel_path, "field": "retracted_at", "new_value": retracted_at},
         )
-        await self._notify_sync("garden", resolved, "update")
         await self._emit_vault_modified(
             path=resolved,
             operation="note_tombstoned",
@@ -135,7 +130,6 @@ class _WriterTombstoneMixin:
             "NOTE_UPDATED",
             {"path": rel_path, "field": "retracted_at", "new_value": None},
         )
-        await self._notify_sync("garden", resolved, "update")
         await self._emit_vault_modified(
             path=resolved,
             operation="note_restored",

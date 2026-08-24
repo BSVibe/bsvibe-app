@@ -1,11 +1,10 @@
 """Tests for bsage.garden.writer — GardenWriter and GardenNote."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, PropertyMock
+from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.knowledge.graph.sync import SyncBackend, SyncManager, WriteEventType
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer_core import GardenNote, GardenWriter
 
@@ -312,97 +311,6 @@ class TestReadNotes:
         assert len(result) == 2
         assert result[0].name == "note-a.md"
         assert result[1].name == "note-b.md"
-
-
-def _make_sync_manager() -> tuple[SyncManager, AsyncMock]:
-    """Create a SyncManager with one mock backend, return (manager, backend)."""
-    mgr = SyncManager()
-    backend = AsyncMock(spec=SyncBackend)
-    type(backend).name = PropertyMock(return_value="test-backend")
-    mgr.register(backend)
-    return mgr, backend
-
-
-class TestGardenWriterSync:
-    """Test that GardenWriter notifies SyncManager after writes."""
-
-    @pytest.mark.asyncio
-    async def test_write_seed_notifies_sync(self, tmp_path: Path) -> None:
-        vault = Vault(tmp_path)
-        vault.ensure_dirs()
-        mgr, backend = _make_sync_manager()
-        writer = GardenWriter(vault, sync_manager=mgr)
-
-        await writer.write_seed("calendar", {"event": "test"})
-
-        backend.sync.assert_called_once()
-        event = backend.sync.call_args[0][0]
-        assert event.event_type == WriteEventType.SEED
-        assert event.source == "calendar"
-
-    @pytest.mark.asyncio
-    async def test_write_garden_notifies_sync(self, tmp_path: Path) -> None:
-        vault = Vault(tmp_path)
-        vault.ensure_dirs()
-        mgr, backend = _make_sync_manager()
-        writer = GardenWriter(vault, sync_manager=mgr)
-
-        note = GardenNote(
-            title="Sync Test",
-            content="Content.",
-            note_type="idea",
-            source="test-skill",
-        )
-        await writer.write_garden(note)
-
-        backend.sync.assert_called_once()
-        event = backend.sync.call_args[0][0]
-        assert event.event_type == WriteEventType.GARDEN
-        assert event.source == "test-skill"
-
-    @pytest.mark.asyncio
-    async def test_write_action_notifies_sync(self, tmp_path: Path) -> None:
-        vault = Vault(tmp_path)
-        vault.ensure_dirs()
-        mgr, backend = _make_sync_manager()
-        writer = GardenWriter(vault, sync_manager=mgr)
-
-        await writer.write_action("test-skill", "Did something")
-
-        backend.sync.assert_called_once()
-        event = backend.sync.call_args[0][0]
-        assert event.event_type == WriteEventType.ACTION
-        assert event.source == "test-skill"
-
-    @pytest.mark.asyncio
-    async def test_write_without_sync_manager(self, tmp_path: Path) -> None:
-        """GardenWriter with no sync_manager should work exactly as before."""
-        vault = Vault(tmp_path)
-        vault.ensure_dirs()
-        writer = GardenWriter(vault)
-
-        result = await writer.write_seed("calendar", {"event": "test"})
-        assert result.exists()
-
-    @pytest.mark.asyncio
-    async def test_write_garden_dict_notifies_sync(self, tmp_path: Path) -> None:
-        vault = Vault(tmp_path)
-        vault.ensure_dirs()
-        mgr, backend = _make_sync_manager()
-        writer = GardenWriter(vault, sync_manager=mgr)
-
-        await writer.write_garden(
-            {
-                "title": "Dict Note",
-                "content": "From dict.",
-                "note_type": "idea",
-                "source": "dict-source",
-            }
-        )
-
-        backend.sync.assert_called_once()
-        event = backend.sync.call_args[0][0]
-        assert event.source == "dict-source"
 
 
 class TestHandleWriteNote:
