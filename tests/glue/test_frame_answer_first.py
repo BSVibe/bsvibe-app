@@ -99,7 +99,7 @@ async def test_llm_knowledge_only_verdict_is_answered(tmp_path: Path, text: str)
         config=FrameConfig(skill_loader=_loader(tmp_path), llm=llm),
     )
     assert framed.path_classification == "knowledge_only"
-    assert framed.pipeline == "single"
+    assert framed.steps == []
 
 
 @pytest.mark.asyncio

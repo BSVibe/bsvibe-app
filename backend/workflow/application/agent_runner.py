@@ -24,7 +24,7 @@ ExecutionRun lifecycle (open, transition, post-transition reactions —
 auto-ship at REVIEW_READY for product-bound runs, design→impl handoff
 spawning). Persistence is delegated to ``RunRepository`` /
 ``DeliverableRepository`` (Lift I-Repo seam). The post-transition
-reactions (``_auto_ship_product_run``, ``_maybe_spawn_impl_run``) are
+reactions (``_auto_ship_product_run``, ``_maybe_spawn_next_step``) are
 tightly coupled to the transition that
 triggers them — extracting as policy strategies would force the caller
 to re-derive trigger conditions externally, harming the invariant that
@@ -46,7 +46,7 @@ from backend.identity.workspaces_db import load_workspace_language
 from backend.notifications.copy import notification_copy
 from backend.notifications.emit import emit_notification
 from backend.workflow.application.agent_loop import LoopResult, RunCompute
-from backend.workflow.application.handoff import capture_design_spec_text
+from backend.workflow.application.handoff import capture_prior_step_output
 from backend.workflow.domain.repositories import DeliverableRepository, RunRepository
 from backend.workflow.infrastructure.db import (
     ExecutionRun,
@@ -330,12 +330,12 @@ class AgentRunner:
         ):
             await self._auto_ship_product_run(run)
 
-        # P1-L2 — design→impl handoff. When a DESIGN-stage run in a
-        # ``design_then_impl`` pipeline reaches its verified terminal, spawn the
-        # IMPLEMENTATION run (seeded with the design run's id + produced refs).
-        # Gated on stage != "impl" so the impl run never re-spawns itself.
+        # Step handoff — when a step of a split request reaches its verified
+        # terminal, spawn the next one (seeded with this run's id + produced
+        # refs). Walks the frame's step plan; a no-op for an unsplit run or the
+        # last step.
         if to_status is RunStatus.REVIEW_READY:
-            await self._maybe_spawn_impl_run(run)
+            await self._maybe_spawn_next_step(run)
         return True
 
     async def _emit_run_failed(self, run: ExecutionRun, reason: str | None) -> None:
@@ -526,86 +526,111 @@ class AgentRunner:
                 exc_info=True,
             )
 
-    async def _maybe_spawn_impl_run(self, design_run: ExecutionRun) -> None:
-        """P1-L2: chain an IMPLEMENTATION run after a verified DESIGN run.
+    async def _maybe_spawn_next_step(self, run: ExecutionRun) -> None:
+        """Chain the NEXT step of a split request, if there is one.
 
-        Fires only when ALL hold:
-        * the run's frame marks the pipeline ``design_then_impl``;
-        * this run is NOT itself the impl stage (so the impl run can't spawn
-          another — the chain is exactly two runs).
+        Fires when the frame split this request into steps
+        (:class:`~backend.workflow.application.stages.frame.FrameStep`) and this
+        run is not the last of them. The chain's length and its stage names come
+        from the founder's routing rules — this helper walks the list, it does
+        not judge.
 
-        The new run is OPEN (the next AgentWorker tick frames + drives it),
-        carries ``stage="impl"`` so routing targets the impl executor, and is
-        seeded with the design run's id + produced artifact refs so its context
-        (P1-L2b) can read the design spec.
+        The new run is OPEN (the next AgentWorker tick drives it — it is NOT
+        re-framed, the plan was decided once), carries the step's ``stage`` so
+        routing can target it, works under the step's OWN ``intent``, and is
+        seeded with the prior run's id + produced artifact refs + their captured
+        text so its context can read what came before.
         """
-        payload = design_run.payload if isinstance(design_run.payload, dict) else {}
+        payload = run.payload if isinstance(run.payload, dict) else {}
         raw_frame = payload.get("frame")
         frame = raw_frame if isinstance(raw_frame, dict) else {}
-        if frame.get("pipeline") != "design_then_impl":
+        steps = frame.get("steps")
+        if not isinstance(steps, list) or len(steps) < 2:
             return
-        if payload.get("stage") == "impl":
+        index = payload.get("step_index")
+        index = index if isinstance(index, int) else 0
+        if index + 1 >= len(steps):
+            return
+        nxt = steps[index + 1]
+        if not isinstance(nxt, dict):
+            return
+        stage = nxt.get("stage")
+        intent = nxt.get("intent")
+        if not isinstance(stage, str) or not isinstance(intent, str) or not intent.strip():
+            logger.warning("handoff_next_step_malformed", run_id=str(run.id), step_index=index + 1)
             return
 
-        refs = await self._design_artifact_refs(design_run.id)
-        # Capture the spec TEXT now — the design worktree is guaranteed present at
-        # this transition (REVIEW_READY, pre-cleanup) and, if the design auto-
-        # shipped just above, its spec is also in product main. Inlining here is
-        # durable: reading refs at the impl run's DISPATCH time (later) raced
-        # worktree cleanup + a held design run whose spec never reached main →
-        # has_spec=false (findings 2026-07-01, D-2). refs kept for provenance /
-        # back-compat fallback.
-        spec_text = capture_design_spec_text(
-            product_id=design_run.product_id,
-            design_run_id=design_run.id,
+        refs = await self._prior_artifact_refs(run.id)
+        # Capture the output TEXT now — this run's worktree is guaranteed present
+        # at this transition (REVIEW_READY, pre-cleanup) and, if it auto-shipped
+        # just above, its files are also in product main. Inlining here is
+        # durable: reading refs at the next run's DISPATCH time raced worktree
+        # cleanup + a held run whose output never reached main (findings
+        # 2026-07-01, D-2). refs kept for provenance / back-compat fallback.
+        output_text = capture_prior_step_output(
+            product_id=run.product_id,
+            prior_run_id=run.id,
             refs=refs,
             settings=self._settings,
         )
-        impl = ExecutionRun(
+        nxt_run = ExecutionRun(
             id=uuid.uuid4(),
-            workspace_id=design_run.workspace_id,
-            product_id=design_run.product_id,
-            request_id=design_run.request_id,
+            workspace_id=run.workspace_id,
+            product_id=run.product_id,
+            request_id=run.request_id,
             status=RunStatus.OPEN,
             payload={
-                "request_id": (
-                    str(design_run.request_id) if design_run.request_id is not None else None
-                ),
+                "request_id": (str(run.request_id) if run.request_id is not None else None),
+                # The founder's OWN words, carried whole through every step.
+                # Replacing them with the step's brief would drop every
+                # requirement the framer's summary happened to leave out —
+                # #690 measured that loss when the directive was merely
+                # truncated: the agent built the half it received, and lint and
+                # tests passed on that half.
                 "intent_text": payload.get("intent_text"),
-                "stage": "impl",
-                "pipeline": "design_then_impl",
-                "design_run_id": str(design_run.id),
-                "design_artifact_refs": refs,
-                "design_spec_text": spec_text,
+                # What THIS step must accomplish. Scope, not a replacement.
+                "step_intent": intent.strip(),
+                "stage": stage,
+                "step_index": index + 1,
+                # The plan travels so the step AFTER this one can follow, and so
+                # the worker does not re-frame (which would re-decide the split
+                # mid-chain against rules that may have changed).
+                "frame": frame,
+                "prior_run_id": str(run.id),
+                "prior_artifact_refs": refs,
+                "prior_output_text": output_text,
             },
             created_at=datetime.now(tz=UTC),
             updated_at=datetime.now(tz=UTC),
         )
-        self._session.add(impl)
+        self._session.add(nxt_run)
         self._session.add(
             ExecutionRunHistory(
                 id=uuid.uuid4(),
-                run_id=impl.id,
-                workspace_id=design_run.workspace_id,
+                run_id=nxt_run.id,
+                workspace_id=run.workspace_id,
                 from_status=None,
                 to_status=RunStatus.OPEN,
-                reason=f"impl stage spawned from design run {design_run.id}",
+                reason=f"step {index + 2}/{len(steps)} ({stage}) spawned from run {run.id}",
                 created_at=datetime.now(tz=UTC),
             )
         )
         await self._session.flush()
         logger.info(
-            "handoff_impl_run_spawned",
-            design_run_id=str(design_run.id),
-            impl_run_id=str(impl.id),
+            "handoff_next_step_spawned",
+            prior_run_id=str(run.id),
+            next_run_id=str(nxt_run.id),
+            stage=stage,
+            step_index=index + 1,
+            step_count=len(steps),
             artifact_refs=len(refs),
-            has_spec=spec_text is not None,
+            has_prior_output=output_text is not None,
         )
 
-    async def _design_artifact_refs(self, design_run_id: uuid.UUID) -> list[str]:
-        """The artifact_refs the design run's deliverable(s) produced — the
-        spec files the impl stage will read. Dedupes, preserves order."""
-        rows = await self._deliverables.list_by_run_id(design_run_id)
+    async def _prior_artifact_refs(self, run_id: uuid.UUID) -> list[str]:
+        """The artifact_refs this run's deliverable(s) produced — what the next
+        step will read. Dedupes, preserves order."""
+        rows = await self._deliverables.list_by_run_id(run_id)
         refs: list[str] = []
         for row in rows:
             row_payload = row.payload if isinstance(row.payload, dict) else {}

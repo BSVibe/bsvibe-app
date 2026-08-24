@@ -121,17 +121,20 @@ async def test_complexity_estimated_tokens_compiles() -> None:
 
 
 @pytest.mark.asyncio
-async def test_complexity_pipeline_compiles() -> None:
+async def test_work_stage_compiles_to_a_founder_named_stage() -> None:
+    reply = json.dumps({"condition": {"field": "stage", "operator": "eq", "value": "design"}})
+    result = await _compile(reply, text="설계처럼 깊이 생각해야 하는 작업")
+    assert isinstance(result, CompiledCondition)
+    assert result.condition == {"field": "stage", "operator": "eq", "value": "design"}
+
+
+@pytest.mark.asyncio
+async def test_the_deleted_pipeline_field_is_rejected() -> None:
+    """음성 대조군 — 옛 축은 더 이상 라우팅 가능한 필드가 아니다."""
     reply = json.dumps(
         {"condition": {"field": "pipeline", "operator": "eq", "value": "design_then_impl"}}
     )
-    result = await _compile(reply, text="큰 작업")
-    assert isinstance(result, CompiledCondition)
-    assert result.condition == {
-        "field": "pipeline",
-        "operator": "eq",
-        "value": "design_then_impl",
-    }
+    assert not isinstance(await _compile(reply, text="큰 작업"), CompiledCondition)
 
 
 # ---------------------------------------------------------------------------

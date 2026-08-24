@@ -27,8 +27,6 @@ def test_agent_loop_module_carries_loop_conductor() -> None:
         "CanonRetriever",
         "RunCompute",
         "_SYSTEM_PROMPT",
-        "_DESIGN_SPEC_DIRECTIVE",
-        "_is_design_stage",
         "_intent_title",
         "_resumption_messages",
     ):

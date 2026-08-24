@@ -67,27 +67,6 @@ _SYSTEM_PROMPT = (
     "it — declare the check and it runs there."
 )
 
-# D1b — when a run is the DESIGN stage of a ``design_then_impl`` pipeline, it
-# must produce a SPECIFICATION (a concise markdown spec the impl stage
-# implements), NOT finished code. Before D1b the design run got only the generic
-# work prompt, so it built working code the impl stage regenerated — a no-op
-# merge (2026-05-28 dogfood). This directive, seeded into the loop's initial
-# context for a design-stage run, redirects it to spec. One concise instruction
-# block (respect the local-model generation budget). The ``single`` + ``impl``
-# runs never get it (impl IMPLEMENTS the spec). Kept byte-identical to the
-# executor path's directive so both prompt-assembly sites tell the design run
-# the same thing.
-_DESIGN_SPEC_DIRECTIVE = (
-    "THIS IS THE DESIGN STAGE. Write ONE concise markdown specification — do NOT "
-    "implement it and do NOT write working code; a later implementation stage "
-    "will. The spec MUST cover: Goal (what to build and why), "
-    "Interface/Contract (the public API, signatures, inputs/outputs), File "
-    "layout (the files to create and what each holds), and Acceptance criteria "
-    "(observable conditions that prove the implementation is correct). Keep it "
-    "tight and implementable; output only the spec."
-)
-
-
 # An ASK run gets a DIFFERENT identity, not the engineer's identity plus a
 # retraction. #778 tried the retraction: it kept ``_SYSTEM_PROMPT`` ("You are an
 # autonomous engineer … Use the tools to inspect and CHANGE FILES") and appended
@@ -126,4 +105,4 @@ _ASK_SYSTEM_PROMPT = (
 )
 
 
-__all__ = ["_ASK_SYSTEM_PROMPT", "_DESIGN_SPEC_DIRECTIVE", "_SYSTEM_PROMPT"]
+__all__ = ["_ASK_SYSTEM_PROMPT", "_SYSTEM_PROMPT"]

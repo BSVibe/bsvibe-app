@@ -1278,49 +1278,64 @@ async def _first_turn_blob(tmp_path: Path, payload: dict[str, Any]) -> str:
     return _all_message_text(llm.calls[0]["messages"])
 
 
-async def test_native_design_stage_seeds_spec_only_directive(tmp_path: Path) -> None:
-    from backend.workflow.application.agent_loop import _DESIGN_SPEC_DIRECTIVE
+async def test_a_step_run_works_under_its_own_intent_with_nothing_injected(
+    tmp_path: Path,
+) -> None:
+    """스텝의 지시문은 payload 의 ``intent_text`` 하나다.
 
-    # First run of a design_then_impl pipeline (no explicit stage) → DESIGN.
+    옛 설계 스테이지는 엔지니어 정체성 위에 "명세만 쓰고 구현하지 마라"는
+    시스템 메시지를 얹었다. #778 이 ASK 런에서 측정한 그 모양 — 정체성은 뒤에
+    붙인 문장으로 뒤집히지 않는다 — 이고, #770 이 여기서 그 대가를 쟀다:
+    명세가 떨어지고, 아무도 구현하지 않고, 런은 완료를 보고했다.
+    """
     blob = await _first_turn_blob(
         tmp_path,
         {
-            "intent_text": "build a JSON-backed key/value store",
-            "frame": {"pipeline": "design_then_impl"},
+            "intent_text": "결제 시스템을 만들어줘. 실패 처리와 재시도까지 포함해서.",
+            "stage": "design",
+            "step_index": 0,
+            "step_intent": "결제 흐름과 실패 처리를 설계한다",
+            "frame": {
+                "steps": [
+                    {"stage": "design", "intent": "결제 흐름과 실패 처리를 설계한다"},
+                    {"stage": "impl", "intent": "설계대로 구현한다"},
+                ]
+            },
         },
     )
-    assert _DESIGN_SPEC_DIRECTIVE in blob
+    # #690 — 형님 원문이 통째로 도달한다. 스텝 brief 는 그것을 좁힐 뿐이다.
+    assert "실패 처리와 재시도까지 포함해서" in blob
+    assert "결제 흐름과 실패 처리를 설계한다" in blob
+    # 다음 스텝의 지시문이 이 런에 새어들지 않는다.
+    assert "설계대로 구현한다" not in blob
+    assert "do NOT implement" not in blob
 
 
-async def test_native_single_pipeline_has_no_spec_only_directive(tmp_path: Path) -> None:
-    from backend.workflow.application.agent_loop import _DESIGN_SPEC_DIRECTIVE
-
-    blob = await _first_turn_blob(
-        tmp_path,
-        {"intent_text": "ship the feature", "frame": {"pipeline": "single"}},
-    )
-    assert _DESIGN_SPEC_DIRECTIVE not in blob
-
-
-async def test_native_impl_stage_has_no_spec_only_directive(tmp_path: Path) -> None:
-    from backend.workflow.application.agent_loop import _DESIGN_SPEC_DIRECTIVE
-
+async def test_a_later_step_sees_what_the_prior_step_produced(tmp_path: Path) -> None:
     blob = await _first_turn_blob(
         tmp_path,
         {
-            "intent_text": "build a JSON-backed key/value store",
-            "frame": {"pipeline": "design_then_impl"},
+            "intent_text": "결제 시스템을 만들어줘.",
             "stage": "impl",
+            "step_index": 1,
+            "step_intent": "설계대로 구현한다",
+            "prior_run_id": str(uuid.uuid4()),
+            "prior_output_text": "The prior step produced:\n\n# 결제 설계",
+            "frame": {
+                "steps": [
+                    {"stage": "design", "intent": "설계한다"},
+                    {"stage": "impl", "intent": "설계대로 구현한다"},
+                ]
+            },
         },
     )
-    assert _DESIGN_SPEC_DIRECTIVE not in blob
+    assert "# 결제 설계" in blob
 
 
-async def test_native_no_frame_has_no_spec_only_directive(tmp_path: Path) -> None:
-    from backend.workflow.application.agent_loop import _DESIGN_SPEC_DIRECTIVE
-
+async def test_an_unsplit_run_gets_no_step_context(tmp_path: Path) -> None:
+    """음성 대조군 — 쪼개지 않은 런에는 아무것도 주입되지 않는다."""
     blob = await _first_turn_blob(tmp_path, {"intent_text": "some work"})
-    assert _DESIGN_SPEC_DIRECTIVE not in blob
+    assert "The prior step" not in blob
 
 
 def test_loop_protocols_are_runtime_checkable() -> None:

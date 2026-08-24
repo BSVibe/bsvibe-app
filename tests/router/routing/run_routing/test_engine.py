@@ -183,18 +183,29 @@ def _run(ws: uuid.UUID, payload: dict | None = None) -> ExecutionRun:
     )
 
 
-def test_from_run_derives_design_stage_from_pipeline() -> None:
+def test_stage_is_read_from_the_payload_and_nowhere_else() -> None:
+    """단계는 프레임이 **써 놓은** 것이지 추론하는 것이 아니다.
+
+    옛 규칙은 ``pipeline == design_then_impl`` 인 런에 명시적 stage 가 없으면
+    그것을 design 스테이지로 **추론**했다 — 프레임의 복잡도 추측이 라우팅의
+    두 번째 진실 소스가 되는 지점이었다. 이제 프레임이 자기가 배정한 단계를
+    쓰거나, 아무것도 안 쓴다.
+    """
     ws = uuid.uuid4()
-    design = RoutingContext.from_run(
+    assigned = RoutingContext.from_run(_run(ws, {"stage": "design"}))
+    assert assigned.stage == "design"
+    unsplit = RoutingContext.from_run(_run(ws, {"frame": {"artifact_type_hint": "code"}}))
+    assert unsplit.stage == "single"
+
+
+def test_a_leftover_pipeline_payload_no_longer_moves_routing() -> None:
+    """음성 대조군 — prod 에 남아 있는 32건의 ``pipeline`` 값은 이제 무해한
+    잔여 필드다 (형님 확정: payload 는 그대로 둔다)."""
+    ws = uuid.uuid4()
+    ctx = RoutingContext.from_run(
         _run(ws, {"frame": {"artifact_type_hint": "code", "pipeline": "design_then_impl"}})
     )
-    assert design.stage == "design"
-    impl = RoutingContext.from_run(
-        _run(ws, {"stage": "impl", "frame": {"pipeline": "design_then_impl"}})
-    )
-    assert impl.stage == "impl"
-    single = RoutingContext.from_run(_run(ws, {"frame": {"pipeline": "single"}}))
-    assert single.stage == "single"
+    assert ctx.stage == "single"
 
 
 # ---------------------------------------------------------------------------

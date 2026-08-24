@@ -126,11 +126,34 @@ async def test_complexity_dimension_compiles_to_estimated_tokens() -> None:
 
 
 @pytest.mark.asyncio
-async def test_complexity_dimension_compiles_to_pipeline() -> None:
+async def test_work_stage_dimension_compiles_to_a_founder_named_stage() -> None:
+    """작업 단계는 ``stage`` 로 컴파일된다 — 사용자가 이름 붙인 라벨로.
+
+    이 룰이 존재하는 것 자체가 프레이머에게 "이 워크스페이스는 설계 단계를
+    구분한다"고 알려준다
+    (:func:`~backend.router.routing.run_routing.chaining.derive_stage_vocabulary`).
+    """
     reply = json.dumps(
         [
             {
-                "name": "design_then_impl → opus",
+                "name": "설계 작업은 opus",
+                "target": "opus",
+                "condition": {"field": "stage", "operator": "eq", "value": "design"},
+                "is_default": False,
+            }
+        ]
+    )
+    rules = await _compile(reply, text="설계처럼 깊이 생각해야 하는 작업은 opus")
+    assert rules[0].condition == {"field": "stage", "operator": "eq", "value": "design"}
+
+
+@pytest.mark.asyncio
+async def test_the_deleted_pipeline_field_is_rejected() -> None:
+    """음성 대조군 — 옛 축을 제안해도 통과하지 못한다."""
+    reply = json.dumps(
+        [
+            {
+                "name": "복잡한 건 opus",
                 "target": "opus",
                 "condition": {
                     "field": "pipeline",
@@ -141,12 +164,7 @@ async def test_complexity_dimension_compiles_to_pipeline() -> None:
             }
         ]
     )
-    rules = await _compile(reply, text="큰 작업은 opus")
-    assert rules[0].condition == {
-        "field": "pipeline",
-        "operator": "eq",
-        "value": "design_then_impl",
-    }
+    assert await _compile(reply, text="큰 작업은 opus") == []
 
 
 # ---------------------------------------------------------------------------

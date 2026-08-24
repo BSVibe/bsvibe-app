@@ -1038,7 +1038,7 @@ export interface ModelAccount {
 // ── Routing rules (Settings → Models → ROUTING) ───────────────────────────
 
 /** One condition a run-routing rule evaluates. `field` is one of the engine's
- *  whitelisted ALLOWED_FIELDS (stage / pipeline / classified_intent / …). The UI
+ *  whitelisted ALLOWED_FIELDS (stage / classified_intent / …). The UI
  *  surfaces the value as "what a rule matches"; complex condition editing is
  *  deferred. Mirrors the backend ConditionResponse. */
 export interface RunRoutingCondition {
@@ -1118,7 +1118,8 @@ export interface RunRoutingCaller {
  *   - `caller_id` → an execution-stage rule;
  *   - `condition` `{field, operator, value}` → a complexity / language / artifact
  *     rule (`field` ∈ estimated_tokens / detected_language / artifact_type_hint /
- *     pipeline / …);
+ *     stage / …). A `stage` rule also tells the framer this workspace
+ *     distinguishes that stage, so it may split work into it;
  *   - `intent_name` + `intent_examples` → a category: the backend creates the
  *     intent definition then a `classified_intent == intent_name` rule.
  *  Dry-run — nothing is persisted until applied via `applyRunRoutingProposals`. */

@@ -205,6 +205,21 @@ def _verified_script() -> _ScriptedCompletion:
     )
 
 
+def _script_framing_one_design_step() -> _ScriptedCompletion:
+    """:func:`_verified_script` 와 같되, 프레임 턴이 ``design`` 스텝 하나를 낸다."""
+    script = _verified_script()
+    script._turns[0]["content"] = json.dumps(  # noqa: SLF001 — 테스트가 스크립트를 짠다
+        {
+            "framed_intent": "Build the answer file",
+            "skill_match": "weekly-digest",
+            "artifact_type_hint": "code",
+            "path_classification": "agent_loop",
+            "steps": [{"stage": "design", "intent": "결제 흐름을 설계한다"}],
+        }
+    )
+    return script
+
+
 def _patch_scripted_llm(monkeypatch: pytest.MonkeyPatch, script: _ScriptedCompletion) -> None:
     """Make the resolver's :class:`LiteLLMAdapter` use the scripted
     completion. After Lift E2 the adapter is constructed inside
@@ -549,13 +564,7 @@ async def test_drive_frames_against_only_the_runs_workspace_skills(
     assert await agent.drive_once() == 1
 
     async with sf() as s:
-        # The design run — REVIEW_READY chains an impl run behind it (the frame
-        # marks this ``design_then_impl``); the impl run carries no frame.
-        run = (
-            await s.execute(
-                select(ExecutionRun).where(ExecutionRun.payload["stage"].as_string().is_(None))
-            )
-        ).scalar_one()
+        run = (await s.execute(select(ExecutionRun))).scalar_one()
         # Framed against workspace A's skills only — sees A's "weekly-digest",
         # never the other workspace's "groceries".
         assert run.payload["frame"]["skill_match"] == "weekly-digest"
@@ -795,3 +804,121 @@ async def test_settle_entity_extractor_factory_none_when_no_default_or_rule(
         session_factory=sf, settings=get_settings()
     )
     assert await factory(region="us-1", workspace_id=workspace_id) is None
+
+
+# --------------------------------------------------------------------------
+# 종합 → 프레이밍 → payload: the WIRE, not just its two ends
+# --------------------------------------------------------------------------
+
+
+async def test_a_stage_rule_makes_the_worker_label_the_run(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    seeded_product: uuid.UUID,
+    kms_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """형님이 ``stage`` 룰 하나를 쓰면 워커가 실제로 런에 그 라벨을 적는가.
+
+    양끝(어휘 도출 · 프레임 쪼갬)은 각각 유닛테스트가 있다. 이 테스트는 그
+    **전선**을 잰다 — 워커가 룰을 조회해 어휘를 만들고, 프레이머에게 넘기고,
+    돌아온 스텝을 payload 에 기록하는 경로. 라벨이 payload 에 없으면
+    ``RoutingContext._derive_stage`` 는 ``"single"`` 을 보고 형님 룰은 발화하지
+    못한다 — 라우팅이 조용히 기본값으로 떨어진다.
+
+    스텝이 하나여도 라벨은 붙는다. 그게 형님의 실제 니즈다: *"설계 작업은
+    opus"* 는 쪼개라는 뜻이 아니라 **그 일을 그 모델로 보내라**는 뜻이다.
+    """
+    from backend.router.routing.run_routing.db import RunRoutingRuleRow
+
+    skills_root = tmp_path / "skills"
+    _write_skill(skills_root / str(workspace_id), "weekly-digest", "Generate a weekly digest")
+    await _seed_active_account(sf, workspace_id=workspace_id, account_id=account_id)
+
+    async with sf() as s:
+        s.add(
+            RunRoutingRuleRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                name="설계 작업",
+                caller_id=None,
+                priority=10,
+                is_default=False,
+                target="opus",
+                source_text="설계처럼 깊이 생각해야 하는 작업",
+                conditions=[{"field": "stage", "operator": "eq", "value": "design"}],
+                is_active=True,
+            )
+        )
+        await s.commit()
+
+    _patch_scripted_llm(monkeypatch, _script_framing_one_design_step())
+
+    resp = await client.post("/api/v1/messages", json={"text": "please run the weekly digest now"})
+    assert resp.status_code == 202, resp.text
+    assert await IntakeWorker(session_factory=sf).drain_once() == 1
+
+    settings = get_settings().model_copy(update={"skills_root": str(skills_root)})
+    deps = runtime.build_agent_execution_deps(
+        settings=settings, sandbox_manager=NoopSandboxManager()
+    )
+    deps.workspace_root = tmp_path / "runs"
+    agent = AgentWorker(session_factory=sf, execution=deps)
+    assert await agent.claim_once() == 1
+    assert await agent.drive_once() == 1
+
+    async with sf() as s:
+        run = (await s.execute(select(ExecutionRun))).scalar_one()
+        # 워커가 라벨을 적었다 — 라우팅이 형님 룰을 만날 수 있다.
+        assert run.payload["stage"] == "design"
+        assert run.payload["step_intent"] == "결제 흐름을 설계한다"
+        # #690 — 형님 원문은 그대로다.
+        assert "weekly digest" in run.payload["intent_text"]
+
+        # 그리고 엔진이 실제로 그 라벨로 형님 룰을 고른다.
+        from backend.router.routing.run_routing.engine import RoutingContext
+
+        assert RoutingContext.from_run(run).stage == "design"
+
+
+async def test_without_a_stage_rule_the_worker_labels_nothing(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    seeded_product: uuid.UUID,
+    kms_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """음성 대조군 — 룰을 빼면 같은 프레임 응답이 와도 라벨이 안 붙는다.
+
+    형님의 live 워크스페이스가 정확히 이 상태다(룰 0개). 이게 안 깨지면 위
+    테스트는 룰이 아니라 프레임 응답만 재고 있는 것이다.
+    """
+    skills_root = tmp_path / "skills"
+    _write_skill(skills_root / str(workspace_id), "weekly-digest", "Generate a weekly digest")
+    await _seed_active_account(sf, workspace_id=workspace_id, account_id=account_id)
+
+    _patch_scripted_llm(monkeypatch, _script_framing_one_design_step())
+
+    resp = await client.post("/api/v1/messages", json={"text": "please run the weekly digest now"})
+    assert resp.status_code == 202, resp.text
+    assert await IntakeWorker(session_factory=sf).drain_once() == 1
+
+    settings = get_settings().model_copy(update={"skills_root": str(skills_root)})
+    deps = runtime.build_agent_execution_deps(
+        settings=settings, sandbox_manager=NoopSandboxManager()
+    )
+    deps.workspace_root = tmp_path / "runs"
+    agent = AgentWorker(session_factory=sf, execution=deps)
+    assert await agent.claim_once() == 1
+    assert await agent.drive_once() == 1
+
+    async with sf() as s:
+        run = (await s.execute(select(ExecutionRun))).scalar_one()
+        assert "stage" not in run.payload
+        assert "steps" not in run.payload["frame"]
