@@ -293,13 +293,17 @@ async def _conditions_from_compiled(
     rule on ``classified_intent == intent_name``. Flushes but does not commit —
     the caller owns the transaction so intent + rule land atomically."""
     if compiled.intent_name is not None:
+        from backend.config import get_settings  # noqa: PLC0415
         from backend.embedding.authoring import (  # noqa: PLC0415
             build_account_embedder,
             create_intent_with_examples,
         )
 
         embedder = await build_account_embedder(
-            session, workspace_id=workspace_id, account_id=account_id
+            session,
+            settings=get_settings(),
+            workspace_id=workspace_id,
+            account_id=account_id,
         )
         await create_intent_with_examples(
             session,
@@ -708,6 +712,7 @@ async def apply_proposals(
     the end, rolling back on any failure (:class:`ApplyError`). ``account_id`` is
     the personal billing account intents are scoped to (the SAME one the N1
     classifier reads at resolve time). The embedder is resolved once per apply."""
+    from backend.config import get_settings  # noqa: PLC0415
     from backend.embedding.authoring import (  # noqa: PLC0415
         build_account_embedder,
         create_intent_with_examples,
@@ -726,7 +731,10 @@ async def apply_proposals(
     embedder = None
     if any(p.intent_name is not None and not p.is_default for p in proposals):
         embedder = await build_account_embedder(
-            session, workspace_id=workspace_id, account_id=account_id
+            session,
+            settings=get_settings(),
+            workspace_id=workspace_id,
+            account_id=account_id,
         )
 
     try:

@@ -12,12 +12,19 @@ is INJECTED (an ``embed_one``-shaped object) so tests never touch a real
 embedding API — pass a stub, or ``None`` to exercise the no-embedding-config
 path.
 
-No-embedding-config behaviour (deliberate): when the account has no embedding
-model configured, the intent + its examples are STILL created, each example
-stamped ``embedding=None``. Nothing is lost — the examples surface via
-:meth:`IntentRepository.list_examples_needing_reembedding` and the classifier
-simply won't match this intent until embeddings exist. Authoring never
-hard-fails on missing embedding config.
+No-embedding-config behaviour (deliberate): when NEITHER the account nor the
+deployment has an embedding model, the intent + its examples are STILL created,
+each example stamped ``embedding=None``. Nothing is lost — the examples surface
+via :meth:`IntentRepository.list_examples_needing_reembedding` and the
+classifier simply won't match this intent until embeddings exist. Authoring
+never hard-fails on missing embedding config.
+
+That tolerance was, until PR A, an ALIBI rather than a courtesy: the per-account
+row it looked for has no authoring surface anywhere in the product (prod
+2026-08-24: 0 rows), so EVERY intent ever authored landed unembedded and no
+``classified_intent`` rule could fire. The model now resolves through
+:func:`~backend.embedding.settings.resolve_embedding_settings`, which falls back
+to the deployment model — the same one the note index runs on.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ from backend.embedding.service import EmbeddedExample
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from backend.config import Settings
     from backend.embedding.db import IntentDefinitionRow
 
 logger = structlog.get_logger(__name__)
@@ -61,22 +69,24 @@ class ExampleEmbedder(Protocol):
 async def build_account_embedder(
     session: AsyncSession,
     *,
+    settings: Settings,
     workspace_id: uuid.UUID,
     account_id: uuid.UUID,
 ) -> ExampleEmbedder | None:
-    """Build the account's :class:`EmbeddingService`, or ``None``.
+    """Build the embedder for ``(workspace, account)``, or ``None``.
 
-    ``None`` when the account has no embedding model configured — the caller
-    then creates examples with ``embedding=None`` (see module docstring).
-    Mirrors the construction in
-    :func:`backend.router.routing.run_routing.intent_classifier.build_intent_classifier`.
+    ``None`` only when NEITHER the account nor the deployment configures a
+    model — the caller then creates examples with ``embedding=None`` (see
+    module docstring). Resolution is shared with
+    :func:`backend.router.routing.run_routing.intent_classifier.build_intent_classifier`
+    so both ends of the wire embed and search the same vector space.
     """
     from sqlalchemy import select  # noqa: PLC0415
 
     from backend.embedding.db import AccountEmbeddingSettingsRow  # noqa: PLC0415
     from backend.embedding.provider import LiteLLMEmbeddingProvider  # noqa: PLC0415
     from backend.embedding.service import EmbeddingService  # noqa: PLC0415
-    from backend.embedding.settings import EmbeddingSettings  # noqa: PLC0415
+    from backend.embedding.settings import resolve_embedding_settings  # noqa: PLC0415
 
     config = await session.scalar(
         select(AccountEmbeddingSettingsRow.config).where(
@@ -84,7 +94,7 @@ async def build_account_embedder(
             AccountEmbeddingSettingsRow.account_id == account_id,
         )
     )
-    emb_settings = EmbeddingSettings.from_account_settings(config)
+    emb_settings = resolve_embedding_settings(config, settings)
     if emb_settings is None:
         return None
     return EmbeddingService(LiteLLMEmbeddingProvider(emb_settings))

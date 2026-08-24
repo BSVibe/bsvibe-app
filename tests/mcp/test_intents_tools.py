@@ -42,7 +42,7 @@ class _StubEmbedder:
 def _stub_embedder(monkeypatch):
     import backend.mcp.tools.intents_tools as tools
 
-    async def _stub_build(session, *, workspace_id, account_id):
+    async def _stub_build(session, *, settings, workspace_id, account_id):
         return _StubEmbedder()
 
     monkeypatch.setattr(tools, "build_account_embedder", _stub_build)
@@ -173,7 +173,7 @@ async def test_create_without_embedding_config_is_graceful(
 ) -> None:
     import backend.mcp.tools.intents_tools as tools
 
-    async def _no_embedder(session, *, workspace_id, account_id):
+    async def _no_embedder(session, *, settings, workspace_id, account_id):
         return None
 
     monkeypatch.setattr(tools, "build_account_embedder", _no_embedder)

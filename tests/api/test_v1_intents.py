@@ -53,7 +53,7 @@ async def client(db, account_id, monkeypatch):
     # Default: a stub embedder is configured (no real API touched).
     import backend.api.v1.intents as intents_mod
 
-    async def _stub_build(session, *, workspace_id, account_id):
+    async def _stub_build(session, *, settings, workspace_id, account_id):
         return _StubEmbedder()
 
     monkeypatch.setattr(intents_mod, "build_account_embedder", _stub_build)
@@ -124,7 +124,7 @@ async def test_create_without_embedding_config_is_graceful(client, monkeypatch) 
     created (embedding=None), NOT a hard failure."""
     import backend.api.v1.intents as intents_mod
 
-    async def _no_embedder(session, *, workspace_id, account_id):
+    async def _no_embedder(session, *, settings, workspace_id, account_id):
         return None
 
     monkeypatch.setattr(intents_mod, "build_account_embedder", _no_embedder)

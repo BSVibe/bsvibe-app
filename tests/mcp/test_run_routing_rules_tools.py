@@ -594,7 +594,7 @@ async def test_compile_apply_creates_intent_rule_and_default(
     """The apply tool persists a category (intent + rule) and sets the default,
     atomically — with the embedder stubbed (no real embedding API)."""
 
-    async def _fake_builder(session, *, workspace_id, account_id):
+    async def _fake_builder(session, *, settings, workspace_id, account_id):
         return _StubEmbedder()
 
     monkeypatch.setattr("backend.embedding.authoring.build_account_embedder", _fake_builder)
@@ -734,7 +734,7 @@ async def test_create_from_source_text_category_creates_intent(
             intent_examples=["write a marketing email", "plan a campaign", "draft copy"],
         )
 
-    async def _fake_builder(session, *, workspace_id, account_id):
+    async def _fake_builder(session, *, settings, workspace_id, account_id):
         return _StubEmbedder()
 
     monkeypatch.setattr(tools, "compile_source_text_for_workspace", _fake)
