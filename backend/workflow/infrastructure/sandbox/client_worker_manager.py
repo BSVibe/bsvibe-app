@@ -98,6 +98,7 @@ class ClientWorkerSandboxSession:
         workspace_path: str,
         default_timeout_s: float,
         pinned_worker_id: uuid.UUID | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self._redis = redis
         self._session_factory = session_factory
@@ -106,6 +107,19 @@ class ClientWorkerSandboxSession:
         self._workspace_path = workspace_path
         self._default_timeout_s = default_timeout_s
         self._pinned_worker_id = pinned_worker_id
+        # The product's DECLARED secrets. The box carries them so that every command it
+        # runs has them — the agent's ``shell_exec`` and the derived gate's commands
+        # alike. Attaching them at each call site instead would be a second source, and
+        # the two would drift toward whichever is tested less.
+        #
+        # This matters here specifically because a client_attach run has no container:
+        # its stack plan is ``None`` (``StackNotApplicable``), so commands run DIRECTLY
+        # on this box and never touch the container path that puts secrets on the boot
+        # command only. Measured 2026-08-24: the run's git worktree holds no ``.env``
+        # (gitignored, so ``git worktree`` does not materialise it) and every exec went
+        # out with ``env_names=[]`` — the founder's own checkout produced a real report
+        # from the same command that produced "API 키가 비어 있어요" in the worktree.
+        self._env: dict[str, str] = dict(env or {})
 
     @property
     def workspace_mount(self) -> str:
@@ -157,7 +171,10 @@ class ClientWorkerSandboxSession:
                 task=task,
                 worker_id=worker_id,
                 action="exec",
-                env=env,
+                # The caller's own env WINS: the verification stack passes the boot
+                # command exactly what it means to boot with, and a product default
+                # must not quietly override that intent.
+                env={**self._env, **(env or {})} or None,
             )
             # Commit before awaiting — the worker reports on a SEPARATE session
             # over HTTP; under PG READ COMMITTED an uncommitted row is invisible
@@ -249,7 +266,9 @@ class ClientWorkerSandboxManager:
         default_timeout_s: float,
         client_workspace_dir: str,
         run_id: uuid.UUID | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
+        self._env: dict[str, str] = dict(env or {})
         self._redis = redis
         self._session_factory = session_factory
         self._workspace_id = workspace_id
@@ -268,6 +287,7 @@ class ClientWorkerSandboxManager:
             workspace_path=workspace_path,
             default_timeout_s=self._default_timeout_s,
             pinned_worker_id=self._pinned_worker_id,
+            env=self._env,
         )
 
     def attach(self) -> ClientWorkerSandboxSession:

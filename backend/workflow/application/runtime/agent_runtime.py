@@ -53,6 +53,7 @@ from backend.workflow.application.runtime.account_resolution import (
 )
 from backend.workflow.application.runtime.dispatcher import _ResolverFrameLlm
 from backend.workflow.application.runtime.sandbox_selection import (
+    declared_secrets_for_product,
     resolve_sandbox_manager,
     sandbox_manager_for_run,
 )
@@ -293,6 +294,14 @@ def build_agent_execution_deps(
             session_factory=session_factory,
             workspace_id=run.workspace_id,
             timeout_s=settings.verify_gate_command_timeout_s,
+            # The product's declared secrets ride WITH the box, so the agent's own
+            # commands get the same environment the gate's do. A client_attach run
+            # has no container to boot them into.
+            secrets=(
+                await declared_secrets_for_product(session, run.product_id)
+                if run.product_id
+                else {}
+            ),
         )
         return RunOrchestrator(
             session=session,
