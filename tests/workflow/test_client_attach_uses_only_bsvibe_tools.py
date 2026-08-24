@@ -210,8 +210,12 @@ class _Session:
     async def get(self, _model: Any, _pk: Any) -> Any:
         return self._run
 
-    async def execute(self, _stmt: Any) -> Any:
-        return SimpleNamespace(first=lambda: (_WORKER_ID, "claude_code"))
+    async def execute(self, stmt: Any) -> Any:
+        # 두 종류 질문 — "어느 워커에서 도나"와 "선언된 시크릿은".
+        if "executor_tasks" in str(stmt):
+            return SimpleNamespace(first=lambda: (_WORKER_ID, "claude_code"))
+        # 제품 메타데이터 — 이 제품은 시크릿을 선언하지 않았다.
+        return SimpleNamespace(first=lambda: ({},))
 
     async def __aenter__(self) -> _Session:
         return self

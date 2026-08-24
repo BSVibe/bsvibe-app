@@ -27,7 +27,7 @@ What the caller gets is a box or an explanation:
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -168,7 +168,7 @@ async def open_check_environment(
         # values go straight onto the dispatch channel that carries them to the
         # founder's machine. A failure to decrypt drops the secret rather than
         # the run — the check that needed it then fails honestly.
-        secrets=_unseal(metadata),
+        secrets=unseal_declared_secrets(metadata),
     ) as outcome:
         if isinstance(outcome, StackUnavailable):
             yield CheckEnvironment(box=None, kind="unavailable", unavailable=outcome.reason)
@@ -191,12 +191,19 @@ async def open_check_environment(
         yield CheckEnvironment(box=_StackBox(box, outcome), kind=plan.source, detail=detail)
 
 
-def _unseal(metadata: Mapping[str, Any] | None) -> dict[str, str]:
-    """The product's declared verification secrets, in the clear.
+def unseal_declared_secrets(
+    metadata: Mapping[str, Any] | None, *, decrypt: Callable[[str], str] | None = None
+) -> dict[str, str]:
+    """The product's declared secrets, in the clear. The ONE unsealing.
 
-    The cipher is built here rather than injected because this is the only place
-    that needs it, and a KMS key that cannot be built is not a reason to fail a
-    run — a product declaring no secrets must not start caring about the key.
+    Public because the agent's own commands need the same values the gate does: a
+    client_attach run has no container, so its commands run directly on the box and
+    never reach the container path that puts secrets on the boot command. Two
+    unsealings would be two places a secret is handled.
+
+    The cipher is built here rather than injected because a KMS key that cannot be
+    built is not a reason to fail a run — a product declaring no secrets must not
+    start caring about the key. ``decrypt`` overrides it for tests.
     """
     from backend.workflow.domain.verify_secrets import (  # noqa: PLC0415
         declared_secret_names,
@@ -205,6 +212,8 @@ def _unseal(metadata: Mapping[str, Any] | None) -> dict[str, str]:
 
     if not declared_secret_names(metadata):
         return {}
+    if decrypt is not None:
+        return unseal_secrets(metadata, decrypt=decrypt)
     try:
         from backend.router.accounts.crypto import (  # noqa: PLC0415
             CredentialCipher,

@@ -154,10 +154,15 @@ class _Session:
     async def get(self, _model: Any, _pk: Any) -> Any:
         return self._run
 
-    async def execute(self, _stmt: Any) -> Any:
+    async def execute(self, stmt: Any) -> Any:
         from types import SimpleNamespace
 
-        return SimpleNamespace(first=lambda: (uuid.uuid4(), "claude_code"))
+        # 이 페이크는 두 종류 질문을 받는다 — "이 런은 어느 워커에서 도나"와
+        # "이 제품이 선언한 시크릿은". 묻는 것에 맞게 답한다.
+        if "executor_tasks" in str(stmt):
+            return SimpleNamespace(first=lambda: (uuid.uuid4(), "claude_code"))
+        # 제품 메타데이터 — 이 제품은 시크릿을 선언하지 않았다.
+        return SimpleNamespace(first=lambda: ({},))
 
     async def __aenter__(self) -> _Session:
         return self

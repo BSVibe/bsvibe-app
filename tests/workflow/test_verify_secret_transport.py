@@ -289,5 +289,5 @@ class TestTheValueReachesTheBootAndNothingElse:
         never meet."""
         import backend.workflow.application.verify_environment as ve
 
-        assert ve._unseal(_metadata()) == {"BSVIBE_TEST_PASSWORD": _SECRET}
-        assert ve._unseal({}) == {}
+        assert ve.unseal_declared_secrets(_metadata()) == {"BSVIBE_TEST_PASSWORD": _SECRET}
+        assert ve.unseal_declared_secrets({}) == {}

@@ -9,6 +9,7 @@ source is. This module holds that one decision, kept out of
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -43,6 +44,7 @@ def sandbox_manager_for_run(
     workspace_id: uuid.UUID,
     timeout_s: float,
     run_id: uuid.UUID | None = None,
+    secrets: Mapping[str, str] | None = None,
 ) -> SandboxManager:
     """#692 in-place verify — pick the sandbox backend for THIS run.
 
@@ -91,6 +93,7 @@ def sandbox_manager_for_run(
         timeout_s=timeout_s,
         client_workspace_dir=client_workspace_dir,
         run_id=run_id,
+        env=secrets,
     )
 
 
@@ -104,6 +107,7 @@ def _client_manager(
     timeout_s: float,
     client_workspace_dir: str,
     run_id: uuid.UUID | None,
+    env: Mapping[str, str] | None = None,
 ) -> ClientWorkerSandboxManager:
     """The ONE construction of a client-worker sandbox manager.
 
@@ -124,6 +128,9 @@ def _client_manager(
         # The founder's own tree — the ONLY path that exists on that machine. The
         # ``acquire`` caller passes the run's server-side dir, which does not.
         client_workspace_dir=client_workspace_dir,
+        # The product's declared secrets, carried by the box so every command it runs
+        # has them — the agent's and the derived gate's alike.
+        env=env,
         # ...and inside it, this run's OWN worktree. Editing the founder's
         # checkout directly left uncommitted work piling up unattributably,
         # blocked concurrent runs on one product, and put their own
@@ -209,6 +216,7 @@ async def client_sandbox_manager_for_run(
         timeout_s=timeout_s,
         client_workspace_dir=client_workspace_dir,
         run_id=run_id,
+        env=await declared_secrets_for_product(session, product_id),
     )
 
 
@@ -235,3 +243,37 @@ async def _worker_running_run(
     if row is None or row[0] is None:
         return None
     return uuid.UUID(str(row[0])), str(row[1])
+
+
+def declared_secrets_for_metadata(
+    metadata: Mapping[str, Any] | None, *, decrypt: Callable[[str], str] | None = None
+) -> dict[str, str]:
+    """A product's declared secrets, in the clear — the SAME unsealing verification uses.
+
+    Delegates to :func:`backend.workflow.application.verify_environment.unseal_declared_secrets`
+    rather than repeating the decrypt: a second unsealing would be a second place for a
+    secret to be handled, and the two would drift toward whichever is exercised less.
+
+    ``decrypt`` is for tests that want to prove the round-trip without a KMS key.
+    """
+    from backend.workflow.application.verify_environment import (  # noqa: PLC0415
+        unseal_declared_secrets,
+    )
+
+    return unseal_declared_secrets(metadata, decrypt=decrypt)
+
+
+async def declared_secrets_for_product(
+    session: AsyncSession, product_id: uuid.UUID
+) -> dict[str, str]:
+    """The product's declared secrets. ``{}`` when it declares none, or on a missing row."""
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.identity.workspaces_db import ProductRow  # noqa: PLC0415
+
+    row = (
+        await session.execute(
+            select(ProductRow.product_metadata).where(ProductRow.id == product_id)
+        )
+    ).first()
+    return declared_secrets_for_metadata(row[0] if row else None)
