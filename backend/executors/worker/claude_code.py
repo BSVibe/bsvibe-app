@@ -155,6 +155,25 @@ _NATIVE_TOOLS: str = " ".join(
         "TaskGet",
         "TaskList",
         "TaskUpdate",
+        # The rot again, and this time it stopped every agent run. Measured on the worker,
+        # 2026-08-24 (run ``cb37cbcd``, both attempts):
+        #     claude_code_unsanctioned_tools problem='unsanctioned: ListAgents,
+        #     ReportFindings, SendMessage'
+        # The guard did its job — it refused rather than hand the agent the founder's
+        # filesystem — but a rotted list means NO agentic run can start, on either execution
+        # model (they share this branch).
+        "ListAgents",
+        "ReportFindings",
+        "SendMessage",
+        # ...and the rest of the same generation's surface, which that run simply did not
+        # expose. Denying a name the CLI never offers costs nothing; discovering the gap one
+        # aborted production run at a time costs a run each time.
+        "Agent",
+        "Artifact",
+        "ListMcpResourcesTool",
+        "ReadMcpResourceDirTool",
+        "ReadMcpResourceTool",
+        "SendUserFile",
     )
 )
 
