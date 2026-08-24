@@ -15,7 +15,10 @@ clause is about  field / mechanism
 category/domain  ``classified_intent == <name>`` AND an intent definition
                  (``intent_name`` + a few ``intent_examples``) so the N1
                  classifier has something to match
-complexity       ``estimated_tokens`` gt/lt OR ``pipeline == design_then_impl``
+work stage       ``stage == <founder-named label>`` — the label the framer then
+                 splits work into (see
+                 :mod:`backend.router.routing.run_routing.chaining`)
+complexity       ``estimated_tokens`` gt/lt
 language         ``detected_language`` eq ko/en/ja/zh
 artifact         ``artifact_type_hint`` eq code/pr/page/page_image
 execution stage  ``caller_id`` == a known caller
@@ -123,13 +126,16 @@ _SYSTEM_PROMPT = (
     '  "is_default": true ONLY for the single catch-all rule ("the rest" / '
     "'나머지' / '기본' / 'everything else'); false otherwise,\n"
     "  plus EXACTLY ONE of the following dimension keys (omit for the default):\n"
-    '  - "caller_id": a caller id from the "Callers" catalog — use for EXECUTION '
-    "STAGE clauses ('design'/'설계' → the plan caller, 'implement'/'구현' → the act "
-    "caller, 'verify'/'검증' → the judge caller);\n"
+    '  - "caller_id": a caller id from the "Callers" catalog — ONLY when the '
+    "founder names one of the system's OWN internal call sites (framing, "
+    "judging, ingesting). A caller is WHERE a model is called from, never what "
+    "KIND of work the founder is talking about;\n"
     '  - "condition": {"field", "operator", "value"} for a non-category dimension:\n'
+    "      * WORK STAGE ('설계'/'design'/'구현'/'implement'/'검토'/'review') → "
+    'field "stage" (operator eq, value = a SHORT snake_case label naming that '
+    "stage). Name it after the founder's own word;\n"
     "      * COMPLEXITY ('복잡한'/'큰 작업'/'간단한') → "
-    'field "estimated_tokens" (operator gt/lt, an integer value) OR '
-    'field "pipeline" (operator eq, value "design_then_impl" for complex);\n'
+    'field "estimated_tokens" (operator gt/lt, an integer value);\n'
     "      * LANGUAGE ('한국어'/'영어') → "
     'field "detected_language" (operator eq, value one of ko/en/ja/zh);\n'
     "      * ARTIFACT ('코드'/'PR'/'페이지') → "
@@ -407,13 +413,16 @@ _SINGLE_SYSTEM_PROMPT = (
     "structured routing dimension. Detect which DIMENSION the phrase is about — do "
     "NOT force everything into categories. Respond with ONE JSON object (no prose, "
     "no code fences) containing EXACTLY ONE of these dimension shapes:\n"
-    '  - "caller_id": a caller id from the "Callers" catalog — for an EXECUTION '
-    "STAGE phrase ('design'/'설계' → the plan caller, 'implement'/'구현' → the act "
-    "caller, 'verify'/'검증' → the judge caller);\n"
+    '  - "caller_id": a caller id from the "Callers" catalog — ONLY when the '
+    "founder names one of the system's OWN internal call sites (framing, "
+    "judging, ingesting). A caller is WHERE a model is called from, never what "
+    "KIND of work the founder is talking about;\n"
     '  - "condition": {"field", "operator", "value"} for a non-category dimension:\n'
+    "      * WORK STAGE ('설계'/'design'/'구현'/'implement'/'검토'/'review') → "
+    'field "stage" (operator eq, value = a SHORT snake_case label naming that '
+    "stage). Name it after the founder's own word;\n"
     "      * COMPLEXITY ('복잡한'/'큰 작업'/'간단한') → "
-    'field "estimated_tokens" (operator gt/lt, an integer value) OR '
-    'field "pipeline" (operator eq, value "design_then_impl" for complex);\n'
+    'field "estimated_tokens" (operator gt/lt, an integer value);\n'
     "      * LANGUAGE ('한국어'/'영어') → "
     'field "detected_language" (operator eq, value one of ko/en/ja/zh);\n'
     "      * ARTIFACT ('코드'/'PR'/'페이지') → "

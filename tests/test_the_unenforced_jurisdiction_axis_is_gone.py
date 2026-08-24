@@ -101,7 +101,25 @@ def test_every_plugin_still_declares_itself() -> None:
 
 
 def test_the_routing_fields_are_untouched() -> None:
-    """양성 대조군 — 라우팅 축은 이 삭제와 무관하다 (``ALLOWED_FIELDS`` 에 없었다)."""
+    """양성 대조군 — 라우팅 축은 이 삭제와 무관하다 (``ALLOWED_FIELDS`` 에 없었다).
+
+    개수가 아니라 **필드 이름**을 센다. 개수는 이 대조군이 지키려는 것과 무관한
+    이유로 움직인다 — 실제로 그랬다: ``pipeline`` 삭제(고정 예측 축 제거)가
+    ``>= 11`` 을 깨뜨렸는데, 관할권 삭제와는 아무 상관이 없다. 개수를 세는
+    대조군은 자기가 무엇을 지키는지 모른다.
+    """
     from backend.router.routing.run_routing.engine import ALLOWED_FIELDS
 
-    assert len(ALLOWED_FIELDS) >= 11
+    assert "data_jurisdiction" not in ALLOWED_FIELDS
+    assert {
+        "artifact_type_hint",
+        "path_classification",
+        "skill_match",
+        "intent_text",
+        "stage",
+        "product_id",
+        "caller_id",
+        "estimated_tokens",
+        "classified_intent",
+        "detected_language",
+    } <= ALLOWED_FIELDS

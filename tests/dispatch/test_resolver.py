@@ -285,17 +285,17 @@ class TestResolverConditionEvaluation:
         from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
         # Default = model_account; an act-caller rule targets cloud_account
-        # ONLY when pipeline == design_then_impl.
+        # ONLY when the run is working the founder-named "design" stage.
         workspace.default_account_id = model_account.id
         session.add(
             RunRoutingRuleRow(
                 workspace_id=workspace.id,
-                name="design -> cloud",
+                name="design stage -> cloud",
                 caller_id=CALLER_AGENT_LOOP_ACT,
                 priority=0,
                 is_default=False,
                 target=cloud_account.litellm_model,
-                conditions=[{"field": "pipeline", "operator": "eq", "value": "design_then_impl"}],
+                conditions=[{"field": "stage", "operator": "eq", "value": "design"}],
                 is_active=True,
             )
         )
@@ -303,7 +303,7 @@ class TestResolverConditionEvaluation:
         run = ExecutionRun(
             workspace_id=workspace.id,
             status=RunStatus.RUNNING,
-            payload={"frame": {"pipeline": "single"}},
+            payload={"frame": {"artifact_type_hint": "code"}},  # 쪼개지 않은 런
         )
         session.add(run)
         await session.flush()
@@ -330,19 +330,19 @@ class TestResolverConditionEvaluation:
         session.add(
             RunRoutingRuleRow(
                 workspace_id=workspace.id,
-                name="design -> cloud",
+                name="design stage -> cloud",
                 caller_id=CALLER_AGENT_LOOP_ACT,
                 priority=0,
                 is_default=False,
                 target=cloud_account.litellm_model,
-                conditions=[{"field": "pipeline", "operator": "eq", "value": "design_then_impl"}],
+                conditions=[{"field": "stage", "operator": "eq", "value": "design"}],
                 is_active=True,
             )
         )
         run = ExecutionRun(
             workspace_id=workspace.id,
             status=RunStatus.RUNNING,
-            payload={"frame": {"pipeline": "design_then_impl"}},
+            payload={"stage": "design", "frame": {"artifact_type_hint": "code"}},
         )
         session.add(run)
         await session.flush()

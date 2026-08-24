@@ -61,7 +61,7 @@ def test_workflow_application_stages_frame_present() -> None:
         "FrameLlm",
         "FramedRequest",
         "PathClassification",
-        "PipelineKind",
+        "FrameStep",
     ):
         assert hasattr(mod, name), f"stages.frame missing {name}"
 

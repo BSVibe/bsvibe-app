@@ -39,14 +39,11 @@ from backend.extensions.skill.loader import SkillLoader
 from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application._loop_context import (
-    _DESIGN_SPEC_DIRECTIVE,
     _SYSTEM_PROMPT,
     _intent_title,
-    _is_design_stage,
     _resumption_messages,
-    design_directive_message,
-    design_seed_message,
     knowledge_seed_message,
+    prior_step_message,
     register_invoke_skill_tool,
     suggested_skill_message,
 )
@@ -259,11 +256,8 @@ class RunOrchestrator:
     async def _knowledge_seed_message(self, run: ExecutionRun) -> dict[str, Any] | None:
         return await knowledge_seed_message(run, retriever=self._retriever)
 
-    def _design_directive_message(self, run: ExecutionRun) -> dict[str, Any] | None:
-        return design_directive_message(run)
-
-    def _design_seed_message(self, run: ExecutionRun) -> dict[str, Any] | None:
-        return design_seed_message(run, settings=self._settings)
+    def _prior_step_message(self, run: ExecutionRun) -> dict[str, Any] | None:
+        return prior_step_message(run, settings=self._settings)
 
     def _suggested_skill_message(self) -> dict[str, Any] | None:
         return suggested_skill_message(
@@ -572,9 +566,7 @@ __all__ = [
     "LoopTurn",
     "RunCompute",
     "RunOrchestrator",
-    "_DESIGN_SPEC_DIRECTIVE",
     "_SYSTEM_PROMPT",
     "_intent_title",
-    "_is_design_stage",
     "_resumption_messages",
 ]

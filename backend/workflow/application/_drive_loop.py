@@ -177,12 +177,10 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     seed = await orch._knowledge_seed_message(run)
     if seed is not None:
         messages.append(seed)
-    # P1-L2b — design→impl handoff: seed the prior design stage's spec.
-    if (design_seed := orch._design_seed_message(run)) is not None:
-        messages.append(design_seed)
-    # D1b — DESIGN stage of a design_then_impl pipeline: spec-only.
-    if (design_directive := orch._design_directive_message(run)) is not None:
-        messages.append(design_directive)
+    # A later step of a split request: seed what the prior step produced. The
+    # step's OWN brief is its ``intent_text``, so nothing is injected on top.
+    if (prior_step := orch._prior_step_message(run)) is not None:
+        messages.append(prior_step)
     # B9a — frame-matched skill hint.
     if (skill_hint := orch._suggested_skill_message()) is not None:
         messages.append(skill_hint)

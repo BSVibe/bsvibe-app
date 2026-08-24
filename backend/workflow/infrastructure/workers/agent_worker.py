@@ -50,7 +50,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy import exists, select, update
@@ -67,6 +67,7 @@ if TYPE_CHECKING:
 from backend.config import Settings, get_settings
 from backend.dispatch.adapter import ExecutorCapacitySaturated
 from backend.extensions.skill.loader import SkillLoader
+from backend.router.routing.run_routing.chaining import StageTerm, derive_stage_vocabulary
 from backend.shared.wire_kinds import SCHEDULE_KIND_PRODUCT_TICK
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
 from backend.workers.base import BaseWorker
@@ -581,6 +582,11 @@ class AgentWorker(BaseWorker):
                 # at THIS run's ``<skills_root>/<workspace_id>/`` (Workflow §6 #5),
                 # not a single shared root-level set.
                 skill_loader = execution.skill_loader_for(run.workspace_id)
+                # 종합 — the founder's routing rules ARE the definition of what
+                # stages this workspace distinguishes. No rules → no vocabulary
+                # → the framer is never asked to split (and never invents a
+                # split we would have nowhere to route).
+                stage_vocabulary = await _stage_vocabulary_for(session, run.workspace_id)
                 # B9a — resolve the per-workspace cheap-LLM for real framing,
                 # bound to this framing session.
                 frame_llm = await _resolve_frame_llm(execution, session, run.workspace_id)
@@ -591,6 +597,7 @@ class AgentWorker(BaseWorker):
                             skill_loader=skill_loader,
                             default_artifact_type=execution.default_artifact_type,
                             llm=frame_llm,
+                            stage_vocabulary=stage_vocabulary,
                         ),
                     )
                 except FrameModelUnresolvedError:
@@ -630,21 +637,34 @@ class AgentWorker(BaseWorker):
                 # Record the FULL framing (B9a): skill match + artifact-type hint
                 # (for delivery routing) + the refined intent + the path
                 # classification (recorded for B9b, which acts on knowledge_only).
+                frame_payload: dict[str, Any] = {
+                    "skill_match": framed.skill_match,
+                    "artifact_type_hint": framed.artifact_type_hint,
+                    "framed_intent": framed.framed_intent,
+                    # L8 — short plain-language title the review surfaces lead with.
+                    "summary_title": framed.summary_title,
+                    "path_classification": framed.path_classification,
+                }
                 run.payload = {
                     **(run.payload or {}),
                     "intent_text": _request_intent_text(request),
-                    "frame": {
-                        "skill_match": framed.skill_match,
-                        "artifact_type_hint": framed.artifact_type_hint,
-                        "framed_intent": framed.framed_intent,
-                        # L8 — short plain-language title the review surfaces lead with.
-                        "summary_title": framed.summary_title,
-                        "path_classification": framed.path_classification,
-                        # P1-L2 — design→impl pipeline signal the orchestrator
-                        # chaining acts on at the verified terminal.
-                        "pipeline": framed.pipeline,
-                    },
+                    "frame": frame_payload,
                 }
+                if framed.steps:
+                    # The plan the chaining walks. The FIRST step runs here (its
+                    # intent is this run's directive); the rest are spawned as
+                    # each one finishes.
+                    frame_payload["steps"] = [
+                        {"stage": step.stage, "intent": step.intent} for step in framed.steps
+                    ]
+                    first = framed.steps[0]
+                    run.payload = {
+                        **run.payload,
+                        # ``intent_text`` stays the founder's own request (#690).
+                        "step_intent": first.intent,
+                        "stage": first.stage,
+                        "step_index": 0,
+                    }
                 await session.flush()
 
         runner = AgentRunner(session)
@@ -761,6 +781,22 @@ async def _resolve_orchestrator(
     if inspect.isawaitable(produced):
         return await produced
     return produced
+
+
+async def _stage_vocabulary_for(session: AsyncSession, workspace_id: uuid.UUID) -> list[StageTerm]:
+    """The stages this workspace's founder distinguishes, from their own rules.
+
+    Empty for a workspace with no stage rules — which is every workspace until
+    someone writes one, and was the state of prod's busiest workspace while the
+    deleted pipeline field split 32 of its runs anyway.
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.router.routing.run_routing.db import RunRoutingRuleRow  # noqa: PLC0415
+
+    stmt = select(RunRoutingRuleRow).where(RunRoutingRuleRow.workspace_id == workspace_id)
+    rules = list((await session.execute(stmt)).scalars().all())
+    return derive_stage_vocabulary(rules)
 
 
 async def _resolve_frame_llm(

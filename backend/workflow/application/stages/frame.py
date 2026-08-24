@@ -27,12 +27,13 @@ the caller fails the run explicitly rather than silently picking a kind.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 import structlog
 
 from backend.extensions.skill.loader import SkillLoader
+from backend.router.routing.run_routing.chaining import StageTerm
 from backend.workflow.infrastructure.intake.db import RequestRow
 
 logger = structlog.get_logger(__name__)
@@ -44,12 +45,24 @@ logger = structlog.get_logger(__name__)
 # the default and behaves exactly as today.
 PathClassification = Literal["knowledge_only", "agent_loop"]
 
-# Phase 1 — the multi-stage pipeline shape. ``single`` is one run end-to-end
-# (today's behaviour). ``design_then_impl`` marks a build that runs a DESIGN
-# stage first (produce a spec), then has the orchestrator chain an
-# IMPLEMENTATION stage that consumes it (P1-L2). Recorded on the frame; the
-# orchestrator chaining + routing act on it.
-PipelineKind = Literal["single", "design_then_impl"]
+
+@dataclass(frozen=True, slots=True)
+class FrameStep:
+    """One step of a split request.
+
+    ``stage`` is a label the founder's routing rules key on (so the existing
+    engine assigns it a model with no second routing authority), and ``intent``
+    is what THIS step must accomplish — the directive its run works under.
+
+    The intent is the step's whole brief. The deleted design→impl pipeline
+    instead hardcoded a "write a spec, do not implement" system message, which
+    is how prod runs came to ship a spec and report done (#770): the run's
+    directive said build, the injected message said don't. Here nothing is
+    injected — a step that should produce a design says so in its own intent.
+    """
+
+    stage: str
+    intent: str
 
 
 @dataclass
@@ -67,8 +80,11 @@ class FramedRequest:
     summary_title: str | None = None
     # B9a — the path branch (Workflow §1.2), always the LLM's verdict.
     path_classification: PathClassification = "agent_loop"
-    # P1-L2 — whether this request should run as a design→impl pipeline.
-    pipeline: PipelineKind = "single"
+    # The ordered steps this request was split into, drawn from the founder's
+    # own stage vocabulary. EMPTY means one run end-to-end — the only honest
+    # default, since a workspace whose rules distinguish no stages has told us
+    # nothing to split on.
+    steps: list[FrameStep] = field(default_factory=list)
 
 
 # Cap the skill catalog we send to the cheap LLM so a workspace with many skills
@@ -77,6 +93,10 @@ class FramedRequest:
 # L8 — hard cap on the plain-language ``summary_title`` so a verbose model can't
 # blow up a review row (the prompt asks for ≤ 8 words; this is the backstop).
 _SUMMARY_TITLE_CAP = 120
+#: Hard cap on how many steps one request may be split into. Not a judgment
+#: about the right number — the founder's rules decide that — just a backstop
+#: against a model that answers with a project plan.
+_MAX_STEPS = 8
 _FRAME_MAX_SKILLS = 40
 _FRAME_MAX_DESC_CHARS = 300
 
@@ -103,46 +123,17 @@ class FrameConfig:
     # B9a — the cheap-LLM seam. ``None`` (no frame route resolved) is not a
     # fallback: the stage raises :class:`FrameUnclassifiedError`.
     llm: FrameLlm | None = None
+    # The stages this workspace's routing rules distinguish
+    # (:func:`~backend.router.routing.run_routing.chaining.derive_stage_vocabulary`).
+    # Empty — the default, and the state of every workspace that has not
+    # written a stage rule — means the request is never split.
+    stage_vocabulary: list[StageTerm] = field(default_factory=list)
 
 
 # Artifact-type hints that denote a concrete deliverable to PRODUCE (vs. a
 # pure-answer ask). Used by the knowledge_only coherence guard in
 # :func:`_framed_from_llm` — any of these forces the agent loop.
 _WORK_ARTIFACT_TYPES = frozenset({"code", "page", "page_image", "pr"})
-
-# P1-L2 — a code/PR build whose intent reads "construct something" gets a
-# DESIGN stage before implementation. Conservative word set: a tiny tweak
-# ("fix the typo", "rename x") stays a single run. The orchestrator chains the
-# impl stage only when the frame marks ``design_then_impl``.
-_BUILD_INTENT_WORDS = frozenset(
-    {
-        "build",
-        "implement",
-        "feature",
-        "app",
-        "application",
-        "service",
-        "system",
-        "design",
-        "refactor",
-        "integrate",
-        "endpoint",
-        "api",
-        "module",
-        "component",
-        "pipeline",
-    }
-)
-
-
-def _derive_pipeline(artifact_hint: str | None, intent: str | None) -> PipelineKind:
-    """``design_then_impl`` for a code/PR build whose intent implies
-    construction; ``single`` otherwise (the default for everything else)."""
-    if artifact_hint not in ("code", "pr"):
-        return "single"
-    words = {w.strip(".,!?:;()") for w in (intent or "").lower().split()}
-    return "design_then_impl" if words & _BUILD_INTENT_WORDS else "single"
-
 
 #: The ASK-vs-PRODUCE rubric — the single definition of what makes a request a
 #: question. It is stated for the LLM because it is a semantic judgment, not a
@@ -185,15 +176,35 @@ _FRAME_SYSTEM_PROMPT = (
     '  "artifact_type_hint": the likely deliverable type '
     '("code" | "page" | "page_image" | "pr" | null). A pure answer has null,\n'
     + _PATH_RUBRIC
-    + '  "pipeline": "single" for a focused one-pass task, or "design_then_impl" '
-    "for substantial / multi-part work that genuinely benefits from a separate "
-    "design pass (producing a spec) before implementation. Judge by COMPLEXITY "
-    "and SCOPE, not keywords: a tiny tweak or a small focused endpoint is "
-    '"single"; a multi-component system or cross-cutting build is '
-    '"design_then_impl",\n'
-    '  "pipeline_reason": a one-line justification for the pipeline choice.\n'
-    "Only choose a skill_match that appears verbatim in the catalog."
+    + "Only choose a skill_match that appears verbatim in the catalog."
 )
+
+#: Appended to the system prompt ONLY when the workspace's rules name stages.
+#: Without a vocabulary the model is never asked to split — asking would spend
+#: tokens on an answer we would then have to throw away, and would tempt the
+#: model to invent stages the routing rules cannot place.
+_STEPS_INSTRUCTION = (
+    '\nAlso return "steps": the ordered list this request should be worked in, '
+    'each `{"stage": <one of the stage names below, VERBATIM>, "intent": <what '
+    "THIS step must accomplish, in the founder's language>}`. The stage names "
+    "and what they mean are the founder's own — do not invent one, do not "
+    "translate one, and never use a name absent from the list. Return exactly "
+    "ONE step when the request is best done in a single pass; that is the "
+    "common case. Split only when a later step genuinely needs an earlier "
+    "step's output to exist first. The stages below are a SET, not a sequence "
+    "— their listed order means nothing; you decide the order, and you may use "
+    "a stage once, several times, or not at all.\nStages this workspace "
+    "distinguishes:\n"
+)
+
+
+def _system_prompt(vocabulary: list[StageTerm]) -> str:
+    """The framing system prompt, extended with the founder's stage vocabulary
+    when there is one."""
+    if not vocabulary:
+        return _FRAME_SYSTEM_PROMPT
+    lines = [f"- {term.label}: {term.description}" for term in vocabulary]
+    return _FRAME_SYSTEM_PROMPT + _STEPS_INSTRUCTION + "\n".join(lines)
 
 
 class FrameUnclassifiedError(RuntimeError):
@@ -244,9 +255,11 @@ class FrameStage:
         llm = config.llm
         if llm is None:
             raise FrameModelUnresolvedError("no frame model is routed for this workspace")
-        user_prompt = _build_user_prompt(text, config.skill_loader)
+        user_prompt = _build_user_prompt(text, config.skill_loader, config.stage_vocabulary)
         try:
-            raw = await llm.complete_text(system=_FRAME_SYSTEM_PROMPT, user=user_prompt)
+            raw = await llm.complete_text(
+                system=_system_prompt(config.stage_vocabulary), user=user_prompt
+            )
         except Exception as exc:
             logger.warning("frame_stage_llm_failed", exc_info=True)
             raise FrameUnclassifiedError("the frame model call failed") from exc
@@ -262,9 +275,15 @@ class FrameStage:
 # --------------------------------------------------------------------------
 
 
-def _build_user_prompt(text: str, loader: SkillLoader) -> str:
-    """Compose the user prompt: the request text + the workspace skill catalog."""
-    lines = [f"Request:\n{text or '(empty request)'}", "", "Skill catalog:"]
+def _build_user_prompt(text: str, loader: SkillLoader, vocabulary: list[StageTerm]) -> str:
+    """Compose the user prompt: the request text + the workspace skill catalog
+    (+ the founder's stage vocabulary when the workspace has one)."""
+    lines = [f"Request:\n{text or '(empty request)'}", ""]
+    if vocabulary:
+        lines.append("Stages this workspace distinguishes (a set, not an order):")
+        lines.extend(f"- {term.label}: {term.description}" for term in vocabulary)
+        lines.append("")
+    lines.append("Skill catalog:")
     skills = list(loader.registry.values())[:_FRAME_MAX_SKILLS]
     if not skills:
         lines.append("(no skills installed)")
@@ -342,7 +361,7 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedReque
     if path_classification == "knowledge_only" and artifact_hint in _WORK_ARTIFACT_TYPES:
         path_classification = "agent_loop"
 
-    pipeline = _resolve_pipeline(parsed, artifact_hint, framed_intent)
+    steps = _resolve_steps(parsed, config.stage_vocabulary, artifact_hint, path_classification)
 
     return FramedRequest(
         skill_match=skill_match,
@@ -350,47 +369,62 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedReque
         framed_intent=framed_intent,
         summary_title=summary_title,
         path_classification=path_classification,
-        pipeline=pipeline,
+        steps=steps,
     )
 
 
-# Valid ``PipelineKind`` values, used to validate the LLM's ``pipeline`` field.
-# We never trust a hallucinated value: only a verbatim-valid kind is honoured.
-_VALID_PIPELINES: frozenset[str] = frozenset({"single", "design_then_impl"})
+def _resolve_steps(  # noqa: PLR0911 — one guard per way a split can be invalid
+    parsed: dict[str, Any],
+    vocabulary: list[StageTerm],
+    artifact_hint: str | None,
+    path_classification: PathClassification,
+) -> list[FrameStep]:
+    """The steps this request was split into — ``[]`` when it was not.
 
+    ``[]`` (do not split) whenever ANY of:
 
-def _resolve_pipeline(
-    parsed: dict[str, Any], artifact_hint: str | None, framed_intent: str | None
-) -> PipelineKind:
-    """Decide the pipeline kind from the LLM output, with defensive guards.
+    * the workspace's rules name no stages — there is nothing to split into,
+      and a built-in default vocabulary would just be the deleted prediction
+      wearing a new name;
+    * this is an ASK (``knowledge_only``) or carries no concrete work artifact
+      — an answer has no implementation to stage;
+    * any step names a stage outside the vocabulary, or carries no intent;
+    * there are more than :data:`_MAX_STEPS` of them.
 
-    Precedence (P1-L2 / D1 — the complexity judgment is the LLM's, not a
-    keyword rule):
-
-    1. Honour the LLM's ``pipeline`` ONLY when it is a verbatim-valid
-       :data:`PipelineKind`. An absent / missing / hallucinated value is never
-       trusted — we fall back to :func:`_derive_pipeline` (the keyword rule, the
-       no-LLM behaviour), so a malformed frame degrades, never breaks.
-    2. Coherence guard (mirrors the ``path_classification`` guard above): a
-       ``single`` / ``design_then_impl`` distinction only makes sense for a
-       concrete WORK artifact (something to PRODUCE). A pure-answer ask
-       (artifact_hint not in :data:`_WORK_ARTIFACT_TYPES`) is always ``single``,
-       regardless of what the LLM emits — there is no implementation to stage.
+    The stage/intent guard is deliberately ALL-or-nothing. Dropping just the bad step
+    would silently discard part of what the founder asked for and ship the rest
+    as if it were the whole job; dropping the split runs the request end-to-end
+    in one pass, which loses nothing.
     """
-    if artifact_hint not in _WORK_ARTIFACT_TYPES:
-        return "single"
-    raw = parsed.get("pipeline")
-    if isinstance(raw, str) and raw in _VALID_PIPELINES:
-        # mypy: ``raw in _VALID_PIPELINES`` narrows to the Literal at runtime,
-        # but the type checker can't see it — cast via the known-good branch.
-        return "design_then_impl" if raw == "design_then_impl" else "single"
-    logger.info("frame_stage_pipeline_keyword_fallback", raw_pipeline=raw)
-    return _derive_pipeline(artifact_hint, framed_intent)
-
-
-# --------------------------------------------------------------------------
-# Keyword heuristic fallback (original Phase 1 behaviour)
-# --------------------------------------------------------------------------
+    if not vocabulary:
+        return []
+    if path_classification == "knowledge_only" or artifact_hint not in _WORK_ARTIFACT_TYPES:
+        return []
+    raw = parsed.get("steps")
+    if not isinstance(raw, list) or not raw:
+        return []
+    if len(raw) > _MAX_STEPS:
+        # Every step is a RUN — an executor turn, a worktree, a review gate. A
+        # model that answers with a twenty-item project plan would spend all of
+        # that before anyone saw it, so an implausible split is treated as no
+        # split rather than trusted.
+        logger.info("frame_stage_step_plan_too_long", steps=len(raw))
+        return []
+    known = {term.label for term in vocabulary}
+    steps: list[FrameStep] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return []
+        stage = item.get("stage")
+        intent = item.get("intent")
+        if not isinstance(stage, str) or stage not in known:
+            logger.info("frame_stage_step_unknown_stage", stage=stage)
+            return []
+        if not isinstance(intent, str) or not intent.strip():
+            logger.info("frame_stage_step_missing_intent", stage=stage)
+            return []
+        steps.append(FrameStep(stage=stage, intent=intent.strip()))
+    return steps
 
 
 def _extract_text(request: RequestRow) -> str:
@@ -417,5 +451,5 @@ __all__ = [
     "FrameUnclassifiedError",
     "FramedRequest",
     "PathClassification",
-    "PipelineKind",
+    "FrameStep",
 ]

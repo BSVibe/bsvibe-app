@@ -23,7 +23,6 @@ from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
 from backend.workflow.application.agent_briefing import (
     _ASK_SYSTEM_PROMPT,
-    _DESIGN_SPEC_DIRECTIVE,
     _SYSTEM_PROMPT,
 )
 from backend.workflow.application.tool_registry import (
@@ -46,24 +45,6 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-def _is_design_stage(run: ExecutionRun) -> bool:
-    """D1b — True when this run is the DESIGN stage of a ``design_then_impl``
-    pipeline (so the loop is told to spec, not build).
-
-    Mirrors routing's ``_derive_stage`` + the executor path's ``_is_design_stage``:
-    the FIRST run of a ``design_then_impl`` pipeline carries no explicit
-    ``stage`` (the AgentRunner chains impl off the frame's pipeline signal), so
-    an unset / non-``impl`` stage on such a run IS the design stage. The spawned
-    impl run (``stage="impl"``) is excluded — it implements the spec. Any other
-    pipeline (``single`` / no frame) is excluded. Tolerant of an odd payload."""
-    payload = run.payload if isinstance(run.payload, dict) else {}
-    raw_frame = payload.get("frame")
-    frame = raw_frame if isinstance(raw_frame, dict) else {}
-    if frame.get("pipeline") != "design_then_impl":
-        return False
-    return payload.get("stage") != "impl"
-
-
 def _intent_text(run: ExecutionRun) -> str:
     """The founder's stored directive for ``run`` — full, never truncated.
 
@@ -83,8 +64,22 @@ def _intent_directive(run: ExecutionRun) -> str:
     it (the old ``_intent_title`` 512 cap) silently dropped requirements past
     that point — the agent built only the half it received while lint/test
     passed on that half. The directive is already bounded upstream by the
-    ``bsvibe_direct`` input limit (20000 chars), so no cap is applied here."""
-    return _intent_text(run)
+    ``bsvibe_direct`` input limit (20000 chars), so no cap is applied here.
+
+    When the frame split the request, the founder's text is still delivered
+    WHOLE and the step's brief is added as SCOPE — never as a substitute. Both
+    are needed: without the founder's words a step loses every requirement the
+    framer's summary omitted; without the step's scope every run in the chain
+    would try to do the whole job."""
+    directive = _intent_text(run)
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    step_intent = payload.get("step_intent")
+    if not isinstance(step_intent, str) or not step_intent.strip():
+        return directive
+    return (
+        f"{directive}\n\n"
+        f"This run is ONE step of that request. Your part of it: {step_intent.strip()}"
+    )
 
 
 def _intent_title(run: ExecutionRun) -> str:
@@ -193,19 +188,6 @@ async def knowledge_seed_message(run: ExecutionRun, *, retriever: Any) -> dict[s
     }
 
 
-def design_directive_message(run: ExecutionRun) -> dict[str, Any] | None:
-    """D1b — when this run is the DESIGN stage of a ``design_then_impl``
-    pipeline, seed the spec-only directive so the loop writes a spec rather
-    than finished code (the impl stage implements it).
-
-    ``None`` for a single run, an impl-stage run, or a run with no frame
-    (loop unchanged)."""
-    if not _is_design_stage(run):
-        return None
-    logger.info("design_directive_seeded", run_id=str(run.id))
-    return {"role": "system", "content": _DESIGN_SPEC_DIRECTIVE}
-
-
 def _is_ask(run: ExecutionRun) -> bool:
     """True when the frame judged this run an ASK (a question), not a PRODUCE.
 
@@ -229,18 +211,25 @@ def system_prompt_for(run: ExecutionRun) -> str:
     return _ASK_SYSTEM_PROMPT if _is_ask(run) else _SYSTEM_PROMPT
 
 
-def design_seed_message(run: ExecutionRun, *, settings: Settings) -> dict[str, Any] | None:
-    """P1-L2b — fold the prior design stage's spec into the loop-start
-    context when this run is the impl stage of a design→impl handoff.
+def prior_step_message(run: ExecutionRun, *, settings: Settings) -> dict[str, Any] | None:
+    """Fold the PRIOR step's output into the loop-start context when this run is
+    a later step of a split request.
 
-    ``None`` for a non-impl run (no design refs) or when no spec content is
-    readable — best-effort, never raises into the loop."""
-    from backend.workflow.application.handoff import read_design_context  # noqa: PLC0415
+    ``None`` for an unsplit run / the first step (no prior refs) or when no
+    content is readable — best-effort, never raises into the loop.
 
-    content = read_design_context(run, settings)
+    Note what is NOT here any more: the design stage used to also get an
+    injected "write a spec, do NOT implement" system message on top of the
+    engineer identity. That is the exact shape #778 measured as ineffective for
+    ASK runs — an identity is not undone by a later sentence — and #770 measured
+    its cost here: the spec landed, nothing implemented it, and the run reported
+    done. A step's brief now travels as its own ``intent_text``."""
+    from backend.workflow.application.handoff import read_prior_step_context  # noqa: PLC0415
+
+    content = read_prior_step_context(run, settings)
     if content is None:
         return None
-    logger.info("design_seeded", run_id=str(run.id))
+    logger.info("prior_step_context_seeded", run_id=str(run.id))
     return {"role": "system", "content": content}
 
 
@@ -440,17 +429,14 @@ def client_attach_terminal(
 
 __all__ = [
     "_ASK_SYSTEM_PROMPT",
-    "_DESIGN_SPEC_DIRECTIVE",
     "system_prompt_for",
     "_RetrieverSearcher",
     "_SYSTEM_PROMPT",
     "_initial_user_message",
     "_intent_directive",
     "_intent_title",
-    "_is_design_stage",
     "_resumption_messages",
-    "design_directive_message",
-    "design_seed_message",
+    "prior_step_message",
     "knowledge_seed_message",
     "make_knowledge_search_handler",
     "register_invoke_skill_tool",

@@ -44,8 +44,10 @@ ALLOWED_FIELDS: frozenset[str] = frozenset(
         "path_classification",  # "knowledge_only" | "agent_loop"
         "skill_match",  # matched skill name | None
         "intent_text",  # the run's intent / framed intent (text ops)
-        "stage",  # "single" | "design" | "impl" (pipeline stage)
-        "pipeline",  # "single" | "design_then_impl" (frame complexity verdict)
+        # The step this run IS — a label from the FOUNDER's own vocabulary
+        # (whatever values their rules key on), written by the frame stage when
+        # it split the request. ``"single"`` for an unsplit run.
+        "stage",
         "product_id",  # the run's product_id (str) | None
         # Lift E2 — caller_id condition clause (back-compat shape). New
         # rules persist caller_id on the column; legacy rows may carry it
@@ -84,7 +86,6 @@ class RoutingContext:
     skill_match: str | None = None
     intent_text: str | None = None
     stage: str = "single"
-    pipeline: str = "single"
     product_id: str | None = None
     # The dispatch caller_id for the LLM call this run is about to make.
     # ``None`` outside the run-routing path (callers route through the
@@ -106,15 +107,13 @@ class RoutingContext:
         frame: dict[str, Any] = raw_frame if isinstance(raw_frame, dict) else {}
         intent = payload.get("intent_text") or frame.get("framed_intent") or payload.get("text")
         intent_str = intent if isinstance(intent, str) else None
-        pipeline = frame.get("pipeline")
         classified_intent = frame.get("classified_intent")
         return cls(
             artifact_type_hint=frame.get("artifact_type_hint"),
             path_classification=frame.get("path_classification"),
             skill_match=frame.get("skill_match"),
             intent_text=intent_str,
-            stage=_derive_stage(payload, frame),
-            pipeline=pipeline if pipeline in ("single", "design_then_impl") else "single",
+            stage=_derive_stage(payload),
             product_id=str(run.product_id) if run.product_id is not None else None,
             estimated_tokens=_estimate_tokens(intent_str or ""),
             classified_intent=classified_intent if isinstance(classified_intent, str) else None,
@@ -122,14 +121,16 @@ class RoutingContext:
         )
 
 
-def _derive_stage(payload: dict[str, Any], frame: dict[str, Any]) -> str:
-    """Resolve the run's pipeline stage for routing."""
+def _derive_stage(payload: dict[str, Any]) -> str:
+    """The stage this run is working, or ``"single"`` when it was not split.
+
+    Read straight off the payload and nowhere else. It used to be INFERRED for
+    the first run of a ``design_then_impl`` pipeline ("no explicit stage on such
+    a run IS the design stage"), which made the frame's complexity guess a
+    second source of routing truth. Now the frame writes the stage it assigned,
+    or nothing at all."""
     explicit = payload.get("stage")
-    if explicit:
-        return str(explicit)
-    if frame.get("pipeline") == "design_then_impl":
-        return "design"
-    return "single"
+    return str(explicit) if explicit else "single"
 
 
 def _estimate_tokens(text: str) -> int:
