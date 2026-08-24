@@ -989,13 +989,6 @@ export interface ConnectorImportResult {
 
 // ── Model accounts (REAL endpoint /api/v1/accounts) ────────────────────────
 
-/** The data-jurisdiction allow-list the backend ModelAccount schema accepts
- *  (backend/accounts/schemas.py `Jurisdiction`). Invisible infra — the founder
- *  no longer hand-picks it (the backend defaults it to "unknown"); this stays
- *  as the source for the `` type the response carries. */
-export const MODEL_ACCOUNT_JURISDICTIONS = ["us", "eu", "kr", "local", "unknown"] as const;
-
-
 /** `POST /api/v1/accounts` body (backend ModelAccountCreate, extra=forbid). The
  *  caller supplies the plaintext `api_key`; the service encrypts it at rest and
  *  the response NEVER echoes it back (only `has_api_key: true`). Field set

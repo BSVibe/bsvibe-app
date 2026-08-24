@@ -42,18 +42,21 @@ def test_the_column_is_gone_from_the_orm() -> None:
 def test_the_schemas_no_longer_carry_it() -> None:
     from backend.router.accounts import schemas
 
+    axis = "data_" + "jurisdiction"
     for name in ("ModelAccountCreate", "ModelAccountUpdate", "ModelAccountOut"):
-        model = getattr(schemas, name)
+        assert axis not in getattr(schemas, name).model_fields, name
     assert not hasattr(schemas, "Jurisdiction")
     assert not hasattr(schemas, "_coerce_jurisdiction")
 
 
 def test_the_sdk_no_longer_requires_it() -> None:
     """``plugin(...)`` 의 필수 인자였다 — 없이도 선언할 수 있어야 한다."""
+    import inspect
 
     from bsvibe_sdk import plugin
 
-    p = plugin(name="probe-plugin", credentials=[])
+    assert ("data_" + "jurisdiction") not in inspect.signature(plugin).parameters
+    assert not hasattr(plugin(name="probe-plugin", credentials=[]).meta, "data_" + "jurisdiction")
 
 
 def test_no_source_still_names_the_axis() -> None:
