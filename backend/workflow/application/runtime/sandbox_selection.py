@@ -9,7 +9,7 @@ source is. This module holds that one decision, kept out of
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -23,6 +23,11 @@ from backend.workflow.infrastructure.sandbox import (
     SandboxManager,
     get_sandbox_manager,
 )
+
+if TYPE_CHECKING:  # the runtime import stays function-level — see _client_manager
+    from backend.workflow.infrastructure.sandbox.client_worker_manager import (
+        ClientWorkerSandboxManager,
+    )
 
 logger = structlog.get_logger(__name__)
 
@@ -99,7 +104,7 @@ def _client_manager(
     timeout_s: float,
     client_workspace_dir: str,
     run_id: uuid.UUID | None,
-) -> SandboxManager:
+) -> ClientWorkerSandboxManager:
     """The ONE construction of a client-worker sandbox manager.
 
     Two callers reach the founder's machine — the loop (which knows the run's model
@@ -162,7 +167,7 @@ async def client_sandbox_manager_for_run(
     session_factory: async_sessionmaker[AsyncSession] | None,
     workspace_id: uuid.UUID,
     timeout_s: float,
-) -> SandboxManager | None:
+) -> ClientWorkerSandboxManager | None:
     """The founder's machine for THIS run — or ``None`` when the run does not act there.
 
     The MCP work-tool transport's entry point. It cannot use

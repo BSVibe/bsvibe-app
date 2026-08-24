@@ -148,7 +148,8 @@ def _install_fakes(
             seen["pin"] = kw.get("pinned_worker_id")
             seen["executor_type"] = kw.get("executor_type")
 
-        async def acquire(self, *_a: Any, **_k: Any) -> Any:
+        def attach(self) -> Any:
+            # 트랜스포트는 붙기만 한다 — 프로비저닝은 런 수명주기의 일이다.
             return _Box(seen["exec"], in_place=True)
 
     class _ServerMgr:

@@ -119,6 +119,7 @@ async def resolve_client_sandbox(run: Any, ctx: ToolContext) -> Any:
     )
     if manager is None:
         return None
-    # The manager owns the path (the founder's dir, then this run's worktree inside it);
-    # the server-side workspace dir does not exist on that machine.
-    return await manager.acquire(run.product_id, "")
+    # ATTACH, never acquire: the worktree was provisioned once by the run's lifecycle, before
+    # its first agent turn. This resolver runs per MCP tool call, so provisioning here would
+    # charge every tool two worker round-trips and run the orphan sweep per call.
+    return manager.attach()

@@ -270,6 +270,31 @@ class ClientWorkerSandboxManager:
             pinned_worker_id=self._pinned_worker_id,
         )
 
+    def attach(self) -> ClientWorkerSandboxSession:
+        """The run's box as it ALREADY stands — no provisioning, no commands sent.
+
+        :meth:`acquire` belongs to the run's lifecycle: it runs once, before the drive loop
+        dispatches the first agent turn, and it dispatches two exec tasks to the founder's
+        machine (provision this run's worktree, sweep the orphans of runs that were killed).
+
+        The MCP work-tool transport is a different caller with a different need. It resolves
+        the box **on every tool call**, and by the time it does, the worktree exists. Calling
+        ``acquire`` there charged every ``file_read`` two worker round-trips and — worse —
+        ran the orphan sweep per tool call instead of once per run, multiplying the window in
+        which it can reclaim a worktree from a run that is only just starting.
+
+        So: the lifecycle provisions, the transport attaches. (The server-side backend draws
+        the same line through its process-wide manager cache — see
+        ``tests/mcp/test_sandbox_reuse.py``, the E1 defect.)
+        """
+        if self._run_id is None:
+            return self._session_for(self._client_workspace_dir)
+        from backend.workflow.domain.client_worktree import (  # noqa: PLC0415
+            client_run_worktree,
+        )
+
+        return self._session_for(client_run_worktree(self._client_workspace_dir, self._run_id))
+
     async def acquire(
         self, project_id: uuid.UUID, workspace_path: str
     ) -> ClientWorkerSandboxSession:
