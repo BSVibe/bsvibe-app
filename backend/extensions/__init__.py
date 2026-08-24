@@ -43,7 +43,6 @@ from __future__ import annotations
 # ``from backend.extensions.plugin import plugin`` directly.
 from backend.extensions.plugin.base import (
     VALID_COMPENSATION_TIERS,
-    VALID_JURISDICTIONS,
     VALID_TRIGGER_TYPES,
     ActionCapability,
     CompensateCapability,
@@ -104,7 +103,6 @@ __all__ = [
     "SkillRunError",
     "SkillRunResult",
     "VALID_COMPENSATION_TIERS",
-    "VALID_JURISDICTIONS",
     "VALID_TRIGGER_TYPES",
     "invoke_skill",
 ]

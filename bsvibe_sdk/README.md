@@ -19,7 +19,7 @@ are the future-publishability artifact.
 ```python
 from bsvibe_sdk import Context, Result, plugin
 
-p = plugin(name="github", credentials=[...], data_jurisdiction="us")
+p = plugin(name="github", credentials=[...])
 
 @p.action(name="open_pr", mcp_exposed=True)
 async def open_pr(context: Context, *, branch: str, title: str) -> Result:

@@ -28,7 +28,6 @@ p = plugin(
     version="0.1.0",
     description="GitHub connector — webhook intake + PR/comment delivery with compensation.",
     author="BSVibe",
-    data_jurisdiction="us",
     credentials=[
         {
             "name": "token",

@@ -190,7 +190,6 @@ async def test_adapter_session_factory_opens_fresh_session_per_chat() -> None:
             litellm_model="executor/claude_code",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="us",
             is_active=True,
             extra_params={"executor_type": "claude_code"},
         )
@@ -319,7 +318,6 @@ async def test_adapter_without_session_factory_falls_back_to_bound_session() -> 
                 litellm_model="executor/claude_code",
                 api_base=None,
                 api_key_encrypted=None,
-                data_jurisdiction="us",
                 is_active=True,
                 extra_params={"executor_type": "claude_code"},
             )

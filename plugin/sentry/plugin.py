@@ -36,8 +36,7 @@ p = plugin(
     name="sentry",
     version="0.1.0",
     description="Sentry connector — issue webhook intake + resolve-issue delivery with compensation.",
-    author="BSVibe",
-    data_jurisdiction="us",  # sentry.io SaaS is US-hosted (self-hosted / EU regions exist).
+    author="BSVibe",  # sentry.io SaaS is US-hosted (self-hosted / EU regions exist).
     credentials=[
         {
             "name": "auth_token",

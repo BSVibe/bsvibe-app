@@ -3,7 +3,7 @@
 A plugin is a single object that declares zero or more capabilities via
 decorators::
 
-    p = plugin(name="github", credentials=[...], data_jurisdiction="us")
+    p = plugin(name="github", credentials=[...])
 
     @p.inbound(trigger={"type": "webhook"})
     async def on_webhook(context, payload): ...
@@ -27,7 +27,6 @@ from __future__ import annotations
 
 from backend.extensions.plugin.base import (
     VALID_COMPENSATION_TIERS,
-    VALID_JURISDICTIONS,
     VALID_TRIGGER_TYPES,
     ActionCapability,
     CompensateCapability,
@@ -74,7 +73,6 @@ __all__ = [
     "RetrieverInterface",
     "SkillContext",
     "VALID_COMPENSATION_TIERS",
-    "VALID_JURISDICTIONS",
     "VALID_TRIGGER_TYPES",
     "WebhookParserRegistry",
     "plugin",

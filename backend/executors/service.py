@@ -98,7 +98,6 @@ async def _upsert_executor_model_accounts(
             litellm_model=f"executor/{capability}",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="unknown",
             extra_params={"worker_id": str(worker_id), "executor_type": capability},
         )
 

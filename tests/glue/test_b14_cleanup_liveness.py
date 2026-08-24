@@ -91,7 +91,6 @@ async def _seed_executor_account(
                 litellm_model="executor/claude_code",
                 api_base=None,
                 api_key_encrypted=None,
-                data_jurisdiction="us-1",
                 is_active=True,
                 extra_params={"executor_type": "claude_code"},
             )

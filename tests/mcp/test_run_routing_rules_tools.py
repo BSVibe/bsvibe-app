@@ -583,7 +583,6 @@ def _model_account(ws: uuid.UUID, litellm_model: str):
         litellm_model=litellm_model,
         api_base=None,
         api_key_encrypted=None,
-        data_jurisdiction="unknown",
         is_active=True,
         extra_params={"executor_type": "claude_code", "worker_id": str(uuid.uuid4())},
     )

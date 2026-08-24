@@ -11,7 +11,7 @@ uv run pytest tests/plugins/implementations/sentry -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_sentry`
-- [x] Declares `data_jurisdiction="us"` + auth_token / client_secret credentials
+- [x] Declares auth_token / client_secret credentials
       — `TestPluginMeta`
 - [x] **Inbound**: valid signed `issue` webhook → `TriggerEvent`
       (idempotency_key derived from the Sentry hook/issue id)

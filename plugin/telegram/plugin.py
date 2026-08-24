@@ -28,10 +28,7 @@ p = plugin(
     version="0.1.0",
     description="Telegram connector — Bot-API webhook intake + message delivery with compensation.",
     author="BSVibe",
-    # Telegram is operated out of multiple regions (no single jurisdiction);
     # the framework's "unspecified/global" value is "unknown" (the others use
-    # the concrete "us"). See VALID_JURISDICTIONS in backend/plugins/base.py.
-    data_jurisdiction="unknown",
     credentials=[
         {
             "name": "bot_token",

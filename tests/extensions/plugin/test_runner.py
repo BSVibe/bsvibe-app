@@ -24,7 +24,7 @@ class _Ctx:
 
 @pytest.fixture
 def github_plugin():
-    p = plugin(name="github", credentials=[], data_jurisdiction="us")
+    p = plugin(name="github", credentials=[])
 
     @p.inbound(trigger={"type": "webhook"})
     async def on_webhook(context, payload):
@@ -123,7 +123,7 @@ class TestDispatchAction:
 
 class TestErrorWrapping:
     async def test_wraps_plugin_exception_into_plugin_run_error(self):
-        p = plugin(name="boom", credentials=[], data_jurisdiction="local")
+        p = plugin(name="boom", credentials=[])
 
         @p.outbound(artifact_types=["thing"])
         async def deliver(context, event):
@@ -141,7 +141,7 @@ class TestErrorWrapping:
 
 class TestInputSchemaValidation:
     async def test_validates_input_against_action_schema(self):
-        p = plugin(name="schema-plug", credentials=[], data_jurisdiction="local")
+        p = plugin(name="schema-plug", credentials=[])
 
         @p.action(
             name="add",

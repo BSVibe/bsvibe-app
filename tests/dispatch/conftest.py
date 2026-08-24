@@ -85,7 +85,6 @@ async def model_account(
         litellm_model="ollama_chat/qwen3",
         api_base="http://localhost:11434",
         api_key_encrypted=None,
-        data_jurisdiction="us",
         is_active=True,
         extra_params={},
     )
@@ -107,7 +106,6 @@ async def cloud_account(
         litellm_model="anthropic/claude-3-5-sonnet-20241022",
         api_base=None,
         api_key_encrypted=cipher.encrypt("sk-test"),
-        data_jurisdiction="us",
         is_active=True,
         extra_params={},
     )

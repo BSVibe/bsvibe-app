@@ -125,8 +125,8 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "drop_dead_worker_tables", (
-        f"expected head drop_dead_worker_tables, got {stamped}"
+    assert stamped == "drop_data_jurisdiction", (
+        f"expected head drop_data_jurisdiction, got {stamped}"
     )
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
@@ -135,7 +135,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "drop_dead_worker_tables"
+    assert stamped == "drop_data_jurisdiction"
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
@@ -381,10 +381,10 @@ def test_model_account_api_key_encrypted_is_nullable_after_upgrade():
                     text(
                         "INSERT INTO model_accounts "
                         "(id, workspace_id, account_id, provider, label, litellm_model, "
-                        " api_base, api_key_encrypted, data_jurisdiction, is_active, "
+                        " api_base, api_key_encrypted, is_active, "
                         " extra_params, created_at, updated_at) "
                         "VALUES (:id, :ws, :acct, 'executor', 'laptop-1', "
-                        " 'executor/claude_code', NULL, NULL, 'unknown', true, "
+                        " 'executor/claude_code', NULL, NULL, true, "
                         " '{}'::jsonb, :now, :now)"
                     ),
                     {

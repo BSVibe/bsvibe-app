@@ -39,7 +39,6 @@ def _runner() -> PluginRunner:
 class TestPluginMeta:
     def test_name_and_jurisdiction(self):
         assert P.meta.name == "email-sender"
-        assert P.meta.data_jurisdiction == "us"
 
     def test_declares_api_key_credential(self):
         names = {c["name"] for c in P.meta.credentials}

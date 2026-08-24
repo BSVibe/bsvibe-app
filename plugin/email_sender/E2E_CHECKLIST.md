@@ -11,7 +11,7 @@ uv run pytest tests/plugins/implementations/email_sender -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_email_sender`
-- [x] Declares `data_jurisdiction="us"` (Resend is US) + `api_key` / `from`
+- [x] Declares (Resend is US) + `api_key` / `from`
       credentials — `TestPluginMeta`
 - [x] **Outbound-only**: no `@p.inbound` capability
       — `TestPluginMeta::test_no_inbound` / loader discovery `inbounds == []`

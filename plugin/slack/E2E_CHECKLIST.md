@@ -11,7 +11,7 @@ uv run pytest tests/plugins/implementations/slack -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_slack`
-- [x] Declares `data_jurisdiction="us"` + bot_token / signing_secret credentials
+- [x] Declares bot_token / signing_secret credentials
       — `TestPluginMeta`
 - [x] **Inbound**: valid signed app_mention event → `TriggerEvent`
       (idempotency_key = Slack `event_id`)

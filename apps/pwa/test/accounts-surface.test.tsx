@@ -40,7 +40,6 @@ const ACCOUNT = {
   label: "Primary",
   litellm_model: "gpt-5",
   api_base: null,
-  data_jurisdiction: "us",
   is_active: true,
   has_api_key: true,
   extra_params: {},
@@ -123,7 +122,6 @@ describe("Model accounts surface", () => {
     const createCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
     expect(createCall[0]).toBe("/api/v1/accounts");
     expect(createCall[1].method).toBe("POST");
-    // The body no longer carries data_jurisdiction — the backend defaults it.
     const sentBody = JSON.parse(createCall[1].body as string);
     expect(sentBody).toEqual({
       provider: "openai",
@@ -132,7 +130,6 @@ describe("Model accounts surface", () => {
       api_key: "sk-super-secret",
       extra_params: {},
     });
-    expect("data_jurisdiction" in sentBody).toBe(false);
 
     // A re-read fired (3rd call is the list GET).
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));

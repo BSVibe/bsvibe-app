@@ -112,7 +112,6 @@ async def _seed_executor_account(
         litellm_model=f"executor/{executor_type}",
         api_base=None,
         api_key_encrypted=None,
-        data_jurisdiction="unknown",
         is_active=True,
         extra_params={"worker_id": str(worker_id), "executor_type": executor_type},
     )
@@ -197,7 +196,6 @@ async def test_non_executor_account_builds_native_orchestrator(
             litellm_model="claude-3-5-sonnet",
             api_base=None,
             api_key_encrypted=cipher.encrypt("sk-test"),
-            data_jurisdiction="us",
             is_active=True,
             extra_params={},
         )
@@ -370,7 +368,6 @@ async def test_factory_wires_retriever_into_native_orchestrator(
             litellm_model="claude-3-5-sonnet",
             api_base=None,
             api_key_encrypted=cipher.encrypt("sk-test"),
-            data_jurisdiction="us",
             is_active=True,
             extra_params={},
         )

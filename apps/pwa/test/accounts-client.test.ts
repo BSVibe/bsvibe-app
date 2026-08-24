@@ -38,7 +38,6 @@ const ACCOUNT = {
   label: "Primary",
   litellm_model: "gpt-5",
   api_base: null,
-  data_jurisdiction: "us",
   is_active: true,
   has_api_key: true,
   extra_params: {},
@@ -107,8 +106,6 @@ describe("accounts client", () => {
       extra_params: {},
       api_base: "https://proxy.example.com",
     });
-    // data_jurisdiction is invisible infra — the backend defaults it.
-    expect("data_jurisdiction" in body).toBe(false);
   });
 
   it("createAccount drops a blank api_base and defaults extra_params to {}", async () => {
@@ -127,7 +124,6 @@ describe("accounts client", () => {
     const body = JSON.parse(init.body as string);
     expect("api_base" in body).toBe(false);
     expect(body.extra_params).toEqual({});
-    expect("data_jurisdiction" in body).toBe(false);
   });
 
   it("setAccountActive PATCHes /api/v1/accounts/{id} with just { is_active }", async () => {

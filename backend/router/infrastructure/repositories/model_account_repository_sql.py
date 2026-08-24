@@ -38,7 +38,6 @@ class SqlAlchemyModelAccountRepository:
         litellm_model: str,
         api_base: str | None,
         api_key_encrypted: str | None,
-        data_jurisdiction: str,
         extra_params: dict[str, Any],
     ) -> ModelAccount:
         row = ModelAccount(
@@ -49,7 +48,6 @@ class SqlAlchemyModelAccountRepository:
             litellm_model=litellm_model,
             api_base=api_base,
             api_key_encrypted=api_key_encrypted,
-            data_jurisdiction=data_jurisdiction,
             extra_params=extra_params,
         )
         self._session.add(row)

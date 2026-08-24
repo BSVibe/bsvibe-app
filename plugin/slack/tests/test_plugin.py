@@ -50,7 +50,6 @@ def _sign(secret: str, timestamp: str, body: bytes) -> str:
 class TestPluginMeta:
     def test_name_and_jurisdiction(self):
         assert P.meta.name == "slack"
-        assert P.meta.data_jurisdiction == "us"
 
     def test_declares_credentials(self):
         names = {c["name"] for c in P.meta.credentials}

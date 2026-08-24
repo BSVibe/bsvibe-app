@@ -40,7 +40,6 @@ p = plugin(
     version="0.1.0",
     description="Trello connector — create cards from deliverables with compensation (archive).",
     author="BSVibe",
-    data_jurisdiction="us",
     credentials=[
         {
             "name": "api_key",

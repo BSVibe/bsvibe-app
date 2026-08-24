@@ -19,7 +19,7 @@ def _write_plugin(root: Path, name: str, body: str) -> Path:
 _SAMPLE_GITHUB = """
 from backend.extensions.plugin import plugin
 
-p = plugin(name="github", credentials=[], data_jurisdiction="us")
+p = plugin(name="github", credentials=[])
 
 @p.inbound(trigger={"type": "webhook"})
 async def on_webhook(context, payload):
@@ -34,7 +34,7 @@ async def deliver_pr(context, event):
 _SAMPLE_NOTION = """
 from backend.extensions.plugin import plugin
 
-p = plugin(name="notion", credentials=[], data_jurisdiction="us")
+p = plugin(name="notion", credentials=[])
 
 @p.outbound(artifact_types=["notion_page"])
 async def deliver_page(context, event):
@@ -57,7 +57,6 @@ class TestLoaderDiscovery:
         registry = await loader.load_all()
 
         assert set(registry.keys()) == {"github", "notion"}
-        assert registry["github"].data_jurisdiction == "us"
         assert len(registry["github"].inbounds) == 1
         assert len(registry["github"].outbounds) == 1
 

@@ -62,7 +62,6 @@ class TestPluginMeta:
     def test_name_and_jurisdiction(self):
         assert P.meta.name == "obsidian"
         # Vault sits on the founder's machine — local-only data.
-        assert P.meta.data_jurisdiction == "local"
 
     def test_declares_no_required_credentials(self):
         # Obsidian is a local-filesystem connector; no API tokens.

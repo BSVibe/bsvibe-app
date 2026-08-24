@@ -72,7 +72,6 @@ def _meta(name: str, *, with_outbound: bool) -> PluginMeta:
         version="0",
         description="",
         author="t",
-        data_jurisdiction="us",
         credentials=[],
         outbounds=outbounds,
     )

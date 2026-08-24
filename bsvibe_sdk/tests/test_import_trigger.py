@@ -14,7 +14,7 @@ from bsvibe_sdk import PluginBuilder, PluginRegistrationError, plugin
 
 
 def _builder() -> PluginBuilder:
-    return plugin(name="mock", credentials=[], data_jurisdiction="local")
+    return plugin(name="mock", credentials=[])
 
 
 async def _noop(context: object) -> None:  # pragma: no cover - body unused

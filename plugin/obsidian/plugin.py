@@ -38,7 +38,6 @@ p = plugin(
     author="BSVibe",
     # The vault sits on the founder's local machine; no cloud / regional
     # data residency boundary applies — local-only data.
-    data_jurisdiction="local",
     # No external API credentials; the binding config carries vault_path.
     credentials=[],
 )

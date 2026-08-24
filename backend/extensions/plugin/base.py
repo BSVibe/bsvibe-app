@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from bsvibe_sdk.plugin import (
     VALID_COMPENSATION_TIERS,
-    VALID_JURISDICTIONS,
     VALID_TRIGGER_TYPES,
     ActionCapability,
     CompensateCapability,
@@ -33,7 +32,6 @@ class PluginRunError(RuntimeError):
 
 __all__ = [
     "VALID_COMPENSATION_TIERS",
-    "VALID_JURISDICTIONS",
     "VALID_TRIGGER_TYPES",
     "ActionCapability",
     "CompensateCapability",

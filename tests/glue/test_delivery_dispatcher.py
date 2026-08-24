@@ -21,7 +21,6 @@ def _meta(name: str, *, artifact_types: list[str], outbound_fn) -> PluginMeta:
         version="1.0.0",
         description=f"{name} test plugin",
         author="",
-        data_jurisdiction="us",
         credentials=[],
         inbounds=[],
         outbounds=[OutboundCapability(artifact_types=tuple(artifact_types), fn=outbound_fn)],

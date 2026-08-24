@@ -18,7 +18,6 @@ def _make_plugin(**overrides):
     kwargs = {
         "name": "github",
         "credentials": [{"name": "token", "required": True}],
-        "data_jurisdiction": "us",
     }
     kwargs.update(overrides)
     return plugin(**kwargs)
@@ -29,7 +28,6 @@ class TestPluginFactory:
         p = _make_plugin()
         assert isinstance(p.meta, PluginMeta)
         assert p.meta.name == "github"
-        assert p.meta.data_jurisdiction == "us"
         assert p.meta.credentials == [{"name": "token", "required": True}]
 
     def test_defaults_version_description_author(self):
@@ -38,27 +36,14 @@ class TestPluginFactory:
         assert p.meta.description == ""
         assert p.meta.author == ""
 
-    def test_rejects_missing_data_jurisdiction(self):
-        with pytest.raises(TypeError):
-            plugin(name="github", credentials=[])  # type: ignore[call-arg]
-
-    def test_rejects_invalid_data_jurisdiction(self):
-        with pytest.raises(PluginRegistrationError, match="data_jurisdiction"):
-            plugin(name="github", credentials=[], data_jurisdiction="atlantis")
-
-    def test_accepts_known_jurisdictions(self):
-        for j in ("us", "eu", "kr", "local", "unknown"):
-            p = plugin(name=f"plugin-{j}", credentials=[], data_jurisdiction=j)
-            assert p.meta.data_jurisdiction == j
-
     def test_rejects_invalid_name(self):
         with pytest.raises(PluginRegistrationError, match="name"):
-            plugin(name="Bad_Name", credentials=[], data_jurisdiction="us")
+            plugin(name="Bad_Name", credentials=[])
         with pytest.raises(PluginRegistrationError, match="name"):
-            plugin(name="9starts", credentials=[], data_jurisdiction="us")
+            plugin(name="9starts", credentials=[])
 
     def test_accepts_valid_name_with_hyphens(self):
-        p = plugin(name="github-pr", credentials=[], data_jurisdiction="us")
+        p = plugin(name="github-pr", credentials=[])
         assert p.meta.name == "github-pr"
 
 
@@ -237,7 +222,7 @@ class TestNoCategoryNoNotify:
     def test_plugin_kwarg_category_rejected(self):
         with pytest.raises(TypeError):
             plugin(  # type: ignore[call-arg]
-                name="x", credentials=[], data_jurisdiction="us", category="input"
+                name="x", credentials=[], category="input"
             )
 
     def test_no_notify_decorator_on_inbound_function(self):

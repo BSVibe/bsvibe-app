@@ -12,7 +12,7 @@ uv run pytest tests/plugins/implementations/discord -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_discord`
-- [x] Declares `data_jurisdiction="us"` + bot_token / public_key credentials
+- [x] Declares bot_token / public_key credentials
       — `TestPluginMeta`
 - [x] **Inbound**: valid Ed25519-signed command interaction → `TriggerEvent`
       (idempotency_key derived from interaction `id`)
@@ -58,10 +58,6 @@ uv run pytest tests/plugins/implementations/discord -q
 - **PING handling**: the registration PING (`type=1`) must still pass signature
   verification (a forged PING is rejected), but parsing returns `None` — the
   PONG response is sent by the HTTP route, which is out of this track's scope.
-- **data_jurisdiction = `us`**: Discord Inc. is US-headquartered with a
-  US-operated control plane, so `us` matches the github/slack connectors and is
-  more accurate than `unknown` (which Telegram used because its operator is
-  multi-region/unspecified).
 - **API error convention** (differs from slack/telegram): Discord signals
   failure with a **non-2xx HTTP status** + JSON `{"message": ...}` body, not
   HTTP-200 `ok:false`. `DiscordClient` raises `DiscordApiError` on non-2xx, and

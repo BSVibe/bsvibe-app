@@ -165,7 +165,6 @@ def _account(
         litellm_model=litellm_model,
         api_base=None,
         api_key_encrypted=None,
-        data_jurisdiction="unknown",
         is_active=True,
         extra_params=extra or {},
     )

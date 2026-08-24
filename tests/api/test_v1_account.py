@@ -96,7 +96,6 @@ async def test_model_accounts_create_list_round_trip_via_fallback(client) -> Non
         "label": "primary",
         "litellm_model": "openai/gpt-4o-mini",
         "api_key": "sk-secret-test",
-        "data_jurisdiction": "us",
     }
     r = await client.post("/api/v1/accounts", json=create_body)
     assert r.status_code == 201, r.text
@@ -110,20 +109,6 @@ async def test_model_accounts_create_list_round_trip_via_fallback(client) -> Non
     assert len(r2.json()) == 1
 
 
-async def test_create_without_jurisdiction_defaults_to_unknown(client) -> None:
-    """The founder-facing form no longer sends ``data_jurisdiction``; a create
-    body omitting it must 201 and the stored row defaults to ``unknown``."""
-    create_body = {
-        "provider": "openai",
-        "label": "no-jurisdiction",
-        "litellm_model": "openai/gpt-4o-mini",
-        "api_key": "sk-secret-test",
-    }
-    r = await client.post("/api/v1/accounts", json=create_body)
-    assert r.status_code == 201, r.text
-    assert r.json()["data_jurisdiction"] == "unknown"
-
-
 async def test_explicit_account_header_wins(client, db, workspace_id) -> None:
     """When a valid header is present it is used verbatim (orthogonal axis
     preserved), NOT replaced by the personal account."""
@@ -134,7 +119,6 @@ async def test_explicit_account_header_wins(client, db, workspace_id) -> None:
         "label": "explicit",
         "litellm_model": "openai/gpt-4o-mini",
         "api_key": "sk-x",
-        "data_jurisdiction": "us",
     }
     r = await client.post(
         "/api/v1/accounts",
@@ -202,7 +186,6 @@ async def test_model_accounts_list_includes_executor_rows(client, db) -> None:
                 litellm_model="executor/claude_code",
                 api_base=None,
                 api_key_encrypted=None,
-                data_jurisdiction="unknown",
                 extra_params={"worker_id": str(uuid.uuid4()), "executor_type": "claude_code"},
             )
         )

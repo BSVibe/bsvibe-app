@@ -11,7 +11,7 @@ uv run pytest tests/plugins/implementations/linear -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_linear`
-- [x] Declares `data_jurisdiction="us"` + `api_key` credential
+- [x] Declares `api_key` credential
       — `TestPluginMeta`
 - [x] **Outbound** `issue`: creates a Linear issue via GraphQL `issueCreate`,
       returns `external_ref` (`linear://issue/<id>`) + `url` +

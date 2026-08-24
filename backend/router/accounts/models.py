@@ -1,9 +1,7 @@
 """SQLAlchemy schema for ModelAccount (per-workspace, per-account).
 
 Supersedes BSGateway's single-tenant ``tenant_models`` table: each row
-is scoped to ``(workspace_id, account_id)``. ``data_jurisdiction`` is
-declared by the worker SDK at registration (Workflow §8.4) — never
-inferred, never user-typed; we just store + index it.
+is scoped to ``(workspace_id, account_id)``.
 """
 
 from __future__ import annotations
@@ -34,7 +32,6 @@ class ModelAccount(AccountsBase):
     # routes to a CLI worker capability and carries NO api key. Real LLM
     # accounts always populate it (the encrypting create path requires one).
     api_key_encrypted: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    data_jurisdiction: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     extra_params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(

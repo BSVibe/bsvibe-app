@@ -29,7 +29,6 @@ export function listAccounts(): Promise<ModelAccount[]> {
 /** Register a model account. The plaintext `api_key` is sent once; the server
  *  encrypts it at rest and the 201 response never echoes it back. We build the
  *  body to match the backend extra=forbid schema: drop `api_base` when blank,
- *  always send `extra_params` (default `{}`). `data_jurisdiction` is invisible
  *  infra — we never send it; the backend defaults it to "unknown". */
 export function createAccount(input: ModelAccountCreate): Promise<ModelAccount> {
   const body: ModelAccountCreate = {

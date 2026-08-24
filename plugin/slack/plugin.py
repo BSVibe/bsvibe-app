@@ -28,7 +28,6 @@ p = plugin(
     version="0.1.0",
     description="Slack connector — Events-API intake + chat message delivery with compensation.",
     author="BSVibe",
-    data_jurisdiction="us",
     credentials=[
         {
             "name": "bot_token",

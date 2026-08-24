@@ -29,7 +29,7 @@ class _Ctx:
 
 class TestOutboundCompensationMetadata:
     def test_outbound_records_tier_and_supported(self):
-        p = plugin(name="github", credentials=[], data_jurisdiction="us")
+        p = plugin(name="github", credentials=[])
 
         @p.outbound(
             artifact_types=["pr"],
@@ -44,7 +44,7 @@ class TestOutboundCompensationMetadata:
         assert cap.compensation_supported is True
 
     def test_outbound_defaults_no_compensation(self):
-        p = plugin(name="github", credentials=[], data_jurisdiction="us")
+        p = plugin(name="github", credentials=[])
 
         @p.outbound(artifact_types=["pr"])
         async def deliver_pr(context, event):
@@ -55,7 +55,7 @@ class TestOutboundCompensationMetadata:
         assert cap.compensation_supported is False
 
     def test_outbound_rejects_invalid_tier(self):
-        p = plugin(name="github", credentials=[], data_jurisdiction="us")
+        p = plugin(name="github", credentials=[])
         with pytest.raises(PluginRegistrationError, match="compensation_tier"):
 
             @p.outbound(artifact_types=["pr"], compensation_tier="t9_magic")
@@ -70,7 +70,7 @@ class TestOutboundCompensationMetadata:
 
 class TestCompensateRegistration:
     def test_registers_compensate_capability(self):
-        p = plugin(name="github", credentials=[], data_jurisdiction="us")
+        p = plugin(name="github", credentials=[])
 
         @p.compensate(artifact_types=["pr"])
         async def revert_pr(context, handle):
@@ -82,7 +82,7 @@ class TestCompensateRegistration:
         assert cap.artifact_types == ("pr",)
 
     def test_rejects_empty_artifact_types(self):
-        p = plugin(name="github", credentials=[], data_jurisdiction="us")
+        p = plugin(name="github", credentials=[])
         with pytest.raises(PluginRegistrationError, match="artifact_types"):
 
             @p.compensate(artifact_types=[])
@@ -90,7 +90,7 @@ class TestCompensateRegistration:
                 return {}
 
     def test_rejects_overlapping_artifact_types(self):
-        p = plugin(name="github", credentials=[], data_jurisdiction="us")
+        p = plugin(name="github", credentials=[])
 
         @p.compensate(artifact_types=["pr"])
         async def revert_pr(context, handle):
@@ -106,7 +106,7 @@ class TestCompensateRegistration:
 class TestDispatchCompensate:
     @pytest.fixture
     def compensating_plugin(self):
-        p = plugin(name="github", credentials=[], data_jurisdiction="us")
+        p = plugin(name="github", credentials=[])
 
         @p.compensate(artifact_types=["code", "pr"])
         async def revert_pr(context, handle):

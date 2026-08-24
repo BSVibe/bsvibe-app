@@ -64,7 +64,6 @@ def _write_fixture_to(dest_dir: Path) -> Path:
 class TestPluginMeta:
     def test_name_and_jurisdiction(self):
         assert P.meta.name == "gpt"
-        assert P.meta.data_jurisdiction == "local"
 
     def test_declares_no_required_credentials(self):
         required = [c for c in P.meta.credentials if c.get("required")]

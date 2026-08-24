@@ -38,9 +38,6 @@ VALID_TRIGGER_TYPES: frozenset[str] = frozenset(
 )
 """Trigger ``type`` values accepted on ``@p.inbound``."""
 
-VALID_JURISDICTIONS: frozenset[str] = frozenset({"us", "eu", "kr", "local", "unknown"})
-"""``data_jurisdiction`` values accepted on ``plugin(...)``."""
-
 VALID_COMPENSATION_TIERS: frozenset[str] = frozenset(
     {"t1_clean", "t2_trail", "t3_new_artifact", "t4_irreversible"}
 )
@@ -124,7 +121,6 @@ class PluginMeta:
     version: str
     description: str
     author: str
-    data_jurisdiction: str
     credentials: list[dict[str, Any]]
 
     inbounds: list[InboundCapability] = field(default_factory=list)
@@ -331,7 +327,6 @@ def plugin(
     *,
     name: str,
     credentials: list[dict[str, Any]],
-    data_jurisdiction: str,
     version: str = "0.1.0",
     description: str = "",
     author: str = "",
@@ -342,7 +337,7 @@ def plugin(
 
         from bsvibe_sdk import plugin
 
-        p = plugin(name="github", credentials=[...], data_jurisdiction="us")
+        p = plugin(name="github", credentials=[...])
 
         @p.action(name="open_pr", mcp_exposed=True)
         async def open_pr(context, *, branch, title, body): ...
@@ -351,17 +346,11 @@ def plugin(
         raise PluginRegistrationError(
             f"Invalid plugin name {name!r}: must match {_NAME_RE.pattern}"
         )
-    if data_jurisdiction not in VALID_JURISDICTIONS:
-        raise PluginRegistrationError(
-            f"Invalid data_jurisdiction {data_jurisdiction!r}: "
-            f"must be one of {sorted(VALID_JURISDICTIONS)}"
-        )
     meta = PluginMeta(
         name=name,
         version=version,
         description=description,
         author=author,
-        data_jurisdiction=data_jurisdiction,
         credentials=list(credentials),
     )
     return PluginBuilder(meta=meta)
@@ -369,7 +358,6 @@ def plugin(
 
 __all__ = [
     "VALID_COMPENSATION_TIERS",
-    "VALID_JURISDICTIONS",
     "VALID_TRIGGER_TYPES",
     "ActionCapability",
     "CompensateCapability",

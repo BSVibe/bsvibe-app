@@ -151,7 +151,7 @@ async def test_loader_accepts_sdk_only_plugin(tmp_path: Path) -> None:
     plug_dir.mkdir()
     (plug_dir / "plugin.py").write_text(
         "from bsvibe_sdk import plugin\n"
-        "p = plugin(name='sdkonly', credentials=[], data_jurisdiction='us')\n"
+        "p = plugin(name='sdkonly', credentials=[])\n"
         "@p.action(name='ping')\n"
         "async def ping(context):\n"
         "    return {'ok': True}\n"
