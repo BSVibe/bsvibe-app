@@ -15,6 +15,9 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
+from backend.workflow.application.runtime.account_resolution import (
+    product_dispatch_config,
+)
 from backend.workflow.infrastructure.sandbox import (
     NoopSandboxManager,
     SandboxManager,
@@ -69,15 +72,43 @@ def sandbox_manager_for_run(
             has_session_factory=session_factory is not None,
         )
         return default
-    from backend.workflow.infrastructure.sandbox.client_worker_manager import (  # noqa: PLC0415
-        ClientWorkerSandboxManager,
-    )
-
     pinned = extra.get("worker_id")
     try:
         pinned_worker_id = uuid.UUID(str(pinned)) if pinned else None
     except (TypeError, ValueError):
         pinned_worker_id = None
+    return _client_manager(
+        redis_client=redis_client,
+        session_factory=session_factory,
+        workspace_id=workspace_id,
+        executor_type=executor_type,
+        pinned_worker_id=pinned_worker_id,
+        timeout_s=timeout_s,
+        client_workspace_dir=client_workspace_dir,
+        run_id=run_id,
+    )
+
+
+def _client_manager(
+    *,
+    redis_client: Any,
+    session_factory: async_sessionmaker[AsyncSession],
+    workspace_id: uuid.UUID,
+    executor_type: str,
+    pinned_worker_id: uuid.UUID | None,
+    timeout_s: float,
+    client_workspace_dir: str,
+    run_id: uuid.UUID | None,
+) -> SandboxManager:
+    """The ONE construction of a client-worker sandbox manager.
+
+    Two callers reach the founder's machine — the loop (which knows the run's model
+    account) and the MCP work-tool transport (which knows only the run). They must not
+    drift on HOW that machine is addressed, so they share this."""
+    from backend.workflow.infrastructure.sandbox.client_worker_manager import (  # noqa: PLC0415
+        ClientWorkerSandboxManager,
+    )
+
     return ClientWorkerSandboxManager(
         redis=redis_client,
         session_factory=session_factory,
@@ -120,3 +151,82 @@ def resolve_sandbox_manager(
             )
         return built
     return NoopSandboxManager()
+
+
+async def client_sandbox_manager_for_run(
+    *,
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    product_id: uuid.UUID,
+    redis_client: Any,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    workspace_id: uuid.UUID,
+    timeout_s: float,
+) -> SandboxManager | None:
+    """The founder's machine for THIS run — or ``None`` when the run does not act there.
+
+    The MCP work-tool transport's entry point. It cannot use
+    :func:`sandbox_manager_for_run`: that one is handed the run's resolved model account,
+    which the transport does not have (it holds a run-scoped token and nothing else).
+
+    So the machine is derived from the run itself — the worker that this run's task was
+    dispatched to. That is a STRICTLY better pin than the account's ``worker_id``: it is the
+    machine the agent is actually running on, hence the one holding this product's tree.
+
+    ``None`` on any missing piece (no client_attach, no local dir, never dispatched, no
+    redis). The caller then keeps the server sandbox, which for a client_attach run means the
+    tools refuse rather than run against a tree that does not hold the founder's source.
+    """
+    _repo_url, execution_target, client_workspace_dir = await product_dispatch_config(
+        session, product_id
+    )
+    if execution_target != "client_attach" or not client_workspace_dir:
+        return None
+    if redis_client is None or session_factory is None:
+        logger.info(
+            "client_attach_mcp_sandbox_context_incomplete",
+            run_id=str(run_id),
+            has_redis=redis_client is not None,
+            has_session_factory=session_factory is not None,
+        )
+        return None
+    dispatched = await _worker_running_run(session, run_id)
+    if dispatched is None:
+        logger.info("client_attach_mcp_sandbox_no_dispatched_task", run_id=str(run_id))
+        return None
+    worker_id, executor_type = dispatched
+    return _client_manager(
+        redis_client=redis_client,
+        session_factory=session_factory,
+        workspace_id=workspace_id,
+        executor_type=executor_type,
+        pinned_worker_id=worker_id,
+        timeout_s=timeout_s,
+        client_workspace_dir=client_workspace_dir,
+        run_id=run_id,
+    )
+
+
+async def _worker_running_run(
+    session: AsyncSession, run_id: uuid.UUID
+) -> tuple[uuid.UUID, str] | None:
+    """``(worker_id, executor_type)`` of the task this run is executing on.
+
+    The newest task with a worker assigned — a run re-dispatched after a worker died must
+    address the machine it is on NOW, not the dead one whose tree it never touched.
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.executors.db import ExecutorTaskRow  # noqa: PLC0415
+
+    row = (
+        await session.execute(
+            select(ExecutorTaskRow.worker_id, ExecutorTaskRow.executor_type)
+            .where(ExecutorTaskRow.run_id == run_id, ExecutorTaskRow.worker_id.is_not(None))
+            .order_by(ExecutorTaskRow.created_at.desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None or row[0] is None:
+        return None
+    return uuid.UUID(str(row[0])), str(row[1])

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -27,6 +28,18 @@ from backend.workflow.infrastructure.sandbox import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+class _Ctx:
+    """``_sandbox_for`` 가 박스를 고를 때 보는 최소 컨텍스트.
+
+    ``extras`` 가 비었다 = 파운더 머신 리졸버가 주입되지 않았다 = 이 런은 서버 박스를
+    쓴다. client_attach 분기는 여기 주제가 아니다 — 그것은
+    ``tests/workflow/test_client_attach_uses_only_bsvibe_tools.py`` 가 지킨다."""
+
+    session: Any = None
+    session_factory: Any = None
+    extras: dict[str, Any] = {}  # noqa: RUF012 — read-only stub
 
 
 class _Run:
@@ -92,7 +105,7 @@ async def test_sandbox_created_once_across_many_tool_calls(
     wsdir = str(tmp_path)
 
     for _ in range(3):
-        session = await work_registry._sandbox_for(run, Path(wsdir))
+        session = await work_registry._sandbox_for(run, Path(wsdir), _Ctx())
         assert session is not None
 
     assert _fake_docker["run"] == 1, (
@@ -106,7 +119,7 @@ async def test_sandbox_for_uses_the_process_singleton(
 ) -> None:
     """Every call resolves the SAME manager instance (so its container cache persists)."""
     run = _Run()
-    s1 = await work_registry._sandbox_for(run, tmp_path)
-    s2 = await work_registry._sandbox_for(run, tmp_path)
+    s1 = await work_registry._sandbox_for(run, tmp_path, _Ctx())
+    s2 = await work_registry._sandbox_for(run, tmp_path, _Ctx())
     # DockerSandboxSession carries a back-reference to its manager; both must be the one singleton.
     assert s1._mgr is s2._mgr

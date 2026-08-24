@@ -189,71 +189,50 @@ async def test_a_chat_turn_gets_no_mcp_and_no_tools(monkeypatch: pytest.MonkeyPa
     assert "--allowedTools" not in argv
 
 
-# ── the third shape: native tools AND BSVibe's platform tools ───────────────
-# #692 parity. A ``client_attach`` run acts on the FOUNDER's own tree, so the
-# workspace half (file / shell) must stay with the CLI's native tools — that is
-# the whole point of the model. But withholding MCP entirely also withheld the
-# PLATFORM half (knowledge / asking the founder / emitting a deliverable), which
-# has nothing to do with where the source lives. Measured consequence: such a run
-# could not emit a Deliverable, so ``connector_dispatch`` had nothing to load and
-# NOTHING was ever delivered out.
-#
-# So the worker gains one execution instruction — ``native_tools`` — and keeps
-# holding no product state of its own.
+# ── there is no third shape ──────────────────────────────────────────────────
+# #692 gave ``client_attach`` a shape of its own: the CLI kept its NATIVE tools
+# for the workspace half while BSVibe served only the platform half over MCP.
+# 형님 판정 2026-08-24 removed it — a worker is not guaranteed to be the client,
+# so an agent must never act with the CLI's own hands. WHERE a work tool runs is
+# the sandbox's business (``ClientWorkerSandboxSession`` dispatches each command
+# to the founder's machine); the SURFACE does not branch.
 
 
-async def test_native_tools_plus_our_platform_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = _patch(
-        monkeypatch, _Proc([_init_line([*_TOOLS, "Bash", "Edit"]), _assistant_line("k")])
-    )
-
-    await drain(ClaudeCodeExecutor().execute("build it", _ctx(native_tools=True)))
-
-    argv = calls[0]
-    # Our MCP server, and ONLY ours — the host operator's servers are not this run's.
-    assert argv[argv.index("--mcp-config") + 1] == json.dumps(_MCP)
-    assert "--strict-mcp-config" in argv
-    assert argv[argv.index("--allowedTools") + 1] == " ".join(_TOOLS)
-    # The CLI KEEPS its own hands: this run's work happens through them, in place.
-    assert "--disallowedTools" not in argv
-    # Edits auto-apply headlessly but stay confined to the cwd (the founder's dir).
-    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
-
-
-async def test_native_shape_does_not_abort_on_the_clis_own_tools(
+async def test_the_clis_own_tools_abort_the_task_in_every_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Native tools are EXPECTED here, so exposing them is not a leak.
+    """The exemption is gone: this init event used to be accepted for client_attach.
 
-    Under the exclusive contract this exact init event aborts the task — which is
-    why the guard has to learn the mode rather than the mode quietly bypassing it.
+    It is the excess half of the guard — hands BSVibe never sanctioned. Under the
+    old relaxation the agent could reach the founder's filesystem directly, which
+    is how a run once invented a codebase in an empty dir and shipped it.
     """
+    from backend.executors.worker import claude_code as cc
+
     _patch(
         monkeypatch, _Proc([_init_line([*_TOOLS, "Bash", "Read", "Edit"]), _assistant_line("k")])
     )
+    monkeypatch.setattr(cc, "_kill_process_group", lambda p: None)
 
-    result = await drain(ClaudeCodeExecutor().execute("build it", _ctx(native_tools=True)))
+    result = await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
 
-    assert result.success is True
+    assert result.success is False
+    assert "unsanctioned" in (result.error_message or "")
 
 
-async def test_native_shape_still_aborts_when_our_tools_never_arrived(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_the_absence_half_still_aborts(monkeypatch: pytest.MonkeyPatch) -> None:
     """The half that must NEVER be relaxed.
 
     An agent with no tools does not report that it has none — it fabricates (the
     CLI raced its own MCP connect, the model got zero tools, invented a tool call
     in prose and answered "The directory appears to be empty", reported success).
-    Presence is asserted in BOTH modes; only the extras are mode-dependent.
     """
     from backend.executors.worker import claude_code as cc
 
-    proc = _Proc([_init_line(["Bash", "Read", "Edit"]), _assistant_line("...")])
-    _patch(monkeypatch, proc)
+    _patch(monkeypatch, _Proc([_init_line(["Bash", "Read", "Edit"]), _assistant_line("...")]))
     monkeypatch.setattr(cc, "_kill_process_group", lambda p: None)
 
-    result = await drain(ClaudeCodeExecutor().execute("build it", _ctx(native_tools=True)))
+    result = await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
 
     assert result.success is False
     assert "never arrived" in (result.error_message or "")

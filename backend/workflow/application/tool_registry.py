@@ -125,27 +125,6 @@ WORK_TOOL_MCP_NAMES: tuple[str, ...] = (
     *RUN_TOOL_LOOP_OWNED,
 )
 
-#: The two axes as MCP names — DERIVED, so a tool added to either tuple above
-#: lands in the right per-model surface with nothing to hand-maintain.
-WORKSPACE_TOOL_MCP_NAMES: tuple[str, ...] = tuple(name for name, _ in WORKSPACE_TOOL_FORWARDING)
-PLATFORM_TOOL_MCP_NAMES: tuple[str, ...] = (
-    *(name for name, _ in PLATFORM_TOOL_FORWARDING),
-    *RUN_TOOL_LOOP_OWNED,
-)
-
-
-def mcp_tool_names_for(execution_target: str) -> tuple[str, ...]:
-    """The MCP tools a task in this execution model may see.
-
-    ``client_attach`` acts on the founder's own tree with the CLI's native
-    tools, so BSVibe supplies only the PLATFORM axis. Every other model — and an
-    absent/unknown value, which must never silently downgrade a run — gets the
-    whole surface, exactly as before.
-    """
-    if execution_target == "client_attach":
-        return PLATFORM_TOOL_MCP_NAMES
-    return WORK_TOOL_MCP_NAMES
-
 
 #: The inner-registry tools BOTH transports invoke — the forwarding targets. INV-7 #1: this is
 #: what the shared factory (:func:`assemble_run_tool_registry`) must register, so the MCP
@@ -358,12 +337,10 @@ __all__ = [
     "KNOWLEDGE_SEARCH_NAME",
     "MAX_NO_WORK_NUDGES",
     "PLATFORM_TOOL_FORWARDING",
-    "PLATFORM_TOOL_MCP_NAMES",
     "RUN_TOOL_FORWARDING",
     "RUN_TOOL_INNER_NAMES",
     "RUN_TOOL_LOOP_OWNED",
     "WORKSPACE_TOOL_FORWARDING",
-    "WORKSPACE_TOOL_MCP_NAMES",
     "WORK_TOOLS",
     "WORK_TOOL_MCP_NAMES",
     "_KNOWLEDGE_SEARCH_MAX_RESULTS",
@@ -374,6 +351,5 @@ __all__ = [
     "_sanitize_ask_user_question_options",
     "assemble_run_tool_registry",
     "make_knowledge_search_handler",
-    "mcp_tool_names_for",
     "register_knowledge_search",
 ]

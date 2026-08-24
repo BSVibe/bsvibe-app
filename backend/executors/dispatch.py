@@ -414,9 +414,6 @@ async def dispatch_task(
     if mcp:
         payload["mcp_config"] = str(mcp.get("mcp_config") or "")
         payload["allowed_tools"] = " ".join(mcp.get("allowed_tools") or ())
-        # #692 parity — may the CLI KEEP its own tools alongside BSVibe's? Streams
-        # carry flat strings, so this crosses as "1"/"0" and the worker re-types it.
-        payload["native_tools"] = "1" if mcp.get("native_tools") else "0"
     # The exec command's environment. Streams take flat strings, so it crosses
     # as JSON — and it is added LAST so that nothing above can be shadowed by a
     # crafted variable name.

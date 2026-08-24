@@ -4,8 +4,9 @@
 
 설계 SoT ``~/Docs/BSVibe_Tool_Surface_Design.md`` §5 의 PR 1·2 는 이미 끝났다:
 
-* **PR 1** (우회 제거) — ``mcp_tool_names_for`` 는 ``execution_target`` 만 받고,
-  ``knowledge_only`` 로 분기해 툴 0개로 답하던 경로가 없다. 모든 런이 같은 seam 을 탄다.
+* **PR 1** (우회 제거) — ``knowledge_only`` 로 분기해 툴 0개로 답하던 경로가 없다.
+  모든 런이 같은 표면을 받는다. (2026-08-24 이후 그 표면은 실행모델로도 안 갈린다 —
+  seam 함수 ``mcp_tool_names_for`` 자체가 사라지고 ``WORK_TOOL_MCP_NAMES`` 하나가 남았다.)
 * **PR 2** (ASK 브리핑) — ``_loop_context.system_prompt_for`` 가 ASK 면 조사자 정체성을
   **고른다** (#779). 금지를 덧붙이는 게 아니라 정체성을 바꾼다.
 
@@ -64,13 +65,12 @@ def test_the_stored_deliverable_kind_survives() -> None:
 
 
 def test_every_run_still_takes_the_one_tool_seam() -> None:
-    """양성 대조군 — 우회가 없다는 것이 이 PR 의 전제다. 그 seam 이 그대로여야 한다."""
-    import inspect
+    """양성 대조군 — 우회가 없다는 것이 이 PR 의 전제다. 표면은 하나로 남아야 한다."""
+    from backend.dispatch.adapter import build_work_tool_dispatch
+    from backend.workflow.application.tool_registry import WORK_TOOL_MCP_NAMES
 
-    from backend.workflow.application.tool_registry import mcp_tool_names_for
-
-    params = set(inspect.signature(mcp_tool_names_for).parameters)
-    assert params == {"execution_target"}, f"seam 입력이 늘었다: {params}"
+    surface = build_work_tool_dispatch(token="t", issuer="https://x")["allowed_tools"]
+    assert surface == [f"mcp__bsvibe__{name}" for name in WORK_TOOL_MCP_NAMES]
 
 
 def test_the_ask_identity_is_still_selected_not_appended() -> None:

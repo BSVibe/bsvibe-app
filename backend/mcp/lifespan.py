@@ -35,6 +35,7 @@ async def mcp_lifespan(
     *,
     session_factory: async_sessionmaker[Any],
     delivery_dispatcher: Any | None = None,
+    client_sandbox: Any | None = None,
     record_question: Any | None = None,
     record_deliverable: Any | None = None,
     record_progress: Any | None = None,
@@ -46,6 +47,10 @@ async def mcp_lifespan(
     MCP ``bsvibe_safe_mode_approve`` handler dispatches through the
     same code path as the REST route. Passed through to
     :func:`build_server` and installed into every :class:`ToolContext`.
+
+    ``client_sandbox`` (optional) — same shape: resolves the founder's own machine for a
+    ``client_attach`` run, injected because addressing it reaches the executor dispatch
+    substrate, which the MCP import contract forbids this context.
     """
     settings = get_settings()
     issuer = settings.oauth_issuer
@@ -58,6 +63,7 @@ async def mcp_lifespan(
         session_factory=session_factory,
         registry=registry,
         delivery_dispatcher=delivery_dispatcher,
+        client_sandbox=client_sandbox,
     )
     manager = StreamableHTTPSessionManager(
         app=server,
