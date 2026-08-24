@@ -36,7 +36,6 @@ p = plugin(
     version="0.1.0",
     description="Email-sender connector — send transactional email from deliverables via Resend.",
     author="BSVibe",
-    data_jurisdiction="us",
     credentials=[
         {
             "name": "api_key",

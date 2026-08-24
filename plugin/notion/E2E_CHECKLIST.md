@@ -11,7 +11,7 @@ uv run pytest tests/plugins/implementations/notion -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_notion`
-- [x] Declares `data_jurisdiction="us"` + `token` credential
+- [x] Declares `token` credential
       — `TestPluginMeta`
 - [x] **Outbound** `page` / `page_image`: creates a page, returns
       `external_ref` + `url` + `compensation_handle` (tier `t3_new_artifact`)

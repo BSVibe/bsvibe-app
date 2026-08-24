@@ -992,10 +992,9 @@ export interface ConnectorImportResult {
 /** The data-jurisdiction allow-list the backend ModelAccount schema accepts
  *  (backend/accounts/schemas.py `Jurisdiction`). Invisible infra — the founder
  *  no longer hand-picks it (the backend defaults it to "unknown"); this stays
- *  as the source for the `ModelAccountJurisdiction` type the response carries. */
+ *  as the source for the `` type the response carries. */
 export const MODEL_ACCOUNT_JURISDICTIONS = ["us", "eu", "kr", "local", "unknown"] as const;
 
-export type ModelAccountJurisdiction = (typeof MODEL_ACCOUNT_JURISDICTIONS)[number];
 
 /** `POST /api/v1/accounts` body (backend ModelAccountCreate, extra=forbid). The
  *  caller supplies the plaintext `api_key`; the service encrypts it at rest and
@@ -1008,7 +1007,6 @@ export interface ModelAccountCreate {
   api_key: string;
   /** Invisible infra — the founder no longer hand-picks this; the backend
    *  defaults it to "unknown". Optional for the rare explicit caller. */
-  data_jurisdiction?: ModelAccountJurisdiction;
   api_base?: string | null;
   extra_params?: Record<string, unknown>;
 }
@@ -1022,7 +1020,6 @@ export interface ModelAccountUpdate {
   litellm_model?: string;
   api_base?: string | null;
   api_key?: string;
-  data_jurisdiction?: ModelAccountJurisdiction;
   is_active?: boolean;
   extra_params?: Record<string, unknown>;
 }
@@ -1038,7 +1035,6 @@ export interface ModelAccount {
   label: string;
   litellm_model: string;
   api_base: string | null;
-  data_jurisdiction: ModelAccountJurisdiction;
   is_active: boolean;
   has_api_key: boolean;
   extra_params: Record<string, unknown>;

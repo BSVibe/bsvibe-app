@@ -37,7 +37,6 @@ p = plugin(
     version="0.1.0",
     description="Linear connector — create issues from deliverables with compensation (archive).",
     author="BSVibe",
-    data_jurisdiction="us",
     credentials=[
         {
             "name": "api_key",

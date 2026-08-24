@@ -76,7 +76,6 @@ function acct(id: string, label: string, litellm_model: string) {
     label,
     litellm_model,
     api_base: null,
-    data_jurisdiction: "unknown",
     is_active: true,
     has_api_key: true,
     extra_params: {},

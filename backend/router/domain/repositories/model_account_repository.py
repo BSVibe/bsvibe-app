@@ -50,7 +50,6 @@ class ModelAccountRepository(Protocol):
         litellm_model: str,
         api_base: str | None,
         api_key_encrypted: str | None,
-        data_jurisdiction: str,
         extra_params: dict[str, Any],
     ) -> ModelAccount:
         """Stage + flush a new ModelAccount row scoped to

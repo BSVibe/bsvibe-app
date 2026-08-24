@@ -59,7 +59,6 @@ class TestPluginMeta:
     def test_name_and_jurisdiction(self):
         assert P.meta.name == "telegram"
         # Telegram is multi-region → "unknown" (unspecified/global), not "us"/"eu".
-        assert P.meta.data_jurisdiction == "unknown"
 
     def test_declares_credentials(self):
         names = {c["name"] for c in P.meta.credentials}

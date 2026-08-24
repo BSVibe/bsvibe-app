@@ -59,7 +59,6 @@ def _out_to_dict(row: ModelAccountOut) -> dict[str, Any]:
         "label": row.label,
         "litellm_model": row.litellm_model,
         "api_base": row.api_base,
-        "data_jurisdiction": row.data_jurisdiction,
         "is_active": row.is_active,
         "has_api_key": row.has_api_key,
         "extra_params": row.extra_params,
@@ -138,7 +137,6 @@ class ModelAccountsCreateInput(BaseModel):
     )
     api_key: str = Field(..., min_length=1)
     api_base: str | None = None
-    data_jurisdiction: str = "unknown"
     extra_params: dict[str, Any] = Field(default_factory=dict)
 
 

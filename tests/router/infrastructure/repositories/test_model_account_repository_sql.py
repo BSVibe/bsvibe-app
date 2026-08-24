@@ -24,7 +24,6 @@ async def test_create_and_get_roundtrip() -> None:
             litellm_model="ollama/qwen3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
 
@@ -48,7 +47,6 @@ async def test_get_returns_none_when_cross_workspace() -> None:
             litellm_model="ollama/qwen3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
 
@@ -78,7 +76,6 @@ async def test_list_for_account_includes_executor_provider() -> None:
             litellm_model="ollama/qwen3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
         # executor-pool account — now included
@@ -90,7 +87,6 @@ async def test_list_for_account_includes_executor_provider() -> None:
             litellm_model="executor/codex",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="unknown",
             extra_params={"worker_id": str(uuid.uuid4()), "executor_type": "codex"},
         )
 
@@ -114,7 +110,6 @@ async def test_list_for_account_only_active_filter() -> None:
             litellm_model="ollama/qwen3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
         inactive = await repo.create(
@@ -125,7 +120,6 @@ async def test_list_for_account_only_active_filter() -> None:
             litellm_model="ollama/llama3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
         inactive.is_active = False
@@ -154,7 +148,6 @@ async def test_list_active_for_workspace_spans_accounts_and_filters_inactive() -
             litellm_model="ollama/qwen3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
         row_b = await repo.create(
@@ -165,7 +158,6 @@ async def test_list_active_for_workspace_spans_accounts_and_filters_inactive() -
             litellm_model="gpt-4",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="unknown",
             extra_params={},
         )
         inactive = await repo.create(
@@ -176,7 +168,6 @@ async def test_list_active_for_workspace_spans_accounts_and_filters_inactive() -
             litellm_model="ollama/llama3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
         inactive.is_active = False
@@ -203,7 +194,6 @@ async def test_list_active_for_workspace_is_workspace_scoped() -> None:
             litellm_model="ollama/qwen3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
 
@@ -227,7 +217,6 @@ async def test_list_executor_accounts_for_worker_matches_extra_params() -> None:
             litellm_model="executor/codex",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="unknown",
             extra_params={"worker_id": str(worker_a), "executor_type": "codex"},
         )
         await repo.create(
@@ -238,7 +227,6 @@ async def test_list_executor_accounts_for_worker_matches_extra_params() -> None:
             litellm_model="executor/claude_code",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="unknown",
             extra_params={"worker_id": str(worker_a), "executor_type": "claude_code"},
         )
         await repo.create(
@@ -249,7 +237,6 @@ async def test_list_executor_accounts_for_worker_matches_extra_params() -> None:
             litellm_model="executor/codex",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="unknown",
             extra_params={"worker_id": str(worker_b), "executor_type": "codex"},
         )
 
@@ -272,7 +259,6 @@ async def test_delete_returns_true_then_false() -> None:
             litellm_model="ollama/qwen3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
 
@@ -294,7 +280,6 @@ async def test_update_patches_non_none_fields_only() -> None:
             litellm_model="ollama/qwen3",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="local",
             extra_params={},
         )
 

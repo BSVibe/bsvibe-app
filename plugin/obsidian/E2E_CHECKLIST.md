@@ -11,7 +11,7 @@ uv run pytest plugin/obsidian/tests -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_obsidian`
-- [x] Declares `data_jurisdiction="local"` + no required credentials
+- [x] Declares no required credentials
       — `TestPluginMeta`
 - [x] `@p.setup` reads `OBSIDIAN_VAULT_PATH` from env + optional
       `OBSIDIAN_EXCLUDE_PATTERNS` / `OBSIDIAN_DEFAULT_REGION`

@@ -40,7 +40,6 @@ p = plugin(
     author="BSVibe",
     # The export file sits on the founder's local machine; no cloud
     # residency boundary applies — local-only data.
-    data_jurisdiction="local",
     # No external API credentials; the binding config carries export_path.
     credentials=[],
 )

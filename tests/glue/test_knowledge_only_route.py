@@ -137,7 +137,6 @@ async def _seed_active_account(
                 label=label,
                 litellm_model="ollama_chat/qwen3-coder:30b",
                 api_key="sk-test",
-                data_jurisdiction="us",
                 extra_params=({"executor_type": "claude_code"} if provider == "executor" else {}),
             ),
         )

@@ -87,7 +87,6 @@ async def test_accounts_full_crud(client) -> None:
         "label": "primary",
         "litellm_model": "openai/gpt-4o-mini",
         "api_key": "sk-secret-test",
-        "data_jurisdiction": "us",
     }
     r = await client.post("/api/v1/accounts", json=create_body)
     assert r.status_code == 201, r.text

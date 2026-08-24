@@ -54,7 +54,6 @@ class ModelAccountService:
             litellm_model=payload.litellm_model,
             api_base=payload.api_base,
             api_key_encrypted=encrypted,
-            data_jurisdiction=payload.data_jurisdiction,
             extra_params=dict(payload.extra_params),
         )
         return ModelAccountOut.from_model(row)

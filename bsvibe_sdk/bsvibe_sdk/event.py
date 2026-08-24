@@ -6,7 +6,7 @@ typically with the :func:`on_event` decorator marker::
 
     from bsvibe_sdk import Event, on_event, plugin
 
-    p = plugin(name="audit-sink", credentials=[], data_jurisdiction="local")
+    p = plugin(name="audit-sink", credentials=[])
 
     @on_event(kind_prefix="audit.")
     async def record(event: Event) -> None:

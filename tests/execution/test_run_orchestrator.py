@@ -1577,7 +1577,6 @@ def _fake_action_plugin(
         version="0",
         description="fake connector",
         author="t",
-        data_jurisdiction="us",
         credentials=[],
         actions={
             action_name: ActionCapability(

@@ -176,7 +176,6 @@ async def test_register_worker_creates_executor_model_accounts() -> None:
             assert row.api_base is None
             # An executor account carries no api key — the column is now nullable.
             assert row.api_key_encrypted is None
-            assert row.data_jurisdiction == "unknown"
             assert row.is_active is True
             assert row.extra_params == {
                 "worker_id": str(worker.id),

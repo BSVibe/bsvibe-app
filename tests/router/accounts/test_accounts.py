@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC
 
 import pytest
-from pydantic import ValidationError
 
 from backend.router.accounts.crypto import CredentialCipher
 from backend.router.accounts.schemas import (
@@ -38,7 +36,6 @@ def _make_create() -> ModelAccountCreate:
         litellm_model="openai/gpt-4o",
         api_base=None,
         api_key="sk-secret",
-        data_jurisdiction="us",
     )
 
 
@@ -79,58 +76,6 @@ class TestCreate:
             account_id=other_account,
             payload=_make_create(),
         )
-
-    def test_invalid_jurisdiction_rejected_at_schema(self):
-        with pytest.raises(ValidationError):
-            ModelAccountCreate(
-                provider="openai",
-                label="x",
-                litellm_model="openai/gpt-4o",
-                api_key="x",
-                data_jurisdiction="mars",  # type: ignore[arg-type]
-            )
-
-    def test_jurisdiction_optional_defaults_to_unknown(self):
-        # The founder no longer hand-picks a data jurisdiction; omitting it
-        # must succeed and fall back to the invisible-infra default.
-        payload = ModelAccountCreate(
-            provider="openai",
-            label="x",
-            litellm_model="openai/gpt-4o",
-            api_key="x",
-        )
-        assert payload.data_jurisdiction == "unknown"
-
-    async def test_create_without_jurisdiction_stores_unknown(
-        self, service, workspace_id, account_id
-    ):
-        out = await service.create(
-            workspace_id=workspace_id,
-            account_id=account_id,
-            payload=ModelAccountCreate(
-                provider="openai",
-                label="defaulted",
-                litellm_model="openai/gpt-4o",
-                api_key="sk-x",
-            ),
-        )
-        assert out.data_jurisdiction == "unknown"
-
-    async def test_create_with_explicit_jurisdiction_stores_it(
-        self, service, workspace_id, account_id
-    ):
-        out = await service.create(
-            workspace_id=workspace_id,
-            account_id=account_id,
-            payload=ModelAccountCreate(
-                provider="openai",
-                label="explicit-eu",
-                litellm_model="openai/gpt-4o",
-                api_key="sk-x",
-                data_jurisdiction="eu",
-            ),
-        )
-        assert out.data_jurisdiction == "eu"
 
 
 class TestListGetUpdateDelete:
@@ -247,7 +192,6 @@ class TestExecutorRowsVisibleInList:
             litellm_model="executor/claude_code",
             api_base=None,
             api_key_encrypted=None,
-            data_jurisdiction="unknown",
             extra_params={"worker_id": str(uuid.uuid4()), "executor_type": "claude_code"},
         )
 
@@ -301,7 +245,6 @@ class TestRevealApiKeyLocalProviders:
             litellm_model=f"{provider}/whatever",
             api_base=None,
             api_key_encrypted=api_key_encrypted,
-            data_jurisdiction="self-hosted-kr",
             extra_params={},
         )
 
@@ -341,45 +284,3 @@ class TestRevealApiKeyLocalProviders:
         )
         with pytest.raises(ValueError, match="has no api key to reveal"):
             service.reveal_api_key(row)
-
-
-class TestFromModelTolerantRead:
-    """A ModelAccount row may hold a data_jurisdiction the OUT Literal doesn't
-    recognise (seeded/legacy value such as 'self-hosted-kr'). One such row must
-    never 500 the whole ``GET /api/v1/accounts`` list — from_model coerces any
-    unrecognised jurisdiction to 'unknown' (tolerant read)."""
-
-    @staticmethod
-    def _row(jurisdiction: str):
-        import types
-        from datetime import datetime
-
-        return types.SimpleNamespace(
-            id=uuid.uuid4(),
-            workspace_id=uuid.uuid4(),
-            account_id=uuid.uuid4(),
-            provider="ollama",
-            label="Local Ollama",
-            litellm_model="ollama_chat/qwen3-coder:30b",
-            api_base="http://host.docker.internal:11434",
-            data_jurisdiction=jurisdiction,
-            is_active=True,
-            api_key_encrypted=None,
-            extra_params={},
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        )
-
-    def test_unrecognised_jurisdiction_coerced_to_unknown(self):
-        from backend.router.accounts.schemas import ModelAccountOut
-
-        out = ModelAccountOut.from_model(self._row("self-hosted-kr"))
-        assert out.data_jurisdiction == "unknown"
-        assert out.has_api_key is False
-
-    def test_recognised_jurisdiction_preserved(self):
-        from backend.router.accounts.schemas import ModelAccountOut
-
-        for j in ("us", "eu", "kr", "local", "unknown"):
-            out = ModelAccountOut.from_model(self._row(j))
-            assert out.data_jurisdiction == j

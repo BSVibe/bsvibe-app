@@ -4,31 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
-# Allow-list matches backend.extensions.plugin.VALID_JURISDICTIONS — single source
-# of truth lives in workspace + plugin spec; ModelAccount mirrors the same
-# values so the validator chain is uniform.
-Jurisdiction = Literal["us", "eu", "kr", "local", "unknown"]
-
-_VALID_JURISDICTIONS: frozenset[str] = frozenset(("us", "eu", "kr", "local", "unknown"))
-
-
-def _coerce_jurisdiction(value: Any) -> Jurisdiction:
-    """Tolerant read for the OUT schema.
-
-    A ``model_accounts`` row may carry a ``data_jurisdiction`` the OUT Literal
-    does not recognise — e.g. a seeded/legacy value like ``self-hosted-kr``.
-    The write path (``ModelAccountCreate``) constrains new values, but the
-    column is a plain ``VARCHAR`` so any string can already be on disk. Without
-    coercion a single unrecognised row raises ``ValidationError`` and 500s the
-    *entire* ``GET /api/v1/accounts`` list, taking the whole Models settings
-    surface down. Fall back to ``"unknown"`` so one bad row never breaks the
-    list.
-    """
-    return value if value in _VALID_JURISDICTIONS else "unknown"
 
 
 class ModelAccountCreate(BaseModel):
@@ -44,7 +22,6 @@ class ModelAccountCreate(BaseModel):
     # Invisible-infra: the founder no longer hand-picks this. Optional in the
     # request body; defaults to "unknown" so the NOT NULL column is always
     # populated. Explicit callers (worker SDK, tests) may still supply a value.
-    data_jurisdiction: Jurisdiction = "unknown"
     extra_params: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -57,7 +34,6 @@ class ModelAccountUpdate(BaseModel):
     litellm_model: str | None = Field(default=None, min_length=1, max_length=255)
     api_base: str | None = None
     api_key: str | None = Field(default=None, min_length=1)
-    data_jurisdiction: Jurisdiction | None = None
     is_active: bool | None = None
     extra_params: dict[str, Any] | None = None
 
@@ -74,7 +50,6 @@ class ModelAccountOut(BaseModel):
     label: str
     litellm_model: str
     api_base: str | None
-    data_jurisdiction: Jurisdiction
     is_active: bool
     has_api_key: bool
     extra_params: dict[str, Any]
@@ -91,7 +66,6 @@ class ModelAccountOut(BaseModel):
             label=row.label,
             litellm_model=row.litellm_model,
             api_base=row.api_base,
-            data_jurisdiction=_coerce_jurisdiction(row.data_jurisdiction),
             is_active=row.is_active,
             has_api_key=bool(row.api_key_encrypted),
             extra_params=row.extra_params,

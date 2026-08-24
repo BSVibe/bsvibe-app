@@ -121,7 +121,6 @@ def test_plugin_decorator_is_callable_factory() -> None:
     builder = plugin(
         name="mock",
         credentials=[],
-        data_jurisdiction="local",
     )
     # The builder must expose the four primary capability decorators.
     assert callable(builder.action)
@@ -183,7 +182,6 @@ def test_all_export_is_complete() -> None:
         "CompensateCapability",
         "ActionCapability",
         "VALID_TRIGGER_TYPES",
-        "VALID_JURISDICTIONS",
         "VALID_COMPENSATION_TIERS",
         "plugin",
         "Action",

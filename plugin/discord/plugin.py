@@ -36,8 +36,6 @@ p = plugin(
     # behind a US-operated control plane — the concrete "us" value matches the
     # github/slack connectors (and is more accurate than "unknown" since the
     # operator/jurisdiction is well-defined, unlike Telegram). See
-    # VALID_JURISDICTIONS in backend/plugins/base.py.
-    data_jurisdiction="us",
     credentials=[
         {
             "name": "bot_token",

@@ -46,7 +46,6 @@ p = plugin(
     version="0.1.0",
     description="Notion connector — create pages from deliverables with compensation (archive).",
     author="BSVibe",
-    data_jurisdiction="us",
     credentials=[
         {
             "name": "token",

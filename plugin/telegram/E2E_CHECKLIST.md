@@ -11,7 +11,7 @@ uv run pytest tests/plugins/implementations/telegram -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_telegram`
-- [x] Declares `data_jurisdiction="unknown"` + bot_token / webhook_secret
+- [x] Declares bot_token / webhook_secret
       credentials — `TestPluginMeta`
 - [x] **Inbound**: valid secret-token message update → `TriggerEvent`
       (idempotency_key derived from Telegram `update_id`)
@@ -38,11 +38,6 @@ uv run pytest tests/plugins/implementations/telegram -q
 
 ## Notes / deviations
 
-- **data_jurisdiction = `unknown`**: Telegram is operated out of multiple
-  regions, so neither `us` nor `eu` is accurate. The framework
-  (`VALID_JURISDICTIONS` in `backend/plugins/base.py`) supports `unknown` for
-  "unspecified/global", so that is used rather than the imprecise `us` the
-  github/slack connectors default to.
 - **Auth scheme**: Telegram does NOT sign the body (no HMAC / replay window
   like Slack). Its webhook auth is the shared **secret token** echoed in the
   `X-Telegram-Bot-Api-Secret-Token` header; we constant-time compare it.

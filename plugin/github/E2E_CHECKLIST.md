@@ -11,7 +11,7 @@ uv run pytest tests/plugins/implementations/github -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_github`
-- [x] Declares `data_jurisdiction="us"` + token / webhook_secret credentials
+- [x] Declares token / webhook_secret credentials
       — `TestPluginMeta`
 - [x] **Inbound**: valid signed PR webhook → `TriggerEvent`
       (idempotency_key = `X-GitHub-Delivery`)

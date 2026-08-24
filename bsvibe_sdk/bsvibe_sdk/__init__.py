@@ -18,7 +18,7 @@ Example::
 
     from bsvibe_sdk import Context, Result, plugin
 
-    p = plugin(name="github", credentials=[...], data_jurisdiction="us")
+    p = plugin(name="github", credentials=[...])
 
     @p.action(name="open_pr", mcp_exposed=True)
     async def open_pr(context: Context, *, branch: str, title: str) -> Result:
@@ -33,7 +33,6 @@ from bsvibe_sdk.context import Context, Result
 from bsvibe_sdk.event import Event, EventBusSubscriber, on_event
 from bsvibe_sdk.plugin import (
     VALID_COMPENSATION_TIERS,
-    VALID_JURISDICTIONS,
     VALID_TRIGGER_TYPES,
     ActionCapability,
     CompensateCapability,
@@ -56,7 +55,6 @@ from bsvibe_sdk.webhook import (
 
 __all__ = [
     "VALID_COMPENSATION_TIERS",
-    "VALID_JURISDICTIONS",
     "VALID_TRIGGER_TYPES",
     "Action",
     "ActionCapability",

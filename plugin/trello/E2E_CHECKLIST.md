@@ -11,7 +11,7 @@ uv run pytest tests/plugins/implementations/trello -q
 
 - [x] Plugin is discoverable by the loader (no central registry edit)
       — `test_plugin.py::TestLoaderDiscovery::test_loader_discovers_trello`
-- [x] Declares `data_jurisdiction="us"` + `api_key` / `token` credentials
+- [x] Declares `api_key` / `token` credentials
       — `TestPluginMeta`
 - [x] **Outbound** `card`: creates a card, returns `external_ref`
       (`trello://card/<id>`) + `url` (`shortUrl`/`url`) +

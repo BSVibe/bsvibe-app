@@ -47,7 +47,6 @@ def _stub_account(
         litellm_model="ollama_chat/qwen3" if provider == "ollama" else "executor/claude_code",
         api_base=None,
         api_key_encrypted=None,
-        data_jurisdiction="us",
         is_active=True,
         extra_params=extra_params or {},
     )
@@ -263,7 +262,6 @@ def _executor_account(workspace_id: uuid.UUID, worker_id: uuid.UUID) -> ModelAcc
         litellm_model="executor/claude_code",
         api_base=None,
         api_key_encrypted=None,
-        data_jurisdiction="unknown",
         is_active=True,
         extra_params={"worker_id": str(worker_id), "executor_type": "claude_code"},
     )
@@ -538,7 +536,6 @@ class TestExecutorAdapterChat:
                     litellm_model="opencode-go/qwen3.6-plus",
                     api_base=None,
                     api_key_encrypted=None,
-                    data_jurisdiction="unknown",
                     is_active=True,
                     extra_params={
                         "worker_id": str(worker.id),
@@ -595,7 +592,6 @@ class TestExecutorAdapterChat:
                     litellm_model="sonnet",
                     api_base=None,
                     api_key_encrypted=None,
-                    data_jurisdiction="unknown",
                     is_active=True,
                     extra_params={
                         "worker_id": str(worker.id),
@@ -655,7 +651,6 @@ class TestExecutorAdapterChat:
                     litellm_model="sonnet",
                     api_base=None,
                     api_key_encrypted=None,
-                    data_jurisdiction="unknown",
                     is_active=True,
                     extra_params={
                         "worker_id": str(worker.id),

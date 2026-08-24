@@ -64,7 +64,6 @@ class TestPluginMeta:
     def test_name_and_jurisdiction(self):
         assert P.meta.name == "discord"
         # Discord is US-operated → "us" (matches github/slack).
-        assert P.meta.data_jurisdiction == "us"
 
     def test_declares_credentials(self):
         names = {c["name"] for c in P.meta.credentials}

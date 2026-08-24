@@ -36,7 +36,6 @@ def _plugin(name: str, *, actions: dict[str, ActionCapability] | None = None) ->
         version="0",
         description="",
         author="t",
-        data_jurisdiction="us",
         credentials=[],
         actions=actions or {},
     )
