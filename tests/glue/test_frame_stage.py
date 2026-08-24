@@ -247,7 +247,7 @@ async def test_llm_knowledge_only_with_concrete_artifact_coerced_to_agent_loop(
     Dogfood (2026-05-28, prod): the local model classified "Create a Python
     file calc.py with a function multiply" as ``knowledge_only`` while also
     hinting ``artifact_type_hint="code"``. B9b then routed it to the
-    KnowledgeAnswerOrchestrator, which answered with code-in-text and wrote
+    the knowledge-only orchestrator, which answered with code-in-text and wrote
     NO file, yet the run was marked shipped. We never trust an incoherent
     classification — a concrete artifact wins over the knowledge_only flag."""
     _write_skill(tmp_path, "weekly-digest", "Generate a weekly digest from notes")

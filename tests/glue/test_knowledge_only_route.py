@@ -1,7 +1,7 @@
 """Frame path ROUTING in the worker factory — every run takes ONE seam.
 
 B9b used to short-circuit a ``knowledge_only`` run into the tool-less
-:class:`KnowledgeAnswerOrchestrator`. That bypass is GONE: it skipped the
+the tool-less knowledge-only orchestrator. That bypass is GONE: it skipped the
 tool-surface seam (``tool_registry.RUN_TOOL_FORWARDING``, INV-7), so an ASK could
 not open a single file and answered by GUESSING — prod ``c40c513d`` was told to
 "코드로 확인하고 근거 파일:라인을 대라" and its deliverable opens with "코드를
@@ -38,10 +38,7 @@ from backend.router.accounts.service import ModelAccountService
 from backend.router.llm_client import LlmClient
 from backend.workflow.application.agent_loop import RunOrchestrator
 from backend.workflow.application.agent_runner import AgentRunner
-from backend.workflow.application.knowledge_orchestrator import (
-    KNOWLEDGE_ANSWER_KIND,
-    KnowledgeAnswerOrchestrator,
-)
+from backend.workflow.domain.verified_deliverable import ANSWER_DELIVERABLE_KIND
 from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
@@ -246,7 +243,11 @@ async def test_ask_run_takes_the_same_seam_as_any_other_run(
         orch = await deps.orchestrator_factory(session, run)
 
         assert isinstance(orch, RunOrchestrator)
-        assert not isinstance(orch, KnowledgeAnswerOrchestrator)
+        # 우회가 **모듈째** 사라졌다 (2026-08-23) — 타입 비교보다 강한 단언이다.
+        import importlib
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("backend.workflow.application.knowledge_orchestrator")
 
 
 async def test_agent_loop_path_is_unchanged(
@@ -308,7 +309,7 @@ async def test_agent_loop_path_is_unchanged(
         deliverable = (await s.execute(select(Deliverable))).scalar_one()
         # Native loop → a CODE deliverable, NOT a knowledge answer.
         assert deliverable.deliverable_type is DeliverableType.CODE
-        assert deliverable.payload.get("kind") != KNOWLEDGE_ANSWER_KIND
+        assert deliverable.payload.get("kind") != ANSWER_DELIVERABLE_KIND
 
 
 async def test_factory_routes_executor_account_even_when_knowledge_only(
@@ -386,10 +387,3 @@ async def test_knowledge_only_without_llm_falls_back_to_loop(
         # No account → no orchestrator (paused on a Decision), never a knowledge
         # orchestrator built without a model.
         assert orch is None
-
-
-async def test_native_and_knowledge_orchestrators_are_run_compute() -> None:
-    """Structural: both satisfy the RunCompute Protocol (one Protocol, not a
-    Union). ``async`` only to satisfy the module's ``pytestmark``."""
-    assert hasattr(RunOrchestrator, "run")
-    assert hasattr(KnowledgeAnswerOrchestrator, "run")

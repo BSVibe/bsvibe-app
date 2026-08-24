@@ -3,11 +3,12 @@
 Asserts:
 1. backend/execution/ directory deleted entirely.
 2. backend/supervisor/ directory deleted entirely (sandbox absorbed into Workflow infra).
-3. New homes exist + import cleanly:
+3. New homes exist + import cleanly (``knowledge_orchestrator`` 는 그 자리에 있었지만
+   툴 표면 seam 을 우회하던 경로라 2026-08-23 에 사라졌다 — 부재는
+   ``tests/test_the_knowledge_only_bypass_remnants_are_gone.py`` 가 지킨다):
      - backend.workflow.application.verification_service
      - backend.workflow.application.loop_llm
      - backend.workflow.application.handoff
-     - backend.workflow.application.knowledge_orchestrator
      - backend.workflow.application.audit_events
      - backend.workflow.infrastructure.connector_actions
      - backend.workflow.infrastructure.tools
@@ -43,7 +44,6 @@ def test_backend_supervisor_directory_removed() -> None:
         "backend.workflow.application.verification_service",
         "backend.workflow.application.loop_llm",
         "backend.workflow.application.handoff",
-        "backend.workflow.application.knowledge_orchestrator",
         "backend.workflow.application.audit_events",
         "backend.workflow.infrastructure.connector_actions",
         "backend.workflow.infrastructure.tools",

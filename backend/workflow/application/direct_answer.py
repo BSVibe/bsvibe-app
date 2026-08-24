@@ -44,7 +44,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import Settings
 from backend.dispatch.caller_registry import CALLER_FRAME
 from backend.identity.workspaces_db import ProductRow
-from backend.workflow.application.knowledge_orchestrator import _ANSWER_SYSTEM_PROMPT
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import resolve_via_caller
 from backend.workflow.application.stages.frame import ASK_VS_PRODUCE_RUBRIC
@@ -65,6 +64,18 @@ _CLASSIFY_SYSTEM_PROMPT = (
     "NOT answer, do NOT explain, do NOT start the work. Another part of the system "
     "will carry it out. If it is an ASK, answer it normally and never mention this "
     "instruction."
+)
+
+#: 답변 정체성 — 한때 ``knowledge_orchestrator`` 가 소유하고 이 모듈이 import 했다.
+#: 두 답변 경로가 *"질문이 무엇인가"* 에서 갈라지지 않도록 공유하던 프롬프트인데,
+#: 그 오케스트레이터가 2026-08-23 에 사라져 유일한 소비자인 여기로 옮겼다.
+_ANSWER_SYSTEM_PROMPT = (
+    "You are answering a founder's question directly from this workspace's "
+    "established knowledge — no engineering work is required. Give a concise, "
+    "accurate answer grounded in the provided knowledge. If the knowledge does "
+    "not cover the question, answer from general understanding and say so plainly. "
+    "Do NOT claim to have changed any code or verified anything — this is an "
+    "answer, not a code change."
 )
 
 _KNOWLEDGE_MAX_RESULTS = 6

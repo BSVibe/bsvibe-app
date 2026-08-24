@@ -17,7 +17,6 @@ from backend.workflow.application.runtime.account_resolution import (
 )
 from backend.workflow.application.runtime.agent_runtime import (
     _frame_skill_hint,
-    _is_knowledge_only,
     build_agent_execution_deps,
 )
 from backend.workflow.application.runtime.delivery_runtime import (
@@ -68,7 +67,6 @@ __all__ = [
     "_ResolverFrameLlm",
     "_build_composite_workspace_provisioner",
     "_frame_skill_hint",
-    "_is_knowledge_only",
     "_key_from_settings",
     "list_active_workspace_accounts",
     "_product_workspace_provisioner",
