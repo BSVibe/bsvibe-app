@@ -14,7 +14,7 @@ own empty sandbox.
 
 :class:`AnswerGroundingRetriever` wraps any :class:`CanonRetriever` and expands
 each note ref into the note's text. It is applied ONLY on the answer paths (the
-inline ``/messages/ask`` service and :class:`KnowledgeAnswerOrchestrator`) — the
+inline ``/messages/ask`` service) — the
 verify path keeps its exact statement wire format, so judge criteria are unchanged.
 """
 
@@ -137,7 +137,7 @@ def build_answer_retriever(session: Any, *, settings: Any, workspace_id: uuid.UU
     hits expanded to their content.
 
     The single builder both answer paths share. They used to differ — the async
-    :class:`KnowledgeAnswerOrchestrator` composed semantic note search while the
+    한때 있던 knowledge-only 오케스트레이터가 semantic note search 를 조합했고 the
     inline ``/messages/ask`` service used the canon retriever alone, so the same
     question was grounded differently depending on which surface the founder asked
     from (and the inline one, on a workspace with no promoted concepts yet, was

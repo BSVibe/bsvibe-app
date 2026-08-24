@@ -70,14 +70,6 @@ from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionD
 logger = structlog.get_logger(__name__)
 
 
-def _is_knowledge_only(run: ExecutionRun) -> bool:
-    """Read the frame's ``path_classification`` off ``run.payload`` (B9b)."""
-    payload = run.payload or {}
-    frame = payload.get("frame") if isinstance(payload, dict) else None
-    classification = frame.get("path_classification") if isinstance(frame, dict) else None
-    return classification == "knowledge_only"
-
-
 def _frame_skill_hint(
     run: ExecutionRun, skill_loader_for: Callable[[uuid.UUID], SkillLoader]
 ) -> tuple[str | None, str | None]:
@@ -335,6 +327,5 @@ def build_agent_execution_deps(
 
 __all__ = [
     "_frame_skill_hint",
-    "_is_knowledge_only",
     "build_agent_execution_deps",
 ]

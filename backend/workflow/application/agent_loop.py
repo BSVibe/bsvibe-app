@@ -168,7 +168,7 @@ class RunCompute(Protocol):
     drives.
 
     The native :class:`RunOrchestrator` and the
-    :class:`~backend.workflow.application.knowledge_orchestrator.KnowledgeAnswerOrchestrator`
+    한때 있던 knowledge-only 오케스트레이터
     satisfy it structurally, so the worker-runtime factory can return either
     without the runner depending on a Union of concretes (per the
     ``bsvibe-llm-wrapper-not-raw-litellm`` rule: one Protocol, never a Union).

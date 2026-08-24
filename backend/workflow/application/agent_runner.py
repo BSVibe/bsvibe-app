@@ -230,7 +230,7 @@ class AgentRunner:
         ``orchestrator`` is any :class:`RunCompute` — the native
         :class:`~backend.workflow.application.agent_loop.RunOrchestrator`
         or the
-        :class:`~backend.workflow.application.knowledge_orchestrator.KnowledgeAnswerOrchestrator`.
+        한때 있던 knowledge-only 오케스트레이터.
         Both have the same ``run(...) -> LoopResult``
         shape, so the outcome mapping below is backend-agnostic.
 
