@@ -77,6 +77,28 @@ async def _seed_worker(
 _FAKE_WORKER_BUDGET_S = 60.0
 
 
+async def _worker_then(redis: Any, factory: Any, worker_id: uuid.UUID, request: Any) -> Any:
+    """Start the fake worker FIRST, let it reach its ``xread``, then issue *request*.
+
+    ``asyncio.gather(request, worker)`` starts the request first and only yields
+    to the worker when the request awaits — so the dispatch can land before the
+    worker has ever polled. The stream read starts at ``"0"`` so a task that
+    arrived early is still seen, which is why this raced correctly almost every
+    time and then did not (CI 2026-08-25). Ordering it explicitly removes the
+    question rather than re-tuning a timeout around it.
+    """
+    worker = asyncio.create_task(_run_one_exec_task(redis, factory, worker_id))
+    # One event-loop turn is enough to run the worker up to its first await;
+    # sleep(0) yields without adding wall-clock to every test that uses this.
+    await asyncio.sleep(0)
+    try:
+        return await request
+    finally:
+        # The request finished (or raised). Let the worker finish its own task —
+        # it must never be left pending, which would leak into the next test.
+        await worker
+
+
 async def _run_one_exec_task(redis: Any, factory: Any, worker_id: uuid.UUID) -> None:
     """Simulate A/2's worker for exactly one ``exec`` task on ``worker_id``'s stream.
 
@@ -93,9 +115,13 @@ async def _run_one_exec_task(redis: Any, factory: Any, worker_id: uuid.UUID) -> 
     # failure looked like a product timeout and was really a harness with no
     # margin (CI flake, 2026-08-10). The dispatch it waits for is a DB commit +
     # XADD, so the budget must cover a slow runner, not a fast laptop.
-    deadline = asyncio.get_running_loop().time() + _FAKE_WORKER_BUDGET_S
+    started = asyncio.get_running_loop().time()
+    deadline = started + _FAKE_WORKER_BUDGET_S
+    reads = 0
+    seen: list[str] = []
     while asyncio.get_running_loop().time() < deadline:
         entries = await redis.xread({stream: last_id}, count=10, block=50)
+        reads += 1
         if not entries:
             continue
         for _stream, msgs in entries:
@@ -103,6 +129,7 @@ async def _run_one_exec_task(redis: Any, factory: Any, worker_id: uuid.UUID) -> 
                 last_id = entry_id
                 if fields.get("action") != "exec":
                     continue
+                seen.append(str(fields.get("action")))
                 task_id = uuid.UUID(fields["task_id"])
                 command = fields["prompt"]
                 cwd = fields.get("workspace_dir") or "."
@@ -125,6 +152,23 @@ async def _run_one_exec_task(redis: Any, factory: Any, worker_id: uuid.UUID) -> 
                     )
                     await s.commit()
                 return
+    # The budget elapsed without an ``exec`` task ever arriving. Returning here
+    # — which is what this helper used to do — is the WORST possible outcome:
+    # the exec side then sits out its OWN 90 s timeout and fails with
+    # ``SandboxError: list_dir '.': exit None``, which points at the product
+    # code while the thing that actually failed was this harness. CI flake
+    # 2026-08-25 cost a full investigation to that misattribution.
+    #
+    # So fail HERE, loudly, with what this loop actually observed. The numbers
+    # are the whole point: a starved event loop shows few reads, a wrong stream
+    # shows many reads and nothing seen, and a task on the right stream with the
+    # wrong action shows up in ``seen``.
+    elapsed = asyncio.get_running_loop().time() - started
+    raise AssertionError(
+        f"fake worker saw no exec task on {stream} in {elapsed:.1f}s "
+        f"({reads} xread calls, actions seen: {seen or 'none'}). "
+        "The harness failed, not the code under test."
+    )
 
 
 def _make_session(
@@ -156,9 +200,9 @@ async def test_exec_runs_command_on_worker_and_maps_zero_exit(tmp_path: Path) ->
         box = _make_session(
             redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
         )
-        exec_coro = box.exec("test -f marker.txt", timeout_s=10.0, shell=True)
-        worker_coro = _run_one_exec_task(redis, factory, wid)
-        result, _ = await asyncio.gather(exec_coro, worker_coro)
+        result = await _worker_then(
+            redis, factory, wid, box.exec("test -f marker.txt", timeout_s=10.0, shell=True)
+        )
         assert result.exit_code == 0
         assert result.timed_out is False
         # The command ran in the workspace, untouched by exec itself.
@@ -176,9 +220,8 @@ async def test_exec_failing_command_maps_nonzero_exit(tmp_path: Path) -> None:
         box = _make_session(
             redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
         )
-        result, _ = await asyncio.gather(
-            box.exec("echo boom; exit 3", timeout_s=10.0, shell=True),
-            _run_one_exec_task(redis, factory, wid),
+        result = await _worker_then(
+            redis, factory, wid, box.exec("echo boom; exit 3", timeout_s=10.0, shell=True)
         )
         assert result.exit_code != 0
         assert result.timed_out is False
@@ -195,10 +238,7 @@ async def test_read_file_returns_contents(tmp_path: Path) -> None:
         box = _make_session(
             redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
         )
-        data, _ = await asyncio.gather(
-            box.read_file("pyproject.toml", 8192),
-            _run_one_exec_task(redis, factory, wid),
-        )
+        data = await _worker_then(redis, factory, wid, box.read_file("pyproject.toml", 8192))
         assert b"name = 'x'" in data
 
 
@@ -213,10 +253,7 @@ async def test_read_file_missing_raises_sandbox_error(tmp_path: Path) -> None:
             redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
         )
         with pytest.raises(SandboxError):
-            await asyncio.gather(
-                box.read_file("nope.toml", 8192),
-                _run_one_exec_task(redis, factory, wid),
-            )
+            await _worker_then(redis, factory, wid, box.read_file("nope.toml", 8192))
     await redis.aclose()
 
 
@@ -232,10 +269,7 @@ async def test_list_dir_returns_entries(tmp_path: Path) -> None:
         box = _make_session(
             redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
         )
-        entries, _ = await asyncio.gather(
-            box.list_dir("."),
-            _run_one_exec_task(redis, factory, wid),
-        )
+        entries = await _worker_then(redis, factory, wid, box.list_dir("."))
         assert "a.py" in entries
         assert "sub/" in entries
 
@@ -300,4 +334,67 @@ async def test_manager_acquire_uses_founder_dir_not_callers_server_path(tmp_path
         assert box.workspace_mount == str(tmp_path)
         assert await mgr.health() is True
         await mgr.release(uuid.uuid4())
+    await redis.aclose()
+
+
+# ── the harness must accuse ITSELF, not the code under test ──────────────────
+#
+# CI 2026-08-25: ``_run_one_exec_task`` burned its 60 s budget without ever
+# seeing a task and then simply returned. The exec side sat out its own 90 s
+# timeout and the test died as
+# ``SandboxError: list_dir '.': exit None`` — pointing squarely at
+# ``client_worker_manager``, which had done nothing wrong. A full investigation
+# went into product code before the harness turned out to be the failing party.
+
+
+async def test_fake_worker_that_sees_no_task_accuses_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point the fake worker at a stream nobody dispatches to. It must fail
+    LOUDLY as a harness failure — not return, letting the exec side time out
+    and report a product error 90 seconds later."""
+    import tests.supervisor.sandbox.test_client_worker_manager as mod
+
+    monkeypatch.setattr(mod, "_FAKE_WORKER_BUDGET_S", 0.3)
+    redis = await _make_redis()
+    async with shared_file_sessionmaker() as factory:
+        with pytest.raises(AssertionError) as exc:
+            await _run_one_exec_task(redis, factory, uuid.uuid4())
+    await redis.aclose()
+
+    message = str(exc.value)
+    # It names itself as the failing party…
+    assert "harness failed, not the code under test" in message
+    # …and reports what it actually observed, which is what a CI-only flake
+    # needs: a starved loop shows few reads, a wrong stream shows many with
+    # nothing seen, a wrong action shows up under "actions seen".
+    assert "xread calls" in message
+    assert "actions seen" in message
+
+
+async def test_the_worker_is_never_left_pending_when_the_request_raises(
+    tmp_path: Path,
+) -> None:
+    """``_worker_then`` awaits the worker even when the request raises.
+
+    ``asyncio.gather`` does not: it propagates the first exception and leaves
+    the sibling running, so a failing test could leak a 60-second coroutine into
+    whatever ran next.
+    """
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with shared_file_sessionmaker() as factory:
+        wid = await _seed_worker(factory, workspace_id=workspace_id)
+        box = _make_session(
+            redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
+        )
+        with pytest.raises(SandboxError):
+            await _worker_then(redis, factory, wid, box.read_file("nope.toml", 8192))
+        # Nothing of ours is still scheduled.
+        others = [
+            t
+            for t in asyncio.all_tasks()
+            if t is not asyncio.current_task() and "_run_one_exec_task" in repr(t)
+        ]
+        assert others == []
     await redis.aclose()
