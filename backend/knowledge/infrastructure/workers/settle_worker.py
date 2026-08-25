@@ -77,6 +77,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.common.settle_kinds import (
     DECISION_RESOLUTION_SETTLE_KIND,
     NEGATIVE_PATTERN_SETTLE_KIND,
+    founder_authored_text,
 )
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.knowledge.extraction.worth_remembering import (
@@ -233,12 +234,34 @@ class Settlement:
     # :class:`~backend.knowledge.retrieval.negative_pattern_retriever.NegativePatternRetriever`
     # reads the guidance directly. ``None`` for every other settlement kind.
     reason: str | None = None
+    # §13: the one-click action key the founder pressed (``acknowledge`` /
+    # ``discard`` / ``ship`` / …), threaded from the resolve service's settle
+    # payload. Its PRESENCE is what tells the sink that ``answer`` above is the
+    # button key itself rather than a sentence the founder typed — see
+    # :attr:`founder_text`. ``None`` for a free-text resolution and for every
+    # non-checkpoint settlement.
+    action_key: str | None = None
     # v2 (agent-authored knowledge): the knowledge the WORKING agent declared in
     # its verification contract — recorded IN THE MOMENT with the full working
     # context a post-hoc reader never has. The sink writes it as a topic-titled
     # note. ``None`` for routine work (the agent declared none) — there is no
     # post-hoc extractor.
     agent_knowledge: RememberableKnowledge | None = None
+
+    @property
+    def founder_text(self) -> str | None:
+        """The text the FOUNDER actually wrote in this settlement, else ``None``.
+
+        Delegates to the shared leaf rule
+        (:func:`~backend.common.settle_kinds.founder_authored_text`) so every
+        producer — the checkpoint resolve service, the Safe Mode queue, and any
+        future third — is judged by the SAME sentence. This is the grounding the
+        Safe Mode queue's ``_record_rejection_knowledge`` already stated in
+        prose: *"매칭 근거는 형님이 직접 쓴 텍스트뿐이다"*.
+        """
+        return founder_authored_text(
+            answer=self.answer, reason=self.reason, action_key=self.action_key
+        )
 
 
 class SettleSink(Protocol):
@@ -373,8 +396,14 @@ class KnowledgeSettleSink:
     Knowledge is NOT a work-history log. The sink gates every settlement:
 
     * **Inherently notable** (``decision_resolution`` / ``negative_pattern`` — a
-      user CHOICE or a discard-with-reason) is ALWAYS written
-      (:func:`~backend.knowledge.extraction.worth_remembering.is_inherently_notable`).
+      user CHOICE or a discard-with-reason) is written when it carries text the
+      FOUNDER actually wrote
+      (:func:`~backend.knowledge.extraction.worth_remembering.is_inherently_notable`
+      over :attr:`Settlement.founder_text`). §13: a one-click action puts the
+      BUTTON KEY in ``answer``; that is zero founder characters, so it earns no
+      note. This is the single choke point every producer passes through — the
+      precondition used to live in only ONE of the two producers, and the one
+      that lacked it wrote 6 zero-text notes out of 11 in prod.
     * **Verified work** is written ONLY when the WORKING agent itself declared
       knowledge (``settlement.agent_knowledge`` — recorded in the moment with full
       working context, threaded from the verification contract), titled by its
@@ -411,7 +440,7 @@ class KnowledgeSettleSink:
         # declared knowledge (recorded in the moment with full working context) —
         # topic-titled. Routine work declares none → return None (no write). There
         # is NO post-hoc extractor: a settle-time reader can't see tacit knowledge.
-        if is_inherently_notable(settlement.kind):
+        if is_inherently_notable(settlement.kind, founder_text=settlement.founder_text):
             headline = summary.splitlines()[0][:80] if summary else "verified work step"
             title = f"Settle: {headline}"
             body = _observation_body(settlement, summary)
@@ -419,11 +448,20 @@ class KnowledgeSettleSink:
             title = settlement.agent_knowledge.topic
             body = _memory_body(settlement, settlement.agent_knowledge)
         else:
+            # §13 — ``kind`` + ``action_key`` + ``has_founder_text`` ride the skip
+            # log so the suppression is COUNTABLE in prod: a settlement of an
+            # inherently-notable kind skipped with ``has_founder_text=False`` is a
+            # one-click action (``acknowledge`` / a reason-less ``discard``), not
+            # ordinary quiet work. Same event name so the existing skip metric
+            # keeps working; the fields tell the two apart.
             logger.info(
                 "settle_sink_skipped_not_worth_remembering",
                 workspace_id=str(settlement.workspace_id),
                 run_id=str(settlement.run_id),
                 activity_id=str(settlement.activity_id),
+                kind=settlement.kind,
+                action_key=settlement.action_key,
+                has_founder_text=settlement.founder_text is not None,
             )
             return None
 
@@ -1109,6 +1147,10 @@ def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
         kind=_opt_str(payload.get("kind")),
         question=_opt_str(payload.get("question")),
         answer=_opt_str(payload.get("answer")),
+        # §13 — the button the founder pressed, when they pressed one. Without
+        # it the sink cannot tell a typed answer from a button key echoed into
+        # the ``answer`` field, and the founder-text precondition is unenforceable.
+        action_key=_opt_str(payload.get("action_key")),
         # G1 — rejection reason when this settle row came from a discard-with-
         # reason; ``None`` for every other settlement kind.
         reason=_opt_str(payload.get("reason")),

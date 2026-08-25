@@ -99,21 +99,32 @@ def test_declared_knowledge_leaves_real_phrase_untouched() -> None:
 
 
 def test_user_decision_is_inherently_notable() -> None:
-    # A resolved checkpoint is a USER CHOICE — always worth remembering, no LLM
-    # judgement needed (the founder decided something).
-    assert is_inherently_notable("decision_resolution") is True
+    # A resolved checkpoint is a USER CHOICE — worth remembering with no LLM
+    # judgement needed, PROVIDED the founder actually wrote the answer.
+    assert is_inherently_notable("decision_resolution", founder_text="Postgres") is True
 
 
 def test_negative_pattern_is_inherently_notable() -> None:
-    # A discard-with-reason is a LEARNING — always worth keeping.
-    assert is_inherently_notable("negative_pattern") is True
+    # A discard-with-REASON is a LEARNING — the reason is the founder's own text.
+    assert is_inherently_notable("negative_pattern", founder_text="hard to reason about") is True
 
 
 def test_plain_verified_work_is_not_inherently_notable() -> None:
     # Routine verified work is NOT automatically notable — it must earn a note via
-    # the extractor (and routine utility work earns nothing).
-    assert is_inherently_notable(None) is False
-    assert is_inherently_notable("verified_work") is False
+    # the agent's own declaration (and routine utility work earns nothing).
+    assert is_inherently_notable(None, founder_text="anything") is False
+    assert is_inherently_notable("verified_work", founder_text="anything") is False
+
+
+def test_a_notable_kind_without_founder_text_is_not_notable() -> None:
+    """§13 — the precondition the docstring always named. A one-click action's
+    ``answer`` is the BUTTON KEY, so it carries zero founder characters and the
+    kind alone must not grant a note. The end-to-end proof (producer → sink) and
+    the two positive controls live in
+    ``tests/knowledge/test_settlement_needs_founder_text.py``."""
+    assert is_inherently_notable("decision_resolution", founder_text=None) is False
+    assert is_inherently_notable("decision_resolution", founder_text="   ") is False
+    assert is_inherently_notable("negative_pattern", founder_text=None) is False
 
 
 # ── shared bar — the ingest compiler embeds the one principle ────────────────
