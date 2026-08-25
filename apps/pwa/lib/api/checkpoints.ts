@@ -29,15 +29,26 @@ export function resolveCheckpoint(
 }
 
 /** L-D2 — resolve a paused-run checkpoint via a one-click action
- *  (`ship` / `discard`) on an executor B2b Decision. The backend dispatches
- *  to the side-effecting handler; the response carries the new `run_status`
- *  (shipped / cancelled) so the row UI can reflect terminal state. */
+ *  (`retry` / `ship` / `discard`) on an executor B2b Decision. The backend
+ *  dispatches to the side-effecting handler; the response carries the new
+ *  `run_status` (shipped / cancelled) so the row UI can reflect terminal state.
+ *
+ *  §14 — `guidance` is the founder's own words typed alongside the button, sent
+ *  as `reason`. It is what makes "Guide & retry" mean what it says: the backend
+ *  seeds it as the resumption message the re-driven agent reads (and, on a
+ *  `discard`, keeps it as negative knowledge). Omitted entirely when blank, so a
+ *  text-free action stays text-free on the wire — that is the shape #823
+ *  suppresses from knowledge, and it must stay reachable. */
 export function resolveCheckpointAction(
   checkpointId: string,
   actionKey: string,
+  guidance?: string,
 ): Promise<CheckpointResolveResponse> {
+  const written = (guidance ?? "").trim();
+  const body: { action_key: string; reason?: string } = { action_key: actionKey };
+  if (written) body.reason = written;
   return apiFetch<CheckpointResolveResponse>(`/api/v1/checkpoints/${checkpointId}/resolve`, {
     method: "POST",
-    body: JSON.stringify({ action_key: actionKey }),
+    body: JSON.stringify(body),
   });
 }

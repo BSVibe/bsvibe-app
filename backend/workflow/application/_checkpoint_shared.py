@@ -111,6 +111,9 @@ ACTION_DISCARD = "discard"
 # handler — it falls through to the resume branch in ``resolve_checkpoint``
 # (RUNNING → OPEN), so ``AgentWorker.drive_once`` re-picks the run and drives a
 # fresh attempt. A failed run is recoverable, not a dead-end.
+# §14: the founder may send OPTIONAL guidance with the click (the resolve
+# service's ``reason``); it becomes the run's resumption message, so the label
+# below ("Guide & retry") is now backed by a wire that carries the guidance.
 ACTION_RETRY = "retry"
 # A pure "I've seen this" — records the founder's acknowledgment and touches the
 # run not at all. It exists for the INFORMATIONAL Decision: one raised about a

@@ -166,6 +166,19 @@ async def resolve_checkpoint(
     and dispatch the action — free-text/retry resumes the run RUNNING → OPEN so
     the worker re-picks it; ``ship`` / ``discard`` run the side-effecting
     handlers. The caller owns the transaction (this flushes, never commits).
+
+    ``reason`` is the founder's OWN WORDS typed alongside a one-click action —
+    a ``discard``'s why, a ``retry``'s how. It is not tied to one action key
+    (§14): the ``retry`` label literally reads *"Guide & retry" / "지침 주고 다시
+    시도"*, so guidance has to have somewhere to flow. What it feeds:
+
+    * the run's resumption context — :func:`~backend.workflow.application._loop_context._resumption_messages`
+      seeds the founder's sentence instead of the bare action key (which is
+      what the re-driven agent used to read: ``A: retry``);
+    * knowledge — the settle payload carries it where the shared leaf rule
+      :func:`~backend.common.settle_kinds.founder_authored_text` looks, so a
+      GUIDED action is not suppressed by the §13 gate. A text-free action still
+      is: that gate is not loosened, it is simply given the founder's text.
     """
     decisions = SqlAlchemyDecisionRepository(session)
     runs = SqlAlchemyRunRepository(session)
@@ -208,6 +221,10 @@ async def resolve_checkpoint(
     # the empty answer string. The settle activity and audit events reference
     # the key so downstream knowledge / analytics stays locale-independent.
     resolution_text = action_key if action_key is not None else answer
+    # §14: what the founder WROTE, separate from what is RECORDED. The recorded
+    # resolution stays the action key above (locale-independent wire id); these
+    # words are what the resuming agent and the vault need.
+    founder_words = reason.strip()
     decision.status = DecisionStatus.RESOLVED
     decision.resolution = resolution_text
     decision.resolved_at = now
@@ -226,7 +243,11 @@ async def resolve_checkpoint(
         {
             "decision_id": str(decision.id),
             "question": _question_text(decision, language),
-            "answer": resolution_text,
+            # The founder's sentence when they wrote one, else the resolution.
+            # This entry is read ONLY by ``_resumption_messages`` — it is the
+            # agent's context, not the record. Before §14 a guided ``retry``
+            # seeded the literal string "retry" here.
+            "answer": founder_words or resolution_text,
         }
     )
     payload["resolved_decisions"] = resolved
@@ -234,72 +255,20 @@ async def resolve_checkpoint(
 
     await session.flush()
 
-    # B11b — Knowledge-ize the resolution. Emit a ``settle`` ExecutionRunActivity
-    # carrying the decision-resolution payload + the run's stable clustering
-    # context (intent/product). The :class:`~backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`
-    # drains this row into the workspace's BSage vault, exactly like a
-    # verified-work observation — so a future run with similar signals can
-    # surface the prior decision via the retriever (the SAME seam B3 verify
-    # and B6 seed inject). ``verified`` is False — the resolution is an honest
-    # answer, NOT verified-as-code (B4 trust integrity).
-    settle_payload: dict[str, Any] = {
-        "kind": DECISION_RESOLUTION_SETTLE_KIND,
-        "decision_id": str(decision.id),
-        "question": _question_text(decision, language),
-        "answer": resolution_text,
-        "options": _decision_options(decision),
-        "action_key": action_key,
-        "resolved_by": str(actor_id),
-        "resolved_at": now.isoformat(),
-        "verified": False,
-        # A human-legible summary the settle sink uses as the garden note body /
-        # title. Capped so a long answer can't blow up the note size.
-        "summary": (
-            f"Decision resolved — Q: {_question_text(decision, language)} A: {resolution_text}"
-        )[:_SUMMARY_CAP],
-        **await settle_run_context(session, run),
-    }
-    session.add(
-        ExecutionRunActivity(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            workspace_id=run.workspace_id,
-            activity_type="settle",
-            payload=settle_payload,
-        )
+    # B11b + G1 — knowledge-ize the resolution (settle rows drained into the
+    # workspace vault by the SettleWorker). Extracted so this function stays
+    # legible; the rule about WHICH row carries the founder's words lives there.
+    await _record_resolution_knowledge(
+        session,
+        run=run,
+        decision=decision,
+        language=language,
+        resolution_text=resolution_text,
+        founder_words=founder_words,
+        action_key=action_key,
+        actor_id=actor_id,
+        now=now,
     )
-
-    # G1 — when the founder DISCARDS with a reason, capture that rejection as
-    # reusable negative knowledge. Emit a SECOND settle activity (additive to the
-    # decision_resolution row above) carrying ``kind = negative_pattern`` + the
-    # reason + the run's stable clustering context. The same SettleWorker drains
-    # it into the vault; the NegativePatternRetriever then surfaces it as "avoid
-    # this" guidance for a future run with overlapping signals — so the rejected
-    # approach is not repeated. Gated on a non-empty reason: a reasonless discard
-    # teaches nothing, so it writes no negative-pattern row.
-    reason_text = reason.strip()
-    if action_key == ACTION_DISCARD and reason_text:
-        negative_payload: dict[str, Any] = {
-            "kind": NEGATIVE_PATTERN_SETTLE_KIND,
-            "decision_id": str(decision.id),
-            "question": _question_text(decision, language),
-            "reason": reason_text,
-            "resolved_by": str(actor_id),
-            "resolved_at": now.isoformat(),
-            # A rejection is an honest founder signal, NEVER verified-as-code.
-            "verified": False,
-            "summary": (f"Rejected approach — {reason_text}")[:_SUMMARY_CAP],
-            **await settle_run_context(session, run),
-        }
-        session.add(
-            ExecutionRunActivity(
-                id=uuid.uuid4(),
-                run_id=run.id,
-                workspace_id=run.workspace_id,
-                activity_type="settle",
-                payload=negative_payload,
-            )
-        )
 
     await session.flush()
 
@@ -371,6 +340,112 @@ async def resolve_checkpoint(
         resolved_at=now,
         run_status=run.status,
     )
+
+
+async def _record_resolution_knowledge(
+    session: AsyncSession,
+    *,
+    run: ExecutionRun,
+    decision: Decision,
+    language: str,
+    resolution_text: str,
+    founder_words: str,
+    action_key: str | None,
+    actor_id: uuid.UUID,
+    now: datetime,
+) -> None:
+    """Emit the settle activities the SettleWorker drains into the vault.
+
+    Always one ``decision_resolution`` row (the run's own history), plus a
+    ``negative_pattern`` row when the founder DISCARDED with a reason.
+
+    §14 — the founder's words ride on WHICHEVER row will carry them into
+    knowledge, never both: one event, one note. A discard-with-reason already
+    gets the ``negative_pattern`` row (that is where "avoid this" is read
+    from), so the ``decision_resolution`` row stays wordless for it and the §13
+    gate suppresses the duplicate. Every OTHER action — a guided ``retry``
+    above all — has no second row, so its guidance belongs on the first one or
+    it reaches knowledge nowhere.
+    """
+    writes_negative_pattern = action_key == ACTION_DISCARD and bool(founder_words)
+    knowledge_words = "" if writes_negative_pattern else founder_words
+    answer_line = f"{resolution_text} — {knowledge_words}" if knowledge_words else resolution_text
+
+    # B11b — Knowledge-ize the resolution. Emit a ``settle`` ExecutionRunActivity
+    # carrying the decision-resolution payload + the run's stable clustering
+    # context (intent/product). The :class:`~backend.knowledge.infrastructure.workers.settle_worker.SettleWorker`
+    # drains this row into the workspace's BSage vault, exactly like a
+    # verified-work observation — so a future run with similar signals can
+    # surface the prior decision via the retriever (the SAME seam B3 verify
+    # and B6 seed inject). ``verified`` is False — the resolution is an honest
+    # answer, NOT verified-as-code (B4 trust integrity).
+    settle_payload: dict[str, Any] = {
+        "kind": DECISION_RESOLUTION_SETTLE_KIND,
+        "decision_id": str(decision.id),
+        "question": _question_text(decision, language),
+        # Still the action key when one was pressed — the §13 gate reads this
+        # field's shape as "a button key, zero founder characters", and that
+        # guarantee is what keeps text-free actions out of the vault.
+        "answer": resolution_text,
+        "options": _decision_options(decision),
+        "action_key": action_key,
+        # The slot ``founder_authored_text`` consults FIRST, whatever the action.
+        # Empty ⇒ the founder typed nothing here ⇒ no note.
+        "reason": knowledge_words,
+        "resolved_by": str(actor_id),
+        "resolved_at": now.isoformat(),
+        "verified": False,
+        # A human-legible summary the settle sink uses as the garden note body /
+        # title. Capped so a long answer can't blow up the note size. The
+        # founder's words go IN it — a note the gate lets through must actually
+        # contain what it was let through for.
+        "summary": (
+            f"Decision resolved — Q: {_question_text(decision, language)} A: {answer_line}"
+        )[:_SUMMARY_CAP],
+        **await settle_run_context(session, run),
+    }
+    session.add(
+        ExecutionRunActivity(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=run.workspace_id,
+            activity_type="settle",
+            payload=settle_payload,
+        )
+    )
+
+    # G1 — when the founder DISCARDS with a reason, capture that rejection as
+    # reusable negative knowledge. Emit a SECOND settle activity (additive to the
+    # decision_resolution row above) carrying ``kind = negative_pattern`` + the
+    # reason + the run's stable clustering context. The same SettleWorker drains
+    # it into the vault; the NegativePatternRetriever then surfaces it as "avoid
+    # this" guidance for a future run with overlapping signals — so the rejected
+    # approach is not repeated. Gated on a non-empty reason: a reasonless discard
+    # teaches nothing, so it writes no negative-pattern row. Reachable from the
+    # PWA since §14 — before that only MCP/REST ever sent a ``reason``, so all
+    # 19 prod negative patterns came from those two surfaces.
+    if writes_negative_pattern:
+        negative_payload: dict[str, Any] = {
+            "kind": NEGATIVE_PATTERN_SETTLE_KIND,
+            "decision_id": str(decision.id),
+            "question": _question_text(decision, language),
+            "reason": founder_words,
+            "resolved_by": str(actor_id),
+            "resolved_at": now.isoformat(),
+            # A rejection is an honest founder signal, NEVER verified-as-code.
+            "verified": False,
+            "summary": (f"Rejected approach — {founder_words}")[:_SUMMARY_CAP],
+            **await settle_run_context(session, run),
+        }
+        session.add(
+            ExecutionRunActivity(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                workspace_id=run.workspace_id,
+                activity_type="settle",
+                payload=negative_payload,
+            )
+        )
 
 
 async def _ship_decision_run(
