@@ -156,6 +156,7 @@ _DERIVATION_SYSTEM_PROMPT = (
     "debt in untouched files does not fail the change — this scoping does NOT apply "
     "to surface checks, which are about the delivered behaviour and are declared "
     "somewhere other than the changed files by their nature.\n"
+    "CI DECLARATIONS, when given, are what this repo requires of ITSELF — a check named there is one the gate should include, written the way the repo writes it and narrowed by the SCOPE rule above.\n"
     "SURFACE checks: if the repo DECLARES checks that drive its delivered behaviour "
     "end-to-end — the way a user receives it, rather than a unit of code — emit them "
     "with `kind:surface`. A declaration is a marked/named suite, a build target, or a "
@@ -188,12 +189,24 @@ def derivation_planner_messages(
     changed_files: list[str],
     intent: str,
     baseline: str | None = None,
+    ci_declarations: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
     """Build the (system, user) message pair grounding the deriver in the repo.
 
     ``manifests`` maps a repo-relative path (pyproject.toml, package.json,
     Cargo.toml, Makefile, a CI workflow, …) to its content — ONLY the files that
     actually exist, so the LLM cannot ground on a manifest the repo lacks.
+
+    ``ci_declarations`` maps a repo-relative path (a CI workflow, a pipeline
+    file, …) to its content, and renders as its OWN labelled block. It is kept
+    apart from ``manifests`` because they answer different questions: a manifest
+    says what the repo DEPENDS on, from which a conventional invocation must be
+    inferred, while a CI file states VERBATIM what the repo RUNS to check
+    itself. Measured (prod, 2026-08-25): checks inferable from a manifest landed
+    in 96% / 77% of derived gates, while the two whose command names exist only
+    in the CI file landed in 45% / 16% — the prompt had always said to ground on
+    CI, and CI had never been shown. Empty / absent → the block is OMITTED
+    entirely, never an empty header for the model to mis-ground on.
 
     ``baseline`` is where the tree stood before the run touched it. Offered so a
     constraint check can be anchored to it; OMITTED entirely when unknown rather
@@ -203,6 +216,12 @@ def derivation_planner_messages(
         "\n\n".join(f"=== {path} ===\n{content}" for path, content in manifests.items())
         if manifests
         else "(no manifests / build config found in this repo)"
+    )
+    ci_block = (
+        "\n\nThe repository's own CI declarations (what it runs to check itself):\n"
+        + "\n\n".join(f"=== {path} ===\n{content}" for path, content in ci_declarations.items())
+        if ci_declarations
+        else ""
     )
     changed_block = "\n".join(changed_files) if changed_files else "(no files changed)"
     baseline_block = (
@@ -215,6 +234,7 @@ def derivation_planner_messages(
         f"{baseline_block}"
         f"Files changed by this work step:\n{changed_block}\n\n"
         f"The repository's own declarations:\n{manifest_block}"
+        f"{ci_block}"
     )
     return [
         {"role": "system", "content": _DERIVATION_SYSTEM_PROMPT},

@@ -143,6 +143,28 @@ _MANIFEST_FILES: tuple[str, ...] = (
     "pom.xml",
     "build.gradle",
 )
+#: Bytes of each CI declaration file fed to the gate deriver — a workflow names
+#: the checks, which fits in a small window; a long matrix/deploy tail does not
+#: need to.
+_CI_CTX_BYTES = 8 * 1024
+#: At most this many CI declaration files are shown. A repo with 40 workflows
+#: would otherwise crowd the manifests out of the prompt entirely.
+_CI_MAX_FILES = 6
+#: And at most this many bytes across all of them, together.
+_CI_TOTAL_CTX_BYTES = 24 * 1024
+#: The directory whose files are enumerated as CI declarations, and the suffixes
+#: that count as one there.
+_CI_WORKFLOW_DIR = ".github/workflows"
+_CI_WORKFLOW_SUFFIXES: tuple[str, ...] = (".yml", ".yaml")
+#: Well-known single-file CI declarations. Deliberately short and generic — the
+#: same reasoning as :data:`_MANIFEST_FILES`: universal NAMES, no per-stack
+#: command logic. Whatever exists is shown; absent files are silently skipped.
+_CI_DECLARATION_FILES: tuple[str, ...] = (
+    ".gitlab-ci.yml",
+    ".circleci/config.yml",
+    "Jenkinsfile",
+    "azure-pipelines.yml",
+)
 #: Extensions the demonstration planner can meaningfully exercise as CODE — i.e.
 #: which files it is shown the CONTENTS of, because writing a probe that CALLS
 #: the deliverable takes knowing its API. A prose/data deliverable (``.md`` /
@@ -904,12 +926,74 @@ class VerificationService:
                 manifests[path] = text
         return manifests
 
+    async def _read_ci_declarations(self, box: SandboxSession) -> dict[str, str]:
+        """Read the repo's OWN CI declarations to ground the gate deriver.
+
+        SEPARATE from :meth:`_read_repo_manifests` on purpose, and its answer is
+        never mixed into that one: a manifest's PRESENCE doubles as a
+        fail-closed decision (``_manifest_present`` → "this repo has a
+        toolchain, so a deriver failure fails CLOSED"; ``inplace_gate``'s
+        ``if not manifests`` → an honest gateless verdict). A docs repo that
+        happens to run a CI workflow has no toolchain, and must keep answering
+        that question the same way.
+
+        Why it exists at all — measured in prod (2026-08-25) over 94 BSVibe
+        gates that produced commands: the checks a manifest lets you INFER
+        landed at 96% (`lint`) / 77% (`type`), while the two whose command names
+        appear ONLY in ``.github/workflows/ci.yml`` landed at 45% and 16%. The
+        deriver's system prompt had always told it to ground on CI and to prefer
+        a CI step verbatim; it had never once been shown a CI file.
+
+        BOUNDED three ways (:data:`_CI_MAX_FILES`, :data:`_CI_CTX_BYTES`,
+        :data:`_CI_TOTAL_CTX_BYTES`) and best-effort throughout: a repo with no
+        CI, a directory that will not list, an unreadable file, or a sandbox
+        that has gone away all yield a silently EMPTY result. Never an
+        exception — a CI read is grounding, and grounding that fails must
+        degrade the prompt, never fail the change. Ordering is deterministic
+        (sorted) so the same repo grounds the same prompt twice.
+        """
+        candidates: list[str] = []
+        try:
+            entries = await box.list_dir(_CI_WORKFLOW_DIR)
+        except Exception:  # noqa: BLE001 — no CI dir / unreachable box: no grounding, no failure
+            entries = []
+        candidates.extend(
+            sorted(
+                f"{_CI_WORKFLOW_DIR}/{name}"
+                for name in entries
+                # A trailing "/" is a subdirectory in every backend's listing.
+                if not name.endswith("/") and name.lower().endswith(_CI_WORKFLOW_SUFFIXES)
+            )
+        )
+        candidates.extend(_CI_DECLARATION_FILES)
+
+        declarations: dict[str, str] = {}
+        remaining = _CI_TOTAL_CTX_BYTES
+        for path in candidates:
+            if len(declarations) >= _CI_MAX_FILES or remaining <= 0:
+                break
+            data: bytes | None
+            try:
+                data = await box.read_file(path, min(_CI_CTX_BYTES, remaining))
+            except Exception:  # noqa: BLE001 — absent / unreadable: skipped, never a false-fail
+                data = None
+            if data is None:
+                continue
+            text = data.decode("utf-8", errors="replace").strip()[:remaining]
+            if text:
+                declarations[path] = text
+                remaining -= len(text)
+        if declarations:
+            logger.debug("gate_ci_declarations_read", paths=sorted(declarations))
+        return declarations
+
     async def _author_derived_gate(
         self,
         intent: str,
         manifests: dict[str, str],
         written_paths: list[str],
         baseline: str | None = None,
+        ci_declarations: dict[str, str] | None = None,
     ) -> DerivedGate | DerivedGateFailed:
         """Ask the independent deriver for this repo's verification commands,
         grounded in its manifests. Bounded — a hung executor CLI must never stall
@@ -929,6 +1013,7 @@ class VerificationService:
                         changed_files=written_paths,
                         intent=intent,
                         baseline=baseline,
+                        ci_declarations=ci_declarations,
                     ),
                     tools=None,
                 ),
@@ -971,7 +1056,10 @@ class VerificationService:
         payload = run.payload or {}
         intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
         manifests = await self._read_repo_manifests(box)
-        gate = await self._author_derived_gate(intent, manifests, written_paths, baseline)
+        ci_declarations = await self._read_ci_declarations(box)
+        gate = await self._author_derived_gate(
+            intent, manifests, written_paths, baseline, ci_declarations
+        )
         if isinstance(gate, DerivedGateFailed):
             return gate
         if not gate.applicable or gate.is_empty:
