@@ -73,6 +73,8 @@ from backend.executors.worker.service import (
     service_status,
     uninstall_service,
 )
+from backend.executors.worker.staleness import ProbeError, StalenessReport, Verdict, diagnose
+from backend.executors.worker.staleness_probes import system_probes
 
 logger = structlog.get_logger(__name__)
 
@@ -539,6 +541,53 @@ def _cmd_worker_status(args: argparse.Namespace) -> int:  # noqa: ARG001
     return 0
 
 
+def _format_staleness_report(report: StalenessReport) -> str:
+    head_short = report.head.sha[:12]
+    lines = [f"HEAD {head_short} committed at {report.head.committed_at.isoformat()}"]
+    if not report.daemons:
+        lines.append("No com.bsvibe.* daemons registered with launchd.")
+        return "\n".join(lines)
+    for daemon in report.daemons:
+        if daemon.verdict is Verdict.STALE:
+            lines.append(f"STALE    {daemon.label} (pid {daemon.pid}) — {daemon.detail}")
+        elif daemon.verdict is Verdict.CURRENT:
+            lines.append(
+                f"CURRENT  {daemon.label} (pid {daemon.pid}) — "
+                f"started {daemon.started_at.isoformat() if daemon.started_at else '?'}"
+            )
+        elif daemon.verdict is Verdict.NOT_RUNNING:
+            lines.append(f"IDLE     {daemon.label} — {daemon.detail}")
+        else:
+            lines.append(f"UNKNOWN  {daemon.label} (pid {daemon.pid}) — {daemon.detail}")
+    if report.has_stale:
+        lines.append("")
+        lines.append(f"{len(report.stale)} stale daemon(s) running pre-HEAD code — restart them.")
+    return "\n".join(lines)
+
+
+def _cmd_staleness(args: argparse.Namespace) -> int:
+    """Name any ``com.bsvibe.*`` daemon whose process started before repo HEAD.
+
+    The measured incident: a daemon can be healthy (fresh heartbeat, online
+    status) while running days-old code. Process start time is the one signal
+    that can't lie about that, so this compares it against HEAD directly.
+
+    ``probes_factory`` defaults to :func:`system_probes` (the real launchctl /
+    ps / git seam). Tests inject their own via ``args.probes_factory`` so the
+    real system is never touched — the parser never sets this attribute, so
+    production dispatch always gets the real one.
+    """
+    repo = args.repo or os.getcwd()
+    probes_factory = getattr(args, "probes_factory", None) or system_probes
+    try:
+        report = diagnose(probes_factory(repo=repo))
+    except ProbeError as exc:
+        print(f"staleness: {exc}", file=sys.stderr)
+        return 1
+    print(_format_staleness_report(report))
+    return 1 if report.has_stale else 0
+
+
 def build_bsvibe_worker_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bsvibe-worker",
@@ -596,6 +645,17 @@ def build_bsvibe_worker_parser() -> argparse.ArgumentParser:
             help="BSVibe checkout dir the worker runs from (default: current dir).",
         )
         _sp.set_defaults(func=_cmd_service)
+
+    p_stale = sub.add_parser(
+        "staleness",
+        help="Diagnose com.bsvibe.* daemons still running pre-HEAD code.",
+    )
+    p_stale.add_argument(
+        "--repo",
+        default=None,
+        help="BSVibe checkout dir to compare HEAD against (default: current dir).",
+    )
+    p_stale.set_defaults(func=_cmd_staleness)
 
     return parser
 
