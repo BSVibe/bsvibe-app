@@ -14,7 +14,8 @@ lands in the diff.
 This module is pure + offline: the shape (:class:`RememberableKnowledge`), the
 parse of the agent's declared block (:func:`parse_declared_knowledge`), the
 "inherently notable" gate
-(a user decision / a discard-with-reason is always kept), and the shared bar
+(a user decision / a discard-with-reason is kept — but only when it carries text
+the founder actually WROTE), and the shared bar
 (:data:`WORTH_REMEMBERING_PRINCIPLE`) the ingest compiler embeds + the executor
 knowledge-declaration guidance surfaces.
 """
@@ -34,8 +35,10 @@ from backend.common.settle_kinds import (
 MAX_TOPIC_CHARS = 80
 MAX_INSIGHT_CHARS = 2000
 
-#: Settlement kinds that are ALWAYS worth remembering, with no LLM judgement:
-#: a resolved checkpoint is a user CHOICE, a discard-with-reason is a LEARNING.
+#: Settlement kinds that can be worth remembering with no LLM judgement — a
+#: resolved checkpoint is a user CHOICE, a discard-with-reason is a LEARNING.
+#: NECESSARY but not SUFFICIENT: the precondition (the founder actually WROTE
+#: something) is checked separately — see :func:`is_inherently_notable`.
 _INHERENTLY_NOTABLE_KINDS: frozenset[str] = frozenset(
     {DECISION_RESOLUTION_SETTLE_KIND, NEGATIVE_PATTERN_SETTLE_KIND}
 )
@@ -50,12 +53,23 @@ class RememberableKnowledge:
     insight: str
 
 
-def is_inherently_notable(kind: str | None) -> bool:
+def is_inherently_notable(kind: str | None, *, founder_text: str | None) -> bool:
     """True when a settlement is worth keeping regardless of the LLM verdict — a
     user decision or a discard-with-reason is knowledge by construction. Plain
     verified work (``None`` / ``"verified_work"``) is NOT: it must earn a note
-    by being declared, and routine work earns none."""
-    return kind in _INHERENTLY_NOTABLE_KINDS
+    by being declared, and routine work earns none.
+
+    ``founder_text`` is the **precondition this docstring always named**: "a user
+    decision or a discard-with-reason" presumes the founder actually WROTE
+    something. Derive it with
+    :func:`~backend.common.settle_kinds.founder_authored_text` — a one-click
+    action's ``answer`` is the BUTTON KEY, not text the founder typed, and a note
+    built from it is just the system echoing its own question back (prod census
+    2026-08-25: 6 of 11 ``decision_resolution`` notes carried zero founder
+    characters). The argument is keyword-ONLY and has no default so a caller
+    cannot silently re-open the hole by forgetting it — ``mypy --strict`` fails
+    instead."""
+    return kind in _INHERENTLY_NOTABLE_KINDS and bool((founder_text or "").strip())
 
 
 def _humanize_topic(topic: str) -> str:

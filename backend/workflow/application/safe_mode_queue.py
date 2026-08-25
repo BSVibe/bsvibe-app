@@ -21,7 +21,7 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.common.settle_kinds import NEGATIVE_PATTERN_SETTLE_KIND
+from backend.common.settle_kinds import NEGATIVE_PATTERN_SETTLE_KIND, founder_authored_text
 from backend.workflow.domain.repositories import SafeModeQueueRepository
 from backend.workflow.infrastructure.db import RunStatus
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
@@ -153,7 +153,16 @@ class SafeModeQueue:
         actually shipped — :class:`backend.delivery.compensation.CompensationHandler` —
         was never carried by a real workflow other than this one fan-out.)
         """
-        reason_text = reason.strip() or None
+        # §13 — the SAME sentence the settle sink now enforces on every producer
+        # (:func:`~backend.common.settle_kinds.founder_authored_text`): a
+        # settlement is knowledge only when the founder actually wrote something.
+        # This producer already held that precondition inline; routing it through
+        # the shared leaf makes it the one rule rather than a second copy that can
+        # drift — the drift is exactly what let ``resolve_checkpoint`` write 6
+        # zero-text notes. Redundant with the sink gate on purpose (defense in
+        # depth): it ALSO gates the run re-open below, which is not a knowledge
+        # concern and must keep its own guard.
+        reason_text = founder_authored_text(answer=None, reason=reason, action_key=None)
         flipped = await self._transition(
             workspace_id=workspace_id,
             item_id=item_id,
