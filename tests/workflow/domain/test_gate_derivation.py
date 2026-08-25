@@ -267,3 +267,100 @@ class TestTheConstraintSurvivesTheEscapeHatch:
         assert "constraint" in sys
         for hardcoded in ("don't touch the tests", "no new dependencies", "pyproject.toml"):
             assert hardcoded not in sys
+
+
+class TestCiDeclarationsGrounding:
+    """§10 실측 (prod, 2026-08-25): BSVibe 게이트 94건 중 `ruff check` 96% ·
+    `mypy` 77% 인데 `ruff format --check` 45% · `lint-imports` 16%. 갈리는 지점이
+    정확히 "명령 이름이 `.github/workflows/ci.yml` 에만 있는 것"이다.
+
+    시스템 프롬프트는 이미 "manifests / build config / CI 에 근거하라",
+    "레포가 VERBATIM 으로 선언한 명령(… a CI step)을 선호하라"고 지시한다 —
+    그런데 CI 파일은 deriver 에게 **한 번도 보여준 적이 없다**. 따를 수 없는
+    지시였다. 여기서는 CI 선언을 별도의 라벨 붙은 블록으로 준다.
+    """
+
+    _CI = (
+        "jobs:\n  lint:\n    steps:\n"
+        "      - run: uv run ruff format --check backend/\n"
+        "      - run: uv run lint-imports\n"
+    )
+
+    def test_ci_declarations_reach_the_prompt_verbatim(self) -> None:
+        msgs = derivation_planner_messages(
+            manifests={"pyproject.toml": "[tool.ruff]\n"},
+            changed_files=["money.py"],
+            intent="Add money utilities",
+            ci_declarations={".github/workflows/ci.yml": self._CI},
+        )
+        user = msgs[1]["content"]
+        # The exact command names the repo declares — the two that were being
+        # guessed at 45% / 16% because they exist ONLY here.
+        assert "ruff format --check backend/" in user
+        assert "lint-imports" in user
+        assert ".github/workflows/ci.yml" in user
+
+    def test_ci_is_its_own_block_distinct_from_the_manifests(self) -> None:
+        """ "What the repo RUNS to check itself" and "what the repo DEPENDS on"
+        are different questions; a model that cannot tell them apart cannot
+        prefer a verbatim CI step over an inferred conventional invocation."""
+        msgs = derivation_planner_messages(
+            manifests={"pyproject.toml": "MANIFEST_MARKER"},
+            changed_files=[],
+            intent="x",
+            ci_declarations={".github/workflows/ci.yml": "CI_MARKER"},
+        )
+        user = msgs[1]["content"]
+        assert "MANIFEST_MARKER" in user and "CI_MARKER" in user
+        # A header of its own, and the CI content lives under it — not merged
+        # into the manifest listing.
+        header = next(
+            line
+            for line in user.splitlines()
+            if "CI" in line and line.rstrip().endswith(":") and "MARKER" not in line
+        )
+        head, _, tail = user.partition(header)
+        assert "MANIFEST_MARKER" in head, "the manifest block must precede the CI block"
+        assert "CI_MARKER" in tail, "the CI content must live under the CI header"
+        assert "CI_MARKER" not in head, "CI content leaked into the manifest block"
+
+    def test_no_ci_declarations_emits_no_empty_header(self) -> None:
+        """A repo with no CI must not be told about an empty CI section — that
+        is noise the model can only mis-ground on."""
+        for ci in (None, {}):
+            user = derivation_planner_messages(
+                manifests={"pyproject.toml": "x"},
+                changed_files=[],
+                intent="x",
+                ci_declarations=ci,
+            )[1]["content"]
+            assert "ci declaration" not in user.lower()
+            assert "workflow" not in user.lower()
+
+    def test_the_prompt_tells_the_model_what_a_ci_declaration_IS(self) -> None:
+        """Handing over the bytes is half of it — the deriver also has to know
+        that a check named there is one the repo REQUIRES of itself."""
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        assert "ci declaration" in sys
+
+    def test_the_ci_rule_keeps_the_prompt_stack_agnostic(self) -> None:
+        """The whole point is that the REPO names its checks, not us. A tool
+        name in our prompt would put the coupling straight back."""
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        for tool in ("ruff", "pytest", "mypy", "cargo", "go test", "npm", "pnpm", "yarn", "uv run"):
+            assert tool not in sys, f"prompt is stack-biased: mentions {tool!r}"
+
+    def test_the_ci_rule_does_not_exempt_ci_steps_from_the_scope_rule(self) -> None:
+        """A CI step lints the WHOLE repo; a gate that copies it verbatim fails
+        the change on pre-existing debt in untouched files."""
+        sys = derivation_planner_messages(manifests={}, changed_files=[], intent="x")[0][
+            "content"
+        ].lower()
+        ci_line = next(line for line in sys.splitlines() if "ci declaration" in line)
+        assert "scope" in ci_line, (
+            f"the CI rule must restate that the scoping rule applies: {ci_line!r}"
+        )

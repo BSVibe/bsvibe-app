@@ -87,6 +87,7 @@ async def test_derived_gate_uses_configured_gate_timeout(
         manifests: dict[str, str],
         written_paths: list[str],
         baseline: str | None = None,
+        ci_declarations: dict[str, str] | None = None,
     ) -> DerivedGate:
         return DerivedGate(
             applicable=True,
