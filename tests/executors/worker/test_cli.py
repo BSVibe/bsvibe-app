@@ -31,7 +31,7 @@ def test_build_bsvibe_parser_lists_subcommands() -> None:
 def test_build_bsvibe_worker_parser_lists_subcommands() -> None:
     parser = cli_mod.build_bsvibe_worker_parser()
     help_text = parser.format_help()
-    for cmd in ("register", "run", "logout", "claude-login", "service", "staleness"):
+    for cmd in ("register", "run", "logout", "claude-login", "service"):
         assert cmd in help_text
 
 
@@ -441,56 +441,3 @@ def test_worker_status_when_nothing_persisted(
     # needs to run `bsvibe-worker register` first.
     assert rc == 1
 
-
-def test_staleness_reports_ok_when_nothing_is_stale(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    from datetime import UTC, datetime
-
-    from backend.executors.worker.staleness import DaemonProbes, HeadCommit, LaunchdEntry
-
-    head = HeadCommit(sha="a" * 40, committed_at=datetime(2026, 8, 25, 12, 0, tzinfo=UTC))
-    probes = DaemonProbes(
-        list_daemons=lambda: [LaunchdEntry("com.bsvibe.worker", 1234)],
-        start_time=lambda pid: datetime(2026, 8, 25, 12, 5, tzinfo=UTC),  # noqa: ARG005
-        head_commit=lambda: head,
-    )
-    monkeypatch.setattr(cli_mod, "system_probes", lambda repo: probes)  # noqa: ARG005
-    rc = cli_mod.run_bsvibe_worker_cli(["staleness"])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "CURRENT" in out and "com.bsvibe.worker" in out
-
-
-def test_staleness_exits_nonzero_and_names_the_stale_daemon(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    from datetime import UTC, datetime, timedelta
-
-    from backend.executors.worker.staleness import DaemonProbes, HeadCommit, LaunchdEntry
-
-    head = HeadCommit(sha="a" * 40, committed_at=datetime(2026, 8, 25, 12, 0, tzinfo=UTC))
-    probes = DaemonProbes(
-        list_daemons=lambda: [LaunchdEntry("com.bsvibe.worker", 1234)],
-        start_time=lambda pid: head.committed_at - timedelta(days=13),  # noqa: ARG005
-        head_commit=lambda: head,
-    )
-    monkeypatch.setattr(cli_mod, "system_probes", lambda repo: probes)  # noqa: ARG005
-    rc = cli_mod.run_bsvibe_worker_cli(["staleness"])
-    assert rc == 1
-    out = capsys.readouterr().out
-    assert "STALE" in out and "com.bsvibe.worker" in out
-
-
-def test_staleness_reports_a_probe_failure(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    from backend.executors.worker.staleness import ProbeError
-
-    def boom(repo: str) -> None:  # noqa: ARG001
-        raise ProbeError("launchctl failed (exit 1)")
-
-    monkeypatch.setattr(cli_mod, "system_probes", boom)
-    rc = cli_mod.run_bsvibe_worker_cli(["staleness"])
-    assert rc == 1
-    assert "launchctl failed" in capsys.readouterr().err

@@ -37,7 +37,7 @@ LAUNCHD_LIST_OUT = (
 )
 
 
-def _fake_run(
+def _recording_run(
     calls: list[tuple[str, ...]],
     *,
     head_date: str = "2026-08-25T12:00:00+00:00",
@@ -75,11 +75,11 @@ def test_the_head_argv_reads_one_commit_from_the_given_repo() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# system_probes — the real seam, wired to a fake runner
+# system_probes — the real seam, wired to a recording runner
 # --------------------------------------------------------------------------- #
 def test_system_probes_issue_the_expected_commands() -> None:
     calls: list[tuple[str, ...]] = []
-    probes = system_probes(repo="/repo", run=_fake_run(calls))
+    probes = system_probes(repo="/repo", run=_recording_run(calls))
     report = diagnose(probes)
 
     assert LIST_ARGV in calls
@@ -95,7 +95,7 @@ def test_system_probes_feed_the_comparison_end_to_end() -> None:
     # real command run. HEAD is a month after the `ps` start time, so the
     # answer is stale no matter what the machine's UTC offset is.
     calls: list[tuple[str, ...]] = []
-    run = _fake_run(calls, head_date="2026-09-25T12:00:00+00:00")
+    run = _recording_run(calls, head_date="2026-09-25T12:00:00+00:00")
     report = diagnose(system_probes(repo="/repo", run=run))
 
     by_label = {d.label: d for d in report.daemons}

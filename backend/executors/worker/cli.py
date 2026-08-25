@@ -573,10 +573,16 @@ def _cmd_staleness(args: argparse.Namespace) -> int:
     The measured incident: a daemon can be healthy (fresh heartbeat, online
     status) while running days-old code. Process start time is the one signal
     that can't lie about that, so this compares it against HEAD directly.
+
+    ``probes_factory`` defaults to :func:`system_probes` (the real launchctl /
+    ps / git seam). Tests inject their own via ``args.probes_factory`` so the
+    real system is never touched — the parser never sets this attribute, so
+    production dispatch always gets the real one.
     """
     repo = args.repo or os.getcwd()
+    probes_factory = getattr(args, "probes_factory", None) or system_probes
     try:
-        report = diagnose(system_probes(repo=repo))
+        report = diagnose(probes_factory(repo=repo))
     except ProbeError as exc:
         print(f"staleness: {exc}", file=sys.stderr)
         return 1
