@@ -113,17 +113,25 @@ class ResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Either ``action_key`` (L-D2 one-click) OR ``answer`` (free-text /
-    # L-D1 options + Other). When both are sent, ``action_key`` wins —
-    # the dispatch-driven path is the authoritative one. ``answer`` is
-    # optional now (was required) because action-only resolutions don't
-    # carry founder text; defaults to ``""`` and the handler resolves
+    # L-D1 options). When both are sent, ``action_key`` wins — the
+    # dispatch-driven path is the authoritative one. ``answer`` is
+    # optional (was required) because action-only resolutions don't
+    # carry founder text there; defaults to ``""`` and the handler resolves
     # the recorded ``decision.resolution`` from the action key instead.
     answer: str = ""
     action_key: str | None = None
-    # G1: free-text "why I'm discarding this" the founder may supply alongside a
-    # ``discard`` action. When present on a discard, it becomes reusable negative
-    # knowledge (a ``negative_pattern`` settle); ignored for non-discard
-    # resolutions. Optional — a reasonless discard simply teaches nothing.
+    # The founder's OWN WORDS typed alongside an action — NOT ignored, and not
+    # tied to one action key (§14):
+    #
+    # * on a ``discard`` it is the "why", kept as reusable negative knowledge
+    #   (a ``negative_pattern`` settle the NegativePatternRetriever reads back);
+    # * on a ``retry`` it is the GUIDANCE the button label promises ("Guide &
+    #   retry" / "지침 주고 다시 시도") — the resolve service seeds it as the
+    #   resumption message the re-driven agent reads, in place of the bare
+    #   action key it used to read (``A: retry``).
+    #
+    # Optional everywhere: a text-free action stays text-free, which is exactly
+    # the shape §13 keeps out of the vault.
     reason: str = ""
 
 

@@ -25,10 +25,17 @@ type RowState = "idle" | "working" | "error";
  *    options) is the same input on its own.
  *
  * 2. **One-click actions (executor B2b Decisions).** For
- *    `verification_failed` / `human_review_required`, the backend ships
- *    `actions` like `[{key:"ship",...}, {key:"discard",...}]`, rendered as
- *    buttons that POST `{ action_key }`. An "Other (free-text)" disclosure
- *    stays available so the founder can always explain a custom path.
+ *    `verification_failed` / `human_review_required` / `merge_conflict_review`,
+ *    the backend ships `actions` like `[{key:"retry",...}, {key:"discard",...}]`,
+ *    rendered as buttons. Above them sits ONE always-visible box for the
+ *    founder's own words (§14). Clicking an action POSTs
+ *    `{ action_key, reason }` when something is written and `{ action_key }`
+ *    when nothing is — so `retry` finally means what its label promises
+ *    ("Guide & retry" / "지침 주고 다시 시도"), and a `discard`'s reason reaches
+ *    negative knowledge from the phone for the first time. The box was a
+ *    hidden "Other" disclosure before, i.e. an ALTERNATIVE to the buttons: the
+ *    typed text was dropped client-side the moment a button was clicked. Its
+ *    own submit button stays, so answering with words ALONE still works.
  *
  * The CARD is the tap target for its report (mobile-first): the title is the
  * one and only <a>, and `.tap-card__link::after` stretches it over the whole
@@ -52,15 +59,15 @@ export default function CheckpointRow({
   const hasActions = actions !== null;
 
   // `selected` is the chosen option chip (options mode); `answer` is the
-  // free-text input. A typed answer takes precedence over a selected chip.
-  // `freeTextOpen` toggles the optional free-text reply in actions mode.
+  // founder's typed text — their free-text answer in options mode, their
+  // guidance for the chosen action in actions mode. A typed answer takes
+  // precedence over a selected chip.
   const [selected, setSelected] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
-  const [freeTextOpen, setFreeTextOpen] = useState(false);
   const [state, setState] = useState<RowState>("idle");
 
   const answerId = useId();
-  const actionFreeTextId = useId();
+  const guidanceId = useId();
 
   const answerTrimmed = answer.trim();
   const working = state === "working";
@@ -87,7 +94,10 @@ export default function CheckpointRow({
     if (working) return;
     setState("working");
     try {
-      await resolveCheckpointAction(item.checkpointId, actionKey);
+      // §14 — the words the founder wrote ride WITH the button. Dropping them
+      // here is what made the resuming agent read `A: retry` where the
+      // guidance belonged.
+      await resolveCheckpointAction(item.checkpointId, actionKey, answerTrimmed);
       onResolved();
     } catch {
       setState("error");
@@ -148,6 +158,28 @@ export default function CheckpointRow({
 
       {hasActions && actions !== null ? (
         <>
+          {/* One box, always visible, ABOVE the buttons — write first, then pick.
+              Optional: leaving it empty keeps the one-click action one click. */}
+          <div className="need-card__answer-row tap-card__above">
+            <input
+              id={guidanceId}
+              className="need-card__input"
+              placeholder={t("guidancePlaceholder")}
+              value={answer}
+              disabled={working}
+              aria-label={t("guidanceLabel")}
+              onChange={(e) => setAnswer(e.target.value)}
+            />
+            {/* Words alone, no action — the pre-existing free-text resolve. */}
+            <button
+              type="button"
+              className="need-card__btn need-card__btn--primary"
+              onClick={submitFreeText}
+              disabled={freeTextSubmitDisabled}
+            >
+              {working ? t("working") : t("answer")}
+            </button>
+          </div>
           <div className="need-card__actions tap-card__above">
             {actions.map((a, i) => (
               <button
@@ -166,37 +198,6 @@ export default function CheckpointRow({
               </span>
             )}
           </div>
-          {/* Optional free-text reply alongside the one-click actions. */}
-          {!freeTextOpen ? (
-            <button
-              type="button"
-              className="need-card__free-toggle tap-card__above"
-              onClick={() => setFreeTextOpen(true)}
-              disabled={working}
-            >
-              {t("otherOptionLabel")}
-            </button>
-          ) : (
-            <div className="need-card__answer-row tap-card__above">
-              <input
-                id={actionFreeTextId}
-                className="need-card__input"
-                placeholder={t("otherAnswerPlaceholder")}
-                value={answer}
-                disabled={working}
-                aria-label={t("answerLabel")}
-                onChange={(e) => setAnswer(e.target.value)}
-              />
-              <button
-                type="button"
-                className="need-card__btn need-card__btn--primary"
-                onClick={submitFreeText}
-                disabled={freeTextSubmitDisabled}
-              >
-                {working ? t("working") : t("answer")}
-              </button>
-            </div>
-          )}
         </>
       ) : (
         <>

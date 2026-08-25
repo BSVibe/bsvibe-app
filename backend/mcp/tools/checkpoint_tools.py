@@ -183,8 +183,10 @@ class CheckpointResolveInput(BaseModel):
     # One-click action for an executor B2b Decision — ``retry`` or ``discard``
     # over MCP. ``ship`` is rejected (PWA-only).
     action_key: str | None = None
-    # Optional "why I'm discarding" captured as reusable negative knowledge on a
-    # ``discard``; ignored otherwise.
+    # The founder's own words alongside the action (§14): a ``discard``'s "why"
+    # — captured as reusable negative knowledge — or a ``retry``'s guidance,
+    # which the resolve service seeds as the resumption message the re-driven
+    # agent reads. Optional; a text-free action stays text-free.
     reason: str = Field(default="", max_length=2000)
 
 
