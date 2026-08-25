@@ -561,9 +561,7 @@ def _format_staleness_report(report: StalenessReport) -> str:
             lines.append(f"UNKNOWN  {daemon.label} (pid {daemon.pid}) — {daemon.detail}")
     if report.has_stale:
         lines.append("")
-        lines.append(
-            f"{len(report.stale)} stale daemon(s) running pre-HEAD code — restart them."
-        )
+        lines.append(f"{len(report.stale)} stale daemon(s) running pre-HEAD code — restart them.")
     return "\n".join(lines)
 
 

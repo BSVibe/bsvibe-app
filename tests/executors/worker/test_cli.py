@@ -440,4 +440,3 @@ def test_worker_status_when_nothing_persisted(
     # Returns 1 because there's no persisted config/token yet — the founder
     # needs to run `bsvibe-worker register` first.
     assert rc == 1
-

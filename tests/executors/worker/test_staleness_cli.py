@@ -100,9 +100,7 @@ def test_staleness_passes_the_resolved_repo_to_the_factory() -> None:
             head_commit=lambda: HEAD,
         )
 
-    cli_mod._cmd_staleness(
-        _namespace(repo="/explicit/repo", probes_factory=recording_factory)
-    )
+    cli_mod._cmd_staleness(_namespace(repo="/explicit/repo", probes_factory=recording_factory))
     assert seen["repo"] == "/explicit/repo"
 
 
