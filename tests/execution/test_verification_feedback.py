@@ -238,6 +238,66 @@ def test_a_failure_with_nothing_identifiable_says_exactly_that() -> None:
     assert "PASSED" not in text
 
 
+# ── the deriver's OWN failure (prod e6472fab, 2026-08-25) ────────────────────
+#
+# ``verification_service`` fails CLOSED when a toolchain manifest exists but the
+# gate deriver could not run: ``gate_deriver_failed`` is persisted and the run
+# FAILS. That is deliberate (INV-2). What was NOT deliberate is that the reason
+# never reached the agent — this module read every other failing surface and
+# none of them applied, so the agent was told "no specific check reported a
+# failure" while the system knew exactly which one had.
+#
+# Measured cost on the first run it hit: six verification declarations, the
+# agent widening its own gate each round guessing at what was missing, until it
+# put a `grep`-for-forbidden-words gate over a test file full of UNRELATED
+# pre-existing tests and blocked on a question. The lexical gate was the
+# symptom; guessing in the dark was the defect.
+
+
+def test_the_derivers_own_failure_reaches_the_agent() -> None:
+    res = _result(
+        derived_gate=None,
+        gate_deriver_failed="deriver_unparseable",
+    )
+    text = render_verification_failure(res)
+    assert "deriver_unparseable" in text
+    # And it must not be reported as "nothing failed" — that is the lie.
+    assert "no specific check reported a failure" not in text
+
+
+def test_the_agent_is_told_not_to_change_its_work_over_a_harness_failure() -> None:
+    """The agent's own checks all passed. Telling it only "FAILED" makes it
+    edit code and widen gates at random — exactly what prod ``e6472fab`` did."""
+    text = render_verification_failure(
+        _result(derived_gate=None, gate_deriver_failed="deriver_unparseable")
+    )
+    lowered = text.lower()
+    assert "harness" in lowered or "not your work" in lowered
+    assert "do not" in lowered or "rather than" in lowered
+
+
+def test_the_deriver_failure_outranks_the_agents_passing_attestation() -> None:
+    """Authority order — the harness failure leads, as the derived gate would."""
+    text = render_verification_failure(
+        _result(derived_gate=None, gate_deriver_failed="deriver_unparseable")
+    )
+    assert text.index("deriver_unparseable") < len(text) // 2
+
+
+def test_a_real_gate_failure_still_leads_over_the_deriver_note() -> None:
+    """양성 대조군 — deriver 가 RAN 하면(=derived_gate 존재) 그 실패가 먼저다.
+    이 케이스는 이 변경 전에도 후에도 같아야 한다."""
+    text = render_verification_failure(_result())  # derived_gate present + failing
+    assert "GATE COMMAND FAILED" in text
+    assert text.index("GATE COMMAND FAILED") == 0
+
+
+def test_no_deriver_note_when_the_deriver_did_not_fail() -> None:
+    """음성 대조군 — 신호를 빼면 문구도 사라진다."""
+    text = render_verification_failure(_result(derived_gate=None))
+    assert "deriver" not in text.lower()
+
+
 # ── the in-place gate caller (_loop_context) ─────────────────────────────────
 
 

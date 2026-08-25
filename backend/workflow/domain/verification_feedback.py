@@ -40,6 +40,19 @@ NO_FAILURE_FOUND = (
     "your summary rather than changing code at random."
 )
 
+#: The harness itself could not produce the repo gate. ``verification_service``
+#: fails CLOSED here on purpose (INV-2: a repo with a toolchain manifest must
+#: not reach PROVED with zero objective gate commands run) — but the run failed
+#: for a reason that is NOT about the agent's work, and the agent has to be told
+#: which, or it will go looking for a defect in code that has none.
+DERIVER_FAILED = (
+    "The repo's verification gate could not be produced by the harness "
+    "({reason}). This is a failure of the verification system, NOT of your "
+    "work — every check you declared passed. Do not change your code and do "
+    "not widen your declared checks to compensate; say what happened in your "
+    "summary so a human can look at the harness."
+)
+
 
 def _clip(text: str, limit: int) -> str:
     """Keep both ends of *text* and state what was dropped.
@@ -114,6 +127,17 @@ def _sections(result: Mapping[str, Any]) -> list[str]:
     if isinstance(gate, Mapping):
         for cmd in _failed(gate.get("commands") or []):
             sections.append(_command_block(cmd, label="GATE COMMAND FAILED"))
+    else:
+        # 1b. The gate did not merely fail — it could not be BUILT. Same
+        #     authority slot, because it is the same verdict source, and it is
+        #     the only surface that knows why this run failed: every other
+        #     section below reads a check that PASSED. prod ``e6472fab`` hit
+        #     exactly this and, told "no specific check reported a failure",
+        #     spent six rounds widening its own gate until it grep-gated a file
+        #     full of unrelated tests and had to ask a human.
+        reason = result.get("gate_deriver_failed")
+        if isinstance(reason, str) and reason:
+            sections.append(DERIVER_FAILED.format(reason=reason))
 
     # 2. Outcome demonstration. Only a "failed" verdict gates —
     #    "undemonstrable" is weak evidence, not a defect to repair.
