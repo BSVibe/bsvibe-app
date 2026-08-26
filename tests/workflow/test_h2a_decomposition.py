@@ -112,6 +112,7 @@ def test_no_new_file_exceeds_god_file_threshold() -> None:
         "backend.workflow.application.connector_action_registrar",
         "backend.workflow.domain.emit_deliverable",
         "backend.workflow.application.run_persistence",
+        "backend.workflow.application._verified_summary",
     ):
         mod = importlib.import_module(module_path)
         src_path = inspect.getsourcefile(mod)

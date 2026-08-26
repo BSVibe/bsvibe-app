@@ -15,9 +15,8 @@ distributed across the new files.
 
 from __future__ import annotations
 
-import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -35,6 +34,10 @@ from backend.notifications.copy import (
     notification_copy,
 )
 from backend.notifications.emit import emit_notification
+from backend.workflow.application._verified_summary import (
+    _changed_paths_for,
+    _compose_verified_summary,
+)
 from backend.workflow.application.audit_events import LoopTerminal
 from backend.workflow.domain.verified_deliverable import write_verified_deliverable
 from backend.workflow.infrastructure.db import (
@@ -53,228 +56,6 @@ from plugin.audit.events import AuditActor, AuditEventBase, AuditResource
 from plugin.audit.service import safe_emit
 
 logger = structlog.get_logger(__name__)
-
-# A coding-agent executor's ``--print`` output ends with a machine-readable
-# ``<verification-contract>{…}</…>`` block (Lift E30). It's noise in a
-# human-facing deliverable summary / PR body, so strip it.
-_CONTRACT_BLOCK_RE = re.compile(
-    r"<verification-contract>.*?</verification-contract>",
-    re.DOTALL | re.IGNORECASE,
-)
-#: Cap the title line (first line of the summary → PR title / settle note
-#: title) so a single-line intent doesn't produce a 512-char title.
-_MAX_SUMMARY_TITLE = 120
-#: Repairs streaming chunk-join whitespace artifacts ("done.Next" → "done. Next")
-#: in the fallback prose — the coding-agent ``--print`` output concatenates
-#: streamed chunks without the inter-sentence space.
-_CHUNK_JOIN_RE = re.compile(r"([.!?:])([A-Z])")
-
-#: Map a verification command to a friendly category for the summary line. We
-#: surface the CATEGORY ("tests", "lint", …), never the raw command string —
-#: echoing "uv run pytest …" would re-introduce the contract-block slop the F4
-#: fix removed from the user-facing summary. Ordered = display order.
-_CHECK_CATEGORY_LABELS: tuple[tuple[str, str], ...] = (
-    ("pytest", "tests"),
-    ("ruff check", "lint"),
-    ("ruff format", "format"),
-    ("mypy", "types"),
-)
-
-
-def _gate_command_results(result: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """The in-place gate's commands, in ``command_results`` shape.
-
-    A client_attach run is verified by the DERIVED gate (``derived_gate`` —
-    per-command ``status``), the sandbox path by a declared contract
-    (``command_results`` — per-command ``passed``). Same evidence, two record
-    shapes, so map one onto the other rather than writing a second sentence
-    builder: what the founder reads about a proof must not depend on WHERE the
-    command ran. ``unavailable`` (exit 127) is not a pass — a tool missing from
-    that machine proved nothing.
-    """
-    gate = result.get("derived_gate")
-    if not isinstance(gate, Mapping):
-        return []
-    return [
-        {"command": c.get("command"), "passed": c.get("status") == "passed"}
-        for c in gate.get("commands") or ()
-        if isinstance(c, Mapping)
-    ]
-
-
-def _gate_command_sentence(passed: list[Any], commands: list[Any], ko: bool) -> str:
-    """Single sentence summarising how many gate/declared commands passed."""
-    if ko:
-        return f"검증: {len(passed)}개 확인 통과."
-    labels: list[str] = []
-    for cmd in commands:
-        text = str(cmd.get("command") or "").lower()
-        for needle, label in _CHECK_CATEGORY_LABELS:
-            if needle in text and label not in labels:
-                labels.append(label)
-    noun = "check" if len(passed) == 1 else "checks"
-    sentence = f"Verified: {len(passed)} {noun} passed"
-    if labels:
-        sentence += f" ({', '.join(labels)})"
-    return sentence + "."
-
-
-def _probe_sentence(matched_probes: list[Any], ko: bool) -> str:
-    """Sentence fragment for matched outcome-demonstration probes."""
-    if not matched_probes:
-        return ""
-    if ko:
-        return f"결과 시연됨 ({len(matched_probes)}개 프로브)."
-    probe_noun = "probe" if len(matched_probes) == 1 else "probes"
-    return f"Outcome demonstrated ({len(matched_probes)} {probe_noun})."
-
-
-def _verification_sentence(result: Mapping[str, Any] | None, language: str = "en") -> str:
-    """A deterministic, LLM-free sentence describing what the verifier proved.
-
-    Reads the ``VerificationResult.result`` blob the verifier already persisted
-    (``command_results`` + ``judge``, or the in-place ``derived_gate``) and
-    renders e.g. "Verified: 3 checks passed (tests, lint, format). Acceptance
-    check passed." (EN) or "검증: 3개 확인 통과. 검증 통과." (KO). Returns "" when
-    there is no verdict / nothing to report, so the caller adds no empty line.
-    Localized so a KO founder never sees the English verification chrome in the
-    delivered summary.
-    """
-    if result is None:
-        return ""
-    # derived_gate is authoritative when present (repo manifests drove it);
-    # command_results is advisory once a gate ran. Prefer gate commands so the
-    # count reflects what actually decided the verdict, not what the agent declared.
-    commands = _gate_command_results(result) or result.get("command_results") or []
-    passed = [c for c in commands if c.get("passed")]
-    ko = language == "ko"
-
-    pieces: list[str] = []
-    if passed:
-        pieces.append(_gate_command_sentence(passed, commands, ko))
-
-    # Count matched demonstration probes: they are independent behavioral checks
-    # that actually ran in the sandbox and are not covered by the gate count above.
-    demonstration = result.get("outcome_demonstration") or {}
-    matched_probes = [
-        p
-        for p in (demonstration.get("probes") or [])
-        if isinstance(p, dict) and p.get("status") == "matched"
-    ]
-    probe_s = _probe_sentence(matched_probes, ko)
-    if probe_s:
-        pieces.append(probe_s)
-
-    weak = _weak_evidence_sentence(result, ko)
-    judge = result.get("judge") or {}
-    if judge.get("passed") and not weak:
-        # SUPPRESSED under weak evidence, deliberately. Live run 6565db96 put
-        # "검증 통과. 검증: 돌릴 검사가 없어 내용만 확인했어요 (증거 약함)." on the
-        # founder's phone: both halves true, the pair reading as a claim and its
-        # own retraction — with the strong half first, which is the half a glance
-        # picks up. The judge passing IS "내용만 확인했어요", so the weak sentence
-        # already says it, accurately and once.
-        pieces.append("검증 통과." if ko else "Acceptance check passed.")
-    if weak:
-        pieces.append(weak)
-    return " ".join(pieces)
-
-
-def _weak_evidence_sentence(result: Mapping[str, Any], ko: bool) -> str:
-    """Say it out loud when a verified run rests on nothing that actually ran.
-
-    A weak finish must still REACH the founder: the push they receive is built
-    from THIS line (``_shipped_detail`` lifts it by prefix), so a weak finish
-    that never reaches it is one the founder never hears about (lesson #742). It
-    stopped BLOCKING (검증은 통과/실패 둘 뿐 — 형님 판정 2026-08-20); it must not
-    stop being SAID.
-
-    Read from the persisted FACTS, never a grade letter — the retired A–D ladder
-    was a second representation over exactly these. ``gate_applicable`` false (a
-    Direct / non-worktree scratch answer) has no repo-gate concept to be weak
-    about and stays silent, exactly as the ladder's ``None`` grade did. The two
-    weak cases are different facts and must not share a sentence; both keep the
-    ``검증``/``Verified`` prefix or the lifter drops them."""
-    if not result.get("gate_applicable"):
-        return ""
-    commands = (result.get("derived_gate") or {}).get("commands") or []
-    gate_passed = bool((result.get("derived_gate") or {}).get("passed")) and any(
-        isinstance(c, dict) and c.get("status") == "passed" for c in commands
-    )
-    if gate_passed or (result.get("outcome_demonstration") or {}).get("verdict") == "demonstrated":
-        return ""  # a real leg carried it — not weak
-    if commands:  # a gate EXISTED here and none of it could run
-        return (
-            "검증: 검사를 찾았지만 여기서 돌릴 수 없었어요 (증거 약함)."
-            if ko
-            else "Verified: a gate was found but could not run here (weak evidence)."
-        )
-    return (
-        "검증: 돌릴 검사가 없어 내용만 확인했어요 (증거 약함)."
-        if ko
-        else "Verified: by content only — no runnable check existed (weak evidence)."
-    )
-
-
-def _compose_verified_summary(
-    run: ExecutionRun,
-    final_text: str,
-    written_paths: Sequence[str] | None = None,
-    verdict_result: Mapping[str, Any] | None = None,
-    language: str = "en",
-) -> str:
-    """Build the verified deliverable's summary — titled by the founder INTENT,
-    bodied by the DETERMINISTIC list of changed files + what the verifier proved.
-
-    The summary's first line becomes the PR title (via ``_split_summary``) and
-    the settle note's title. The work LLM's ``final_text`` is raw first-person
-    streaming narration ("I'll invoke /feature-workflow… Now the
-    implementation… Phase 1 (RED)…") with chunk-join whitespace artifacts plus
-    the E30 contract block — slop in a user-facing deliverable summary / PR body
-    (live dogfood F4; earlier garbage PR titles, PR #374). So lead with the
-    founder intent (what was asked == what shipped for a verified run) and list
-    what actually changed; the agent's prose stays in the ``llm_turn`` activity
-    for debugging. ``final_text`` is only a FALLBACK body (contract-stripped,
-    whitespace-repaired) when no changed-file list is available — e.g. a
-    non-file deliverable. Falls back to a stable title when there is no intent.
-
-    R1: when a passing verdict blob is supplied, a deterministic verification
-    sentence (which checks passed, by category) is appended so the report says
-    not just *what* changed but *that it was proven* — no LLM, no raw commands.
-    Takes the ``VerificationResult.result`` MAPPING rather than the row: the
-    in-place gate's proof (#692) is real evidence but is not the row the sandbox
-    path holds, and only the blob was ever read here.
-    """
-    payload = run.payload or {}
-    # Title in a formal, declarative register — a REPORT, not the founder's raw
-    # imperative Direction ("dedup 함수를 추가해줘"). The FrameStage already produces
-    # a SHORT plain-language, workspace-language ``summary_title`` ("dedup 유틸리티
-    # 추가"); prefer it. Fall back to the intent first-line, then a stable string.
-    frame = payload.get("frame")
-    summary_title = str(
-        (frame.get("summary_title") if isinstance(frame, dict) else "") or ""
-    ).strip()
-    intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
-    first_line = next((ln.strip() for ln in intent.splitlines() if ln.strip()), "")
-    title = (summary_title or first_line)[:_MAX_SUMMARY_TITLE].rstrip() or "Delivered change"
-
-    files = [p.strip() for p in (written_paths or []) if p and p.strip()]
-    sections: list[str] = []
-    if files:
-        header = f"바뀐 파일 {len(files)}개:" if language == "ko" else "Changed files:"
-        sections.append(header + "\n" + "\n".join(f"- {p}" for p in files))
-    else:
-        stripped = _CONTRACT_BLOCK_RE.sub("", final_text or "").strip()
-        cleaned = _CHUNK_JOIN_RE.sub(r"\1 \2", stripped)
-        if cleaned:
-            sections.append(cleaned)
-
-    verification = _verification_sentence(verdict_result, language)
-    if verification:
-        sections.append(verification)
-
-    body = "\n\n".join(sections)
-    return f"{title}\n\n{body}" if body else title
 
 
 def utcnow() -> Any:
@@ -443,6 +224,12 @@ async def land_verified_artifacts(
     # sentence) is localized to the workspace language so a KO founder's delivered
     # summary / Telegram body reads in Korean, not English.
     language = await load_workspace_language(session, run.workspace_id)
+    # The file list the summary reports must come from the SAME place the
+    # deliverable's diff does (``main...HEAD``), or the two disagree — prod run
+    # `02af81f7` shipped "바뀐 파일 4개" against a 2-file PR. ``None`` when it
+    # cannot be determined; the summary then labels the written paths honestly
+    # as "touched" instead of claiming they changed.
+    changed_paths = await _changed_paths_for(run)
     deliverable = await write_verified_deliverable(
         session,
         run,
@@ -451,7 +238,9 @@ async def land_verified_artifacts(
         # Title the summary by the founder intent + body by the changed files,
         # not the work LLM's raw narration — the first line becomes the PR
         # title + settle note title. R1: weave in what the verifier proved.
-        summary=_compose_verified_summary(run, final_text, written_paths, verdict_result, language),
+        summary=_compose_verified_summary(
+            run, final_text, written_paths, verdict_result, language, changed_paths=changed_paths
+        ),
         # v2 — the agent's own retrospective knowledge declaration (or None).
         knowledge=knowledge,
     )

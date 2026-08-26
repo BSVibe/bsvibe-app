@@ -755,6 +755,34 @@ async def capture_run_diff(product_id: uuid.UUID, run_id: uuid.UUID) -> str | No
     return diff if diff.strip() else None
 
 
+async def capture_run_changed_paths(product_id: uuid.UUID, run_id: uuid.UUID) -> list[str] | None:
+    """The paths this run actually CHANGED (``git diff --name-only main...HEAD``),
+    or ``None`` when that cannot be determined.
+
+    The sibling of :func:`capture_run_diff` and deliberately the SAME ref range,
+    so the deliverable's summary and its diff can never disagree about which
+    files the run touched. Read separately rather than parsed out of the diff
+    text: the stored diff is capped (and flagged ``diff_truncated``), so parsing
+    it would silently drop the tail files — the exact class of quiet miscount
+    this exists to remove.
+
+    ``None`` means "unknown" (cleaned worktree / non-product run / git error) —
+    distinct from ``[]``, which means the run changed nothing durable. Callers
+    must keep them apart: the first is a missing value, the second an answer.
+    Best-effort: never raises, so it cannot break a verified terminal.
+    """
+    worktree = run_worktree_path(run_id)
+    if not (worktree / ".git").exists():
+        return None
+    try:
+        result = await _git("diff", "--name-only", "main...HEAD", cwd=worktree, check=False)
+    except (ProductWorkspaceError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 async def merge_main_into_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> MergeOutcome:
     """Pull ``main`` into the run worktree.
 
@@ -1012,6 +1040,7 @@ async def list_product_tree(
 
 
 __all__ = [
+    "capture_run_changed_paths",
     "MergeOutcome",
     "ProductWorkspaceBusy",
     "ProductWorkspaceError",
