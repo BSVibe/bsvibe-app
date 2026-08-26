@@ -37,6 +37,7 @@ from backend.workflow.application.verification_service import (
     _CI_CTX_BYTES,
     _CI_MAX_FILES,
     _CI_TOTAL_CTX_BYTES,
+    _MANIFEST_CTX_BYTES,
     _MANIFEST_FILES,
     _MANIFEST_TOTAL_CTX_BYTES,
     VerificationService,
@@ -342,6 +343,20 @@ class TestManifestTotalByteBudget:
         assert spent <= _MANIFEST_TOTAL_CTX_BYTES, (
             f"manifest grounding spent {spent}B of {_MANIFEST_TOTAL_CTX_BYTES}B"
         )
+
+    async def test_each_manifest_stays_within_the_per_file_byte_cap(self) -> None:
+        """The docstring claims the read is bounded per-file AND in total. The
+        per-file half was only true for ASCII: a byte-capped read can land
+        mid-character, and ``errors="replace"`` substitutes a 3-byte U+FFFD, so
+        the kept text re-encodes to MORE bytes than were read. Clamping only to
+        the TOTAL leaves that overrun in place while every other assertion here
+        stays green — the claim has to be made true, not softened."""
+        box = _Box({"pyproject.toml": "가" * 200_000})
+        manifests = await _service(_Llm(_GATE_JSON))._read_repo_manifests(box)
+        assert manifests, "the key must survive — it is the toolchain signal"
+        for path, text in manifests.items():
+            spent = len(text.encode("utf-8"))
+            assert spent <= _MANIFEST_CTX_BYTES, f"{path} kept {spent}B of {_MANIFEST_CTX_BYTES}B"
 
     async def test_existing_manifest_keys_survive_total_budget_exhaustion(self) -> None:
         """The dict's KEYS double as the fail-closed 'this repo has a

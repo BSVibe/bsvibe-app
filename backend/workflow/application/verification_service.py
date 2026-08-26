@@ -963,7 +963,11 @@ class VerificationService:
             text = data.decode("utf-8", errors="replace").strip()
             if not text:
                 continue
-            text = _clamp_utf8(text, max(remaining, 0))
+            # Both caps, in BYTES. The per-file one is not implied by the read:
+            # a byte-capped read can land mid-character and ``errors="replace"``
+            # substitutes a 3-byte U+FFFD, so the kept text can re-encode LARGER
+            # than the bytes that were read.
+            text = _clamp_utf8(text, min(_MANIFEST_CTX_BYTES, max(remaining, 0)))
             manifests[path] = text
             remaining -= len(text.encode("utf-8"))
         return manifests
