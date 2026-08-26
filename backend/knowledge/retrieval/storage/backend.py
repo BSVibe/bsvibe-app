@@ -37,7 +37,9 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 class NoteVectorBackend(Protocol):
     """A workspace-scoped note embedding store with similarity search."""
 
-    async def store(self, note_path: str, embedding: list[float]) -> None: ...
+    async def store(
+        self, note_path: str, embedding: list[float], *, content_hash: str | None = None
+    ) -> None: ...
 
     async def remove(self, note_path: str) -> None: ...
 
@@ -45,9 +47,15 @@ class NoteVectorBackend(Protocol):
         self, query_embedding: list[float], top_k: int = 10
     ) -> list[tuple[str, float]]: ...
 
-    async def existing_paths(self) -> set[str]:
-        """The note paths already embedded under the current model — so a
-        reconcile (backfill) can skip them and embed only the gap. Paths stored
-        under a *different* embedding model are NOT returned (a model swap makes
-        old vectors incomparable), so reconcile re-embeds them."""
+    async def existing_fingerprints(self) -> dict[str, str | None]:
+        """Note path → the fingerprint of the text its vector was built from.
+
+        Replaces the old ``existing_paths``, which answered only "is there a
+        vector?" — so a vector built from the WRONG text looked identical to a
+        correct one and reconcile skipped it forever. ``None`` means the row
+        predates fingerprinting: unknown text is not evidence of correct text, so
+        reconcile re-embeds it (that is the backfill).
+
+        Rows stored under a *different* embedding model are NOT returned (a model
+        swap makes old vectors incomparable), so reconcile re-embeds them."""
         ...

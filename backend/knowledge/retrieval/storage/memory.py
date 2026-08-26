@@ -17,18 +17,23 @@ class InMemoryNoteVectorBackend:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._embeddings: dict[str, list[float]] = {}
+        self._fingerprints: dict[str, str | None] = {}
 
-    async def store(self, note_path: str, embedding: list[float]) -> None:
+    async def store(
+        self, note_path: str, embedding: list[float], *, content_hash: str | None = None
+    ) -> None:
         async with self._lock:
             self._embeddings[note_path] = list(embedding)
+            self._fingerprints[note_path] = content_hash
 
     async def remove(self, note_path: str) -> None:
         async with self._lock:
             self._embeddings.pop(note_path, None)
+            self._fingerprints.pop(note_path, None)
 
-    async def existing_paths(self) -> set[str]:
+    async def existing_fingerprints(self) -> dict[str, str | None]:
         async with self._lock:
-            return set(self._embeddings)
+            return {p: self._fingerprints.get(p) for p in self._embeddings}
 
     async def search(
         self, query_embedding: list[float], top_k: int = 10

@@ -81,11 +81,13 @@ async def _run_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _StubEmb
     class _Backend:
         def __init__(self, *_a: object, **_kw: object) -> None: ...
 
-        async def store(self, note_path: str, vector: list[float]) -> None:
+        async def store(
+            self, note_path: str, vector: list[float], *, content_hash: str | None = None
+        ) -> None:
             stored.append((note_path, vector))
 
-        async def existing_paths(self) -> set[str]:
-            return set()
+        async def existing_fingerprints(self) -> dict[str, str | None]:
+            return {}
 
     monkeypatch.setattr("backend.knowledge.retrieval.storage.pg.PgNoteVectorBackend", _Backend)
 
