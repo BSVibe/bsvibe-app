@@ -34,6 +34,7 @@ from typing import Any
 import pytest
 
 from backend.workflow.application.verification_service import (
+    _CI_CTX_BYTES,
     _CI_MAX_FILES,
     _CI_TOTAL_CTX_BYTES,
     VerificationService,
@@ -226,6 +227,31 @@ class TestReadCiDeclarations:
         box = _Box({f".github/workflows/w{i}.yml": "x" * 200_000 for i in range(5)})
         ci = await _service(_Llm(_GATE_JSON))._read_ci_declarations(box)
         assert sum(len(v) for v in ci.values()) <= _CI_TOTAL_CTX_BYTES
+
+    async def test_the_total_budget_is_bytes_even_when_the_ci_is_not_ascii(self) -> None:
+        """The budget is declared in BYTES (:data:`_CI_TOTAL_CTX_BYTES`) and a
+        prompt window is spent in bytes, so a CI file written in a non-ASCII
+        language must not buy more of it than an ASCII one.
+
+        The ASCII case above cannot see this: there ``len(text)`` and the byte
+        count are the same number, so a character-counted budget passes it
+        forever. A Korean/Japanese/Chinese CI comment is 3 bytes per character —
+        counting characters lets the CI block overrun by ~3x and crowd out the
+        manifests, which is the exact failure the cap exists to prevent."""
+        box = _Box({f".github/workflows/w{i}.yml": "가" * 200_000 for i in range(5)})
+        ci = await _service(_Llm(_GATE_JSON))._read_ci_declarations(box)
+        spent = sum(len(v.encode("utf-8")) for v in ci.values())
+        assert spent <= _CI_TOTAL_CTX_BYTES, (
+            f"CI grounding spent {spent}B of {_CI_TOTAL_CTX_BYTES}B"
+        )
+
+    async def test_each_non_ascii_file_stays_within_the_per_file_byte_cap(self) -> None:
+        """Same confusion, one level down: the per-file cap is asked of the
+        sandbox in bytes, so the text kept from it must be measured the same
+        way."""
+        box = _Box({".github/workflows/ci.yml": "가" * 200_000})
+        ci = await _service(_Llm(_GATE_JSON))._read_ci_declarations(box)
+        assert all(len(v.encode("utf-8")) <= _CI_CTX_BYTES for v in ci.values())
 
     async def test_each_file_read_is_byte_capped_at_the_source(self) -> None:
         """The cap has to be asked of the SANDBOX, not applied after pulling a
