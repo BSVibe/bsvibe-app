@@ -16,6 +16,7 @@ the dozens of pre-existing, unrelated login/register/service tests next door.
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -110,3 +111,103 @@ def test_staleness_dispatch_defaults_to_the_real_system_probes() -> None:
     parser = cli_mod.build_bsvibe_worker_parser()
     args = parser.parse_args(["staleness"])
     assert not hasattr(args, "probes_factory")
+
+
+# --------------------------------------------------------------------------
+# The diagnosis has to name its own remedy
+# --------------------------------------------------------------------------
+#
+# 2026-08-26, first real use of this command: it printed "restart them." and
+# nothing else. The operator (an agent, at session start) then has to source
+# the command from somewhere outside the tool — and the OBVIOUS guess, `kill`,
+# is the documented WRONG answer: a worker's identity is its token, so killing
+# it loses the live registration. A tool that names a fault it will not tell
+# you how to fix hands its reader a coin flip between the right command and a
+# destructive one.
+
+
+def _stale_and_current_probes() -> DaemonProbes:
+    entries = [
+        LaunchdEntry("com.bsvibe.worker", 1234),
+        LaunchdEntry("com.bsvibe.worker-admin", 5678),
+        LaunchdEntry("com.bsvibe.worker-mac-mini-e2e", 9012),
+    ]
+    fresh = {9012}
+
+    def start_time(pid: int) -> datetime:
+        return (
+            HEAD.committed_at + timedelta(minutes=5)
+            if pid in fresh
+            else (HEAD.committed_at - timedelta(hours=3))
+        )
+
+    return DaemonProbes(
+        list_daemons=lambda: entries, start_time=start_time, head_commit=lambda: HEAD
+    )
+
+
+def test_staleness_prints_the_exact_restart_command_for_each_stale_daemon(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rc = cli_mod._cmd_staleness(
+        _namespace(probes_factory=lambda *, repo: _stale_and_current_probes())  # noqa: ARG005
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    uid = os.getuid()
+    assert f"launchctl kickstart -k gui/{uid}/com.bsvibe.worker\n" in out
+    assert f"launchctl kickstart -k gui/{uid}/com.bsvibe.worker-admin" in out
+
+
+def test_the_restart_lines_cover_the_stale_daemons_and_only_those(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A remedy offered for a CURRENT daemon is a pointless restart, and a
+    stale one left out is the fault this command exists to surface."""
+    cli_mod._cmd_staleness(
+        _namespace(probes_factory=lambda *, repo: _stale_and_current_probes())  # noqa: ARG005
+    )
+    out = capsys.readouterr().out
+    restarts = [ln.strip() for ln in out.splitlines() if "kickstart" in ln]
+    assert len(restarts) == 2
+    assert not any("mac-mini-e2e" in ln for ln in restarts)
+
+
+def test_staleness_names_kill_as_the_wrong_way(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The cheap guess is destructive, so the output has to rule it out where
+    the reader is already looking."""
+    cli_mod._cmd_staleness(
+        _namespace(probes_factory=lambda *, repo: _stale_and_current_probes())  # noqa: ARG005
+    )
+    assert "kill" in capsys.readouterr().out
+
+
+def test_a_clean_report_offers_no_remedy(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """POSITIVE CONTROL — nothing stale, nothing to run. This assertion passed
+    before the remedy existed and must keep passing after."""
+    probes = DaemonProbes(
+        list_daemons=lambda: [LaunchdEntry("com.bsvibe.worker", 1234)],
+        start_time=lambda pid: HEAD.committed_at + timedelta(minutes=5),  # noqa: ARG005
+        head_commit=lambda: HEAD,
+    )
+    rc = cli_mod._cmd_staleness(_namespace(probes_factory=lambda *, repo: probes))  # noqa: ARG005
+    assert rc == 0
+    assert "kickstart" not in capsys.readouterr().out
+
+
+def test_the_report_renderer_takes_the_uid_rather_than_reading_the_process(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The gui domain belongs to the user whose launchd owns the daemons, and
+    the renderer is pure: it is TOLD the uid, it does not go find one. Same
+    discipline as the process/git probes this command already injects."""
+    from backend.executors.worker.staleness import diagnose
+
+    report = diagnose(_stale_and_current_probes())
+    rendered = cli_mod._format_staleness_report(report, uid=4242)
+    assert "gui/4242/com.bsvibe.worker" in rendered
+    capsys.readouterr()
