@@ -125,7 +125,10 @@ services:
       # compose profile + BSVIBE_SANDBOX_ENABLED=true (see README §5 Stage B).
       # SANDBOX_USER=0:0 matches the worker's root-owned run worktrees so the
       # sandbox can write /work.
-      BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:-false}
+      # REQUIRED, never defaulted: `:-false` would let an unreadable .env.prod
+      # look exactly like a deliberate 'no sandbox' and silently run the agent's
+      # commands on this container's host. `:?` makes compose refuse instead.
+      BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:?set it explicitly — true (sandboxed) or false (deliberately not)}
       BSVIBE_SANDBOX_IMAGE: ${BSVIBE_SANDBOX_IMAGE:-bsvibe-sandbox:latest}
       BSVIBE_DOCKER_HOST: ${BSVIBE_DOCKER_HOST:-}
       BSVIBE_SANDBOX_USER: ${BSVIBE_SANDBOX_USER:-}
@@ -192,7 +195,10 @@ services:
       # The worker builds notification CTAs (보고서 보기 → <pwa_url>/…) so it needs
       # the PUBLIC PWA origin, not the localhost default. Mirrors backend.
       BSVIBE_PWA_URL: ${BSVIBE_PWA_URL:-https://app.bsvibe.dev}
-      BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:-false}
+      # REQUIRED, never defaulted: `:-false` would let an unreadable .env.prod
+      # look exactly like a deliberate 'no sandbox' and silently run the agent's
+      # commands on this container's host. `:?` makes compose refuse instead.
+      BSVIBE_SANDBOX_ENABLED: ${BSVIBE_SANDBOX_ENABLED:?set it explicitly — true (sandboxed) or false (deliberately not)}
       BSVIBE_SANDBOX_IMAGE: ${BSVIBE_SANDBOX_IMAGE:-bsvibe-sandbox:latest}
       BSVIBE_DOCKER_HOST: ${BSVIBE_DOCKER_HOST:-}
       BSVIBE_SANDBOX_USER: ${BSVIBE_SANDBOX_USER:-}
