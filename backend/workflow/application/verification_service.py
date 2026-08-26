@@ -759,8 +759,28 @@ class VerificationService:
         applicable = run.product_id is not None and self._is_real_worktree(run)
         gate_expected = applicable and self._manifest_present(run)
 
-        if derived_gate is not None:
-            # The deriver RAN — its exit-code verdict is authoritative.
+        if derived_gate is not None and gate_expected and not derived_gate.get("commands"):
+            # INV-2, the SECOND fail-open door: the deriver RAN and produced ZERO
+            # gate commands on a repo whose manifest is physically present. Its
+            # blob says ``passed: True`` — vacuously, over nothing — and taking
+            # that verdict is exactly the LLM self-declaration this file's own
+            # comment forbids ("NEVER the LLM's self-declared ``applicable``").
+            #
+            # This used to be survivable: the weak verdict carried a letter on the
+            # retired honesty ladder, and the ratchet routed that letter to founder
+            # review. THE LADDER IS GONE (#780, "검증은 통과/실패 둘 뿐") — a guard
+            # in ``tests/execution/test_proved_invariant.py`` now forbids naming it
+            # here at all — and NOTHING replaced that routing. ``gate_expected`` had
+            # no consumer that gates anything, so the value was computed, persisted,
+            # and never allowed to decide. Deleting the ladder reopened this door
+            # while every test stayed green.
+            #
+            # prod (2026-08-26): 32 verifications PASSED this way, all of them
+            # ``applicable:false``; 8 of those work steps reached PROVED.
+            command_gate_pass = False
+        elif derived_gate is not None:
+            # The deriver RAN and produced commands — its exit-code verdict is
+            # authoritative.
             command_gate_pass = bool(derived_gate["passed"])
         elif deriver_failed and gate_expected:
             # INV-2 fail-CLOSED: the gate was EXPECTED (a manifest exists) but the

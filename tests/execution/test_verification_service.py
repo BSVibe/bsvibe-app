@@ -2388,6 +2388,68 @@ class TestGateFailClosed:
             assert vr.outcome is VerificationOutcome.PASSED  # greenfield still proceeds
             assert vr.result["gate_expected"] is False
 
+    async def test_applicable_but_zero_commands_on_a_manifest_repo_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """The other way to arrive at zero commands: the deriver says the repo IS
+        applicable and then derives none. The founder's rule does not care which
+        sentence produced it — "정말 없는 것만 통과, 할 게 있는데 못 한 것은 실패".
+        A manifest is physically there, so there was something to do."""
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch, manifest="pyproject.toml")
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            llm = StubLlm(
+                [
+                    _no_artifact_probes(),
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(content='{"applicable": true, "commands": []}'),
+                ]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=VerificationContract(
+                    checks=(VerificationCheck(kind="command", command="true"),)
+                ),
+                box=FakeBox(),
+                written_paths=["README.md"],
+                final_text="",
+            )
+            assert vr.outcome is VerificationOutcome.FAILED
+
+    async def test_greenfield_with_no_manifest_still_passes_on_zero_commands(
+        self, tmp_path, monkeypatch
+    ):
+        """POSITIVE CONTROL — a repo with NO manifest is legitimately gateless and
+        must keep auto-proceeding. prod has 8 such passes; a fix that fails them
+        too would be closing the door by bricking the room."""
+        async with memory_session() as session:
+            run = await self._seed(session, tmp_path, monkeypatch)  # no manifest
+            work_step, attempt = await _make_step_and_attempt(session, run)
+            llm = StubLlm(
+                [
+                    _no_artifact_probes(),
+                    LoopTurn(content='{"flagged": []}'),
+                    LoopTurn(content='{"applicable": false, "commands": []}'),
+                ]
+            )
+            svc = VerificationService(session=session, llm=llm)
+            vr = await svc.verify(
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=VerificationContract(
+                    checks=(VerificationCheck(kind="command", command="true"),)
+                ),
+                box=FakeBox(),
+                written_paths=["README.md"],
+                final_text="",
+            )
+            assert vr.result["gate_expected"] is False
+            assert vr.outcome is VerificationOutcome.PASSED
+
     async def test_llm_not_applicable_cannot_override_present_manifest(self, tmp_path, monkeypatch):
         """INV-2 — the LLM self-declaring ``applicable: false`` does NOT beat a
         deterministic manifest. A repo WITH a manifest stays gate_expected even
@@ -2418,7 +2480,16 @@ class TestGateFailClosed:
                 written_paths=["README.md"],
                 final_text="",
             )
-            # The deriver RAN (didn't crash) → PASSED verification, but the manifest
-            # makes it gate_expected + grade D → the ratchet routes it to review.
-            assert vr.outcome is VerificationOutcome.PASSED
+            # 2026-08-26 — this used to assert PASSED, on the stated grounds that
+            # "the weak (grade-D) verdict routes to founder review instead of
+            # silently auto-proving". THE GRADE LADDER WAS DELETED (#780, "검증은
+            # 통과/실패 둘 뿐"), and nothing replaced that routing: `honesty_grade`
+            # has zero non-test hits in backend/, and `gate_expected` has no
+            # consumer that gates anything. So the second door reopened while this
+            # test kept passing — it pinned a behaviour whose safety net was gone.
+            #
+            # prod (2026-08-26): 32 verifications PASSED with a manifest present
+            # and ZERO gate commands, every one of them `applicable:false`;
+            # 8 of those work steps reached proof_state=proved.
+            assert vr.outcome is VerificationOutcome.FAILED
             assert vr.result["gate_expected"] is True  # manifest wins over the LLM's word
