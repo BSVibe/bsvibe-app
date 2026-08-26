@@ -20,9 +20,14 @@ import { useEffect, useState } from "react";
  *  - The `in_app` column is INFORMATIONAL, not a toggle. The NotifyWorker never
  *    sends in_app (a Decision already surfaces in the Brief / SSE inbox), so a
  *    switch there would pretend to gate an always-on inbox. It renders "always on".
- *  - `daily_brief` has NO producer yet (it needs the Schedule track), so its row
- *    is rendered disabled with a "requires scheduled runs" note — never a live
- *    toggle that looks active but delivers nothing.
+ *  - `daily_brief` is a LIVE row like the rest. It was rendered inert on the
+ *    grounds that it "has NO producer yet"; measured in prod 2026-08-26 the
+ *    DailyBriefWorker was running and `notification_events` held 76 daily_brief
+ *    rows, ALL sent, the newest that same day — with the founder's own prefs
+ *    enabling it on a push channel. The worker gates on those prefs, so the
+ *    events themselves prove the toggle was ON while this grid drew it as an
+ *    unchecked, disabled box. The founder could not switch off something they
+ *    were receiving, and the UI told them they were not receiving it.
  *  - Zero push connectors ⇒ a connect-a-channel empty state (deep link to
  *    Connectors), not a bare in-app-only grid.
  *
@@ -31,12 +36,11 @@ import { useEffect, useState } from "react";
  * hours, reconcile from the response, revert on error.
  */
 
-// Matrix rows. The four delivering events are togglable; daily_brief is rendered
-// but inert (no producer) — kept visible so the grid reads as complete/honest.
-const DELIVERING_EVENTS = ["needs_you", "triggered", "shipped", "failed"] as const;
+// Matrix rows — every one of them delivering, every one of them togglable.
+const DELIVERING_EVENTS = ["needs_you", "triggered", "shipped", "failed", "daily_brief"] as const;
 const IN_APP = "in_app";
 
-type EventId = (typeof DELIVERING_EVENTS)[number] | "daily_brief";
+type EventId = (typeof DELIVERING_EVENTS)[number];
 
 export default function NotificationsTab() {
   const t = useTranslations("settings.notifications");
@@ -182,33 +186,6 @@ export default function NotificationsTab() {
                     ))}
                   </tr>
                 ))}
-                {/* daily_brief — visible but inert until the Schedule track wires a
-                    producer. Disabled toggles + a note keep it honest. */}
-                <tr className="notifications-grid__row--pending">
-                  <th scope="row" className="notifications-grid__event">
-                    {eventLabel("daily_brief")}
-                    <span className="notifications-grid__pending-note">
-                      {t("dailyBriefPending")}
-                    </span>
-                  </th>
-                  <td className="notifications-grid__cell notifications-grid__cell--inapp">
-                    <span className="notifications-grid__dot notifications-grid__dot--off">
-                      {t("inAppOff")}
-                    </span>
-                  </td>
-                  {pushChannels.map((channel) => (
-                    <td key={channel} className="notifications-grid__cell">
-                      <input
-                        type="checkbox"
-                        className="notifications-grid__toggle"
-                        aria-label={`${eventLabel("daily_brief")} — ${channelLabel(channel)}`}
-                        checked={false}
-                        disabled
-                        onChange={() => undefined}
-                      />
-                    </td>
-                  ))}
-                </tr>
               </tbody>
             </table>
           </div>

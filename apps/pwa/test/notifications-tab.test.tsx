@@ -10,7 +10,8 @@
  *  - Toggling a push cell PUTs the flipped matrix through `updateNotificationPrefs`.
  *  - Zero push connectors (`available_channels == ["in_app"]`) ⇒ a "connect a
  *    channel" empty state with a deep link, never a bare in-app-only grid.
- *  - `daily_brief` has no live toggle (no producer yet — Schedule track).
+ *  - `daily_brief` is a LIVE toggle: it has a producer (DailyBriefWorker) and the
+ *    founder must be able to turn it off.
  *
  * The tab fetches prefs on mount, so every assertion against the rendered grid
  * uses `findBy*` (async, retries) — a sync `getBy*` right after render passes
@@ -44,7 +45,7 @@ function prefs(overrides: Partial<NotificationPrefsView> = {}): NotificationPref
       triggered: { in_app: true },
       shipped: { in_app: true },
       failed: { in_app: true },
-      daily_brief: { in_app: false },
+      daily_brief: { in_app: false, telegram: true },
     },
     quiet_hours_enabled: false,
     quiet_hours_start: "22:00",
@@ -100,11 +101,42 @@ describe("NotificationsTab — events × channels matrix", () => {
     expect(screen.queryByRole("checkbox", { name: /needs you.*in-app/i })).toBeNull();
   });
 
-  it("daily_brief is present but not a live toggle (no producer yet)", async () => {
+  // `daily_brief` was rendered inert on the stated grounds that it "has NO
+  // producer yet (it needs the Schedule track)". Measured in prod 2026-08-26:
+  // `DailyBriefWorker` is running and `notification_events` holds 76 daily_brief
+  // rows, ALL `sent`, the most recent that same day — and the founder's own prefs
+  // have it enabled on a push channel. The worker even gates on those prefs
+  // ("skips the workspace unless daily_brief is enabled for at least one
+  // channel"), so the events prove the toggle is ON.
+  //
+  // So the grid was not merely withholding a switch: it drew an ENABLED
+  // preference as an unchecked, disabled box. The founder could not turn off
+  // something they were receiving, and the UI told them they were not receiving it.
+
+  it("daily_brief is a live toggle — it has a producer", async () => {
     getNotificationPrefs.mockResolvedValue(prefs());
     render(<NotificationsTab />);
     const cell = await screen.findByRole("checkbox", { name: /daily digest.*telegram/i });
-    expect(cell).toBeDisabled();
+    expect(cell).toBeEnabled();
+  });
+
+  it("daily_brief reflects the stored preference instead of a hardcoded false", async () => {
+    getNotificationPrefs.mockResolvedValue(prefs());
+    render(<NotificationsTab />);
+    const cell = await screen.findByRole("checkbox", { name: /daily digest.*telegram/i });
+    expect(cell).toBeChecked();
+  });
+
+  it("turning daily_brief OFF PUTs the flipped matrix", async () => {
+    getNotificationPrefs.mockResolvedValue(prefs());
+    updateNotificationPrefs.mockResolvedValue(prefs());
+    render(<NotificationsTab />);
+    const cell = await screen.findByRole("checkbox", { name: /daily digest.*telegram/i });
+    await userEvent.click(cell);
+
+    expect(updateNotificationPrefs).toHaveBeenCalledTimes(1);
+    const sent = updateNotificationPrefs.mock.calls[0][0];
+    expect(sent.matrix.daily_brief.telegram).toBe(false);
   });
 
   it("zero push connectors ⇒ connect-a-channel empty state, no grid", async () => {

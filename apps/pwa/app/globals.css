@@ -5257,19 +5257,6 @@ main.login {
   opacity: 0.5;
 }
 
-.notifications-grid__row--pending .notifications-grid__event {
-  color: var(--ink-2);
-}
-
-.notifications-grid__pending-note {
-  display: block;
-  font-size: 0.66rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
-
 .notifications-quiet__enable {
   display: inline-flex;
   align-items: center;

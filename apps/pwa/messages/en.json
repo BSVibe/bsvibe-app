@@ -721,7 +721,6 @@
       "inAppOff": "—",
       "inAppTooltip": "The in-app inbox is always on — a Decision surfaces in your Brief and the live inbox regardless of this grid.",
       "inAppCaption": "In-app is informational: it's the always-on inbox and can't be turned off here. Toggles control the push channels only.",
-      "dailyBriefPending": "requires scheduled runs",
       "emptyTitle": "Connect a notification channel",
       "emptyBody": "You have no push channels yet, so notifications only land in the in-app inbox. Connect Telegram, Slack, Discord, or email to be reached off-app.",
       "emptyCta": "Go to Connectors",
