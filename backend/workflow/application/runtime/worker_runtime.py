@@ -18,6 +18,7 @@ factories) and the process lifecycle (signal handlers / boot path):
 from __future__ import annotations
 
 import asyncio
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings, get_settings
+from backend.knowledge.application.retraction_sweep import RetractionSweepRunner
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
@@ -157,6 +159,27 @@ async def check_executor_dispatch_health(
     }
 
 
+async def _retraction_writer_for(workspace_id: uuid.UUID) -> Any:
+    """Root a GardenWriter at one workspace's vault, for the retract sweep.
+
+    Mirrors the MCP call site exactly (``GardenWriter(vault=Vault(root))``) so a
+    tombstone written by the sweep is byte-identical to one written by a read.
+    The region lookup is a DB read, which is why the factory is async. Imports
+    are LOCAL: this module is the worker composition root and must not pull the
+    knowledge vault stack at import time.
+    """
+    from backend.data.session import session_scope  # noqa: PLC0415 — composition root
+    from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
+    from backend.knowledge.graph.writer import GardenWriter  # noqa: PLC0415
+    from backend.mcp.tools._helpers import vault_root_for, workspace_region  # noqa: PLC0415
+
+    async with session_scope() as session:
+        region = await workspace_region(session, workspace_id)
+    root = vault_root_for(region=region, workspace_id=workspace_id)
+    root.mkdir(parents=True, exist_ok=True)
+    return GardenWriter(vault=Vault(root))
+
+
 def build_worker_runtime(
     *,
     session_factory: async_sessionmaker[AsyncSession],
@@ -259,6 +282,21 @@ def build_worker_runtime(
             runner=AuditRetentionSweepRunner(),
             name="audit_retention_sweep_worker",
             config=ScheduleWorkerConfig(poll_interval_s=86400.0),
+        ),
+        # A FOURTH ScheduleWorker on the same seam — the retract queue's sweep.
+        # `RetractionService.apply_pending` writes a queued retract's tombstone
+        # once its 30s undo window closes, and both the service and the REST
+        # handler described a "background sweep" driving it. There was none: its
+        # only production caller was four MCP READ tools, so a tombstone landed
+        # only when an AGENT happened to read the garden. A founder on the PWA
+        # retracted a note and the vault was never stamped — it kept grounding
+        # answers. Minutes-grained: the window is 30s, and a row waiting one tick
+        # is invisible next to "never".
+        ScheduleWorker(
+            session_factory=session_factory,
+            runner=RetractionSweepRunner(writer_factory=_retraction_writer_for),
+            name="retraction_sweep_worker",
+            config=ScheduleWorkerConfig(poll_interval_s=60.0),
         ),
         # PR4 — CI-green auto-merge poller, gated on github_auto_merge_enabled (off ⇒
         # absent). ``redis_client`` lets a stale client_attach PR freshen where its checkout is.
