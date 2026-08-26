@@ -113,9 +113,13 @@ class CanonConceptRetriever:
 
         index = CanonicalizationIndex()
         await index.initialize(self._storage)
-        # Empty-knowledge workspace → no active concepts → no fold. Cheap exit
-        # that also avoids resolving every token against an empty registry.
-        if not await index.list_active_concepts():
+        # Empty-knowledge workspace → no LIVE concepts → no fold. Cheap exit that
+        # also avoids resolving every token against a registry with nothing to
+        # give. "Active" here names the FOLDER (``concepts/active/``): retraction
+        # stamps the frontmatter and leaves the file in place, so a workspace
+        # whose concepts were all retracted still lists them. Ask the honest
+        # question instead.
+        if not any(c.retracted_at is None for c in await index.list_active_concepts()):
             return []
 
         resolver = TagResolver(index=index)
@@ -130,7 +134,21 @@ class CanonConceptRetriever:
             if resolved.concept_id in seen_ids:
                 continue
             concept = await index.get_active_concept(resolved.concept_id)
-            if concept is None:
+            if concept is None or concept.retracted_at is not None:
+                # The founder retracted it. ``answer_grounding._expand`` states
+                # the rule this honours — "Retraction has to be honoured at every
+                # consumer, not just at the writer" — and then exempts every kind
+                # but ``note``; this retriever is the sole producer of
+                # ``kind="concept"`` items, so the exemption ended here, with the
+                # founder's own retracted knowledge quoted back as a canonical
+                # pattern. Measured 2026-08-26: 403 of 932 files under
+                # ``concepts/active/`` carried a ``retracted_at`` stamp in prod.
+                #
+                # Filtered HERE, at the reader, not in ``CanonicalizationIndex``:
+                # that index also answers the GDPR export (
+                # :mod:`backend.api.v1.workspace_compliance`), which must return
+                # retracted concepts — under-reporting there is its own defect.
+                # Same shape ``concept_graph.py`` already uses.
                 continue
             seen_ids.add(resolved.concept_id)
             # The concept's display H1 is its label (Handoff §0.2). KG Lift 4 —
