@@ -175,7 +175,7 @@ async def test_the_pass_still_tells_the_founder_the_evidence_is_weak() -> None:
     """#742 재발 방지 — 파킹은 없앴지만 형님 폰에 닿는 문장까지 없애면 안 된다.
 
     ``_weak_evidence_sentence`` 는 ``gate_applicable`` 이 falsy 면 침묵한다."""
-    from backend.workflow.application.run_persistence import _weak_evidence_sentence
+    from backend.workflow.application._verified_summary import _weak_evidence_sentence
 
     orch, box = _Orch(real_worktree=True), _Box()
     await _settle(orch, box, [])

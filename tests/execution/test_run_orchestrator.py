@@ -326,7 +326,7 @@ async def test_verified_summary_titled_by_intent_bodied_by_changed_files() -> No
     """
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(
         payload={"intent_text": "Add a TTL cache utility to the backend.\n\nDetails: monotonic."}
@@ -364,7 +364,7 @@ async def test_verified_summary_prefers_declarative_frame_title() -> None:
     first-line only when no framed title exists."""
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(
         payload={
@@ -384,7 +384,7 @@ async def test_compose_verified_summary_falls_back_to_cleaned_prose_without_path
     streaming chunk-join whitespace artifacts ("done.Next" → "done. Next")."""
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "Investigate the flake."})
     summary = _compose_verified_summary(run, "Found the cause.Fixed the race.", None)  # type: ignore[arg-type]
@@ -397,7 +397,7 @@ async def test_compose_verified_summary_falls_back_to_cleaned_prose_without_path
 async def test_compose_verified_summary_falls_back_when_no_intent() -> None:
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={})
     summary = _compose_verified_summary(run, "did the thing", ["a.py"])  # type: ignore[arg-type]
@@ -415,7 +415,7 @@ async def test_compose_verified_summary_weaves_verification_result() -> None:
     verification-contract block must never leak into the user-facing summary)."""
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "Add a TTL cache utility."})
     verdict_result = {
@@ -451,10 +451,12 @@ async def test_compose_verified_summary_no_verdict_unchanged() -> None:
     is exactly the prior title + changed-file body — no verification line."""
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "Add a cache."})
-    summary = _compose_verified_summary(run, "narration", ["a.py"])  # type: ignore[arg-type]
+    summary = _compose_verified_summary(  # type: ignore[arg-type]
+        run, "narration", ["a.py"], changed_paths=["a.py"]
+    )
     assert "Verified:" not in summary
     assert summary == "Add a cache.\n\nChanged files:\n- a.py"
 
@@ -465,7 +467,7 @@ async def test_compose_verified_summary_localizes_chrome_for_ko() -> None:
     'Changed files:' / 'Verified:' jargon a KO founder saw in prod."""
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"frame": {"summary_title": "문자열 유틸 추가"}})
     verdict_result = {
@@ -481,6 +483,7 @@ async def test_compose_verified_summary_localizes_chrome_for_ko() -> None:
         ["src/strx.py", "tests/test_strx.py"],
         verdict_result,
         language="ko",
+        changed_paths=["src/strx.py", "tests/test_strx.py"],
     )
     assert "바뀐 파일 2개:" in summary
     assert "검증: 2개 확인 통과" in summary
@@ -495,7 +498,7 @@ async def test_compose_verified_summary_ko_acceptance_case() -> None:
     """NC2 — the acceptance-judge sentence is localized ('검증 통과') for KO."""
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"frame": {"summary_title": "리팩터"}})
     summary = _compose_verified_summary(
@@ -513,7 +516,7 @@ async def test_compose_verified_summary_en_parity_unchanged() -> None:
     """NC2 — EN keeps the current English chrome (parity)."""
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "Add a cache."})
     summary = _compose_verified_summary(
@@ -522,6 +525,7 @@ async def test_compose_verified_summary_en_parity_unchanged() -> None:
         ["a.py"],
         {"command_results": [{"command": "pytest", "passed": True}], "judge": {}},
         language="en",
+        changed_paths=["a.py"],
     )
     assert "Changed files:" in summary
     assert "Verified: 1 check passed" in summary
@@ -2088,7 +2092,7 @@ _GATE_NA = {"gate_applicable": False, "derived_gate": None}
 def _summary_for(evidence: dict, language: str = "ko") -> str:
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "주간 리포트를 써줘"})
     return _compose_verified_summary(
@@ -2164,7 +2168,7 @@ def test_a_weak_finish_does_not_also_claim_a_plain_pass() -> None:
 def test_a_strong_finish_still_reports_the_acceptance_pass() -> None:
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "x"})
     summary = _compose_verified_summary(
@@ -2192,7 +2196,7 @@ def test_verification_sentence_prefers_derived_gate_over_command_results() -> No
     """
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "Add dedup utility."})
     verdict_result = {
@@ -2226,7 +2230,7 @@ def test_verification_sentence_counts_matched_probes_en() -> None:
     """
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"intent_text": "Add factorial."})
     verdict_result = {
@@ -2251,7 +2255,7 @@ def test_verification_sentence_counts_matched_probes_ko() -> None:
     """KO localization: matched probes appear as '결과 시연됨 (N개 프로브).'"""
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
 
     run = SimpleNamespace(payload={"frame": {"summary_title": "팩토리얼 추가"}})
     verdict_result = {
@@ -2282,7 +2286,7 @@ def test_verification_sentence_gate_plus_probes_combined() -> None:
     """
     from types import SimpleNamespace
 
-    from backend.workflow.application.run_persistence import _compose_verified_summary
+    from backend.workflow.application._verified_summary import _compose_verified_summary
     from backend.workflow.domain.verified_deliverable import (
         _shipped_detail,
     )
@@ -2318,3 +2322,130 @@ def test_verification_sentence_gate_plus_probes_combined() -> None:
     # The phone notification must mention both gate checks and probes.
     assert "2개 확인 통과" in detail
     assert "2개 프로브" in detail
+
+
+# --------------------------------------------------------------------------
+# The summary's file list and the deliverable's diff had DIFFERENT SOURCES
+# --------------------------------------------------------------------------
+#
+# prod run `02af81f7` (2026-08-26) shipped a deliverable whose summary said
+# "바뀐 파일 4개" while the PR it produced (#827) contained **2**. The summary
+# counted ``written_paths`` — every path the agent WROTE during the run —
+# which includes a scratch probe it created and then deleted, and a file it
+# opened but left byte-identical. The diff on the same deliverable is captured
+# separately, from ``git diff --name-only main...HEAD``.
+#
+# This is not cosmetic: the summary's first line becomes the PR title AND the
+# settle note title, so a wrong count is written into the knowledge graph and
+# injected into later runs as "what happened".
+
+
+async def test_verified_summary_lists_changed_paths_not_everything_written() -> None:
+    """When the run's real changed-path list is known, THAT is what the summary
+    reports — a file the agent created and then deleted never changed anything
+    and must not be counted."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Add a total byte budget."})
+    written = ["backend/svc.py", "tests/_scratch_probe.py", "tests/test_untouched.py"]
+    summary = _compose_verified_summary(
+        run,  # type: ignore[arg-type]
+        "narration",
+        written,
+        changed_paths=["backend/svc.py"],
+    )
+    assert "backend/svc.py" in summary
+    assert "_scratch_probe.py" not in summary
+    assert "test_untouched.py" not in summary
+
+
+async def test_verified_summary_counts_what_it_lists() -> None:
+    """The KO header carries a COUNT. It has to be the count of the list under
+    it — a header saying 4 above a list of 1 is worse than no header."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "예산 추가"})
+    summary = _compose_verified_summary(
+        run,  # type: ignore[arg-type]
+        "narration",
+        ["a.py", "b.py", "c.py", "d.py"],
+        language="ko",
+        changed_paths=["a.py", "b.py"],
+    )
+    assert "바뀐 파일 2개" in summary
+    assert "바뀐 파일 4개" not in summary
+
+
+async def test_verified_summary_says_touched_when_the_changed_list_is_unknown() -> None:
+    """Diff capture is best-effort: a cleaned worktree or a non-product run
+    yields no changed-path list. Falling back to ``written_paths`` is fine —
+    calling them "changed" is not, because they are not known to have changed.
+    The label must name its own source."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Investigate."})
+    en = _compose_verified_summary(run, "narration", ["a.py"], changed_paths=None)  # type: ignore[arg-type]
+    ko = _compose_verified_summary(  # type: ignore[arg-type]
+        run, "narration", ["a.py"], language="ko", changed_paths=None
+    )
+    assert "Changed files:" not in en
+    assert "Files touched:" in en
+    assert "바뀐 파일" not in ko
+    assert "건드린 파일 1개" in ko
+
+
+async def test_verified_summary_with_an_empty_changed_list_claims_no_files() -> None:
+    """An empty changed list is a real answer — the run wrote scratch files and
+    changed nothing durable. Reporting the written paths there would restate
+    exactly the falsehood this fixes."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Probe only."})
+    summary = _compose_verified_summary(
+        run,
+        "Nothing durable.",
+        ["tests/_scratch.py"],
+        changed_paths=[],  # type: ignore[arg-type]
+    )
+    assert "_scratch.py" not in summary
+    assert "Changed files:" not in summary
+    assert "Files touched:" not in summary
+
+
+async def test_the_landing_path_actually_asks_for_the_changed_paths() -> None:
+    """SEAM — a ``changed_paths`` parameter nobody supplies is dead code, and the
+    summary would keep reporting the written paths forever while every unit test
+    above stayed green. Pin that ``land_verified_artifacts`` reads the run's real
+    change list and hands it to the composer."""
+    import inspect
+
+    from backend.workflow.application import run_persistence
+
+    landing = inspect.getsource(run_persistence.land_verified_artifacts)
+    assert "_changed_paths_for" in landing
+    assert "changed_paths=changed_paths" in landing
+
+    from backend.workflow.application import _verified_summary
+
+    reader = inspect.getsource(_verified_summary._changed_paths_for)
+    # Same ref range as the deliverable's diff — the two must not drift apart.
+    assert "capture_run_changed_paths" in reader
+
+
+async def test_a_non_product_run_reports_unknown_not_empty() -> None:
+    """``None`` (unknown) and ``[]`` (changed nothing) drive different labels, so
+    a run with no worktree to diff must yield the former — otherwise a
+    client-side / non-product run would claim it changed nothing."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _changed_paths_for
+
+    assert await _changed_paths_for(SimpleNamespace(product_id=None)) is None  # type: ignore[arg-type]
