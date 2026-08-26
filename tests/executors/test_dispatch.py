@@ -1289,3 +1289,90 @@ async def test_await_completion_times_out_cleanly() -> None:
 # :func:`build_worker_runtime`; real executor dispatch runs inline in the run
 # state machine. The corresponding tests are removed (see
 # ``tests/glue/test_b14_cleanup_liveness.py`` for the deletion assertions).
+
+
+# --------------------------------------------------------------------------
+# A TaskTimeout that names nothing is an investigation, not a diagnosis
+# --------------------------------------------------------------------------
+#
+# #821 (2026-08-25) instrumented the fake WORKER — how many stream reads it
+# made, which actions it saw — on the hypothesis that the worker never got the
+# task. It recurred 2026-08-26 (PR #828 CI) and that instrumentation stayed
+# SILENT, because the worker had in fact received the task, run it, and
+# recorded the result. The failure was on this side: the awaiter never observed
+# the terminal row and burned its whole 70s budget.
+#
+# The silence WAS the datum, and it named where the numbers belong: here. Three
+# observations separate the remaining shapes, and none of them existed:
+#
+#   polls ≈ budget/interval + last_status="dispatched"  → the worker never reported
+#   polls ≈ budget/interval + last_status=None          → the row is invisible to our reads
+#   polls very LOW                                      → this loop never ticked (starved wait)
+#   last_status terminal at raise                       → the row WAS done and our reads missed it
+#
+# Observability only — no behaviour changes. #821's rule stands: an
+# unreproduced hypothesis does not get to edit production logic.
+
+
+async def test_task_timeout_reports_how_many_times_it_polled() -> None:
+    """A starved wait and a busy one fail identically today. The poll count is
+    what tells them apart."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await s.commit()
+        with pytest.raises(dispatch.TaskTimeout) as exc:
+            await dispatch.await_completion(redis, session=s, task_id=task.id, timeout_s=0.5)
+    assert exc.value.polls >= 1, "a loop that ran must say so"
+    assert "polls" in str(exc.value)
+    await redis.aclose()
+
+
+async def test_task_timeout_reports_the_last_status_it_saw() -> None:
+    """The row exists and is non-terminal → say WHICH non-terminal state it sat
+    in. "dispatched" means the worker never reported; anything else is a
+    different bug."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await s.commit()
+        with pytest.raises(dispatch.TaskTimeout) as exc:
+            await dispatch.await_completion(redis, session=s, task_id=task.id, timeout_s=0.3)
+    assert exc.value.last_status == task.status
+    assert str(task.status) in str(exc.value)
+    await redis.aclose()
+
+
+async def test_task_timeout_says_when_the_row_was_never_visible() -> None:
+    """A row our reads cannot see at all is a DIFFERENT failure from one stuck
+    at "dispatched" — the message must not collapse them into one."""
+    workspace_id = uuid.uuid4()  # noqa: F841 — parity with the sibling cases
+    redis = await _make_redis()
+    async with memory_session() as s:
+        with pytest.raises(dispatch.TaskTimeout) as exc:
+            await dispatch.await_completion(redis, session=s, task_id=uuid.uuid4(), timeout_s=0.3)
+    assert exc.value.last_status is None
+    assert "not visible" in str(exc.value)
+    await redis.aclose()
+
+
+async def test_task_timeout_reports_elapsed_time() -> None:
+    """The elapsed figure is what let §23/§25 name the timeout that caused a
+    failure by arithmetic (70.8s = timeout_s(10) + _AWAIT_SLACK_S(60))."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await dispatch.create_task(
+            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await s.commit()
+        with pytest.raises(dispatch.TaskTimeout) as exc:
+            await dispatch.await_completion(redis, session=s, task_id=task.id, timeout_s=0.3)
+    assert exc.value.elapsed_s >= 0.3
+    await redis.aclose()

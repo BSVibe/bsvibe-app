@@ -74,7 +74,41 @@ _AWAIT_POLL_INTERVAL_S = 2.0
 
 
 class TaskTimeout(Exception):
-    """Raised when :func:`await_completion` sees no terminal result in time."""
+    """Raised when :func:`await_completion` sees no terminal result in time.
+
+    Carries what the awaiter actually OBSERVED, because "it timed out" alone
+    cannot tell the remaining failure shapes apart. #821 instrumented the other
+    end of this wire — the worker's stream loop — on the hypothesis that the
+    worker never received the task. It recurred (PR #828 CI, 2026-08-26) and
+    that instrumentation stayed SILENT: the worker had received the task, run
+    it and recorded the result. The silence located the gap here.
+
+    Read the three numbers together:
+
+    * ``polls`` near ``timeout_s / _AWAIT_POLL_INTERVAL_S`` + ``last_status``
+      still ``"dispatched"`` → the worker never reported.
+    * same ``polls``, ``last_status`` ``None`` → the row is not visible to these
+      reads at all (a DB/session-visibility problem, not a worker one).
+    * ``polls`` far BELOW that ratio → this loop never ticked; the wait itself
+      was starved and the safety-net read never got its turn.
+    * ``last_status`` TERMINAL at raise time → the row was done and every read
+      here missed it. That one is the alarming shape.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        task_id: uuid.UUID | None = None,
+        polls: int = 0,
+        last_status: str | None = None,
+        elapsed_s: float = 0.0,
+    ) -> None:
+        super().__init__(message)
+        self.task_id = task_id
+        self.polls = polls
+        self.last_status = last_status
+        self.elapsed_s = elapsed_s
 
 
 class _RedisDispatch(Protocol):
@@ -586,6 +620,33 @@ async def _read_terminal_isolated(
     return await _read_terminal(session, task_id)
 
 
+async def _read_status_isolated(
+    task_id: uuid.UUID,
+    *,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+) -> str | None:
+    """The row's RAW status, or ``None`` when the row is not visible at all.
+
+    Distinct from :func:`_read_terminal_isolated`, which folds "no row" and
+    "row is still running" into the same ``None`` — the exact conflation that
+    made a timeout unreadable. Called ONCE on the raise path, so the polling
+    loop keeps its single query per tick. Same short-session discipline.
+    """
+
+    async def _read(s: AsyncSession) -> str | None:
+        row = await s.get(ExecutorTaskRow, task_id)
+        return None if row is None else str(row.status)
+
+    try:
+        if session_factory is not None:
+            async with session_factory() as short:
+                return await _read(short)
+        return await _read(session)
+    except Exception:  # noqa: BLE001 — diagnosis must never mask the timeout
+        return None
+
+
 async def await_completion(
     redis: _RedisDispatch,
     *,
@@ -613,6 +674,8 @@ async def await_completion(
     connection is held across the wait — acceptable only for callers that do not
     park on a long turn).
     """
+    started = asyncio.get_event_loop().time()
+    polls = 0
     # Fast path: the result may already be terminal (worker beat the awaiter).
     early = await _read_terminal_isolated(task_id, session=session, session_factory=session_factory)
     if early is not None:
@@ -622,7 +685,7 @@ async def await_completion(
     pubsub = redis.pubsub()
     try:
         await pubsub.subscribe(chan)
-        deadline = asyncio.get_event_loop().time() + timeout_s
+        deadline = started + timeout_s
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
@@ -641,6 +704,7 @@ async def await_completion(
             # Whether or not a signal arrived, re-read the row: the signal is the
             # fast path; the periodic read is the safety net for a missed publish.
             _ = msg
+            polls += 1
             row = await _read_terminal_isolated(
                 task_id, session=session, session_factory=session_factory
             )
@@ -666,7 +730,22 @@ async def await_completion(
     row = await _read_terminal_isolated(task_id, session=session, session_factory=session_factory)
     if row is not None:
         return row
-    raise TaskTimeout(f"executor task {task_id} did not complete within {timeout_s}s")
+    # What did this awaiter actually see? Read the RAW status once, so the
+    # message separates "worker never reported" from "row never visible" from
+    # "this loop never ticked" (see :class:`TaskTimeout`).
+    last_status = await _read_status_isolated(
+        task_id, session=session, session_factory=session_factory
+    )
+    elapsed_s = asyncio.get_event_loop().time() - started
+    seen = f"last status {last_status!r}" if last_status is not None else "row not visible"
+    raise TaskTimeout(
+        f"executor task {task_id} did not complete within {timeout_s}s "
+        f"({polls} polls in {elapsed_s:.1f}s, {seen})",
+        task_id=task_id,
+        polls=polls,
+        last_status=last_status,
+        elapsed_s=elapsed_s,
+    )
 
 
 async def _poll_until_terminal(

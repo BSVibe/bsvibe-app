@@ -189,20 +189,34 @@ class ClientWorkerSandboxSession:
                     timeout_s=timeout_s + _AWAIT_SLACK_S,
                     session_factory=self._session_factory,
                 )
-            except dispatch.TaskTimeout:
+            except dispatch.TaskTimeout as exc:
                 # Signal the worker to stop the now-abandoned command, then report
                 # the honest timeout (never a silent pass).
                 await dispatch.cancel_task(self._redis, worker_id=worker_id, task_id=task_id)
+                # Carry the awaiter's OBSERVATIONS through — the stderr below is
+                # what a failing CI assertion prints, and "timed out after 70s"
+                # alone sent one investigation back to zero (#821, 2026-08-26).
+                seen = (
+                    f"last status {exc.last_status!r}"
+                    if exc.last_status is not None
+                    else "row not visible"
+                )
                 logger.info(
                     "client_worker_exec_timeout",
                     workspace_id=str(self._workspace_id),
                     worker_id=str(worker_id),
                     task_id=str(task_id),
+                    polls=exc.polls,
+                    last_status=exc.last_status,
+                    elapsed_s=round(exc.elapsed_s, 1),
                 )
                 return SandboxResult(
                     exit_code=None,
                     stdout="",
-                    stderr=f"exec timed out after {timeout_s}s",
+                    stderr=(
+                        f"exec timed out after {timeout_s}s "
+                        f"({exc.polls} polls in {exc.elapsed_s:.1f}s, {seen})"
+                    ),
                     timed_out=True,
                 )
         return _map_result(completed)
