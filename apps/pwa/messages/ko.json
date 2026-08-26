@@ -721,7 +721,6 @@
       "inAppOff": "—",
       "inAppTooltip": "인앱 인박스는 항상 켜져 있어요 — 이 그리드와 무관하게 Decision은 Brief와 실시간 인박스에 나타나요.",
       "inAppCaption": "인앱은 안내용이에요. 항상 켜진 인박스라 여기서 끌 수 없어요. 토글은 푸시 채널만 제어해요.",
-      "dailyBriefPending": "예약 실행 연동 후 제공",
       "emptyTitle": "알림 채널을 연결하세요",
       "emptyBody": "아직 푸시 채널이 없어서 알림은 인앱 인박스에만 쌓여요. Telegram·Slack·Discord·이메일을 연결하면 앱 밖에서도 받을 수 있어요.",
       "emptyCta": "커넥터로 이동",
