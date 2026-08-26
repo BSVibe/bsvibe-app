@@ -37,6 +37,8 @@ from backend.workflow.application.verification_service import (
     _CI_CTX_BYTES,
     _CI_MAX_FILES,
     _CI_TOTAL_CTX_BYTES,
+    _MANIFEST_FILES,
+    _MANIFEST_TOTAL_CTX_BYTES,
     VerificationService,
 )
 from backend.workflow.infrastructure.sandbox import SandboxError, SandboxResult
@@ -295,6 +297,66 @@ class TestManifestReaderIsUnchanged:
         )
         manifests = await _service(_Llm(_GATE_JSON))._read_repo_manifests(box)
         assert set(manifests) == {"pyproject.toml"}
+
+
+# --------------------------------------------------------------------------
+# `_read_repo_manifests` had a PER-FILE cap (`_MANIFEST_CTX_BYTES`) but no
+# TOTAL one: a repo with several manifests could feed the deriver up to
+# `_MANIFEST_CTX_BYTES * len(_MANIFEST_FILES)` (80KB), crowding out the CI
+# declarations and source excerpts that compete for the same fixed prompt
+# window. Measured in prod (2026-08-25/26): one large manifest dropped a
+# check's inclusion rate from 10/10 runs to 3/10.
+# --------------------------------------------------------------------------
+
+
+class TestManifestTotalByteBudget:
+    async def test_the_total_byte_budget_is_bounded(self) -> None:
+        box = _Box(
+            {
+                "pyproject.toml": "x" * 200_000,
+                "package.json": "x" * 200_000,
+                "Cargo.toml": "x" * 200_000,
+                "go.mod": "x" * 200_000,
+            }
+        )
+        manifests = await _service(_Llm(_GATE_JSON))._read_repo_manifests(box)
+        spent = sum(len(v.encode("utf-8")) for v in manifests.values())
+        assert spent <= _MANIFEST_TOTAL_CTX_BYTES
+
+    async def test_the_total_budget_is_bytes_even_when_manifests_are_not_ascii(self) -> None:
+        """The ASCII case above cannot see this: there each character is one
+        byte, so a character-counted budget passes it forever too. A
+        Korean-language manifest is 3 bytes per character, and counting
+        characters instead of bytes lets the total overrun ~3x — the same bug
+        class the CI reader had before :func:`_clamp_utf8` was applied there."""
+        box = _Box(
+            {
+                "pyproject.toml": "가" * 200_000,
+                "package.json": "가" * 200_000,
+                "Cargo.toml": "가" * 200_000,
+                "go.mod": "가" * 200_000,
+            }
+        )
+        manifests = await _service(_Llm(_GATE_JSON))._read_repo_manifests(box)
+        spent = sum(len(v.encode("utf-8")) for v in manifests.values())
+        assert spent <= _MANIFEST_TOTAL_CTX_BYTES, (
+            f"manifest grounding spent {spent}B of {_MANIFEST_TOTAL_CTX_BYTES}B"
+        )
+
+    async def test_existing_manifest_keys_survive_total_budget_exhaustion(self) -> None:
+        """The dict's KEYS double as the fail-closed 'this repo has a
+        toolchain' signal (`_manifest_present`, `inplace_gate`'s `if not
+        manifests`). Once a manifest is known non-empty on disk, spending the
+        total budget must only truncate its VALUE — never drop its KEY, or a
+        repo WITH a toolchain reads as gateless. Non-ASCII on purpose: a
+        byte/char mixup could make this look fine while actually overrunning."""
+        box = _Box({name: "설정" * 5_000 for name in _MANIFEST_FILES})
+        manifests = await _service(_Llm(_GATE_JSON))._read_repo_manifests(box)
+        assert set(manifests) == set(_MANIFEST_FILES)
+        spent = sum(len(v.encode("utf-8")) for v in manifests.values())
+        assert spent <= _MANIFEST_TOTAL_CTX_BYTES, (
+            f"manifest grounding spent {spent}B of {_MANIFEST_TOTAL_CTX_BYTES}B"
+        )
 
 
 # --------------------------------------------------------------------------

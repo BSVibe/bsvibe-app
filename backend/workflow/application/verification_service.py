@@ -127,6 +127,13 @@ _SOURCE_CTX_BYTES = 8 * 1024
 #: Bytes of each manifest fed to the gate deriver — a manifest declares the
 #: toolchain (deps, extras, scripts, targets), which fits in a small window.
 _MANIFEST_CTX_BYTES = 8 * 1024
+#: And at most this many bytes across ALL manifests, together — mirrors
+#: :data:`_CI_TOTAL_CTX_BYTES` for the same reason: the deriver prompt is a
+#: fixed budget, and every manifest competes with the CI grounding and the
+#: source excerpts for the same window. Measured in prod (2026-08-25/26):
+#: adding one large manifest (7,587B) crowded the rest of the grounding out
+#: of the prompt and a check's inclusion rate fell from 10/10 runs to 3/10.
+_MANIFEST_TOTAL_CTX_BYTES = 24 * 1024
 #: Repo-root declaration files fed to the gate deriver as GROUNDING. These are
 #: universal manifest NAMES (not per-stack command logic — that is exactly the
 #: coupling the deriver removes): whatever exists is shown to the LLM, which
@@ -932,16 +939,33 @@ class VerificationService:
     async def _read_repo_manifests(self, box: SandboxSession) -> dict[str, str]:
         """Read the repo's OWN declaration files (whatever exists) to ground the
         gate deriver. Best-effort: a missing file raises :class:`SandboxError`
-        on a real sandbox / returns empty on the fake — skipped either way."""
+        on a real sandbox / returns empty on the fake — skipped either way.
+
+        Bounded per-file (:data:`_MANIFEST_CTX_BYTES`) AND in total
+        (:data:`_MANIFEST_TOTAL_CTX_BYTES`), spent in UTF-8 BYTES via
+        :func:`_clamp_utf8` — a non-ASCII manifest must not buy a bigger
+        window than an ASCII one (same reasoning as
+        :meth:`_read_ci_declarations`).
+
+        The dict's KEYS double as a fail-closed signal (`_manifest_present`,
+        `inplace_gate`'s ``if not manifests``): once a manifest is known to be
+        non-empty on disk, its KEY is never dropped for budget reasons — only
+        its VALUE is truncated, even down to an empty string. Losing a key
+        here would make a repo WITH a toolchain read as gateless.
+        """
         manifests: dict[str, str] = {}
+        remaining = _MANIFEST_TOTAL_CTX_BYTES
         for path in _MANIFEST_FILES:
             try:
                 data = await box.read_file(path, _MANIFEST_CTX_BYTES)
             except SandboxError:
                 continue
             text = data.decode("utf-8", errors="replace").strip()
-            if text:
-                manifests[path] = text
+            if not text:
+                continue
+            text = _clamp_utf8(text, max(remaining, 0))
+            manifests[path] = text
+            remaining -= len(text.encode("utf-8"))
         return manifests
 
     async def _read_ci_declarations(self, box: SandboxSession) -> dict[str, str]:
