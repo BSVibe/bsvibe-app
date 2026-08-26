@@ -152,6 +152,24 @@ _CI_CTX_BYTES = 8 * 1024
 _CI_MAX_FILES = 6
 #: And at most this many bytes across all of them, together.
 _CI_TOTAL_CTX_BYTES = 24 * 1024
+
+
+def _clamp_utf8(text: str, max_bytes: int) -> str:
+    """Trim ``text`` to at most ``max_bytes`` UTF-8 BYTES, on a character boundary.
+
+    The CI grounding budgets (:data:`_CI_CTX_BYTES`, :data:`_CI_TOTAL_CTX_BYTES`)
+    are declared in bytes because a prompt window is spent in bytes. Slicing the
+    decoded string instead — ``text[:max_bytes]`` — counts CHARACTERS, so a CI
+    file written in a non-ASCII language buys 3-4x the window an ASCII one does.
+    Slicing the ENCODED form and dropping any split tail (``errors="ignore"``)
+    keeps the result valid UTF-8 while spending the budget in its own unit.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
 #: The directory whose files are enumerated as CI declarations, and the suffixes
 #: that count as one there.
 _CI_WORKFLOW_DIR = ".github/workflows"
@@ -972,17 +990,21 @@ class VerificationService:
         for path in candidates:
             if len(declarations) >= _CI_MAX_FILES or remaining <= 0:
                 break
+            budget = min(_CI_CTX_BYTES, remaining)
             data: bytes | None
             try:
-                data = await box.read_file(path, min(_CI_CTX_BYTES, remaining))
+                data = await box.read_file(path, budget)
             except Exception:  # noqa: BLE001 — absent / unreadable: skipped, never a false-fail
                 data = None
             if data is None:
                 continue
-            text = data.decode("utf-8", errors="replace").strip()[:remaining]
+            # Decoding a byte-capped read can land mid-character, and
+            # ``errors="replace"`` substitutes a 3-byte U+FFFD — so the kept
+            # text is re-measured against the budget in BYTES, never characters.
+            text = _clamp_utf8(data.decode("utf-8", errors="replace").strip(), budget)
             if text:
                 declarations[path] = text
-                remaining -= len(text)
+                remaining -= len(text.encode("utf-8"))
         if declarations:
             logger.debug("gate_ci_declarations_read", paths=sorted(declarations))
         return declarations
