@@ -616,6 +616,9 @@ async def test_build_worker_runtime_constructs_all_workers(
         # cutoff. Emits a ``audit.retention.swept`` row per workspace
         # tagged ``trigger=schedule, source=system.audit_retention``.
         "audit_retention_sweep_worker",
+        # The retract queue's sweep — its tombstones used to land only when an
+        # agent happened to read the garden over MCP.
+        "retraction_sweep_worker",
     }
     # start + graceful stop is idempotent and drains in-flight ticks.
     for w in rt.workers:
