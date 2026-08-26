@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from pathlib import Path
 
 import httpx
 import pytest
@@ -173,8 +174,20 @@ async def test_settle_hook_auto_populates_pgvector_index_e2e(tmp_path) -> None:
     sf = async_sessionmaker(engine, expire_on_commit=False)
     try:
         hook = build_note_embed_hook(session_factory=sf, settings=settings)
-        # A settled note (the hook embeds the summary; node_ref keys the row).
+        # A settled note. The hook embeds the NOTE (title + body) via the shared
+        # ``embed_and_store_note``, so the note must exist on disk — which is what
+        # actually happens in production: the settle sink writes the .md first and
+        # the hook embeds it. This test used to pass a node_ref at a path that was
+        # never created, which only worked while the hook embedded
+        # ``settlement.summary`` and never opened the file.
         node_ref = f"{settings.knowledge_vault_root}/us-1/{workspace_id}/garden/seedling/pay.md"
+        note = Path(node_ref)
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text(
+            "---\ntitle: Payment changes need a regression test\n---\n\n"
+            "never ship a payment or billing change without a regression test\n",
+            encoding="utf-8",
+        )
         settlement = Settlement(
             workspace_id=workspace_id,
             region="us-1",

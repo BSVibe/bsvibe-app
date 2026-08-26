@@ -224,38 +224,55 @@ def build_note_embed_hook(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings | None = None,
 ) -> NoteEmbedHook:
-    """Production :class:`NoteEmbedHook` for the settle sink — unchanged from E1."""
+    """Production :class:`NoteEmbedHook` for the settle sink.
+
+    Embeds the NOTE — via the shared :func:`embed_and_store_note`, the same
+    function the live subscriber and the reconcile backfill use, so all three
+    writers key a vector to the same text (``title + body``).
+
+    It used to embed ``settlement.summary`` instead: the one-line work-log
+    sentence that produced the note, never the note's own words. Two answers to
+    "what text represents this note?", because this hook duplicated the logic
+    rather than calling it. Measured against prod (2026-08-26, ollama/bge-m3)
+    for a real stored vector — positive control 1.0000, stored-vs-summary
+    1.0000, stored-vs-note-body 0.7006 — so semantic recall over settled
+    knowledge ranked by the work log.
+
+    It could not self-heal either: :func:`reconcile_embeddings` skips any path
+    already in ``existing_paths()`` for the current model, so a note holding a
+    wrong vector was never re-embedded. Backfilling the rows written before this
+    fix is a separate change.
+    """
     settings = settings or get_settings()
     vault_root = Path(settings.knowledge_vault_root)
 
     async def _hook(settlement: Settlement, node_ref: str) -> None:
+        from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
         from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
             resolve_knowledge_embedder,
         )
         from backend.knowledge.retrieval.storage.pg import (  # noqa: PLC0415
             PgNoteVectorBackend,
         )
+        from backend.knowledge.retrieval.vector_subscriber import (  # noqa: PLC0415
+            embed_and_store_note,
+        )
 
-        text = settlement.summary.strip()
-        if not text:
-            return
         embedder = resolve_knowledge_embedder(settings)
         if not embedder.enabled or embedder.model is None:
-            return
-        vector = await embedder.embed(text)
-        if not vector:
             return
         note_path = _relative_note_path(
             node_ref, vault_root, settlement.region, settlement.workspace_id
         )
+        vault = Vault(vault_root / settlement.region / str(settlement.workspace_id))
         async with session_factory() as session:
             backend = PgNoteVectorBackend(
                 session,
                 workspace_id=settlement.workspace_id,
                 embedding_model=embedder.model,
             )
-            await backend.store(note_path, vector)
-            await session.commit()
+            if await embed_and_store_note(vault, embedder, backend, note_path):
+                await session.commit()
 
     return _hook
 
