@@ -9,7 +9,7 @@ from functools import lru_cache
 from importlib import metadata
 from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from backend.shared.core import csv_list_field, parse_csv_list
@@ -166,6 +166,15 @@ class Settings(BaseSettings):
     verify_docker_context: str = ""
 
     # Sandbox settings (backend.workflow.infrastructure.sandbox)
+    #
+    # ``False`` is the right DEV default (no DinD on a laptop / in CI), and a
+    # founder who turns the sandbox off in prod is making a choice, not a
+    # mistake. What is NOT a choice is silence: with this default False AND
+    # ``deploy/compose.prod.yaml``'s ``${BSVIBE_SANDBOX_ENABLED:-false}``, a
+    # ``.env.prod`` that fails to load leaves both layers saying "false", the
+    # enabled-but-unbuildable guard in ``sandbox_selection`` never fires (it only
+    # guards the OTHER direction), and the agent's shell runs in the worker
+    # container. See :meth:`_prod_must_declare_its_sandbox_mode`.
     sandbox_enabled: bool = False
     docker_host: str = ""
     sandbox_image: str = "bsvibe-sandbox:latest"
@@ -401,6 +410,31 @@ class Settings(BaseSettings):
         default=_DEFAULT_CORS_ORIGINS,
         description="Comma-separated CORS allow_origins for the browser PWA.",
     )
+
+    @model_validator(mode="after")
+    def _prod_must_declare_its_sandbox_mode(self) -> Settings:
+        """In prod, an UNSET sandbox flag is refused — silence is not a decision.
+
+        A chosen ``false`` and an accidental one are indistinguishable at the
+        value, and they differ enormously in consequence: the accidental one is a
+        dropped ``.env.prod`` degrading agent execution to the worker container's
+        host, with no guard firing (``sandbox_selection`` only refuses
+        enabled-but-unbuildable). So the value is not overridden — a DECISION is
+        required, and ``BSVIBE_SANDBOX_ENABLED=false`` remains perfectly valid.
+
+        ``model_fields_set`` distinguishes "provided" (env or init) from
+        "defaulted" — verified against pydantic-settings, not assumed. dev and
+        staging keep the quiet default, so local runs and the test suite are
+        untouched.
+        """
+        if self.environment == "prod" and "sandbox_enabled" not in self.model_fields_set:
+            raise ValueError(
+                "BSVIBE_SANDBOX_ENABLED must be set explicitly when "
+                "BSVIBE_ENVIRONMENT=prod — an unset flag would silently run agent "
+                "commands on the worker host. Set it to 'true' (sandboxed) or "
+                "'false' (deliberately not)."
+            )
+        return self
 
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
