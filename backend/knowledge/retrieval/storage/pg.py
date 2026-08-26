@@ -40,18 +40,22 @@ class PgNoteVectorBackend:
         self._workspace_id = workspace_id
         self._embedding_model = embedding_model
 
-    async def store(self, note_path: str, embedding: list[float]) -> None:
+    async def store(
+        self, note_path: str, embedding: list[float], *, content_hash: str | None = None
+    ) -> None:
         await self._session.execute(
             text(
                 """
                 INSERT INTO note_embeddings
-                    (workspace_id, note_path, embedding, embedding_model, dimension, updated_at)
+                    (workspace_id, note_path, embedding, embedding_model, dimension,
+                     content_hash, updated_at)
                 VALUES
-                    (:ws, :path, CAST(:emb AS vector), :model, :dim, now())
+                    (:ws, :path, CAST(:emb AS vector), :model, :dim, :hash, now())
                 ON CONFLICT (workspace_id, note_path) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embedding_model = EXCLUDED.embedding_model,
                     dimension = EXCLUDED.dimension,
+                    content_hash = EXCLUDED.content_hash,
                     updated_at = now()
                 """
             ),
@@ -61,6 +65,7 @@ class PgNoteVectorBackend:
                 "emb": _to_pgvector(embedding),
                 "model": self._embedding_model,
                 "dim": len(embedding),
+                "hash": content_hash,
             },
         )
         await self._session.flush()
@@ -72,17 +77,19 @@ class PgNoteVectorBackend:
         )
         await self._session.flush()
 
-    async def existing_paths(self) -> set[str]:
+    async def existing_fingerprints(self) -> dict[str, str | None]:
         # Filtered by the current model: vectors from a different model are
         # incomparable, so reconcile treats them as missing and re-embeds.
+        # ``content_hash`` is NULL for every row written before it existed —
+        # unknown text, so reconcile re-embeds those too (the backfill).
         rows = await self._session.execute(
             text(
-                "SELECT note_path FROM note_embeddings "
+                "SELECT note_path, content_hash FROM note_embeddings "
                 "WHERE workspace_id = :ws AND embedding_model = :model"
             ),
             {"ws": self._workspace_id, "model": self._embedding_model},
         )
-        return {row[0] for row in rows}
+        return {row[0]: row[1] for row in rows}
 
     async def search(
         self, query_embedding: list[float], top_k: int = 10
@@ -148,9 +155,11 @@ class SessionScopedNoteVectorBackend:
             session, workspace_id=self._workspace_id, embedding_model=self._embedding_model
         )
 
-    async def store(self, note_path: str, embedding: list[float]) -> None:
+    async def store(
+        self, note_path: str, embedding: list[float], *, content_hash: str | None = None
+    ) -> None:
         async with self._session_factory() as session:
-            await self._bind(session).store(note_path, embedding)
+            await self._bind(session).store(note_path, embedding, content_hash=content_hash)
             await session.commit()
 
     async def remove(self, note_path: str) -> None:
@@ -164,6 +173,6 @@ class SessionScopedNoteVectorBackend:
         async with self._session_factory() as session:
             return await self._bind(session).search(query_embedding, top_k)
 
-    async def existing_paths(self) -> set[str]:
+    async def existing_fingerprints(self) -> dict[str, str | None]:
         async with self._session_factory() as session:
-            return await self._bind(session).existing_paths()
+            return await self._bind(session).existing_fingerprints()

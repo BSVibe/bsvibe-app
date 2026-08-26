@@ -10,7 +10,8 @@ the settle hook). Two gaps leave knowledge un-retrievable:
 so a corpus can be largely un-embedded (observed: 26 / 1373). This reconcile
 enumerates the knowledge layers, diffs against what is already embedded under
 the current model, and embeds only the gap — idempotent (a second pass is a
-no-op) and model-aware (a model swap re-embeds, via ``existing_paths``).
+no-op), model-aware (a model swap re-embeds) and CONTENT-aware (a vector
+built from different text re-embeds), via ``existing_fingerprints``.
 
 Only the *knowledge* layers are embedded — ``garden`` (seedlings/entities) and
 ``concepts`` — never the machinery (``actions`` / ``proposals`` / ``decisions``),
@@ -62,7 +63,7 @@ async def reconcile_embeddings(
     if not embedder.enabled:
         return ReconcileResult(scanned=0, embedded=0, already=0, disabled=True)
 
-    existing = await vector_store.existing_paths()
+    existing = await vector_store.existing_fingerprints()
     scanned = embedded = already = 0
     seen: set[str] = set()
 
@@ -73,13 +74,22 @@ async def reconcile_embeddings(
                 continue
             seen.add(note_path)
             scanned += 1
-            if note_path in existing:
-                already += 1
-                continue
+            # The skip decision is NOT made here. ``embed_and_store_note`` is the
+            # only place that knows the embedded text, so it compares the stored
+            # fingerprint itself and returns False when nothing changed. Deciding
+            # here would need a second copy of "what text represents this note" —
+            # the drift that keyed 1,724 prod vectors to a work-log line (#837).
             if await embed_and_store_note(
-                vault, embedder, vector_store, note_path, max_embed_chars=max_embed_chars
+                vault,
+                embedder,
+                vector_store,
+                note_path,
+                max_embed_chars=max_embed_chars,
+                known_fingerprint=existing.get(note_path),
             ):
                 embedded += 1
+            elif note_path in existing:
+                already += 1
 
     logger.info("embedding_reconcile_complete", scanned=scanned, embedded=embedded, already=already)
     return ReconcileResult(scanned=scanned, embedded=embedded, already=already)

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING
 
 import structlog
@@ -31,6 +32,7 @@ async def embed_and_store_note(
     note_path: str,
     *,
     max_embed_chars: int = _DEFAULT_MAX_EMBED_CHARS,
+    known_fingerprint: str | None = None,
 ) -> bool:
     """Read ``note_path`` from the vault, embed its title+body, and store the
     vector. Returns True iff a vector was stored. Soft on every failure (missing
@@ -60,6 +62,14 @@ async def embed_and_store_note(
         )
         text = text[:max_embed_chars]
 
+    # The fingerprint is computed HERE because this is the only place that knows
+    # the embedded text — title + body, post-truncation. Hashing it anywhere else
+    # would be a second definition of "what text represents this note", which is
+    # exactly the drift that keyed 1,724 prod vectors to a work-log line (#837).
+    fingerprint = content_fingerprint(text)
+    if known_fingerprint is not None and known_fingerprint == fingerprint:
+        return False
+
     try:
         embedding = await embedder.embed(text)
     except (RuntimeError, OSError, ValueError):
@@ -67,6 +77,16 @@ async def embed_and_store_note(
         return False
     if not embedding:
         return False
-    await vector_store.store(note_path, embedding)
+    await vector_store.store(note_path, embedding, content_hash=fingerprint)
     logger.debug("vector_stored", path=note_path, dim=len(embedding))
     return True
+
+
+def content_fingerprint(text: str) -> str:
+    """Stable digest of the text a vector was built from.
+
+    Lets a reconcile tell "already embedded, unchanged" apart from "embedded from
+    something else" — the distinction ``existing_paths`` could not make, which is
+    why a vector keyed to the wrong text could never be corrected.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
