@@ -398,3 +398,46 @@ async def test_the_worker_is_never_left_pending_when_the_request_raises(
         ]
         assert others == []
     await redis.aclose()
+
+
+# --------------------------------------------------------------------------
+# The diagnosis has to reach the place the failure is READ
+# --------------------------------------------------------------------------
+#
+# `TaskTimeout` now carries polls / last_status / elapsed (#821 follow-up). If
+# the sandbox layer drops them, a CI failure still reads "exec timed out after
+# 70s" and the investigation starts from zero again — which is exactly what
+# happened on 2026-08-26.
+
+
+async def test_a_timed_out_exec_carries_the_awaiters_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The SandboxResult's stderr is what a failing assertion prints. It must
+    name what the awaiter saw, not just that time ran out."""
+    from backend.executors import dispatch as dispatch_mod
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with shared_file_sessionmaker() as factory:
+        await _seed_worker(factory, workspace_id=workspace_id)
+        box = _make_session(
+            redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
+        )
+
+        async def _always_timeout(*_a: Any, **kw: Any) -> Any:
+            raise dispatch_mod.TaskTimeout(
+                "forced",
+                task_id=kw.get("task_id"),
+                polls=3,
+                last_status="dispatched",
+                elapsed_s=7.5,
+            )
+
+        monkeypatch.setattr(dispatch_mod, "await_completion", _always_timeout)
+        result = await box.exec("true", timeout_s=1.0, shell=True)
+
+    assert result.timed_out is True
+    assert "3 polls" in result.stderr
+    assert "dispatched" in result.stderr
+    await redis.aclose()
