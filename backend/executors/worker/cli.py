@@ -541,7 +541,21 @@ def _cmd_worker_status(args: argparse.Namespace) -> int:  # noqa: ARG001
     return 0
 
 
-def _format_staleness_report(report: StalenessReport) -> str:
+def _format_staleness_report(report: StalenessReport, *, uid: int) -> str:
+    """Render the diagnosis, and — when something is stale — the exact command
+    that fixes it.
+
+    ``uid`` is passed in rather than read here: the gui domain belongs to the
+    user whose launchd owns these daemons, and this renderer stays pure for the
+    same reason the process/git probes are injected.
+
+    Naming the remedy is not a convenience. Measured 2026-08-26, the first real
+    use of this command: it said "restart them." and stopped, so the reader had
+    to source the command elsewhere — and the cheap guess, ``kill``, is the
+    wrong one. launchd owns these daemons' lifecycle and the worker's identity
+    is the token its service definition carries; ``kickstart -k`` is the
+    restart that keeps both.
+    """
     head_short = report.head.sha[:12]
     lines = [f"HEAD {head_short} committed at {report.head.committed_at.isoformat()}"]
     if not report.daemons:
@@ -561,7 +575,12 @@ def _format_staleness_report(report: StalenessReport) -> str:
             lines.append(f"UNKNOWN  {daemon.label} (pid {daemon.pid}) — {daemon.detail}")
     if report.has_stale:
         lines.append("")
-        lines.append(f"{len(report.stale)} stale daemon(s) running pre-HEAD code — restart them.")
+        lines.append(
+            f"{len(report.stale)} stale daemon(s) running pre-HEAD code. "
+            "Restart each through launchd — `kill` is not it, launchd owns their "
+            "lifecycle and the worker's identity rides its service definition:"
+        )
+        lines.extend(f"  launchctl kickstart -k gui/{uid}/{d.label}" for d in report.stale)
     return "\n".join(lines)
 
 
@@ -584,7 +603,7 @@ def _cmd_staleness(args: argparse.Namespace) -> int:
     except ProbeError as exc:
         print(f"staleness: {exc}", file=sys.stderr)
         return 1
-    print(_format_staleness_report(report))
+    print(_format_staleness_report(report, uid=os.getuid()))
     return 1 if report.has_stale else 0
 
 
