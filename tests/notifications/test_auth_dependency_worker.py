@@ -189,3 +189,50 @@ async def test_the_row_this_worker_emits_is_one_the_notify_worker_can_deliver(sf
     await NotifyWorker(session_factory=sf, sender=_Sender()).drain_once()
 
     assert sent == ["telegram"], "the producer's own payload never reached a channel"
+
+
+UNCONFIGURED = UserKeySourceStatus(
+    ok=False, source="unconfigured", detail="user_jwt_secret not configured"
+)
+
+
+async def test_a_process_without_the_auth_config_does_not_page(sf) -> None:
+    """It observed nothing, so it must not claim an outage.
+
+    Shipped 2026-08-28 and this fired within seconds of deploy. The worker runs
+    in a container that did not receive ``USER_JWT_*``, so the settings fell
+    back to HS256-with-no-secret and the probe honestly reported
+    ``unconfigured`` — which this worker read as "sign-in is down" and pushed to
+    the founder's telegram. Three false alerts, all before anyone could look.
+
+    "I have no configuration" is a deployment question, not a live outage. Only
+    a CONFIGURED remote source that fails to answer is something this worker
+    watched break. The compose passthrough is guarded separately
+    (:mod:`tests.deploy.test_auth_probe_env_reaches_the_worker`) — without it
+    this rule alone would leave the detector permanently silent.
+    """
+    await _seed_workspaces(sf, 2)
+
+    await self_tick(_worker(sf, [UNCONFIGURED]))
+
+    assert await _events(sf) == []
+
+
+async def test_a_configured_source_that_fails_still_pages(sf) -> None:
+    """Negative control — the rule above must not silence the real thing."""
+    await _seed_workspaces(sf, 1)
+
+    await self_tick(_worker(sf, [DOWN]))
+
+    assert len(await _events(sf)) == 1
+
+
+async def test_recovery_is_not_announced_after_an_unconfigured_reading(sf) -> None:
+    """An ignored reading must not leave state that fakes an all-clear later."""
+    await _seed_workspaces(sf, 1)
+    worker = _worker(sf, [UNCONFIGURED, UP])
+
+    await self_tick(worker)
+    await self_tick(worker)
+
+    assert await _events(sf) == []

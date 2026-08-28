@@ -164,6 +164,17 @@ services:
       BSVIBE_GATEWAY_KMS_KEY_B64: ${BSVIBE_GATEWAY_KMS_KEY_B64:?set BSVIBE_GATEWAY_KMS_KEY_B64}
       BSVIBE_SUPABASE_URL: ${BSVIBE_SUPABASE_URL:?set BSVIBE_SUPABASE_URL}
       BSVIBE_SUPABASE_PUBLISHABLE_KEY: ${BSVIBE_SUPABASE_PUBLISHABLE_KEY:?set BSVIBE_SUPABASE_PUBLISHABLE_KEY}
+      # The AuthDependencyWorker probes the user-JWT key source from HERE, so it
+      # needs the SAME settings the backend verifies with. Without them the
+      # settings fall back to HS256-with-no-secret, the probe can only report
+      # "unconfigured", and it can never observe the real outage. Shipped
+      # without these on 2026-08-28 and it paged the founder falsely within
+      # seconds of deploy. The worker VERIFIES nothing — it only reads whether
+      # the source answers.
+      USER_JWT_JWKS_URL: ${USER_JWT_JWKS_URL:?set USER_JWT_JWKS_URL}
+      USER_JWT_ALGORITHM: ${USER_JWT_ALGORITHM:-ES256}
+      USER_JWT_AUDIENCE: ${USER_JWT_AUDIENCE:-authenticated}
+      USER_JWT_ISSUER: ${USER_JWT_ISSUER:?set USER_JWT_ISSUER}
       BSVIBE_DEFAULT_WORKSPACE_REGION: ${BSVIBE_DEFAULT_WORKSPACE_REGION:-us-1}
       BSVIBE_KNOWLEDGE_VAULT_ROOT: ${BSVIBE_KNOWLEDGE_VAULT_ROOT:-/app/var/vault}
       BSVIBE_KNOWLEDGE_DEFAULT_REGION: ${BSVIBE_KNOWLEDGE_DEFAULT_REGION:-us-1}
