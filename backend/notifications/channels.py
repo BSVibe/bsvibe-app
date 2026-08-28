@@ -64,6 +64,7 @@ NOTIFICATION_OUTBOX: Channel[NotificationEventRow] = Channel(
         "workflow:verified_deliverable",
         "workflow:run_failed",
         "worker:daily_brief",
+        "worker:auth_dependency",
     ),
     consumers=("worker:notify_worker",),
     human_origin=False,

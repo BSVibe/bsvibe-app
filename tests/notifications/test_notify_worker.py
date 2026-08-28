@@ -378,3 +378,82 @@ def test_claim_stmt_uses_for_update_skip_locked() -> None:
 
     sql = str(build_notify_claim_stmt(batch_size=10).compile(dialect=postgresql.dialect()))
     assert "FOR UPDATE SKIP LOCKED" in sql
+
+
+# ---------------------------------------------------------------------------
+# auth_down — an outage alert must not wait to be opted into
+# ---------------------------------------------------------------------------
+# Prod 2026-08-28: the founder's workspace had telegram bound and ACTIVE with a
+# delivery config, and its stored prefs matrix had no ``telegram`` key at all —
+# the connector was bound after prefs were last saved, and absence reads as off.
+# For ordinary events that is a fair opt-in default. For an auth outage it is
+# not: the in-app inbox is part of what breaks, so an alert nobody opted into is
+# an alert nobody gets.
+#
+# The default flips for THIS event only, and only for keys the founder never
+# set. An explicit False stays a No — a stored choice is not a defect to correct.
+
+
+async def test_auth_down_reaches_a_bound_channel_absent_from_the_stored_matrix(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    ws = uuid.uuid4()
+    await _seed(
+        sf,
+        ws=ws,
+        connectors=[("telegram", {"chat_id": "42"})],
+        # Exactly the prod shape: a saved matrix that predates the binding.
+        matrix={"needs_you": {"in_app": True, "slack": False}},
+        event="auth_down",
+    )
+    sender = _RecordingSender()
+    worker = NotifyWorker(session_factory=sf, sender=sender)
+
+    await worker.drain_once()
+
+    assert sender.sent == ["telegram"]
+
+
+async def test_auth_down_still_honours_an_explicit_no(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    """A stored False is the founder's choice, not an absent key. Respect it."""
+    ws = uuid.uuid4()
+    await _seed(
+        sf,
+        ws=ws,
+        connectors=[("telegram", {"chat_id": "42"})],
+        matrix={"auth_down": {"telegram": False}},
+        event="auth_down",
+    )
+    sender = _RecordingSender()
+    worker = NotifyWorker(session_factory=sf, sender=sender)
+
+    await worker.drain_once()
+
+    assert sender.sent == []
+
+
+async def test_ordinary_events_keep_their_opt_in_default(
+    sf: async_sessionmaker[AsyncSession],
+) -> None:
+    """Negative control: the flipped default must not leak to other events.
+
+    The same workspace, the same absent telegram key — a ``needs_you`` row must
+    still NOT go to telegram, or this change would silently rewrite every
+    founder's notification settings.
+    """
+    ws = uuid.uuid4()
+    await _seed(
+        sf,
+        ws=ws,
+        connectors=[("telegram", {"chat_id": "42"})],
+        matrix={"needs_you": {"in_app": True}},
+        event="needs_you",
+    )
+    sender = _RecordingSender()
+    worker = NotifyWorker(session_factory=sf, sender=sender)
+
+    await worker.drain_once()
+
+    assert sender.sent == []

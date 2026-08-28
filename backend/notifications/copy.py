@@ -36,6 +36,31 @@ _SUPPORTED: frozenset[str] = frozenset({"en", "ko"})
 NEEDS_YOU_LINK = "/brief"
 TRIGGERED_LINK = "/brief"
 DAILY_BRIEF_LINK = "/brief"
+#: Nothing in the PWA fixes this — it is a deployment-level dependency — so the
+#: link points at the Brief rather than a settings page that cannot help.
+AUTH_DOWN_LINK = "/brief"
+
+
+#: The all-clear for ``auth_down``. It is the SAME matrix event (one row for the
+#: founder to configure) but it must not wear the outage's words — a recovery
+#: titled "Sign-in is down" is read on a lock screen and believed.
+AUTH_RECOVERED_COPY: dict[str, dict[str, str]] = {
+    "en": {
+        "title": "Sign-in is back",
+        "body": "The service that verifies your session is reachable again.",
+    },
+    "ko": {
+        "title": "로그인이 다시 돼요",
+        "body": "세션을 확인하는 서비스에 다시 닿고 있어요.",
+    },
+}
+
+
+def auth_recovered_copy(language: str | None) -> NotificationCopy:
+    """The localized all-clear. Unknown / missing language falls back to English."""
+    lang = language if language in _SUPPORTED else _DEFAULT_LANGUAGE
+    entry = AUTH_RECOVERED_COPY[lang]
+    return NotificationCopy(title=entry["title"], body=entry["body"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +79,10 @@ _TITLES: dict[str, dict[str, str]] = {
     "shipped": {"en": "Done", "ko": "작업 완료"},
     "failed": {"en": "A run failed", "ko": "작업이 실패했어요"},
     "daily_brief": {"en": "Your daily brief", "ko": "오늘의 요약"},
+    "auth_down": {
+        "en": "Sign-in is down",
+        "ko": "로그인이 안 되고 있어요",
+    },
 }
 
 #: Localized fallback BODY for the "detail-bearing" events — used only when the
@@ -71,6 +100,10 @@ _FALLBACK_BODY: dict[str, dict[str, str]] = {
     "failed": {
         "en": "A run reached its failed terminal.",
         "ko": "작업이 실패 상태로 종료됐어요.",
+    },
+    "auth_down": {
+        "en": "The service that verifies your session is unreachable, so nobody can sign in.",
+        "ko": "세션을 확인하는 서비스에 닿지 않아서 아무도 로그인할 수 없어요.",
     },
 }
 

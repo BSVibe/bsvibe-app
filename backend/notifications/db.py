@@ -46,6 +46,10 @@ DEFAULT_EVENTS: tuple[str, ...] = (
     "shipped",
     "failed",
     "daily_brief",
+    # Platform health. Not a run moment — the deployment telling the founder it
+    # cannot verify anyone's session, which is otherwise invisible: the only
+    # passive signal is a sign-in failing, and a quiet stretch produces none.
+    "auth_down",
 )
 
 # The seed matrix a fresh workspace reads: only the always-present ``in_app``
@@ -61,6 +65,10 @@ DEFAULT_MATRIX: dict[str, dict[str, bool]] = {
     "shipped": {"in_app": True},
     "failed": {"in_app": True},
     "daily_brief": {"in_app": False},
+    # Seeded on; the worker additionally defaults its PUSH channels on for
+    # anything bound (see ``DEFAULT_ON_EVENTS``) — during this outage the
+    # in-app inbox is part of what is broken.
+    "auth_down": {"in_app": True},
 }
 
 DEFAULT_QUIET_HOURS_START = "22:00"

@@ -616,6 +616,10 @@ async def test_build_worker_runtime_constructs_all_workers(
         # cutoff. Emits a ``audit.retention.swept`` row per workspace
         # tagged ``trigger=schedule, source=system.audit_retention``.
         "audit_retention_sweep_worker",
+        # Platform health — actively probes the user-JWT key source. The only
+        # passive signal is a sign-in failing, and a quiet stretch produces none
+        # (prod 2026-08-28: a paused Supabase project took auth down unseen).
+        "auth_dependency_worker",
         # The retract queue's sweep — its tombstones used to land only when an
         # agent happened to read the garden over MCP.
         "retraction_sweep_worker",
