@@ -316,7 +316,9 @@ def build_reconcile_hook(
                 workspace_id=workspace_id,
                 embedding_model=embedder.model,
             )
-            result = await reconcile_embeddings(vault, embedder, backend)
+            # No cap: a worker has no proxy to answer to, so it drains the
+            # whole gap. The checkpoint still bounds what a crash can lose.
+            result = await reconcile_embeddings(vault, embedder, backend, checkpoint=session.commit)
             await session.commit()
             return result
 

@@ -613,7 +613,7 @@ async def _reconcile_embeddings_soft(
             backend = PgNoteVectorBackend(
                 session, workspace_id=workspace_id, embedding_model=embedder.model
             )
-            result = await reconcile_embeddings(vault, embedder, backend)
+            result = await reconcile_embeddings(vault, embedder, backend, checkpoint=session.commit)
             await session.commit()
         logger.info(
             "bootstrap_embeddings_reconciled",

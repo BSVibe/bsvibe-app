@@ -193,7 +193,13 @@ class ReindexEmbeddingsResponse(BaseModel):
 
     ``scanned`` knowledge notes were examined; ``embedded`` were newly vectored;
     ``already`` already had a current-model vector (skipped). ``disabled`` is
-    True when no embedder is configured (a pure no-op)."""
+    True when no embedder is configured (a pure no-op).
+
+    ``remaining`` is the tail this pass did NOT examine because it hit its
+    per-pass cap — POST again until it is 0. The pass is bounded so it answers
+    before a proxy gives up: a 1,685-note pass measured ~12 minutes on prod and
+    Cloudflare cut the client at 125s, delivering a success to the founder as a
+    failure."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -201,6 +207,7 @@ class ReindexEmbeddingsResponse(BaseModel):
     embedded: int
     already: int
     disabled: bool
+    remaining: int = 0
 
 
 __all__ = [

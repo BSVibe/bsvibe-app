@@ -149,7 +149,7 @@ async def test_reindex_tool_backfills_the_workspaces_knowledge_notes(
         )
         out = await registry.call_tool(TOOL, {}, ctx)
 
-    assert out == {"scanned": 2, "embedded": 2, "already": 0, "disabled": False}
+    assert out == {"scanned": 2, "embedded": 2, "already": 0, "disabled": False, "remaining": 0}
     assert len(stub_embedder.calls) == 2
 
 
@@ -195,7 +195,7 @@ async def test_reindex_tool_is_idempotent(
         second = await registry.call_tool(TOOL, {}, ctx)
 
     assert first["embedded"] == 1
-    assert second == {"scanned": 1, "embedded": 0, "already": 1, "disabled": False}
+    assert second == {"scanned": 1, "embedded": 0, "already": 1, "disabled": False, "remaining": 0}
 
 
 async def test_reindex_tool_requires_write_scope(
@@ -236,4 +236,59 @@ async def test_reindex_tool_reports_disabled_when_no_embedding_model(
         )
         out = await registry.call_tool(TOOL, {}, ctx)
 
-    assert out == {"scanned": 0, "embedded": 0, "already": 0, "disabled": True}
+    assert out == {"scanned": 0, "embedded": 0, "already": 0, "disabled": True, "remaining": 0}
+
+
+async def test_reindex_tool_bounds_one_pass_and_reports_the_rest(
+    db, workspace_id, user_id, registry, seeded_ws, stub_embedder, monkeypatch
+) -> None:
+    """An HTTP-shaped caller must answer before its proxy gives up.
+
+    Measured on prod 2026-08-28: a 1,685-note pass ran ~12 minutes, committed
+    once at the end, and Cloudflare cut the client at 125s — so the surface
+    reported failure for work that had succeeded. The pass is now bounded and
+    reports ``remaining``; the caller re-invokes until it is 0.
+    """
+    monkeypatch.setattr("backend.mcp.tools.reindex_tools._HTTP_PASS_MAX_EMBEDS", 2)
+    ws_vault = seeded_ws / "eu-9" / str(workspace_id)
+    for i in range(5):
+        _write_note(ws_vault, f"garden/seedling/n{i}.md", f"Body {i}")
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        first = await registry.call_tool(TOOL, {}, ctx)
+
+    assert first["embedded"] == 2
+    assert first["remaining"] == 3
+
+
+async def test_reindex_tool_drains_across_calls_to_zero_remaining(
+    db, workspace_id, user_id, registry, seeded_ws, stub_embedder, monkeypatch
+) -> None:
+    """Repeated calls finish the corpus — the resume protocol, with no job row."""
+    monkeypatch.setattr("backend.mcp.tools.reindex_tools._HTTP_PASS_MAX_EMBEDS", 2)
+    ws_vault = seeded_ws / "eu-9" / str(workspace_id)
+    for i in range(5):
+        _write_note(ws_vault, f"garden/seedling/n{i}.md", f"Body {i}")
+
+    total = 0
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        for _ in range(10):
+            out = await registry.call_tool(TOOL, {}, ctx)
+            total += out["embedded"]
+            if out["remaining"] == 0:
+                break
+
+    assert total == 5
+    assert out["remaining"] == 0

@@ -24,7 +24,15 @@ type State =
   | { kind: "idle" }
   | { kind: "running" }
   | { kind: "done"; result: ReindexResult }
+  | { kind: "stalled"; result: ReindexResult }
   | { kind: "failed"; message: string };
+
+/** Hard stop for the pass loop. The continue/stop decision comes from a number
+ *  the SERVER supplies, so a stuck backend that always reports work remaining
+ *  would otherwise spin the browser forever. At the server's per-pass cap this
+ *  covers a corpus far larger than any real vault; hitting it means something
+ *  is wrong, and the UI says so instead of hanging. */
+const MAX_PASSES = 100;
 
 export default function ReindexEmbeddings() {
   const t = useTranslations("settings.developer.reindex");
@@ -41,7 +49,39 @@ export default function ReindexEmbeddings() {
     inFlight.current = true;
     setState({ kind: "running" });
     try {
-      setState({ kind: "done", result: await reindexEmbeddings() });
+      // One request is a BOUNDED pass, so a single call finishes the corpus
+      // only when it is already small. Keep going while work remains and
+      // report the running total — otherwise a 250-note corpus reports "100
+      // embedded" and reads as a completed rebuild.
+      let total: ReindexResult = {
+        scanned: 0,
+        embedded: 0,
+        already: 0,
+        disabled: false,
+        remaining: 0,
+      };
+      let passes = 0;
+      for (;;) {
+        passes += 1;
+        const pass = await reindexEmbeddings();
+        if (pass.disabled) {
+          total = pass;
+          break;
+        }
+        total = {
+          scanned: total.scanned + pass.scanned,
+          embedded: total.embedded + pass.embedded,
+          already: total.already + pass.already,
+          disabled: false,
+          remaining: pass.remaining,
+        };
+        if (pass.remaining === 0) break;
+        if (passes >= MAX_PASSES) {
+          setState({ kind: "stalled", result: total });
+          return;
+        }
+      }
+      setState({ kind: "done", result: total });
     } catch (e) {
       setState({ kind: "failed", message: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -78,6 +118,12 @@ export default function ReindexEmbeddings() {
             embedded: state.result.embedded,
             already: state.result.already,
           })}
+        </p>
+      )}
+
+      {state.kind === "stalled" && (
+        <p className="general-tab__error" role="alert">
+          {t("stalled", { embedded: state.result.embedded })}
         </p>
       )}
 
