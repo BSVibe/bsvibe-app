@@ -96,7 +96,7 @@ async def test_existing_user_keeps_their_workspace(
     """A user that already has a workspace+membership reuses them on login."""
     async with session_factory() as s:
         user = UserRow(id=uuid.uuid4(), supabase_user_id="sb-user-1", email="founder@example.com")
-        ws = WorkspaceRow(id=uuid.uuid4(), name="existing", region="us-1", safe_mode=True)
+        ws = WorkspaceRow(id=uuid.uuid4(), name="existing", safe_mode=True)
         s.add(user)
         s.add(ws)
         await s.flush()

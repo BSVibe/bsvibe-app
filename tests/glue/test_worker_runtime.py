@@ -294,7 +294,6 @@ async def _seed_active_account(
                 ws = WorkspaceRow(
                     id=workspace_id,
                     name="test-ws",
-                    region="us-1",
                     safe_mode=True,
                     legal_basis="contract",
                 )
@@ -673,7 +672,7 @@ async def test_settle_entity_extractor_factory_extracts_entities(
     factory = runtime.build_settle_entity_extractor_factory(
         session_factory=sf, settings=get_settings()
     )
-    extractor = await factory(region="us-1", workspace_id=workspace_id)
+    extractor = await factory(workspace_id=workspace_id)
     assert extractor is not None
     names = await extractor.extract_entity_names("build a calculator in python")
     assert names == ["calculator", "Python"]
@@ -709,7 +708,7 @@ async def test_settle_extractor_factory_threads_redis_for_executor_dispatch(
     factory = runtime.build_settle_entity_extractor_factory(
         session_factory=sf, settings=get_settings(), redis=sentinel
     )
-    extractor = await factory(region="us-1", workspace_id=uuid.uuid4())
+    extractor = await factory(workspace_id=uuid.uuid4())
 
     assert extractor is None  # short-circuited
     assert captured["redis"] is sentinel, "redis must be threaded into the resolver"
@@ -735,7 +734,7 @@ async def test_concept_framer_factory_distills_via_routing(
     _patch_scripted_llm(monkeypatch, _ScriptedCompletion([{"content": framing}]))
 
     factory = runtime.build_concept_framer(session_factory=sf, settings=get_settings())
-    framer = await factory(region="us-1", workspace_id=workspace_id)
+    framer = await factory(workspace_id=workspace_id)
     assert framer is not None
     text = await framer.frame(
         concept="resolver-pattern", members=[("resolver-soft-fallback", "return None on a miss")]
@@ -773,7 +772,7 @@ async def test_concept_framer_factory_routes_via_canonicalization_caller(
     factory = runtime.build_concept_framer(
         session_factory=sf, settings=get_settings(), redis=sentinel
     )
-    framer = await factory(region="us-1", workspace_id=uuid.uuid4())
+    framer = await factory(workspace_id=uuid.uuid4())
 
     assert framer is None  # routing miss → deterministic body
     assert captured["caller_id"] == CALLER_KNOWLEDGE_CANONICALIZATION
@@ -790,7 +789,7 @@ async def test_settle_entity_extractor_factory_none_when_no_account(
     factory = runtime.build_settle_entity_extractor_factory(
         session_factory=sf, settings=get_settings()
     )
-    assert await factory(region="us-1", workspace_id=workspace_id) is None
+    assert await factory(workspace_id=workspace_id) is None
 
 
 async def test_settle_entity_extractor_factory_none_when_no_default_or_rule(
@@ -810,7 +809,7 @@ async def test_settle_entity_extractor_factory_none_when_no_default_or_rule(
     factory = runtime.build_settle_entity_extractor_factory(
         session_factory=sf, settings=get_settings()
     )
-    assert await factory(region="us-1", workspace_id=workspace_id) is None
+    assert await factory(workspace_id=workspace_id) is None
 
 
 # --------------------------------------------------------------------------

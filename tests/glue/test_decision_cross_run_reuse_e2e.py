@@ -133,14 +133,13 @@ async def test_second_run_retriever_sees_prior_resolved_decision(
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
 
     # Phase B — fresh KnowledgeFactory for the SAME workspace (mirrors the
     # production wiring at ``workers/run.py::_retriever_for``).
     factory = KnowledgeFactory(
-        region="us-1",
         workspace_id=str(workspace_id),
         vault_root=tmp_path,
     )
@@ -195,14 +194,13 @@ async def test_second_run_workspace_isolation(
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
 
     # Phase B — DIFFERENT workspace. Its retriever sees no leaked decisions.
     other_workspace = uuid.uuid4()
     factory = KnowledgeFactory(
-        region="us-1",
         workspace_id=str(other_workspace),
         vault_root=tmp_path,
     )

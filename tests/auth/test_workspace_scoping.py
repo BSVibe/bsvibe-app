@@ -199,7 +199,7 @@ async def test_create_workspace_grants_owner_membership(
         await s.commit()
 
     async with authed_client_factory("user-a") as c:
-        r = await c.post("/api/v1/workspaces", json={"name": "Acme", "region": "us-1"})
+        r = await c.post("/api/v1/workspaces", json={"name": "Acme"})
         assert r.status_code == 201, r.text
         ws_id = r.json()["id"]
 

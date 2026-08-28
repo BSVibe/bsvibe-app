@@ -38,7 +38,7 @@ async def _seed(db, role: str) -> tuple[uuid.UUID, str]:
     product_id = uuid.uuid4()
     supabase_user_id = f"sub-{role}"
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         s.add(UserRow(id=user_id, supabase_user_id=supabase_user_id, email="m@x"))
         await s.flush()
         s.add(MembershipRow(id=uuid.uuid4(), user_id=user_id, workspace_id=workspace_id, role=role))

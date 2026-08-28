@@ -33,7 +33,7 @@ def test_minimal_mock_conforms_to_knowledge() -> None:
         async def retrieve_canon(self, query: CanonRetrievalQuery) -> CanonRetrievalResult:  # noqa: ARG002
             return CanonRetrievalResult(notes=[])
 
-        async def settle(self, *, workspace_id: uuid.UUID, region: str) -> int:  # noqa: ARG002
+        async def settle(self, *, workspace_id: uuid.UUID) -> int:  # noqa: ARG002
             return 0
 
     mock = _Mock()
@@ -44,20 +44,19 @@ def test_ingest_request_is_frozen_dataclass() -> None:
     assert dataclasses.is_dataclass(IngestRequest)
     assert IngestRequest.__dataclass_params__.frozen is True  # type: ignore[attr-defined]
     field_names = {f.name for f in dataclasses.fields(IngestRequest)}
-    assert field_names == {"workspace_id", "region", "artifacts"}
+    assert field_names == {"workspace_id", "artifacts"}
 
 
 def test_ingest_request_field_types() -> None:
     hints_types = get_type_hints(IngestRequest)
     assert hints_types["workspace_id"] is uuid.UUID
-    assert hints_types["region"] is str
     assert hints_types["artifacts"] == list[dict[str, Any]]
 
 
 def test_ingest_request_is_immutable() -> None:
-    req = IngestRequest(workspace_id=uuid.uuid4(), region="us", artifacts=[])
+    req = IngestRequest(workspace_id=uuid.uuid4(), artifacts=[])
     with pytest.raises(dataclasses.FrozenInstanceError):
-        req.region = "eu"  # type: ignore[misc]
+        req.artifacts = []  # type: ignore[misc]
 
 
 def test_ingest_result_is_frozen_dataclass() -> None:
@@ -93,16 +92,15 @@ def test_canon_retrieval_query_is_frozen_dataclass() -> None:
     assert dataclasses.is_dataclass(CanonRetrievalQuery)
     assert CanonRetrievalQuery.__dataclass_params__.frozen is True  # type: ignore[attr-defined]
     field_names = {f.name for f in dataclasses.fields(CanonRetrievalQuery)}
-    assert field_names == {"workspace_id", "region", "seed_text", "k"}
+    assert field_names == {"workspace_id", "seed_text", "k"}
 
 
 def test_canon_retrieval_query_field_types_and_default() -> None:
     hints_types = get_type_hints(CanonRetrievalQuery)
     assert hints_types["workspace_id"] is uuid.UUID
-    assert hints_types["region"] is str
     assert hints_types["seed_text"] is str
     assert hints_types["k"] is int
-    query = CanonRetrievalQuery(workspace_id=uuid.uuid4(), region="us", seed_text="hi")
+    query = CanonRetrievalQuery(workspace_id=uuid.uuid4(), seed_text="hi")
     assert query.k == 8
 
 

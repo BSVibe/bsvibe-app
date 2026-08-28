@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.config import get_settings
 from backend.knowledge.factory import KnowledgeFactory
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.graph.vault import Vault
@@ -35,7 +36,6 @@ _REGION = "us-1"
 async def _seed_resolved_decision_note(
     vault_root: Path,
     *,
-    region: str,
     workspace_id: str,
     question: str,
     answer: str,
@@ -43,7 +43,7 @@ async def _seed_resolved_decision_note(
 ) -> None:
     """Write a garden note shaped exactly like the settle sink writes one for a
     decision resolution, so the retriever sees real on-disk state."""
-    ws_root = vault_root / region / workspace_id
+    ws_root = vault_root / get_settings().knowledge_default_region / workspace_id
     ws_root.mkdir(parents=True, exist_ok=True)
     writer = GardenWriter(vault=Vault(ws_root))
     summary = f"Decision resolved — Q: {question} A: {answer}"
@@ -79,13 +79,13 @@ async def test_retriever_still_satisfies_canon_retriever_protocol(
 ) -> None:
     """The composite retriever must still satisfy the CanonRetriever protocol so
     every existing caller (verifier, B6 seed, knowledge_search) keeps working."""
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
     assert isinstance(factory.retriever(), CanonRetriever)
 
 
 async def test_empty_workspace_returns_empty(vault_root: Path, workspace_id: str) -> None:
     """No decisions + no canon → ``[]`` (graceful-empty invariant preserved)."""
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
     assert await factory.retriever().retrieve_for_signals("anything\nsrc/x.py") == []
 
 
@@ -96,13 +96,12 @@ async def test_resolved_decision_surfaces_for_matching_signal(
     incoming signals shows up in the retriever output."""
     await _seed_resolved_decision_note(
         vault_root,
-        region=_REGION,
         workspace_id=workspace_id,
         question="Which database should I target?",
         answer="Use Postgres",
         intent_text="pick a database",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
     statements = await factory.retriever().retrieve_for_signals(
         "the user wants to pick a database for the new service"
     )
@@ -118,13 +117,12 @@ async def test_resolved_decision_workspace_scoped(vault_root: Path, workspace_id
     other_workspace = str(uuid.uuid4())
     await _seed_resolved_decision_note(
         vault_root,
-        region=_REGION,
         workspace_id=other_workspace,
         question="Which database?",
         answer="Use Postgres",
         intent_text="pick a database",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
     assert await factory.retriever().retrieve_for_signals("pick a database") == []
 
 
@@ -135,13 +133,12 @@ async def test_resolved_decision_irrelevant_signal_no_surface(
     workspace-wide token dump — the retriever must filter by signal overlap)."""
     await _seed_resolved_decision_note(
         vault_root,
-        region=_REGION,
         workspace_id=workspace_id,
         question="Which database should I target?",
         answer="Use Postgres",
         intent_text="pick a database",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
     statements = await factory.retriever().retrieve_for_signals(
         "rotate the access logs on the nginx box"
     )
@@ -152,30 +149,29 @@ async def test_resolved_decision_irrelevant_signal_no_surface(
 async def test_resolved_decision_never_raises(vault_root: Path, workspace_id: str) -> None:
     """A malformed (empty / missing-frontmatter) decision note must NOT break
     retrieve — the verify path must never crash because knowledge was corrupt."""
-    ws_root = vault_root / _REGION / workspace_id
+    ws_root = vault_root / get_settings().knowledge_default_region / workspace_id
     (ws_root / "garden" / "seedling").mkdir(parents=True, exist_ok=True)
     # A junk file under garden/seedling — same dir the settle sink writes into.
     (ws_root / "garden" / "seedling" / "junk.md").write_text("not yaml at all", encoding="utf-8")
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
     # Never raises; returns at worst the canon part (here empty) gracefully.
     assert await factory.retriever().retrieve_for_signals("pick a database") == []
 
 
 async def test_resolved_decision_cap(vault_root: Path, workspace_id: str) -> None:
     """The retriever caps decision results so a future run can't be flooded."""
-    storage = FileSystemStorage(vault_root / _REGION / workspace_id)
+    storage = FileSystemStorage(vault_root / get_settings().knowledge_default_region / workspace_id)
     # Seed many on-topic decisions.
     for i in range(20):
         await _seed_resolved_decision_note(
             vault_root,
-            region=_REGION,
             workspace_id=workspace_id,
             question=f"Database question {i}?",
             answer=f"Postgres-{i}",
             intent_text="pick a database",
         )
     assert len(await storage.list_files("garden/seedling")) == 20
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
     statements = await factory.retriever().retrieve_for_signals("pick a database")
     # Cap is conservative — never the full 20.
     assert 0 < len(statements) <= 10
@@ -204,13 +200,12 @@ async def test_stopword_only_query_does_not_surface_decision(
     """
     await _seed_resolved_decision_note(
         vault_root,
-        region=_REGION,
         workspace_id=workspace_id,
         question="Which database should I target?",
         answer="Use Postgres for the answer",
         intent_text="pick a database",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
     # Pure stopwords. Stripped to ∅ → graceful-empty.
     statements = await factory.retriever().retrieve_for_signals("the and for the was")
     assert statements == [], statements
@@ -235,13 +230,12 @@ async def test_stopword_bleed_blocked_real_overlap_still_surfaces(
     # content drives matches.
     await _seed_resolved_decision_note(
         vault_root,
-        region=_REGION,
         workspace_id=workspace_id,
         question="Which database should I target for the service?",
         answer="Use Postgres",
         intent_text="pick a database",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
 
     # Half A: only the stopword "the" overlaps the decision body. Must NOT surface.
     bleed = await factory.retriever().retrieve_for_signals("the user")
@@ -268,13 +262,12 @@ async def test_stopword_only_decision_body_still_filterable(
     """
     await _seed_resolved_decision_note(
         vault_root,
-        region=_REGION,
         workspace_id=workspace_id,
         question="What was the answer for the user?",
         answer="No throttling required",
         intent_text="the user the answer",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
 
     # Query overlaps the decision ONLY on stopwords ("the", "was", "for", "what")
     # — must NOT surface.
@@ -296,13 +289,12 @@ async def test_retrieve_structured_carries_decision_note_identity(
     contract can persist it and the report links without a reverse-lookup."""
     await _seed_resolved_decision_note(
         vault_root,
-        region=_REGION,
         workspace_id=workspace_id,
         question="Which database should I target?",
         answer="Use Postgres",
         intent_text="pick a database",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=workspace_id, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root)
     items = await factory.retriever().retrieve_structured(
         "the user wants to pick a database for the new service"
     )

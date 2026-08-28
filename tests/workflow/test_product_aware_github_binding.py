@@ -67,7 +67,7 @@ def cipher() -> CredentialCipher:
 
 async def _seed_workspace(session: AsyncSession, workspace_id: uuid.UUID) -> None:
     if await session.get(WorkspaceRow, workspace_id) is None:
-        session.add(WorkspaceRow(id=workspace_id, name="ws-681", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=workspace_id, name="ws-681", safe_mode=False))
         await session.flush()
 
 

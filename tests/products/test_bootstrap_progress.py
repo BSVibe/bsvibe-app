@@ -47,7 +47,7 @@ async def _seed_workspace_and_product(
     session_factory, *, workspace_id: uuid.UUID, product_id: uuid.UUID
 ) -> None:
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region=_REGION, safe_mode=False))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
         await s.flush()
         s.add(
             ProductRow(
@@ -313,7 +313,7 @@ async def test_runtime_attaches_subscriber_and_persists_progress(
 
             return CanonRetrievalResult(notes=[])
 
-        async def settle(self, *, workspace_id, region):
+        async def settle(self, *, workspace_id):
             return 0
 
     captured: dict[str, object] = {}

@@ -75,7 +75,6 @@ async def run_repo_bootstrap(
     *,
     repo_root: Path,
     workspace_id: uuid.UUID,
-    region: str,
     knowledge: Knowledge,
     vault_root: Path | None = None,
 ) -> BootstrapOutcome:
@@ -118,7 +117,6 @@ async def run_repo_bootstrap(
         logger.warning(
             "product_bootstrap_too_large",
             workspace_id=str(workspace_id),
-            region=region,
         )
         raise
 
@@ -133,7 +131,6 @@ async def run_repo_bootstrap(
             logger.warning(
                 "product_bootstrap_graph_persist_failed",
                 workspace_id=str(workspace_id),
-                region=region,
                 exc_info=True,
             )
         # Lift E25 — derive + persist community labels so the MCP
@@ -154,14 +151,12 @@ async def run_repo_bootstrap(
             logger.info(
                 "product_bootstrap_community_labels_persisted",
                 workspace_id=str(workspace_id),
-                region=region,
                 labeled=labeled,
             )
         except OSError:
             logger.warning(
                 "product_bootstrap_community_labels_persist_failed",
                 workspace_id=str(workspace_id),
-                region=region,
                 exc_info=True,
             )
 
@@ -181,7 +176,6 @@ async def run_repo_bootstrap(
         logger.warning(
             "product_bootstrap_too_large_structural",
             workspace_id=str(workspace_id),
-            region=region,
             walked_so_far=len(structural_walked),
         )
         raise
@@ -194,7 +188,6 @@ async def run_repo_bootstrap(
     logger.info(
         "product_bootstrap_artifacts_built",
         workspace_id=str(workspace_id),
-        region=region,
         walked=code_graph_result.walked_count,
         parsed=code_graph_result.parsed_count,
         communities=code_graph_result.community_count,
@@ -211,7 +204,6 @@ async def run_repo_bootstrap(
         result = await knowledge.ingest(
             IngestRequest(
                 workspace_id=workspace_id,
-                region=region,
                 artifacts=[
                     {
                         "label": "repo/empty.md",
@@ -226,7 +218,6 @@ async def run_repo_bootstrap(
     result = await knowledge.ingest(
         IngestRequest(
             workspace_id=workspace_id,
-            region=region,
             artifacts=artifacts,
         )
     )

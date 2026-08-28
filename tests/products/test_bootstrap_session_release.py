@@ -84,7 +84,7 @@ async def test_no_connection_held_across_bootstrap_ingest(
         workspace_id = uuid.uuid4()
         product_id = uuid.uuid4()
         async with sf() as s:
-            s.add(WorkspaceRow(id=workspace_id, name="t", region=_REGION, safe_mode=False))
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
             await s.flush()
             s.add(
                 ProductRow(

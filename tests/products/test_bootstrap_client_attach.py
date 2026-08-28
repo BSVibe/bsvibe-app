@@ -36,7 +36,7 @@ async def session_factory():
 async def _seed(session_factory, *, metadata: dict[str, Any]) -> tuple[uuid.UUID, uuid.UUID]:
     workspace_id, product_id = uuid.uuid4(), uuid.uuid4()
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=False))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
         await s.flush()
         s.add(
             ProductRow(

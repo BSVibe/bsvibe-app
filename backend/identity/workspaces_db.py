@@ -91,8 +91,6 @@ class WorkspaceRow(WorkspacesBase):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    # Region per Workflow §2.3 — vault/<region>/<workspace_id>/ FS layout
-    region: Mapped[str] = mapped_column(String(32), nullable=False, default="us-1")
     safe_mode: Mapped[bool] = mapped_column(nullable=False, default=True)
     # GDPR L1 — Art. 6 legal basis the workspace operates under. TEXT + app
     # Literal validation (see :func:`validate_legal_basis`). Default mirrors

@@ -186,7 +186,7 @@ async def _make_product(
 ) -> ProductRow:
     """Seed a workspace + product so the orchestrator can resolve the run's
     product binding for the settle payload."""
-    session.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+    session.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
     product = ProductRow(id=uuid.uuid4(), workspace_id=workspace_id, name=name, slug=slug)
     session.add(product)
     await session.flush()
@@ -1662,7 +1662,7 @@ async def test_connector_action_in_schema_when_workspace_has_account(tmp_path: P
     account = _fake_account(ws, "github")
     provider = FakeConnectorActionProvider([_tool(plugin, account)])
     async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=ws, name="ws", safe_mode=False))
         await session.flush()
         run = await _make_run(session, workspace_id=ws)
         orch = RunOrchestrator(
@@ -1690,7 +1690,7 @@ async def test_connector_action_excluded_when_workspace_lacks_account(tmp_path: 
     provider = FakeConnectorActionProvider([_tool(plugin, account)])
     async with memory_session() as session:
         this_ws = uuid.uuid4()
-        session.add(WorkspaceRow(id=this_ws, name="ws", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=this_ws, name="ws", safe_mode=False))
         await session.flush()
         run = await _make_run(session, workspace_id=this_ws)
         orch = RunOrchestrator(
@@ -1739,7 +1739,7 @@ async def test_non_dangerous_action_runs_and_feeds_result_back(tmp_path: Path) -
         ]
     )
     async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=ws, name="ws", safe_mode=False))
         await session.flush()
         run = await _make_run(session, workspace_id=ws)
         orch = RunOrchestrator(
@@ -1860,7 +1860,7 @@ async def test_real_github_list_issues_action_appears_in_tool_schema(
     provider = FakeConnectorActionProvider([tool])
     llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
     async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=ws, name="ws", safe_mode=False))
         await session.flush()
         run = await _make_run(session, workspace_id=ws)
         orch = RunOrchestrator(
@@ -1895,7 +1895,7 @@ async def test_real_sentry_list_issues_action_appears_in_tool_schema(
     provider = FakeConnectorActionProvider([tool])
     llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
     async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=ws, name="ws", safe_mode=False))
         await session.flush()
         run = await _make_run(session, workspace_id=ws)
         orch = RunOrchestrator(
@@ -1929,7 +1929,7 @@ async def test_new_action_absent_when_workspace_lacks_account(tmp_path: Path) ->
     llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
     async with memory_session() as session:
         this_ws = uuid.uuid4()
-        session.add(WorkspaceRow(id=this_ws, name="ws", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=this_ws, name="ws", safe_mode=False))
         await session.flush()
         run = await _make_run(session, workspace_id=this_ws)
         orch = RunOrchestrator(
@@ -1973,7 +1973,7 @@ async def test_real_github_list_issues_dispatches_through_real_pluginrunner(
     # resolver decrypts at dispatch time).
     cipher = CredentialCipher(os.urandom(32))
     async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=ws, name="ws", safe_mode=False))
         account = ConnectorAccountRow(
             id=uuid.uuid4(),
             workspace_id=ws,

@@ -29,7 +29,7 @@ async def test_legal_basis_defaults_to_contract(session_factory) -> None:
     """A new row with no legal_basis provided defaults to ``'contract'``."""
     workspace_id = uuid.uuid4()
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
         await s.commit()
     async with session_factory() as s:
         row = (
@@ -46,7 +46,6 @@ async def test_legal_basis_persists_consent(session_factory) -> None:
             WorkspaceRow(
                 id=workspace_id,
                 name="t",
-                region="us-1",
                 safe_mode=True,
                 legal_basis="consent",
             )

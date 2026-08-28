@@ -65,7 +65,6 @@ async def seeded(db, workspace_id) -> AsyncIterator[None]:
             WorkspaceRow(
                 id=workspace_id,
                 name="acme",
-                region="us-1",
                 safe_mode=True,
             )
         )
@@ -82,7 +81,6 @@ async def test_get_returns_workspace_fields(db, workspace_id, user_id, registry,
         out = await registry.call_tool("bsvibe_workspace_get", {}, ctx)
     assert out["id"] == str(workspace_id)
     assert out["name"] == "acme"
-    assert out["region"] == "us-1"
     assert out["safe_mode"] is True
     assert out["audit_retention_days"] is None
     # #528 read-parity gap closed — language is now readable via MCP.

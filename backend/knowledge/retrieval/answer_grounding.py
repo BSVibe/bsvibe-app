@@ -146,7 +146,6 @@ def build_answer_retriever(session: Any, *, settings: Any, workspace_id: uuid.UU
     from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
 
     factory = KnowledgeFactory(
-        region=settings.knowledge_default_region,
         workspace_id=str(workspace_id),
         vault_root=Path(settings.knowledge_vault_root),
     )
@@ -179,7 +178,6 @@ def build_canon_retriever(
     from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend  # noqa: PLC0415
 
     base = KnowledgeFactory(
-        region=settings.knowledge_default_region,
         workspace_id=str(workspace_id),
         vault_root=Path(settings.knowledge_vault_root),
     ).retriever()

@@ -66,6 +66,7 @@ from backend.common.settle_kinds import (
     NEGATIVE_PATTERN_SETTLE_KIND,
     founder_authored_text,
 )
+from backend.config import get_settings
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
@@ -206,8 +207,8 @@ async def _settle_payloads(sf, kind: str) -> list[dict]:
     return [r.payload for r in rows if (r.payload or {}).get("kind") == kind]
 
 
-def _notes(vault_root: Path, workspace_id: uuid.UUID, region: str = "us-1") -> list[Path]:
-    ws_dir = vault_root / region / str(workspace_id)
+def _notes(vault_root: Path, workspace_id: uuid.UUID) -> list[Path]:
+    ws_dir = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     return list(ws_dir.rglob("*.md")) if ws_dir.exists() else []
 
 
@@ -215,7 +216,7 @@ async def _drain(sf, vault_root: Path) -> int:
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=vault_root),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     return await worker.drain_once()
 

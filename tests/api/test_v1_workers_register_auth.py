@@ -61,7 +61,7 @@ async def test_resolve_succeeds_for_supabase_jwt(db, monkeypatch: pytest.MonkeyP
     sub = "supa-sub"
 
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         user_id = uuid.uuid4()
         s.add(UserRow(id=user_id, supabase_user_id=sub, email="x@x"))
         await s.flush()

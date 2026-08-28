@@ -61,7 +61,7 @@ async def registry() -> ToolRegistry:
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
     yield
 
@@ -256,7 +256,7 @@ async def test_workers_list_exposes_e13_fields(db, workspace_id, user_id, regist
 async def test_workers_list_isolates_workspaces(db, registry, seeded) -> None:
     other_workspace = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=other_workspace, name="other", region="us-1"))
+        s.add(WorkspaceRow(id=other_workspace, name="other"))
         await s.commit()
 
     async with db() as s:

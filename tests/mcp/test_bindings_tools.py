@@ -76,7 +76,7 @@ async def seeded(db, workspace_id) -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]
     product_id = uuid.uuid4()
     connector_account_id = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="P", slug="p"))
         s.add(
@@ -225,7 +225,7 @@ async def test_create_rejects_product_in_other_workspace(
     other_ws = uuid.uuid4()
     other_product = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=other_ws, name="other", region="us-1"))
+        s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.flush()
         s.add(ProductRow(id=other_product, workspace_id=other_ws, name="X", slug="x"))
         await s.commit()
@@ -257,7 +257,7 @@ async def test_list_workspace_scoped(db, workspace_id, user_id, registry, seeded
     other_product = uuid.uuid4()
     other_account = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=other_ws, name="other", region="us-1"))
+        s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.flush()
         s.add(ProductRow(id=other_product, workspace_id=other_ws, name="X", slug="x"))
         s.add(

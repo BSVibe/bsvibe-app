@@ -82,8 +82,6 @@ class Settings(BaseSettings):
     # Supabase **publishable** key (``sb_publishable_...``), passed as the
     # GoTrue ``apikey`` header. Replaces the deprecated legacy ``anon`` key.
     supabase_publishable_key: str = ""
-    # Default region stamped onto workspaces created at signup (§10.2).
-    default_workspace_region: str = "us-1"
 
     # Embedded OAuth 2.0 authorization server (Lift D1, backend.identity.oauth_*).
     # PEM-encoded ECDSA P-256 private key used to sign OAuth access tokens.

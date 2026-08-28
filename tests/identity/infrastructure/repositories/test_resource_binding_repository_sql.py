@@ -46,7 +46,7 @@ async def _seed_parents(
     product_id = uuid.uuid4()
     connector_account_id = uuid.uuid4()
     async with sf() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="Blog", slug="blog"))
         s.add(

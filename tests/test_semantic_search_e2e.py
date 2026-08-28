@@ -190,7 +190,6 @@ async def test_settle_hook_auto_populates_pgvector_index_e2e(tmp_path) -> None:
         )
         settlement = Settlement(
             workspace_id=workspace_id,
-            region="us-1",
             run_id=_uuid.uuid4(),
             activity_id=_uuid.uuid4(),
             verified=True,

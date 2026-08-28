@@ -28,7 +28,6 @@ export interface SupabaseSession {
 export interface Workspace {
   id: string;
   name: string;
-  region: string;
   safe_mode: boolean;
   created_at: string;
   updated_at: string;

@@ -197,7 +197,6 @@ class Settlement:
     """
 
     workspace_id: uuid.UUID
-    region: str
     run_id: uuid.UUID
     activity_id: uuid.UUID
     verified: bool
@@ -304,7 +303,7 @@ class ExtractorFactory(Protocol):
     succeeds. Errors raised here are caught by the sink for the same reason.
     """
 
-    async def __call__(self, *, region: str, workspace_id: uuid.UUID) -> EntityExtractor | None: ...
+    async def __call__(self, *, workspace_id: uuid.UUID) -> EntityExtractor | None: ...
 
 
 class WorkspacePromoter(Protocol):
@@ -320,7 +319,7 @@ class WorkspacePromoter(Protocol):
 
 
 class PromoterFactory(Protocol):
-    """Builds a :class:`WorkspacePromoter` for one workspace/region.
+    """Builds a :class:`WorkspacePromoter` for one workspace.
 
     Construction is the per-workspace vault boundary: the promoter is rooted at
     ``<vault_root>/<region>/<workspace_id>/`` (the
@@ -331,9 +330,7 @@ class PromoterFactory(Protocol):
     workspace (e.g. promotion not configured).
     """
 
-    def __call__(
-        self, *, region: str, workspace_id: uuid.UUID, safe_mode: bool
-    ) -> WorkspacePromoter | None: ...
+    def __call__(self, *, workspace_id: uuid.UUID, safe_mode: bool) -> WorkspacePromoter | None: ...
 
 
 class ConceptFramerFactory(Protocol):
@@ -345,7 +342,7 @@ class ConceptFramerFactory(Protocol):
     promoter deterministic (Lift 1 body) — the framing model is 100% user-routed,
     never hardcoded ([[bsvibe-no-implicit-routing]])."""
 
-    async def __call__(self, *, region: str, workspace_id: uuid.UUID) -> ConceptFramer | None: ...
+    async def __call__(self, *, workspace_id: uuid.UUID) -> ConceptFramer | None: ...
 
 
 class NoteEmbedHook(Protocol):
@@ -376,17 +373,13 @@ class ReconcileHook(Protocol):
     its OWN DB session + commit and is invoked soft-fail: any error is logged and
     swallowed, never reverting the promotion or the settle write."""
 
-    async def __call__(self, *, region: str, workspace_id: uuid.UUID) -> object: ...
+    async def __call__(self, *, workspace_id: uuid.UUID) -> object: ...
 
 
 @dataclass(slots=True)
 class SettleWorkerConfig:
     batch_size: int = 50
     poll_interval_s: float = 5.0
-    # Fallback region when a workspace row carries none (matches
-    # ``Settings.knowledge_default_region``). The runtime entrypoint should
-    # pass the configured value.
-    default_region: str = "us-1"
 
 
 class KnowledgeSettleSink:
@@ -466,7 +459,6 @@ class KnowledgeSettleSink:
             return None
 
         factory = KnowledgeFactory(
-            region=settlement.region,
             workspace_id=str(settlement.workspace_id),
             vault_root=self._vault_root,
         )
@@ -539,9 +531,7 @@ class KnowledgeSettleSink:
         if self._extractor_factory is None:
             return derive_content_tags(settlement)
         try:
-            extractor = await self._extractor_factory(
-                region=settlement.region, workspace_id=settlement.workspace_id
-            )
+            extractor = await self._extractor_factory(workspace_id=settlement.workspace_id)
             if extractor is None:
                 return derive_content_tags(settlement)
             names = await extractor.extract_entity_names(_extraction_seed_text(settlement))
@@ -743,7 +733,6 @@ class _WorkspacePolicy:
     True → promotion queues proposals; False → it auto-applies anchors).
     """
 
-    region: str
     safe_mode: bool
 
 
@@ -767,12 +756,9 @@ def build_garden_promoter_factory(
     promotion fully deterministic.
     """
 
-    def _factory(
-        *, region: str, workspace_id: uuid.UUID, safe_mode: bool
-    ) -> WorkspacePromoter | None:
+    def _factory(*, workspace_id: uuid.UUID, safe_mode: bool) -> WorkspacePromoter | None:
         return _LazyGardenPromoter(
             vault_root=vault_root,
-            region=region,
             workspace_id=workspace_id,
             safe_mode=safe_mode,
             framer_factory=framer_factory,
@@ -790,25 +776,25 @@ class _LazyGardenPromoter:
     just-written vault state each pass — keeping promotion idempotent.
     """
 
-    __slots__ = ("_vault_root", "_region", "_workspace_id", "_safe_mode", "_framer_factory")
+    __slots__ = ("_vault_root", "_workspace_id", "_safe_mode", "_framer_factory")
 
     def __init__(
         self,
         *,
         vault_root: Path,
-        region: str,
         workspace_id: uuid.UUID,
         safe_mode: bool,
         framer_factory: ConceptFramerFactory | None = None,
     ) -> None:
         self._vault_root = vault_root
-        self._region = region
         self._workspace_id = workspace_id
         self._safe_mode = safe_mode
         self._framer_factory = framer_factory
 
     async def promote(self) -> object:
         # Lazy heavy imports — keep the worker entrypoint cheap.
+        # SAME boundary the sink wrote to: the deployment region segment.
+        from backend.config import get_settings  # noqa: PLC0415 — lazy, like the rest
         from backend.knowledge.canonicalization.decisions import DecisionMemory  # noqa: PLC0415
         from backend.knowledge.canonicalization.index import (  # noqa: PLC0415
             CanonicalizationIndex,
@@ -825,8 +811,9 @@ class _LazyGardenPromoter:
         from backend.knowledge.canonicalization.store import NoteStore  # noqa: PLC0415
         from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
 
-        # SAME boundary the sink wrote to: <vault_root>/<region>/<workspace_id>/.
-        ws_root = self._vault_root / self._region / str(self._workspace_id)
+        ws_root = (
+            self._vault_root / get_settings().knowledge_default_region / str(self._workspace_id)
+        )
         ws_root.mkdir(parents=True, exist_ok=True)
         storage = FileSystemStorage(ws_root)
 
@@ -860,9 +847,7 @@ class _LazyGardenPromoter:
         framer = None
         if self._framer_factory is not None:
             try:
-                framer = await self._framer_factory(
-                    region=self._region, workspace_id=self._workspace_id
-                )
+                framer = await self._framer_factory(workspace_id=self._workspace_id)
             except Exception:  # noqa: BLE001 — framing is derived; never break promotion
                 logger.warning(
                     "concept_framer_resolution_failed",
@@ -925,10 +910,7 @@ class SettleWorker(BaseWorker):
             processed = 0
             promoted_ids: set[uuid.UUID] = set()
             for row in rows:
-                policy = policies.get(
-                    row.workspace_id, _WorkspacePolicy(self._cfg.default_region, True)
-                )
-                settlement = _to_settlement(row, policy.region)
+                settlement = _to_settlement(row)
                 try:
                     node_ref = await self._sink.absorb(settlement)
                 except Exception:  # noqa: BLE001 — record + leave un-drained for retry
@@ -1001,7 +983,7 @@ class SettleWorker(BaseWorker):
         if self._promoter_factory is None:
             return
         for workspace_id in sorted(workspace_ids, key=str):
-            policy = policies.get(workspace_id, _WorkspacePolicy(self._cfg.default_region, True))
+            policy = policies.get(workspace_id, _WorkspacePolicy(True))
             async with self._session_factory() as lease_session:
                 acquired = await try_workspace_promote_lock(lease_session, workspace_id)
                 if not acquired:
@@ -1012,7 +994,6 @@ class SettleWorker(BaseWorker):
                     continue
                 try:
                     promoter = self._promoter_factory(
-                        region=policy.region,
                         workspace_id=workspace_id,
                         safe_mode=policy.safe_mode,
                     )
@@ -1038,20 +1019,18 @@ class SettleWorker(BaseWorker):
                     # case, and every Safe-Mode pass) stays a cheap no-op rather
                     # than a full vault scan. Soft-fail: never reverts the
                     # promotion the drain just logged complete.
-                    await self._reconcile_after_promotion(result, policy.region, workspace_id)
+                    await self._reconcile_after_promotion(result, workspace_id)
                 finally:
                     await release_workspace_promote_lock(lease_session, workspace_id)
 
-    async def _reconcile_after_promotion(
-        self, result: object, region: str, workspace_id: uuid.UUID
-    ) -> None:
+    async def _reconcile_after_promotion(self, result: object, workspace_id: uuid.UUID) -> None:
         """Embed freshly created concepts. Gated + soft-fail (Lift 2)."""
         if self._reconcile_hook is None:
             return
         if not getattr(result, "created_concepts", None):
             return
         try:
-            await self._reconcile_hook(region=region, workspace_id=workspace_id)
+            await self._reconcile_hook(workspace_id=workspace_id)
         except Exception:  # noqa: BLE001 — reconcile is derived; never break the drain
             logger.exception(
                 "settle_worker_reconcile_failed",
@@ -1085,7 +1064,7 @@ class SettleWorker(BaseWorker):
             return {}
         stmt = select(WorkspaceRow.id, WorkspaceRow.safe_mode).where(WorkspaceRow.id.in_(ids))
         return {
-            wid: _WorkspacePolicy(self._cfg.default_region, bool(safe_mode))
+            wid: _WorkspacePolicy(bool(safe_mode))
             for wid, safe_mode in (await session.execute(stmt)).all()
         }
 
@@ -1129,12 +1108,11 @@ def _opt_str(value: object) -> str | None:
     return stripped or None
 
 
-def _to_settlement(row: ExecutionRunActivity, region: str) -> Settlement:
+def _to_settlement(row: ExecutionRunActivity) -> Settlement:
     payload = row.payload or {}
     refs = payload.get("artifact_refs") or []
     return Settlement(
         workspace_id=row.workspace_id,
-        region=region,
         run_id=row.run_id,
         activity_id=row.id,
         verified=bool(payload.get("verified", False)),

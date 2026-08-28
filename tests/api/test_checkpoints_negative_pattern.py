@@ -201,7 +201,7 @@ async def test_discard_negative_pattern_drains_into_vault(
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     # Drain everything queued (decision_resolution + negative_pattern).
     while await worker.drain_once():

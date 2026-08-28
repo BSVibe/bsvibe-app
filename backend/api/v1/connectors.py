@@ -554,11 +554,9 @@ async def get_import_dispatcher() -> ImportDispatcher:  # pragma: no cover — o
     registry = await loader.load_all()
     settings = get_settings()
     vault_root = Path(settings.knowledge_vault_root)
-    region = settings.knowledge_default_region
 
     def _knowledge(workspace_id: uuid.UUID) -> Any:
         return KnowledgeFactory(
-            region=region,
             workspace_id=str(workspace_id),
             vault_root=vault_root,
         ).restricted_garden()

@@ -27,6 +27,7 @@ from backend.dispatch.caller_registry import (
     CALLER_SETTLE_EXTRACT,
 )
 from backend.knowledge.canonicalization.promotion import ConceptFramer
+from backend.knowledge.graph.vault_paths import workspace_vault_root
 from backend.knowledge.infrastructure.workers.settle_worker import (
     ConceptFramerFactory,
     EntityExtractor,
@@ -72,7 +73,7 @@ def build_settle_entity_extractor_factory(
     settings = settings or get_settings()
     vault_root = Path(settings.knowledge_vault_root)
 
-    async def _factory(*, region: str, workspace_id: uuid.UUID) -> EntityExtractor | None:
+    async def _factory(*, workspace_id: uuid.UUID) -> EntityExtractor | None:
         from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415 — lazy
         from backend.knowledge.ingest.ingest_compiler import IngestCompiler  # noqa: PLC0415
         from backend.knowledge.retrieval.ingest_retriever import (  # noqa: PLC0415
@@ -104,7 +105,6 @@ def build_settle_entity_extractor_factory(
                 return None
             llm = _ResolverCompileLlm(adapter=resolved.adapter)
             knowledge = KnowledgeFactory(
-                region=region,
                 workspace_id=str(workspace_id),
                 vault_root=vault_root,
             )
@@ -116,7 +116,6 @@ def build_settle_entity_extractor_factory(
                 retriever=build_ingest_retriever(
                     settings=settings,
                     session_factory=session_factory,
-                    region=region,
                     workspace_id=workspace_id,
                 ),
                 parallelism=settings.ingest_compile_parallelism,
@@ -197,7 +196,7 @@ def build_concept_framer(
     ([[bsvibe-no-implicit-routing]])."""
     settings = settings or get_settings()
 
-    async def _factory(*, region: str, workspace_id: uuid.UUID) -> ConceptFramer | None:
+    async def _factory(*, workspace_id: uuid.UUID) -> ConceptFramer | None:
         async with session_factory() as session:
             resolved = await resolve_via_caller(
                 session,
@@ -244,7 +243,6 @@ def build_note_embed_hook(
     fix is a separate change.
     """
     settings = settings or get_settings()
-    vault_root = Path(settings.knowledge_vault_root)
 
     async def _hook(settlement: Settlement, node_ref: str) -> None:
         from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
@@ -261,10 +259,8 @@ def build_note_embed_hook(
         embedder = resolve_knowledge_embedder(settings)
         if not embedder.enabled or embedder.model is None:
             return
-        note_path = _relative_note_path(
-            node_ref, vault_root, settlement.region, settlement.workspace_id
-        )
-        vault = Vault(vault_root / settlement.region / str(settlement.workspace_id))
+        note_path = _relative_note_path(node_ref, settlement.workspace_id, settings=settings)
+        vault = Vault(workspace_vault_root(settlement.workspace_id, settings=settings))
         async with session_factory() as session:
             backend = PgNoteVectorBackend(
                 session,
@@ -292,9 +288,8 @@ def build_reconcile_hook(
     reading the gap — in steady state just the freshly created concept. Owns its
     own session + commit; no-op when no embedding model is configured."""
     settings = settings or get_settings()
-    vault_root = Path(settings.knowledge_vault_root)
 
-    async def _hook(*, region: str, workspace_id: uuid.UUID) -> object:
+    async def _hook(*, workspace_id: uuid.UUID) -> object:
         from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
         from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
             resolve_knowledge_embedder,
@@ -309,7 +304,7 @@ def build_reconcile_hook(
         embedder = resolve_knowledge_embedder(settings)
         if not embedder.enabled or embedder.model is None:
             return None
-        vault = Vault(vault_root / region / str(workspace_id))
+        vault = Vault(workspace_vault_root(workspace_id, settings=settings))
         async with session_factory() as session:
             backend = PgNoteVectorBackend(
                 session,
@@ -326,9 +321,9 @@ def build_reconcile_hook(
 
 
 def _relative_note_path(
-    node_ref: str, vault_root: Path, region: str, workspace_id: uuid.UUID
+    node_ref: str, workspace_id: uuid.UUID, *, settings: Settings | None = None
 ) -> str:
-    workspace_root = vault_root / region / str(workspace_id)
+    workspace_root = workspace_vault_root(workspace_id, settings=settings)
     try:
         return Path(node_ref).relative_to(workspace_root).as_posix()
     except ValueError:

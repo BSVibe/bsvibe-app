@@ -71,7 +71,6 @@ async def test_falls_back_to_workspace_default_when_no_explicit() -> None:
             WorkspaceRow(
                 id=ws,
                 name="w",
-                region="us-1",
                 safe_mode=True,
                 legal_basis="x",
                 default_account_id=acct.id,
@@ -95,7 +94,6 @@ async def test_matching_rule_beats_workspace_default() -> None:
             WorkspaceRow(
                 id=ws,
                 name="w",
-                region="us-1",
                 safe_mode=True,
                 legal_basis="x",
                 default_account_id=default.id,
@@ -125,7 +123,7 @@ async def test_matching_rule_beats_workspace_default() -> None:
 async def test_no_route_no_default_raises() -> None:
     ws = uuid.uuid4()
     async with memory_session() as s:
-        s.add(WorkspaceRow(id=ws, name="w", region="us-1", safe_mode=True, legal_basis="x"))
+        s.add(WorkspaceRow(id=ws, name="w", safe_mode=True, legal_basis="x"))
         await s.commit()
         with pytest.raises(NoMatchingRouteError):
             await _resolve_chat_model_account_id(s, get_settings(), workspace_id=ws, explicit=None)

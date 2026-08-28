@@ -34,6 +34,7 @@ import pytest_asyncio
 from backend.api.deps import get_current_user, get_workspace_id
 from backend.api.main import create_app
 from backend.api.v1.inside import build_inside_index, build_inside_storage
+from backend.config import get_settings
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.promotion import GardenObservationPromoter
@@ -112,7 +113,7 @@ async def _seed_settle_observation(vault_root: Path, workspace_id: uuid.UUID, ti
     ``write_garden`` → ``garden/seedling/<slug>.md`` with ``captured_at`` +
     ``tags``), rooted at the per-workspace vault.
     """
-    ws_root = vault_root / _REGION / str(workspace_id)
+    ws_root = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     ws_root.mkdir(parents=True, exist_ok=True)
     writer = GardenWriter(Vault(ws_root))
     await writer.write_garden(
@@ -142,7 +143,7 @@ def vault_root(tmp_path: Path) -> Path:
 @pytest.fixture
 def workspace_storage(vault_root: Path, workspace_id: uuid.UUID) -> FileSystemStorage:
     """Storage rooted exactly like the request handler's per-workspace vault."""
-    root = vault_root / _REGION / str(workspace_id)
+    root = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     root.mkdir(parents=True, exist_ok=True)
     return FileSystemStorage(root)
 

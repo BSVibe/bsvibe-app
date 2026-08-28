@@ -76,7 +76,7 @@ async def _seed(
     is_active: bool = True,
 ) -> None:
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
         await s.flush()
         s.add(
             ProductRow(

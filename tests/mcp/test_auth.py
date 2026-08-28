@@ -92,7 +92,7 @@ async def _seed_row(
     from backend.identity.workspaces_db import WorkspaceRow
 
     now = datetime.now(UTC)
-    session.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+    session.add(WorkspaceRow(id=workspace_id, name="ws"))
     session.add(UserRow(id=user_id, supabase_user_id=f"u-{user_id}", email=f"{user_id}@t.co"))
     await session.flush()
     row = OAuthAccessTokenRow(

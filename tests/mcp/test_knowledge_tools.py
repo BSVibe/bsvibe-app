@@ -67,7 +67,7 @@ async def registry() -> ToolRegistry:
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[Path]:
     async with db() as s:
-        ws = WorkspaceRow(id=workspace_id, name="ws", region="us-1")
+        ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
     settings = get_settings()
@@ -204,7 +204,7 @@ async def seeded_nested(db, workspace_id) -> AsyncIterator[Path]:
     - concepts/active/qux.md          (root-level recursion)
     """
     async with db() as s:
-        ws = WorkspaceRow(id=workspace_id, name="ws", region="us-1")
+        ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
     settings = get_settings()

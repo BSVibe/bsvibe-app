@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.config import get_settings
 from backend.knowledge import KnowledgeFactory
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.store import NoteStore
@@ -34,7 +35,6 @@ def _ws() -> str:
 async def _seed_concept(
     vault_root: Path,
     *,
-    region: str,
     workspace_id: str,
     concept_id: str,
     display: str,
@@ -42,7 +42,9 @@ async def _seed_concept(
     initial_body: str | None = None,
 ) -> None:
     """Write a promoted active concept into the workspace's vault on disk."""
-    store = NoteStore(FileSystemStorage(vault_root / region / workspace_id))
+    store = NoteStore(
+        FileSystemStorage(vault_root / get_settings().knowledge_default_region / workspace_id)
+    )
     await store.write_concept(
         models.ConceptEntry(
             concept_id=concept_id,
@@ -62,7 +64,7 @@ def vault_root(tmp_path: Path) -> Path:
 
 
 async def test_retriever_satisfies_canon_retriever_protocol(vault_root: Path) -> None:
-    factory = KnowledgeFactory(region=_REGION, workspace_id=_ws(), vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=_ws(), vault_root=vault_root)
     retriever = factory.retriever()
     assert isinstance(retriever, CanonRetriever)
 
@@ -70,14 +72,14 @@ async def test_retriever_satisfies_canon_retriever_protocol(vault_root: Path) ->
 async def test_empty_workspace_returns_no_patterns(vault_root: Path) -> None:
     """No-canon workspace → []: an empty-knowledge workspace sees NO verify
     behaviour change (the central graceful-empty invariant)."""
-    factory = KnowledgeFactory(region=_REGION, workspace_id=_ws(), vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=_ws(), vault_root=vault_root)
     retriever = factory.retriever()
     assert await retriever.retrieve_for_signals("anything at all\nsrc/x.py") == []
 
 
 async def test_unknown_workspace_with_no_vault_returns_empty(vault_root: Path) -> None:
     """A workspace whose vault dir never materialized must not raise."""
-    factory = KnowledgeFactory(region=_REGION, workspace_id=_ws(), vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=_ws(), vault_root=vault_root)
     retriever = factory.retriever()
     assert await retriever.retrieve_for_signals("some change") == []
 
@@ -88,12 +90,11 @@ async def test_matching_signal_surfaces_canonical_concept(vault_root: Path) -> N
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="dependency-pinning",
         display="Always pin dependency versions",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
     retriever = factory.retriever()
 
     patterns = await retriever.retrieve_for_signals(
@@ -107,13 +108,12 @@ async def test_alias_match_surfaces_concept(vault_root: Path) -> None:
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="structured-logging",
         display="Use structlog for structured logging",
         aliases=["structlog"],
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
     retriever = factory.retriever()
 
     patterns = await retriever.retrieve_for_signals("switched prints to structlog calls\napp.py")
@@ -126,12 +126,11 @@ async def test_non_matching_signal_returns_empty(vault_root: Path) -> None:
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="dependency-pinning",
         display="Always pin dependency versions",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
     retriever = factory.retriever()
 
     patterns = await retriever.retrieve_for_signals("renamed a CSS class in the footer\nfooter.css")
@@ -145,12 +144,11 @@ async def test_results_are_capped(vault_root: Path) -> None:
     for word in words:
         await _seed_concept(
             vault_root,
-            region=_REGION,
             workspace_id=ws,
             concept_id=word,
             display=f"{word.title()} statement",
         )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
     retriever = factory.retriever()
 
     signals = " ".join(words)
@@ -163,14 +161,11 @@ async def test_workspace_isolation(vault_root: Path) -> None:
     ws_a, ws_b = _ws(), _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws_b,
         concept_id="dependency-pinning",
         display="Always pin dependency versions",
     )
-    retriever_a = KnowledgeFactory(
-        region=_REGION, workspace_id=ws_a, vault_root=vault_root
-    ).retriever()
+    retriever_a = KnowledgeFactory(workspace_id=ws_a, vault_root=vault_root).retriever()
     assert await retriever_a.retrieve_for_signals("dependency pinning change") == []
 
 
@@ -179,12 +174,11 @@ async def test_retrieve_never_raises_on_storage_error(vault_root: Path) -> None:
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="dependency-pinning",
         display="Always pin dependency versions",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
     retriever = factory.retriever()
 
     # Corrupt the vault root mid-flight so initialize/list raises internally; the
@@ -203,7 +197,6 @@ async def test_concept_body_substance_folds_into_statement(vault_root: Path) -> 
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="idempotency",
         display="Idempotency",
@@ -213,7 +206,7 @@ async def test_concept_body_substance_folds_into_statement(vault_root: Path) -> 
             "already exists; re-fetch and reuse it instead of failing."
         ),
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
     retriever = factory.retriever()
 
     patterns = await retriever.retrieve_for_signals("improved idempotency of create_ref\napi.py")
@@ -229,12 +222,11 @@ async def test_bodyless_concept_still_returns_title(vault_root: Path) -> None:
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="dependency-pinning",
         display="Always pin dependency versions",
     )
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
     retriever = factory.retriever()
 
     patterns = await retriever.retrieve_for_signals("dependency pinning\nrequirements.txt")
@@ -260,9 +252,16 @@ async def test_bodyless_concept_still_returns_title(vault_root: Path) -> None:
 # retrieval path does not.
 
 
-async def _retract(vault_root: Path, *, region: str, workspace_id: str, concept_id: str) -> None:
+async def _retract(vault_root: Path, *, workspace_id: str, concept_id: str) -> None:
     """Stamp a concept the way retraction does — frontmatter only, file stays put."""
-    path = vault_root / region / workspace_id / "concepts" / "active" / f"{concept_id}.md"
+    path = (
+        vault_root
+        / get_settings().knowledge_default_region
+        / workspace_id
+        / "concepts"
+        / "active"
+        / f"{concept_id}.md"
+    )
     raw = path.read_text(encoding="utf-8")
     assert raw.startswith("---\n"), "seeded concept must have frontmatter"
     head, sep, rest = raw[4:].partition("---\n")
@@ -282,13 +281,12 @@ async def test_a_retracted_concept_never_reaches_the_contract(vault_root: Path) 
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="dependency-pinning",
         display="Always pin dependency versions",
     )
-    await _retract(vault_root, region=_REGION, workspace_id=ws, concept_id="dependency-pinning")
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    await _retract(vault_root, workspace_id=ws, concept_id="dependency-pinning")
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
 
     patterns = await factory.retriever().retrieve_for_signals(
         "Updated dependency pinning in the lockfile\nrequirements.txt"
@@ -304,13 +302,12 @@ async def test_a_retracted_concept_is_absent_from_the_structured_surface(
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="dependency-pinning",
         display="Always pin dependency versions",
     )
-    await _retract(vault_root, region=_REGION, workspace_id=ws, concept_id="dependency-pinning")
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    await _retract(vault_root, workspace_id=ws, concept_id="dependency-pinning")
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
 
     items = await factory.retriever().retrieve_structured(
         "Updated dependency pinning in the lockfile"
@@ -327,20 +324,18 @@ async def test_a_live_concept_still_surfaces_next_to_a_retracted_one(
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="dependency-pinning",
         display="Always pin dependency versions",
     )
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="stateless-design",
         display="Keep handlers stateless",
     )
-    await _retract(vault_root, region=_REGION, workspace_id=ws, concept_id="dependency-pinning")
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    await _retract(vault_root, workspace_id=ws, concept_id="dependency-pinning")
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
 
     patterns = await factory.retriever().retrieve_for_signals(
         "dependency pinning and stateless design in the handler"
@@ -366,13 +361,12 @@ async def test_a_workspace_whose_concepts_are_all_retracted_takes_the_cheap_exit
     ws = _ws()
     await _seed_concept(
         vault_root,
-        region=_REGION,
         workspace_id=ws,
         concept_id="dependency-pinning",
         display="Always pin dependency versions",
     )
-    await _retract(vault_root, region=_REGION, workspace_id=ws, concept_id="dependency-pinning")
-    factory = KnowledgeFactory(region=_REGION, workspace_id=ws, vault_root=vault_root)
+    await _retract(vault_root, workspace_id=ws, concept_id="dependency-pinning")
+    factory = KnowledgeFactory(workspace_id=ws, vault_root=vault_root)
 
     resolves: list[str] = []
     original = _resolver.TagResolver.resolve

@@ -51,12 +51,14 @@ class WorkspaceRepository(Protocol):
         workspaces (``deleted_at IS NULL``).
         """
 
-    async def list_active_regions(self) -> list[tuple[uuid.UUID, str, bool]]:
-        """Every live workspace's ``(id, region, safe_mode)`` triple.
+    async def list_active_policies(self) -> list[tuple[uuid.UUID, bool]]:
+        """Every live workspace's ``(id, safe_mode)`` pair.
 
         Powers infrastructure-layer sweeps that need to fan out across
-        workspaces (e.g. the settle worker's per-region drain). Excludes
-        soft-deleted rows.
+        workspaces. Excludes soft-deleted rows.
+
+        Was ``list_active_regions`` and carried a ``region`` in the middle —
+        an axis that named a vault directory and nothing else.
         """
 
     async def list_with_audit_retention(self) -> list[tuple[uuid.UUID, int]]:

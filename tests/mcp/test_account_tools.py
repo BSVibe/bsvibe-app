@@ -64,7 +64,7 @@ async def registry() -> ToolRegistry:
 async def seeded(db, workspace_id, user_id) -> AsyncIterator[None]:
     """Stage-flush workspace + user + membership parents so PG FKs resolve."""
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id=f"supabase|{user_id}"))
         await s.flush()
         s.add(
@@ -121,7 +121,7 @@ async def test_memberships_list_returns_active_workspaces(
     async with db() as s:
         # Add a SECOND workspace + membership so the list isn't trivially singleton.
         ws2 = uuid.uuid4()
-        s.add(WorkspaceRow(id=ws2, name="ws2", region="us-1"))
+        s.add(WorkspaceRow(id=ws2, name="ws2"))
         await s.flush()
         s.add(
             MembershipRow(
@@ -145,7 +145,8 @@ async def test_memberships_list_returns_active_workspaces(
     assert len(out["memberships"]) == 2
     # Shape parity check — every entry carries the WorkspaceResponse fields.
     sample = out["memberships"][0]
-    assert {"id", "name", "region", "safe_mode", "created_at", "updated_at"} <= set(sample)
+    assert {"id", "name", "safe_mode", "created_at", "updated_at"} <= set(sample)
+    assert "region" not in sample, "the per-workspace region axis came back onto the MCP surface"
 
 
 async def test_memberships_list_excludes_left_memberships(
@@ -156,7 +157,7 @@ async def test_memberships_list_excludes_left_memberships(
 
     async with db() as s:
         ws_gone = uuid.uuid4()
-        s.add(WorkspaceRow(id=ws_gone, name="gone", region="us-1"))
+        s.add(WorkspaceRow(id=ws_gone, name="gone"))
         await s.flush()
         s.add(
             MembershipRow(

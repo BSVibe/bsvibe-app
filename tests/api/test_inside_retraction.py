@@ -36,6 +36,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.api.v1.inside.retraction import build_retraction_writer
+from backend.config import get_settings
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenWriter
 
@@ -92,7 +93,7 @@ def vault_root(tmp_path: Path, workspace_id: uuid.UUID) -> Path:
 
 def _seed_note(vault_root: Path, workspace_id: uuid.UUID) -> str:
     rel_path = "garden/seedling/cache-homepage.md"
-    note_path = vault_root / _REGION / str(workspace_id) / rel_path
+    note_path = vault_root / get_settings().knowledge_default_region / str(workspace_id) / rel_path
     note_path.parent.mkdir(parents=True, exist_ok=True)
     note_path.write_text(_NOTE_TEMPLATE, encoding="utf-8")
     return rel_path
@@ -119,7 +120,7 @@ async def client(
             yield s
 
     async def _writer() -> GardenWriter:
-        ws_root = vault_root / _REGION / str(workspace_id)
+        ws_root = vault_root / get_settings().knowledge_default_region / str(workspace_id)
         ws_root.mkdir(parents=True, exist_ok=True)
         return GardenWriter(vault=Vault(ws_root))
 
@@ -267,6 +268,6 @@ async def test_correct_endpoint_is_unavailable_501(
     )
     assert r.status_code == 501, r.text
     # File untouched — no tombstone, no rewrite.
-    note = vault_root / _REGION / str(workspace_id) / node_ref
+    note = vault_root / get_settings().knowledge_default_region / str(workspace_id) / node_ref
     assert note.exists()
     assert "retracted_at" not in note.read_text(encoding="utf-8")

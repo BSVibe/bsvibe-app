@@ -147,7 +147,6 @@ async def _seed_active_account(
             ws = WorkspaceRow(
                 id=workspace_id,
                 name="test-ws",
-                region="us-1",
                 safe_mode=True,
                 legal_basis="contract",
             )

@@ -33,7 +33,11 @@ from .._support import db_engine, fake_current_user
 
 pytestmark = pytest.mark.asyncio
 
-_REGION = "eu-1"
+#: The directory segment this test's vault is seeded under. The export reads
+#: through injected ``build_inside_storage`` / ``build_inside_index``, so this
+#: is just a folder name — deliberately NOT the deployment region, so the Art.30
+#: assertions below cannot pass by coincidence.
+_VAULT_SEGMENT = "eu-1"
 
 
 @pytest_asyncio.fixture
@@ -55,7 +59,7 @@ async def client_with_ws(db, tmp_path):
     workspace_id = uuid.uuid4()
     user_id = uuid.uuid4()
 
-    ws_vault = tmp_path / "vault" / _REGION / str(workspace_id)
+    ws_vault = tmp_path / "vault" / _VAULT_SEGMENT / str(workspace_id)
     ws_vault.mkdir(parents=True, exist_ok=True)
     vault_storage = FileSystemStorage(ws_vault)
 
@@ -85,7 +89,6 @@ async def client_with_ws(db, tmp_path):
             WorkspaceRow(
                 id=workspace_id,
                 name="Acme",
-                region=_REGION,
                 safe_mode=True,
                 legal_basis="contract",
             )
@@ -215,11 +218,13 @@ async def test_processing_record_returns_art30_doc(client_with_ws) -> None:
         assert key in body, f"missing Art. 30 key {key} in {sorted(body.keys())}"
     assert body["workspace_id"] == str(workspace_id)
     # The region where processing ACTUALLY happens — a deployment constant.
-    # The fixture's workspace row says ``eu-1``; that column never steered
-    # where anything is processed, so echoing it into an Art. 30 record
-    # asserted a residency control the system does not implement.
+    # There used to be a per-workspace ``region`` column and this record echoed
+    # it, asserting a residency control the system does not implement. The
+    # column is gone; the record must name the deployment.
     assert body["region"] == get_settings().knowledge_default_region
-    assert body["region"] != "eu-1", "Art. 30 record echoed the stale region column"
+    assert body["region"] != _VAULT_SEGMENT, (
+        "Art. 30 record named a directory segment instead of the deployment region"
+    )
     assert body["legal_basis"] == "contract"
     assert isinstance(body["sub_processors"], list)
     # The sub-processor list must include the obvious ones.

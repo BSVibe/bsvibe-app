@@ -265,7 +265,7 @@ async def test_mcp_list_pending_returns_question_options_and_actions(
     db, workspace_id, user_id, registry
 ) -> None:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", language="en"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws", language="en"))
         _run_id, q_decision_id = await _seed_pending_question(
             s, workspace_id, question="Which DB?", options=["Postgres", "SQLite"]
         )

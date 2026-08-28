@@ -293,7 +293,6 @@ async def _build_export(
         "workspace": {
             "id": str(workspace.id),
             "name": workspace.name,
-            "region": workspace.region,
             "safe_mode": workspace.safe_mode,
             "legal_basis": workspace.legal_basis,
             "created_at": workspace.created_at.isoformat() if workspace.created_at else None,

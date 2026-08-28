@@ -71,7 +71,7 @@ def user_id() -> uuid.UUID:
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id, user_id) -> AsyncIterator[None]:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.flush()
         s.add(ProductRow(workspace_id=workspace_id, name="A", slug="alpha"))

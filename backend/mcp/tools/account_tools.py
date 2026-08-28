@@ -83,7 +83,6 @@ class MembershipEntryOut(BaseModel):
 
     id: str
     name: str
-    region: str
     safe_mode: bool
     created_at: datetime
     updated_at: datetime
@@ -121,7 +120,6 @@ async def _h_memberships_list(_args: AccountMembershipsListInput, ctx: ToolConte
             MembershipEntryOut(
                 id=str(r.id),
                 name=r.name,
-                region=r.region,
                 safe_mode=r.safe_mode,
                 created_at=r.created_at,
                 updated_at=r.updated_at,

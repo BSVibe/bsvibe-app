@@ -21,6 +21,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.config import get_settings
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
@@ -101,12 +102,12 @@ async def _seed_settle_activity(
     return activity_id
 
 
-def _ws_dir(vault_root, region: str, workspace_id: uuid.UUID):
-    return vault_root / region / str(workspace_id)
+def _ws_dir(vault_root, workspace_id: uuid.UUID):
+    return vault_root / get_settings().knowledge_default_region / str(workspace_id)
 
 
-def _written_notes(vault_root, region: str, workspace_id: uuid.UUID) -> list:
-    ws_dir = _ws_dir(vault_root, region, workspace_id)
+def _written_notes(vault_root, workspace_id: uuid.UUID) -> list:
+    ws_dir = _ws_dir(vault_root, workspace_id)
     return list(ws_dir.rglob("*.md")) if ws_dir.exists() else []
 
 
@@ -145,12 +146,12 @@ async def test_routine_verified_work_writes_nothing(sf, tmp_path) -> None:
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     processed = await worker.drain_once()
 
     assert processed == 1  # drained (not re-evaluated), but ...
-    assert _written_notes(tmp_path, "us-1", ws) == []  # ... nothing written
+    assert _written_notes(tmp_path, ws) == []  # ... nothing written
     async with sf() as s:
         drains = (await s.execute(select(SettleDrainRow))).scalars().all()
         assert len(drains) == 1
@@ -176,11 +177,11 @@ async def test_agent_declared_knowledge_writes_topic_titled_note(sf, tmp_path) -
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
 
-    notes = _written_notes(tmp_path, "us-1", ws)
+    notes = _written_notes(tmp_path, ws)
     assert len(notes) == 1
     # Filename is slugified from the topic — the knowledge NAME, not the Direction.
     assert notes[0].name == "idempotent-webhooks.md"
@@ -204,10 +205,10 @@ async def test_blank_declared_knowledge_writes_nothing(sf, tmp_path) -> None:
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
-    assert _written_notes(tmp_path, "us-1", ws) == []
+    assert _written_notes(tmp_path, ws) == []
 
 
 async def test_decision_resolution_is_inherently_notable_always_written(sf, tmp_path) -> None:
@@ -227,10 +228,10 @@ async def test_decision_resolution_is_inherently_notable_always_written(sf, tmp_
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),  # agent declared no knowledge
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
-    notes = _written_notes(tmp_path, "us-1", ws)
+    notes = _written_notes(tmp_path, ws)
     assert len(notes) == 1
     body = notes[0].read_text(encoding="utf-8")
     assert "Use Postgres over SQLite" in body
@@ -248,10 +249,10 @@ async def test_negative_pattern_is_inherently_notable_always_written(sf, tmp_pat
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
-    assert len(_written_notes(tmp_path, "us-1", ws)) == 1
+    assert len(_written_notes(tmp_path, ws)) == 1
 
 
 async def test_settle_worker_calls_embed_hook_per_absorbed_note(sf, tmp_path) -> None:
@@ -268,7 +269,7 @@ async def test_settle_worker_calls_embed_hook_per_absorbed_note(sf, tmp_path) ->
     worker = SettleWorker(
         session_factory=sf,
         sink=_remembered_sink(tmp_path),
-        config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01, default_region="us-1"),
+        config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01),
         embed_hook=_hook,
     )
     processed = await worker.drain_once()
@@ -292,7 +293,7 @@ async def test_settle_worker_embed_hook_failure_is_soft(sf, tmp_path) -> None:
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01, default_region="us-1"),
+        config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01),
         embed_hook=_boom,
     )
     assert await worker.drain_once() == 1
@@ -309,12 +310,12 @@ async def test_settle_worker_writes_observation_to_bsage(sf, tmp_path) -> None:
     worker = SettleWorker(
         session_factory=sf,
         sink=_remembered_sink(tmp_path),
-        config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01, default_region="us-1"),
+        config=SettleWorkerConfig(batch_size=10, poll_interval_s=0.01),
     )
     processed = await worker.drain_once()
 
     assert processed == 1
-    notes = _written_notes(tmp_path, "us-1", ws)
+    notes = _written_notes(tmp_path, ws)
     assert len(notes) == 1, f"expected one BSage note under the workspace vault, got {notes}"
     body = notes[0].read_text(encoding="utf-8")
     assert "wired the cache" in body
@@ -345,11 +346,11 @@ async def test_settle_worker_note_carries_content_tags_not_just_structural(sf, t
     worker = SettleWorker(
         session_factory=sf,
         sink=_remembered_sink(tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
 
-    store = NoteStore(FileSystemStorage(_ws_dir(tmp_path, "us-1", ws)))
+    store = NoteStore(FileSystemStorage(_ws_dir(tmp_path, ws)))
     garden_paths = await store.list_garden_paths()
     assert len(garden_paths) == 1
     tags = set(await store.read_garden_tags(garden_paths[0]))
@@ -392,17 +393,17 @@ async def test_settle_worker_respects_llm_empty_extraction_no_noise_tags(sf, tmp
         knowledge=True,
     )
 
-    async def _factory(*, region: str, workspace_id: uuid.UUID) -> _EmptyExtractor:
+    async def _factory(*, workspace_id: uuid.UUID) -> _EmptyExtractor:
         return _EmptyExtractor()
 
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
 
-    store = NoteStore(FileSystemStorage(_ws_dir(tmp_path, "us-1", ws)))
+    store = NoteStore(FileSystemStorage(_ws_dir(tmp_path, ws)))
     garden_paths = await store.list_garden_paths()
     assert len(garden_paths) == 1
     tags = set(await store.read_garden_tags(garden_paths[0]))
@@ -421,7 +422,7 @@ async def test_settle_worker_idempotent_redrain(sf, tmp_path) -> None:
     worker = SettleWorker(
         session_factory=sf,
         sink=_remembered_sink(tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
 
     first = await worker.drain_once()
@@ -430,7 +431,7 @@ async def test_settle_worker_idempotent_redrain(sf, tmp_path) -> None:
     assert first == 1
     assert second == 0, "re-drain must not re-process an already-drained activity"
     # No duplicate node written, no duplicate drain marker.
-    assert len(_written_notes(tmp_path, "us-1", ws)) == 1
+    assert len(_written_notes(tmp_path, ws)) == 1
     async with sf() as s:
         drains = (await s.execute(select(SettleDrainRow))).scalars().all()
         assert len(drains) == 1
@@ -457,13 +458,13 @@ async def test_settle_worker_workspace_isolation(sf, tmp_path) -> None:
     worker = SettleWorker(
         session_factory=sf,
         sink=_remembered_sink(tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     processed = await worker.drain_once()
     assert processed == 2
 
-    a_notes = _written_notes(tmp_path, "us-1", ws_a)
-    b_notes = _written_notes(tmp_path, "us-1", ws_b)
+    a_notes = _written_notes(tmp_path, ws_a)
+    b_notes = _written_notes(tmp_path, ws_b)
     assert len(a_notes) == 1
     assert len(b_notes) == 1
     assert "alpha learning" in a_notes[0].read_text(encoding="utf-8")
@@ -487,12 +488,12 @@ async def test_settle_worker_ignores_non_settle_activities(sf, tmp_path) -> None
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     processed = await worker.drain_once()
 
     assert processed == 0
-    assert _written_notes(tmp_path, "us-1", ws) == []
+    assert _written_notes(tmp_path, ws) == []
     async with sf() as s:
         assert (await s.execute(select(SettleDrainRow))).scalars().all() == []
 
@@ -509,10 +510,10 @@ async def test_settle_worker_tick_drains_one_batch(sf, tmp_path) -> None:
     worker = SettleWorker(
         session_factory=sf,
         sink=_remembered_sink(tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker._tick() == 1
-    assert len(_written_notes(tmp_path, "us-1", ws)) == 1
+    assert len(_written_notes(tmp_path, ws)) == 1
 
 
 async def test_settle_worker_sink_failure_is_retryable(sf, tmp_path) -> None:
@@ -527,7 +528,7 @@ async def test_settle_worker_sink_failure_is_retryable(sf, tmp_path) -> None:
     worker = SettleWorker(
         session_factory=sf,
         sink=_BoomSink(),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     processed = await worker.drain_once()
 
@@ -558,7 +559,7 @@ class _FakePromoter:
 
 
 def _promoter_factory_returning(result: object):
-    def _factory(*, region: str, workspace_id: uuid.UUID, safe_mode: bool):
+    def _factory(*, workspace_id: uuid.UUID, safe_mode: bool):
         return _FakePromoter(result)
 
     return _factory
@@ -574,21 +575,21 @@ async def test_reconcile_hook_runs_when_promotion_creates_a_concept(sf, tmp_path
 
     calls: list[tuple[str, uuid.UUID]] = []
 
-    async def _reconcile(*, region: str, workspace_id: uuid.UUID) -> object:
-        calls.append((region, workspace_id))
+    async def _reconcile(*, workspace_id: uuid.UUID) -> object:
+        calls.append((workspace_id,))
         return None
 
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
         promoter_factory=_promoter_factory_returning(
             PromotionResult(created_concepts=["resolver-soft-fallback"])
         ),
         reconcile_hook=_reconcile,
     )
     assert await worker.drain_once() == 1
-    assert calls == [("us-1", ws)]
+    assert calls == [(ws,)]
 
 
 async def test_reconcile_hook_skipped_when_no_concept_created(sf, tmp_path) -> None:
@@ -601,14 +602,14 @@ async def test_reconcile_hook_skipped_when_no_concept_created(sf, tmp_path) -> N
 
     calls: list[uuid.UUID] = []
 
-    async def _reconcile(*, region: str, workspace_id: uuid.UUID) -> object:
+    async def _reconcile(*, workspace_id: uuid.UUID) -> object:
         calls.append(workspace_id)
         return None
 
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
         # Safe-Mode shape: candidate queued as a proposal, nothing created/applied.
         promoter_factory=_promoter_factory_returning(
             PromotionResult(pending_actions=["create-concept:foo"])
@@ -627,13 +628,13 @@ async def test_reconcile_hook_failure_is_soft(sf, tmp_path) -> None:
     ws = uuid.uuid4()
     await _seed_settle_activity(sf, workspace_id=ws, summary="resolver soft-fallback")
 
-    async def _boom(*, region: str, workspace_id: uuid.UUID) -> object:
+    async def _boom(*, workspace_id: uuid.UUID) -> object:
         raise RuntimeError("embedder down")
 
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
         promoter_factory=_promoter_factory_returning(PromotionResult(created_concepts=["x"])),
         reconcile_hook=_boom,
     )

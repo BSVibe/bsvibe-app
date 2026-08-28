@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from backend.config import get_settings
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -50,8 +52,8 @@ class _StubEmbedder:
         return [0.1, 0.2, 0.3]
 
 
-def _write_note(vault_root: Path, *, region: str, workspace_id: uuid.UUID, rel: str) -> Path:
-    path = vault_root / region / str(workspace_id) / rel
+def _write_note(vault_root: Path, *, workspace_id: uuid.UUID, rel: str) -> Path:
+    path = vault_root / get_settings().knowledge_default_region / str(workspace_id) / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "---\ntitle: Worker staleness needs a reference point\n---\n\n"
@@ -66,9 +68,9 @@ async def _run_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _StubEmb
     from backend.knowledge.infrastructure.workers.settle_worker import Settlement
     from backend.workflow.application.runtime import settle_runtime
 
-    region, workspace_id = "us-1", uuid.uuid4()
+    workspace_id = uuid.uuid4()
     rel = "garden/seedling/staleness.md"
-    note = _write_note(tmp_path, region=region, workspace_id=workspace_id, rel=rel)
+    note = _write_note(tmp_path, workspace_id=workspace_id, rel=rel)
 
     embedder = _StubEmbedder()
     stored: list[tuple[str, list[float]]] = []
@@ -109,7 +111,6 @@ async def _run_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _StubEmb
     await hook(
         Settlement(
             workspace_id=workspace_id,
-            region=region,
             run_id=uuid.uuid4(),
             activity_id=uuid.uuid4(),
             verified=True,

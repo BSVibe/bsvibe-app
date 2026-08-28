@@ -7,6 +7,14 @@ be deliberate — this test pins the exact shape so an accidental drift
 fails CI loudly.
 
 Source: ``backend/knowledge/facade.py`` (Lift A).
+
+2026-08-28 — ``region`` left this seam DELIBERATELY. It was a per-workspace
+column whose only effect was a vault path segment, and two surfaces answered it
+differently (the writers read the column, every REST route read the deployment
+default). The middle segment is now the deployment constant
+``settings.knowledge_default_region``; see
+``backend.knowledge.graph.vault_paths`` and
+``tests/test_the_workspace_region_axis_is_gone.py``.
 """
 
 from __future__ import annotations
@@ -78,22 +86,21 @@ def test_knowledge_retrieve_canon_signature_is_pinned() -> None:
 
 
 def test_knowledge_settle_signature_is_pinned() -> None:
-    """``settle`` MUST be ``(self, *, workspace_id: uuid.UUID, region: str) -> int``."""
+    """``settle`` MUST be ``(self, *, workspace_id: uuid.UUID) -> int``."""
     sig = inspect.signature(Knowledge.settle)
     params = list(sig.parameters.values())
-    # self + 2 keyword-only args.
-    assert [p.name for p in params] == ["self", "workspace_id", "region"], (
+    # self + 1 keyword-only arg.
+    assert [p.name for p in params] == ["self", "workspace_id"], (
         f"Knowledge.settle parameter list drift: {[p.name for p in params]}"
     )
-    # workspace_id and region are keyword-only.
     kw_only_names = [p.name for p in params if p.kind == inspect.Parameter.KEYWORD_ONLY]
-    assert kw_only_names == ["workspace_id", "region"], (
+    assert kw_only_names == ["workspace_id"], (
         f"Knowledge.settle keyword-only drift: {kw_only_names}"
     )
 
     hints = get_type_hints(Knowledge.settle)
     assert hints.get("workspace_id") is uuid.UUID
-    assert hints.get("region") is str
+    assert "region" not in hints, "the per-workspace region axis came back onto the seam"
     assert hints.get("return") is int
 
 
@@ -110,11 +117,10 @@ def test_knowledge_is_runtime_checkable_protocol() -> None:
 
 def test_ingest_request_field_shape_is_pinned() -> None:
     hints = get_type_hints(IngestRequest)
-    assert set(hints.keys()) == {"workspace_id", "region", "artifacts"}, (
+    assert set(hints.keys()) == {"workspace_id", "artifacts"}, (
         f"IngestRequest field set drift: {sorted(hints.keys())}"
     )
     assert hints["workspace_id"] is uuid.UUID
-    assert hints["region"] is str
 
 
 def test_ingest_result_field_shape_is_pinned() -> None:
@@ -142,12 +148,10 @@ def test_canon_retrieval_query_field_shape_is_pinned() -> None:
     hints = get_type_hints(CanonRetrievalQuery)
     assert set(hints.keys()) == {
         "workspace_id",
-        "region",
         "seed_text",
         "k",
     }, f"CanonRetrievalQuery field set drift: {sorted(hints.keys())}"
     assert hints["workspace_id"] is uuid.UUID
-    assert hints["region"] is str
     assert hints["seed_text"] is str
     assert hints["k"] is int
 

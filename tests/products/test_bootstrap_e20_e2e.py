@@ -159,8 +159,8 @@ class _CapturingKnowledge:
         del query
         return CanonRetrievalResult(notes=[])
 
-    async def settle(self, *, workspace_id: uuid.UUID, region: str) -> int:
-        del workspace_id, region
+    async def settle(self, *, workspace_id: uuid.UUID) -> int:
+        del workspace_id
         return 0
 
 
@@ -188,7 +188,6 @@ async def test_e20_bootstrap_writes_typed_notes_and_persists_graph(tmp_path: Pat
     outcome = await run_repo_bootstrap(
         repo_root=repo,
         workspace_id=uuid.uuid4(),
-        region="us-1",
         knowledge=knowledge,
         vault_root=vault_root,
     )

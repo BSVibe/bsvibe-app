@@ -74,7 +74,7 @@ async def registry() -> ToolRegistry:
 async def seeded_graph(db, workspace_id) -> AsyncIterator[Path]:
     """Plant a small graph.json under the workspace's vault."""
     async with db() as s:
-        ws = WorkspaceRow(id=workspace_id, name="ws", region="us-1")
+        ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
     settings = get_settings()
@@ -346,7 +346,7 @@ async def graph_with_external(db, workspace_id) -> AsyncIterator[Path]:
     """A graph where an external import stub (BaseModel) shares the query
     substring with an internal node — for the F8 external-exclusion check."""
     async with db() as s:
-        ws = WorkspaceRow(id=workspace_id, name="ws", region="us-1")
+        ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
     settings = get_settings()
@@ -413,7 +413,7 @@ async def test_search_includes_external_when_kind_requested(
 
 async def test_no_graph_yet_returns_clean_error(db, workspace_id, user_id, registry) -> None:
     async with db() as s:
-        ws = WorkspaceRow(id=workspace_id, name="ws", region="us-1")
+        ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
         ctx = ToolContext(

@@ -75,7 +75,7 @@ def workspace_id() -> uuid.UUID:
 async def seeded_user(db, workspace_id) -> AsyncIterator[UserRow]:
     """Seed a workspace + a UserRow whose Supabase id matches fake_current_user."""
     async with db() as s:
-        ws = WorkspaceRow(id=workspace_id, name="t-ws", region="us-1")
+        ws = WorkspaceRow(id=workspace_id, name="t-ws")
         s.add(ws)
         user = UserRow(supabase_user_id="test-user", email="t@example.com")
         s.add(user)

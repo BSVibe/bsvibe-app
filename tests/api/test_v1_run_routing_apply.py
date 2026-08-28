@@ -80,7 +80,7 @@ async def seeded(maker, workspace_id) -> AsyncIterator[dict[str, ModelAccount]]:
     opus = _acct(workspace_id, "opus")
     sonnet = _acct(workspace_id, "sonnet")
     async with maker() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add_all([opus, sonnet])
         await s.commit()
     yield {"opus": opus, "sonnet": sonnet}
