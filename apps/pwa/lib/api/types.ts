@@ -1405,3 +1405,18 @@ export interface Worker {
   /** Lift E4 — ISO 8601 row-creation timestamp ("Added on" detail). */
   created_at: string | null;
 }
+
+/** `POST /api/v1/inside/reindex-embeddings` response (backend
+ *  `ReindexEmbeddingsResponse`, extra=forbid) — the outcome of one vector-index
+ *  backfill pass over the workspace's knowledge notes (garden + concepts).
+ *
+ *  `disabled` is the honest-absence flag: when the deployment configures no
+ *  embedding model the pass could not run at all, and the three zeros beside it
+ *  mean "did not look", not "nothing needed work". The UI must render those two
+ *  situations differently. */
+export interface ReindexResult {
+  scanned: number;
+  embedded: number;
+  already: number;
+  disabled: boolean;
+}

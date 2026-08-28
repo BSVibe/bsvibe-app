@@ -33,6 +33,7 @@ import type {
   KnowledgeGraph,
   KnowledgeNote,
   Observation,
+  ReindexResult,
   RetractRequestBody,
   RetractResponse,
   UndoCorrectionResponse,
@@ -104,4 +105,16 @@ export function undoCorrection(correctionId: string): Promise<UndoCorrectionResp
     `/api/v1/inside/corrections/${encodeURIComponent(correctionId)}/undo`,
     { method: "POST" },
   );
+}
+
+/** Rebuild the workspace's note vector index — embed every knowledge note whose
+ *  stored vector is missing, built by a different model, or built from different
+ *  text. Idempotent: a second pass returns `embedded: 0`.
+ *
+ *  The index is normally maintained event-driven by the settle promote hook, so
+ *  this is the deliberate trigger for the case where that hook has had no
+ *  activity to ride on (measured on prod 2026-08-28: 1,724 rows with no content
+ *  fingerprint and no run in 30 hours). */
+export function reindexEmbeddings(): Promise<ReindexResult> {
+  return apiFetch<ReindexResult>("/api/v1/inside/reindex-embeddings", { method: "POST" });
 }

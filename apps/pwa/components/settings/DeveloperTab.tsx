@@ -10,6 +10,7 @@ import { type Pat, type PatCreated, createPat, deletePat, listPats } from "@/lib
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import CopyField from "./CopyField";
+import ReindexEmbeddings from "./ReindexEmbeddings";
 
 /**
  * Settings → Developer. OAuth client management for the embedded
@@ -53,6 +54,8 @@ export default function DeveloperTab() {
   return (
     <div className="general-tab">
       <p className="general-tab__lede">{t("lede")}</p>
+
+      <ReindexEmbeddings />
 
       <section className="account-section" aria-label={t("clients.title")}>
         <header className="developer-tab__header">
