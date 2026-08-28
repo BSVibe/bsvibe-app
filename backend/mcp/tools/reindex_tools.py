@@ -50,6 +50,7 @@ class ReindexEmbeddingsOutput(BaseModel):
     already: int
     disabled: bool
     remaining: int
+    removed: int
 
 
 async def _h_reindex(_args: ReindexEmbeddingsInput, ctx: ToolContext) -> Any:
@@ -67,7 +68,9 @@ async def _h_reindex(_args: ReindexEmbeddingsInput, ctx: ToolContext) -> Any:
     embedder = resolve_knowledge_embedder(get_settings())
     if not embedder.enabled or embedder.model is None:
         # Honest "nothing to report" rather than a fabricated zero-scan success.
-        return ReindexEmbeddingsOutput(scanned=0, embedded=0, already=0, disabled=True, remaining=0)
+        return ReindexEmbeddingsOutput(
+            scanned=0, embedded=0, already=0, disabled=True, remaining=0, removed=0
+        )
 
     region = await workspace_region(ctx.session, workspace_id)
     vault = Vault(vault_root_for(region=region, workspace_id=workspace_id))
@@ -88,6 +91,7 @@ async def _h_reindex(_args: ReindexEmbeddingsInput, ctx: ToolContext) -> Any:
         already=result.already,
         disabled=result.disabled,
         remaining=result.remaining,
+        removed=result.removed,
     )
 
 
@@ -102,7 +106,8 @@ def register_reindex_tools(registry: ToolRegistry) -> None:
                 "`POST /api/v1/inside/reindex-embeddings`. ONE pass is bounded so it "
                 "always answers in time; `remaining` is what it did not reach — CALL "
                 "AGAIN UNTIL `remaining` IS 0. Idempotent: a settled corpus returns "
-                "`embedded: 0`. Returns `disabled: true` when the deployment configures "
+                "`embedded: 0`. `removed` counts vectors dropped for notes that no longer "
+                "exist (only ever on a pass that reached the end). Returns `disabled: true` when the deployment configures "
                 "no embedding model."
             ),
             input_schema=ReindexEmbeddingsInput,

@@ -208,6 +208,10 @@ class ReindexEmbeddingsResponse(BaseModel):
     already: int
     disabled: bool
     remaining: int = 0
+    #: Vectors dropped because their note no longer exists. Only ever non-zero
+    #: on a pass that reached the end of the vault — a capped pass has not
+    #: proven anything about the notes it never walked.
+    removed: int = 0
 
 
 __all__ = [
