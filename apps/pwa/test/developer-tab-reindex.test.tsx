@@ -40,7 +40,13 @@ import { reindexEmbeddings } from "@/lib/api/knowledge";
 import { listOAuthClients } from "@/lib/api/oauth-clients";
 import { listPats } from "@/lib/api/pats";
 
-const RESULT: ReindexResult = { scanned: 1685, embedded: 1685, already: 0, disabled: false };
+const RESULT: ReindexResult = {
+  scanned: 1685,
+  embedded: 1685,
+  already: 0,
+  disabled: false,
+  remaining: 0,
+};
 
 describe("DeveloperTab — rebuild the search index", () => {
   // Set here, not in the vi.mock factory: restoreAllMocks() wipes a
@@ -69,6 +75,7 @@ describe("DeveloperTab — rebuild the search index", () => {
       embedded: 0,
       already: 0,
       disabled: true,
+      remaining: 0,
     });
 
     render(<DeveloperTab />);
@@ -131,5 +138,84 @@ describe("DeveloperTab — rebuild the search index", () => {
     expect(reindexEmbeddings).toHaveBeenCalledTimes(1);
 
     release(RESULT);
+  });
+});
+
+describe("DeveloperTab — a bounded pass keeps going until it is done", () => {
+  beforeEach(() => {
+    vi.mocked(listOAuthClients).mockResolvedValue([]);
+    vi.mocked(listPats).mockResolvedValue([]);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("keeps calling while work remains and reports the TOTAL, not the last pass", async () => {
+    // One pass is capped so the request answers before the proxy gives up.
+    // If the button fired once and stopped, the founder would see "100 embedded"
+    // over a corpus of 250 and believe the index was rebuilt.
+    vi.mocked(reindexEmbeddings)
+      .mockResolvedValueOnce({
+        scanned: 100,
+        embedded: 100,
+        already: 0,
+        disabled: false,
+        remaining: 150,
+      })
+      .mockResolvedValueOnce({
+        scanned: 100,
+        embedded: 100,
+        already: 0,
+        disabled: false,
+        remaining: 50,
+      })
+      .mockResolvedValueOnce({
+        scanned: 50,
+        embedded: 50,
+        already: 0,
+        disabled: false,
+        remaining: 0,
+      });
+
+    render(<DeveloperTab />);
+    await userEvent.click(await screen.findByRole("button", { name: /rebuild index/i }));
+
+    expect(await screen.findByText(/250 embedded/i)).toBeInTheDocument();
+    expect(reindexEmbeddings).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up rather than spinning when the server never stops saying 'more'", async () => {
+    // The loop is driven by a number the SERVER supplies. A stuck or buggy
+    // backend that always reports work remaining must not spin the founder's
+    // browser forever — it stops and says what it did.
+    vi.mocked(reindexEmbeddings).mockResolvedValue({
+      scanned: 100,
+      embedded: 100,
+      already: 0,
+      disabled: false,
+      remaining: 999,
+    });
+
+    render(<DeveloperTab />);
+    await userEvent.click(await screen.findByRole("button", { name: /rebuild index/i }));
+
+    expect(await screen.findByText(/still had work left/i)).toBeInTheDocument();
+    expect(vi.mocked(reindexEmbeddings).mock.calls.length).toBeLessThanOrEqual(100);
+  });
+
+  it("stops and reports the error if a later pass fails", async () => {
+    vi.mocked(reindexEmbeddings)
+      .mockResolvedValueOnce({
+        scanned: 100,
+        embedded: 100,
+        already: 0,
+        disabled: false,
+        remaining: 150,
+      })
+      .mockRejectedValueOnce(new Error("gateway timeout"));
+
+    render(<DeveloperTab />);
+    await userEvent.click(await screen.findByRole("button", { name: /rebuild index/i }));
+
+    expect(await screen.findByText(/gateway timeout/i)).toBeInTheDocument();
+    expect(reindexEmbeddings).toHaveBeenCalledTimes(2);
   });
 });

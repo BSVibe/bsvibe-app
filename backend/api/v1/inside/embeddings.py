@@ -32,6 +32,10 @@ from ._schemas import ReindexEmbeddingsResponse
 
 router = APIRouter()
 
+#: See ``backend.mcp.tools.reindex_tools`` — one HTTP pass must answer before
+#: the proxy gives up, or a success is delivered to the caller as a failure.
+_HTTP_PASS_MAX_EMBEDS = 100
+
 
 def build_inside_vault(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
@@ -63,15 +67,25 @@ async def reindex_embeddings(
     backend: Annotated[NoteVectorBackend, Depends(build_inside_vector_backend)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ReindexEmbeddingsResponse:
-    """Backfill the workspace's note vector index. Embeds every knowledge note
-    (garden + concepts) missing a current-model vector; idempotent."""
-    result = await reconcile_embeddings(vault, embedder, backend)
+    """Backfill the workspace's note vector index — one bounded pass.
+
+    Embeds knowledge notes (garden + concepts) whose vector is missing, from a
+    different model, or from different text. ``remaining`` is what this pass did
+    not reach: POST again until it is 0. Idempotent."""
+    result = await reconcile_embeddings(
+        vault,
+        embedder,
+        backend,
+        max_embeds=_HTTP_PASS_MAX_EMBEDS,
+        checkpoint=session.commit,
+    )
     await session.commit()
     return ReindexEmbeddingsResponse(
         scanned=result.scanned,
         embedded=result.embedded,
         already=result.already,
         disabled=result.disabled,
+        remaining=result.remaining,
     )
 
 

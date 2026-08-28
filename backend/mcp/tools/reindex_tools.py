@@ -27,6 +27,12 @@ from pydantic import BaseModel, ConfigDict
 from backend.mcp.api import Tool, ToolContext, ToolRegistry
 from backend.mcp.tools._helpers import vault_root_for, workspace_region
 
+#: Notes embedded per HTTP-shaped pass. Measured on prod 2026-08-28: ~0.43s per
+#: note, and Cloudflare cuts an idle client at ~100s. 100 keeps one pass well
+#: inside that, so the caller always gets a real answer instead of a 524 that
+#: looks like failure over work that succeeded.
+_HTTP_PASS_MAX_EMBEDS = 100
+
 
 class ReindexEmbeddingsInput(BaseModel):
     """No arguments — the workspace is the principal's."""
@@ -43,6 +49,7 @@ class ReindexEmbeddingsOutput(BaseModel):
     embedded: int
     already: int
     disabled: bool
+    remaining: int
 
 
 async def _h_reindex(_args: ReindexEmbeddingsInput, ctx: ToolContext) -> Any:
@@ -60,20 +67,27 @@ async def _h_reindex(_args: ReindexEmbeddingsInput, ctx: ToolContext) -> Any:
     embedder = resolve_knowledge_embedder(get_settings())
     if not embedder.enabled or embedder.model is None:
         # Honest "nothing to report" rather than a fabricated zero-scan success.
-        return ReindexEmbeddingsOutput(scanned=0, embedded=0, already=0, disabled=True)
+        return ReindexEmbeddingsOutput(scanned=0, embedded=0, already=0, disabled=True, remaining=0)
 
     region = await workspace_region(ctx.session, workspace_id)
     vault = Vault(vault_root_for(region=region, workspace_id=workspace_id))
     backend = PgNoteVectorBackend(
         ctx.session, workspace_id=workspace_id, embedding_model=embedder.model
     )
-    result = await reconcile_embeddings(vault, embedder, backend)
+    result = await reconcile_embeddings(
+        vault,
+        embedder,
+        backend,
+        max_embeds=_HTTP_PASS_MAX_EMBEDS,
+        checkpoint=ctx.session.commit,
+    )
     await ctx.session.commit()
     return ReindexEmbeddingsOutput(
         scanned=result.scanned,
         embedded=result.embedded,
         already=result.already,
         disabled=result.disabled,
+        remaining=result.remaining,
     )
 
 
@@ -85,9 +99,11 @@ def register_reindex_tools(registry: ToolRegistry) -> None:
                 "Backfill this workspace's note vector index — embed every knowledge "
                 "note (garden + concepts) whose stored vector is missing, built by a "
                 "different model, or built from different text. Mirrors "
-                "`POST /api/v1/inside/reindex-embeddings`. Idempotent: a second pass "
-                "re-embeds nothing and returns `embedded: 0`. Returns `disabled: true` "
-                "when the deployment configures no embedding model."
+                "`POST /api/v1/inside/reindex-embeddings`. ONE pass is bounded so it "
+                "always answers in time; `remaining` is what it did not reach — CALL "
+                "AGAIN UNTIL `remaining` IS 0. Idempotent: a settled corpus returns "
+                "`embedded: 0`. Returns `disabled: true` when the deployment configures "
+                "no embedding model."
             ),
             input_schema=ReindexEmbeddingsInput,
             output_schema=ReindexEmbeddingsOutput,

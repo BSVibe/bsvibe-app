@@ -902,7 +902,8 @@
         "running": "Rebuilding…",
         "result": "{scanned} scanned · {embedded} embedded · {already} already current.",
         "disabled": "No embedding model is configured for this deployment, so there is nothing to rebuild.",
-        "error": "Rebuild failed: {message}"
+        "error": "Rebuild failed: {message}",
+        "stalled": "Stopped after many passes and the index still had work left — {embedded} rebuilt so far. Something is wrong on the server; try again later."
       }
     }
   },

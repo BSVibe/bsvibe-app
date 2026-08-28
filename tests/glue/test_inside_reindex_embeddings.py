@@ -72,7 +72,13 @@ async def test_reindex_embeddings_backfills_missing_knowledge_notes(tmp_path) ->
             resp = await c.post("/api/v1/inside/reindex-embeddings")
 
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"scanned": 2, "embedded": 2, "already": 0, "disabled": False}
+    assert resp.json() == {
+        "scanned": 2,
+        "embedded": 2,
+        "already": 0,
+        "disabled": False,
+        "remaining": 0,
+    }
     assert set(await store.existing_fingerprints()) == {
         "garden/seedling/a.md",
         "concepts/active/c.md",

@@ -1419,4 +1419,9 @@ export interface ReindexResult {
   embedded: number;
   already: number;
   disabled: boolean;
+  /** The tail this pass did not reach because it hit its per-pass cap. POST
+   *  again until it is 0 — one pass is bounded so the request answers before a
+   *  proxy gives up (a 1,685-note pass measured ~12 min; Cloudflare cut the
+   *  client at 125s and delivered that success as a failure). */
+  remaining: number;
 }
