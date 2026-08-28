@@ -237,7 +237,13 @@ describe("Knowledge surface — local-graph view (Lift 5)", () => {
     await screen.findByRole("heading", { name: "Auth" });
     const callsAfterSelect = detailFn.mock.calls.length;
 
-    fireEvent.click(screen.getByTestId("graph-node-garden/seedling/auth.md"));
+    // findBy, not getBy: the seedling leaf only enters the graph after the
+    // detail fetch above re-renders it with the concept's sources. Awaiting the
+    // heading (line above) proves the fetch resolved, not that the extra render
+    // pass has landed — a slow runner opens that window and the sync query
+    // throws "Unable to find an element". Observed once in CI 2026-08-28 while
+    // passing locally 741/741 and in isolation.
+    fireEvent.click(await screen.findByTestId("graph-node-garden/seedling/auth.md"));
 
     // No new getConceptDetail fetch (a seedling id would 404), panel stays on Auth.
     await waitFor(() => {
