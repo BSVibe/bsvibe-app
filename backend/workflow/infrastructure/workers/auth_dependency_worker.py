@@ -46,6 +46,22 @@ PRODUCER_ID = "worker:auth_dependency"
 #: harder buys nothing — and each probe is a real network call.
 _POLL_INTERVAL_S = 300.0
 
+#: Key sources whose failure is an outage THIS process actually watched happen.
+#:
+#: A reading of ``unconfigured`` means the settings in this process hold no key
+#: material — which says nothing about whether anyone can sign in, only that
+#: this process cannot tell. Paging on it is claiming an observation that was
+#: never made. Shipped on 2026-08-28 without this rule and it fired within
+#: seconds of deploy: the worker container had not been given ``USER_JWT_*``, so
+#: the settings fell back to HS256-with-no-secret and three false "Sign-in is
+#: down" alerts went out, two of them to telegram, while sign-in was fine.
+#:
+#: This rule alone would leave the detector permanently silent in that same
+#: broken deployment, so the compose passthrough is guarded separately
+#: (``tests/deploy/test_auth_probe_env_reaches_the_worker.py``). A detector that
+#: cannot see is worse than none — it looks present.
+_OBSERVABLE_SOURCES: frozenset[str] = frozenset({"jwks_url"})
+
 
 def _today() -> str:
     return datetime.now(tz=UTC).date().isoformat()
@@ -87,6 +103,16 @@ class AuthDependencyWorker(BaseWorker):
         that survived).
         """
         status = await self._probe()
+        if not status.ok and status.source not in _OBSERVABLE_SOURCES:
+            # Nothing observed — stay silent AND leave the down/up state alone,
+            # so this reading cannot manufacture an all-clear later either.
+            logger.info(
+                "auth_dependency_not_observable",
+                source=status.source,
+                detail=status.detail,
+            )
+            return 0
+
         if not status.ok:
             if not self._announced_down:
                 logger.warning("auth_dependency_down", source=status.source, detail=status.detail)
