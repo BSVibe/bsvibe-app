@@ -97,7 +97,7 @@ function makeConnector(over: Partial<Connector> & { connector: string }): Connec
 }
 
 describe("AddConnector — per-connector field branching", () => {
-  it("renders obsidian fields (vault path, exclude patterns, region) and hides the JSON delivery_config", async () => {
+  it("renders obsidian fields (vault path, exclude patterns) and hides the JSON delivery_config", async () => {
     render(
       <AddConnector
         catalog={CATALOG}
@@ -109,7 +109,8 @@ describe("AddConnector — per-connector field branching", () => {
 
     expect(screen.getByLabelText(/Vault path/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Exclude patterns/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Region/i)).toBeInTheDocument();
+    // The `default_region` field is gone — it set a value nothing read.
+    expect(screen.queryByLabelText(/Region/i)).not.toBeInTheDocument();
     // Outbound JSON delivery_config is suppressed for inbound-only.
     expect(screen.queryByLabelText(/Delivery config/i)).not.toBeInTheDocument();
     // No webhook signing-secret either — it's injected as a placeholder
@@ -191,7 +192,6 @@ describe("AddConnector — per-connector field branching", () => {
 
     await userEvent.type(screen.getByLabelText(/Vault path/i), "/Users/me/Vault");
     await userEvent.type(screen.getByLabelText(/Exclude patterns/i), ".obsidian/**\nTemplates/**");
-    await userEvent.type(screen.getByLabelText(/Region/i), "imported");
     await userEvent.click(screen.getByRole("button", { name: /^Add connector$/i }));
 
     await waitFor(() => expect(createConnector).toHaveBeenCalledTimes(1));
@@ -201,7 +201,6 @@ describe("AddConnector — per-connector field branching", () => {
     expect(payload.delivery_config).toEqual({
       vault_path: "/Users/me/Vault",
       exclude_patterns: [".obsidian/**", "Templates/**"],
-      default_region: "imported",
     });
   });
 

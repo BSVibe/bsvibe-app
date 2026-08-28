@@ -163,33 +163,6 @@ class TestImportVault:
         assert any("keep.md" in r for r in rels)
 
     @pytest.mark.asyncio
-    async def test_region_routed_into_seed(self, tmp_path):
-        _write_md(tmp_path, "a.md", "x")
-        knowledge = _Knowledge()
-        await _runner().dispatch_action(
-            P.meta,
-            action_name="import_vault",
-            context=_Ctx(knowledge=knowledge, config={"default_region": "imported"}),
-            kwargs={"vault_path": str(tmp_path), "region": "personal"},
-        )
-        # When both are set, kwarg region overrides default_region.
-        _, data = knowledge.calls[0]
-        assert data["region"] == "personal"
-
-    @pytest.mark.asyncio
-    async def test_region_falls_back_to_config_default(self, tmp_path):
-        _write_md(tmp_path, "a.md", "x")
-        knowledge = _Knowledge()
-        await _runner().dispatch_action(
-            P.meta,
-            action_name="import_vault",
-            context=_Ctx(knowledge=knowledge, config={"default_region": "imported"}),
-            kwargs={"vault_path": str(tmp_path)},
-        )
-        _, data = knowledge.calls[0]
-        assert data["region"] == "imported"
-
-    @pytest.mark.asyncio
     async def test_missing_vault_path_in_args_falls_back_to_config(self, tmp_path):
         _write_md(tmp_path, "a.md", "x")
         knowledge = _Knowledge()
@@ -245,7 +218,6 @@ class TestImportVault:
         assert rec["notes_count"] == 1
         assert rec["scanned_count"] == 1
         assert rec["skipped_count"] == 0
-        assert rec["region"] == "imported"
 
 
 # ── setup ──────────────────────────────────────────────────────────────────
@@ -262,7 +234,6 @@ class TestSetup:
         args = store.store.await_args.args
         assert args[0] == "obsidian"
         assert args[1]["vault_path"] == str(tmp_path)
-        assert args[1]["default_region"] == "imported"
 
     @pytest.mark.asyncio
     async def test_setup_requires_vault_path_env(self, monkeypatch):

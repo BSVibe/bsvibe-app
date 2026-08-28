@@ -123,15 +123,6 @@ def test_no_source_still_names_a_per_workspace_region() -> None:
         "backend/storage/product_bundle_store.py": {"k_region", "_SIGV4_REGION"},
         # Art.30 기록 — 처리가 **실제로** 일어나는 리전(배포 상수)을 보고한다.
         "backend/api/v1/workspace_compliance.py": {"region"},
-        # 커넥터 임포트 메타데이터의 동명이축. 파운더가 PWA 커넥터 설정에서
-        # 실제로 채울 수 있는 필드(``default_region``)이고 기본값은 ``"imported"`` —
-        # vault 리전이 아니라 임포트 통계에 붙는 라벨이다. 아무것도 라우팅하지
-        # 않으므로 이 축과 같은 운명이 맞지만, 사용자 표면을 지우는 것은
-        # 리팩터가 아니라 제품 결정이라 별도로 다룬다.
-        "plugin/claude/plugin.py": {"region", "resolved_region"},
-        "plugin/gpt/plugin.py": {"region", "resolved_region"},
-        "plugin/notion/plugin.py": {"region", "resolved_region"},
-        "plugin/obsidian/plugin.py": {"region", "resolved_region"},
     }
 
     survivors = {

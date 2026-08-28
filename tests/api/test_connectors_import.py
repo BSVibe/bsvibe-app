@@ -134,7 +134,7 @@ async def _create(client: httpx.AsyncClient, connector: str, **extra: Any) -> di
     [
         (
             "obsidian",
-            {"notes_count": 7, "scanned_count": 9, "skipped_count": 2, "region": "imported"},
+            {"notes_count": 7, "scanned_count": 9, "skipped_count": 2},
             7,
         ),
         (
@@ -143,7 +143,6 @@ async def _create(client: httpx.AsyncClient, connector: str, **extra: Any) -> di
                 "conversations_count": 3,
                 "messages_count": 24,
                 "skipped": 0,
-                "region": "imported-claude",
             },
             3,
         ),
@@ -153,13 +152,12 @@ async def _create(client: httpx.AsyncClient, connector: str, **extra: Any) -> di
                 "conversations_count": 5,
                 "messages_count": 41,
                 "skipped": 1,
-                "region": "imported-gpt",
             },
             5,
         ),
         (
             "notion",
-            {"pages_count": 11, "blocks_count": 88, "skipped": 0, "region": "imported-notion"},
+            {"pages_count": 11, "blocks_count": 88, "skipped": 0},
             11,
         ),
     ],

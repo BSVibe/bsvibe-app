@@ -76,7 +76,6 @@ class TestPluginMeta:
         props = cap.input_schema["properties"]
         assert "export_path" in props
         assert "since" in props
-        assert "region" in props
         assert "gpt_binding_id" in props
 
     def test_no_outbound_or_compensate(self):
@@ -167,48 +166,6 @@ class TestImportConversations:
         assert result["conversations_count"] == 1
         _, data = knowledge.calls[0]
         assert "conv-def-456" in data["source_ref"]
-
-    @pytest.mark.asyncio
-    async def test_default_region_when_unset(self, tmp_path):
-        json_path = _write_fixture_to(tmp_path)
-        knowledge = _Knowledge()
-        ctx = _Ctx(knowledge=knowledge)
-        await _runner().dispatch_action(
-            P.meta,
-            action_name="import_conversations",
-            context=ctx,
-            kwargs={"export_path": str(json_path)},
-        )
-        _, data = knowledge.calls[0]
-        assert data["region"] == "imported-gpt"
-
-    @pytest.mark.asyncio
-    async def test_default_region_from_binding_config(self, tmp_path):
-        json_path = _write_fixture_to(tmp_path)
-        knowledge = _Knowledge()
-        ctx = _Ctx(knowledge=knowledge, config={"default_region": "research"})
-        await _runner().dispatch_action(
-            P.meta,
-            action_name="import_conversations",
-            context=ctx,
-            kwargs={"export_path": str(json_path)},
-        )
-        _, data = knowledge.calls[0]
-        assert data["region"] == "research"
-
-    @pytest.mark.asyncio
-    async def test_region_kwarg_overrides_binding_default(self, tmp_path):
-        json_path = _write_fixture_to(tmp_path)
-        knowledge = _Knowledge()
-        ctx = _Ctx(knowledge=knowledge, config={"default_region": "research"})
-        await _runner().dispatch_action(
-            P.meta,
-            action_name="import_conversations",
-            context=ctx,
-            kwargs={"export_path": str(json_path), "region": "personal"},
-        )
-        _, data = knowledge.calls[0]
-        assert data["region"] == "personal"
 
     @pytest.mark.asyncio
     async def test_export_path_falls_back_to_binding_config(self, tmp_path):
@@ -337,7 +294,6 @@ class TestImportConversations:
         assert rec["conversations_count"] == 2
         assert rec["messages_count"] == 5
         assert rec["skipped"] == 1
-        assert rec["region"] == "imported-gpt"
         assert rec["binding_id"] == "binding-x"
 
     @pytest.mark.asyncio
@@ -371,7 +327,6 @@ class TestSetup:
         args = store.store.await_args.args
         assert args[0] == "gpt"
         assert args[1]["export_path"] == str(tmp_path)
-        assert args[1]["default_region"] == "imported-gpt"
 
     @pytest.mark.asyncio
     async def test_setup_optional_since(self, monkeypatch, tmp_path):
