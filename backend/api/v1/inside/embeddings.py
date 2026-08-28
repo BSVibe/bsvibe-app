@@ -86,6 +86,7 @@ async def reindex_embeddings(
         already=result.already,
         disabled=result.disabled,
         remaining=result.remaining,
+        removed=result.removed,
     )
 
 

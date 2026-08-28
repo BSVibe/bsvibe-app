@@ -78,6 +78,7 @@ async def test_reindex_embeddings_backfills_missing_knowledge_notes(tmp_path) ->
         "already": 0,
         "disabled": False,
         "remaining": 0,
+        "removed": 0,
     }
     assert set(await store.existing_fingerprints()) == {
         "garden/seedling/a.md",

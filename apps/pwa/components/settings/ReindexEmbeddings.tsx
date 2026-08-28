@@ -59,6 +59,7 @@ export default function ReindexEmbeddings() {
         already: 0,
         disabled: false,
         remaining: 0,
+        removed: 0,
       };
       let passes = 0;
       for (;;) {
@@ -74,6 +75,7 @@ export default function ReindexEmbeddings() {
           already: total.already + pass.already,
           disabled: false,
           remaining: pass.remaining,
+          removed: total.removed + pass.removed,
         };
         if (pass.remaining === 0) break;
         if (passes >= MAX_PASSES) {
@@ -117,6 +119,7 @@ export default function ReindexEmbeddings() {
             scanned: state.result.scanned,
             embedded: state.result.embedded,
             already: state.result.already,
+            removed: state.result.removed,
           })}
         </p>
       )}

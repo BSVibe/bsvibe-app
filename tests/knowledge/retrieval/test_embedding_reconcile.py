@@ -288,3 +288,83 @@ async def test_settled_corpus_reports_zero_remaining(tmp_path) -> None:
     assert second.embedded == 0
     assert second.already == 1
     assert second.remaining == 0
+
+
+# ---------------------------------------------------------------------------
+# Sweeping vectors whose note no longer exists
+# ---------------------------------------------------------------------------
+# ``NoteVectorBackend.remove`` had ZERO production callers — the seam existed
+# and nothing was wired to it, so a vector outlived its note forever. Measured
+# on prod 2026-08-28: 14 rows under ``concepts/active/`` whose files are gone
+# (concepts that were removed), against 1,685 live notes. Small today, monotonic
+# by construction: every deleted note leaves one behind permanently, and a
+# search can hand a caller a path it cannot read.
+#
+# The safety constraint is the interesting half. A pass that hit ``max_embeds``
+# stopped WALKING, so "in the index but not seen this pass" does not mean "the
+# note is gone" — it mostly means "not reached yet". Sweeping on a capped pass
+# would delete the entire tail of the index. The sweep is therefore only legal
+# on a pass that examined the whole vault.
+
+
+async def test_a_complete_pass_removes_the_vector_of_a_deleted_note(tmp_path) -> None:
+    vault = Vault(tmp_path)
+    _write(vault, "garden/seedling/live.md", "L", "Still here.")
+    store = InMemoryNoteVectorBackend()
+    await store.store("concepts/active/gone.md", [1.0, 0.0, 0.0], content_hash="stale")
+
+    result = await reconcile_embeddings(vault, _FakeEmbedder(), store)
+
+    assert "concepts/active/gone.md" not in await store.existing_fingerprints()
+    assert result.removed == 1
+
+
+async def test_a_complete_pass_keeps_the_vectors_of_notes_that_exist(tmp_path) -> None:
+    """Positive control — the sweep must not touch live notes."""
+    vault = Vault(tmp_path)
+    _write(vault, "garden/seedling/a.md", "A", "Alpha.")
+    _write(vault, "concepts/active/c.md", "C", "Gamma.")
+    store = InMemoryNoteVectorBackend()
+    embedder = _FakeEmbedder()
+
+    await reconcile_embeddings(vault, embedder, store)
+    result = await reconcile_embeddings(vault, embedder, store)
+
+    assert set(await store.existing_fingerprints()) == {
+        "garden/seedling/a.md",
+        "concepts/active/c.md",
+    }
+    assert result.removed == 0
+
+
+async def test_a_capped_pass_never_removes_anything(tmp_path) -> None:
+    """The load-bearing one: a bounded pass has NOT proven a note is gone.
+
+    It stopped walking at ``max_embeds``, so everything past that point looks
+    "not seen" — sweeping there would delete the tail of a healthy index. This
+    is the exact interaction between the per-pass cap and the sweep, and it is
+    the difference between a cleanup and data loss.
+    """
+    vault = Vault(tmp_path)
+    for i in range(5):
+        _write(vault, f"garden/seedling/n{i}.md", f"N{i}", f"Body {i}.")
+    store = InMemoryNoteVectorBackend()
+    await store.store("concepts/active/gone.md", [1.0, 0.0, 0.0], content_hash="stale")
+
+    result = await reconcile_embeddings(vault, _FakeEmbedder(), store, max_embeds=2)
+
+    assert result.remaining > 0, "test no longer exercises a capped pass"
+    assert result.removed == 0
+    assert "concepts/active/gone.md" in await store.existing_fingerprints()
+
+
+async def test_a_disabled_embedder_removes_nothing(tmp_path) -> None:
+    """No embedder means no pass at all — it examined nothing to judge."""
+    vault = Vault(tmp_path)
+    store = InMemoryNoteVectorBackend()
+    await store.store("concepts/active/gone.md", [1.0, 0.0, 0.0], content_hash="stale")
+
+    result = await reconcile_embeddings(vault, _FakeEmbedder(enabled=False), store)
+
+    assert result.removed == 0
+    assert "concepts/active/gone.md" in await store.existing_fingerprints()

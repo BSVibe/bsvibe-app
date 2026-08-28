@@ -64,6 +64,7 @@ class ReconcileResult:
     already: int
     disabled: bool = False
     remaining: int = 0
+    removed: int = 0
 
 
 async def reconcile_embeddings(
@@ -128,11 +129,31 @@ async def reconcile_embeddings(
             elif note_path in existing:
                 already += 1
 
+    # Sweep vectors whose note is gone — ONLY when this pass walked the whole
+    # vault. A capped pass stopped WALKING, so "in the index but not seen" there
+    # means "not reached yet", not "deleted": sweeping on it would delete the
+    # tail of a healthy index. Nothing was wired to ``remove`` before this, so a
+    # vector outlived its note forever (prod 2026-08-28: 14 rows under
+    # ``concepts/active/`` with no file, monotonic by construction).
+    removed = 0
+    if remaining == 0:
+        for note_path in existing:
+            if note_path not in seen:
+                await vector_store.remove(note_path)
+                removed += 1
+
     logger.info(
         "embedding_reconcile_complete",
         scanned=scanned,
         embedded=embedded,
         already=already,
         remaining=remaining,
+        removed=removed,
     )
-    return ReconcileResult(scanned=scanned, embedded=embedded, already=already, remaining=remaining)
+    return ReconcileResult(
+        scanned=scanned,
+        embedded=embedded,
+        already=already,
+        remaining=remaining,
+        removed=removed,
+    )

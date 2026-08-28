@@ -46,6 +46,7 @@ const RESULT: ReindexResult = {
   already: 0,
   disabled: false,
   remaining: 0,
+  removed: 0,
 };
 
 describe("DeveloperTab — rebuild the search index", () => {
@@ -76,6 +77,7 @@ describe("DeveloperTab — rebuild the search index", () => {
       already: 0,
       disabled: true,
       remaining: 0,
+      removed: 0,
     });
 
     render(<DeveloperTab />);
@@ -159,6 +161,7 @@ describe("DeveloperTab — a bounded pass keeps going until it is done", () => {
         already: 0,
         disabled: false,
         remaining: 150,
+        removed: 0,
       })
       .mockResolvedValueOnce({
         scanned: 100,
@@ -166,6 +169,7 @@ describe("DeveloperTab — a bounded pass keeps going until it is done", () => {
         already: 0,
         disabled: false,
         remaining: 50,
+        removed: 0,
       })
       .mockResolvedValueOnce({
         scanned: 50,
@@ -173,6 +177,7 @@ describe("DeveloperTab — a bounded pass keeps going until it is done", () => {
         already: 0,
         disabled: false,
         remaining: 0,
+        removed: 0,
       });
 
     render(<DeveloperTab />);
@@ -192,6 +197,7 @@ describe("DeveloperTab — a bounded pass keeps going until it is done", () => {
       already: 0,
       disabled: false,
       remaining: 999,
+      removed: 0,
     });
 
     render(<DeveloperTab />);
@@ -209,6 +215,7 @@ describe("DeveloperTab — a bounded pass keeps going until it is done", () => {
         already: 0,
         disabled: false,
         remaining: 150,
+        removed: 0,
       })
       .mockRejectedValueOnce(new Error("gateway timeout"));
 

@@ -901,7 +901,7 @@
         "lede": "The search index updates itself as knowledge is created. Rebuild it if search results look stale or incomplete — the pass is idempotent, so running it twice costs nothing.",
         "button": "Rebuild index",
         "running": "Rebuilding…",
-        "result": "{scanned} scanned · {embedded} embedded · {already} already current.",
+        "result": "{scanned} scanned · {embedded} embedded · {already} already current · {removed} stale removed.",
         "disabled": "No embedding model is configured for this deployment, so there is nothing to rebuild.",
         "error": "Rebuild failed: {message}",
         "stalled": "Stopped after many passes and the index still had work left — {embedded} rebuilt so far. Something is wrong on the server; try again later."

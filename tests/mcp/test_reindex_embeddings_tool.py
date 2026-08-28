@@ -149,7 +149,14 @@ async def test_reindex_tool_backfills_the_workspaces_knowledge_notes(
         )
         out = await registry.call_tool(TOOL, {}, ctx)
 
-    assert out == {"scanned": 2, "embedded": 2, "already": 0, "disabled": False, "remaining": 0}
+    assert out == {
+        "scanned": 2,
+        "embedded": 2,
+        "already": 0,
+        "disabled": False,
+        "remaining": 0,
+        "removed": 0,
+    }
     assert len(stub_embedder.calls) == 2
 
 
@@ -195,7 +202,14 @@ async def test_reindex_tool_is_idempotent(
         second = await registry.call_tool(TOOL, {}, ctx)
 
     assert first["embedded"] == 1
-    assert second == {"scanned": 1, "embedded": 0, "already": 1, "disabled": False, "remaining": 0}
+    assert second == {
+        "scanned": 1,
+        "embedded": 0,
+        "already": 1,
+        "disabled": False,
+        "remaining": 0,
+        "removed": 0,
+    }
 
 
 async def test_reindex_tool_requires_write_scope(
@@ -236,7 +250,14 @@ async def test_reindex_tool_reports_disabled_when_no_embedding_model(
         )
         out = await registry.call_tool(TOOL, {}, ctx)
 
-    assert out == {"scanned": 0, "embedded": 0, "already": 0, "disabled": True, "remaining": 0}
+    assert out == {
+        "scanned": 0,
+        "embedded": 0,
+        "already": 0,
+        "disabled": True,
+        "remaining": 0,
+        "removed": 0,
+    }
 
 
 async def test_reindex_tool_bounds_one_pass_and_reports_the_rest(
