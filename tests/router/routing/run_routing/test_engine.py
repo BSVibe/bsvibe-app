@@ -305,7 +305,7 @@ def test_content_signals_do_not_change_existing_rule_matching() -> None:
 async def test_resolve_no_rules_no_default_returns_none() -> None:
     ws_id = uuid.uuid4()
     async with memory_session() as s:
-        s.add(WorkspaceRow(id=ws_id, name="w", region="us-1", safe_mode=True, legal_basis="x"))
+        s.add(WorkspaceRow(id=ws_id, name="w", safe_mode=True, legal_basis="x"))
         acct = _account(ws_id, "ollama/qwen", provider="ollama")
         s.add(acct)
         run = _run(ws_id)
@@ -326,7 +326,6 @@ async def test_resolve_workspace_default_used_when_no_rules() -> None:
             WorkspaceRow(
                 id=ws_id,
                 name="w",
-                region="us-1",
                 safe_mode=True,
                 legal_basis="x",
                 default_account_id=acct.id,
@@ -351,7 +350,6 @@ async def test_resolve_rule_match_beats_workspace_default() -> None:
             WorkspaceRow(
                 id=ws_id,
                 name="w",
-                region="us-1",
                 safe_mode=True,
                 legal_basis="x",
                 default_account_id=native.id,
@@ -378,7 +376,7 @@ async def test_resolve_rule_match_beats_workspace_default() -> None:
 async def test_resolve_rule_target_inactive_falls_through() -> None:
     ws_id = uuid.uuid4()
     async with memory_session() as s:
-        s.add(WorkspaceRow(id=ws_id, name="w", region="us-1", safe_mode=True, legal_basis="x"))
+        s.add(WorkspaceRow(id=ws_id, name="w", safe_mode=True, legal_basis="x"))
         s.add(_account(ws_id, "ollama/qwen", provider="ollama"))
         s.add(
             _rule(

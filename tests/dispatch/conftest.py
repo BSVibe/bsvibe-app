@@ -63,7 +63,6 @@ async def workspace(session: AsyncSession) -> WorkspaceRow:
     row = WorkspaceRow(
         id=uuid.uuid4(),
         name="test-workspace",
-        region="us-1",
         safe_mode=True,
         legal_basis="contract",
     )

@@ -210,7 +210,7 @@ async def test_github_list_issues_still_in_agent_tool_schema(tmp_path: Path) -> 
     provider = _FakeProvider([tool])
     llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
     async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=ws, name="ws", safe_mode=False))
         await session.flush()
         run = await _make_run(session, workspace_id=ws)
         orch = RunOrchestrator(
@@ -256,7 +256,7 @@ async def test_sentry_list_issues_still_in_agent_tool_schema(tmp_path: Path) -> 
     provider = _FakeProvider([tool])
     llm = ScriptedLlm([LoopTurn(content="done", tool_calls=())])
     async with memory_session() as session:
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=False))
+        session.add(WorkspaceRow(id=ws, name="ws", safe_mode=False))
         await session.flush()
         run = await _make_run(session, workspace_id=ws)
         orch = RunOrchestrator(
@@ -364,7 +364,7 @@ async def test_safe_mode_workspace_dispatches_connector_action_directly(
     async with memory_session() as session:
         # safe_mode=True — pre-0c this was the gating condition. Post-0c
         # the gate is gone; the call must dispatch directly.
-        session.add(WorkspaceRow(id=ws, name="ws", region="us-1", safe_mode=True))
+        session.add(WorkspaceRow(id=ws, name="ws", safe_mode=True))
         await session.flush()
         run = await _make_run(session, workspace_id=ws)
         orch = RunOrchestrator(

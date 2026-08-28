@@ -61,6 +61,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.config import get_settings
 from backend.knowledge.factory import KnowledgeFactory
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
@@ -184,7 +185,6 @@ def _production_retriever(vault_root: Path, workspace_id: uuid.UUID):
     into. No PG / no Ollama needed for the decision-resolution seam.
     """
     return KnowledgeFactory(
-        region=_REGION,
         workspace_id=str(workspace_id),
         vault_root=vault_root,
     ).retriever()
@@ -235,14 +235,20 @@ async def test_resolved_decision_ratchets_across_runs_e2e(
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=vault_root),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1, "settle activity did not drain"
 
     # PROVE the producer ran: the decision-resolution garden note is physically
     # on disk. If this fails, the producer never fired and any "Run B retrieved
     # nothing" below would be a false negative (absence-measurement trap).
-    seedling = vault_root / _REGION / str(workspace_id) / "garden" / "seedling"
+    seedling = (
+        vault_root
+        / get_settings().knowledge_default_region
+        / str(workspace_id)
+        / "garden"
+        / "seedling"
+    )
     notes = list(seedling.rglob("*.md"))
     bodies = "\n".join(p.read_text(encoding="utf-8") for p in notes)
     assert notes, f"producer never wrote a garden note; vault: {vault_root}"

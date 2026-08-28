@@ -17,13 +17,12 @@ from tests._support import memory_session
 async def test_add_get_roundtrip() -> None:
     async with memory_session() as session:
         repo = SqlAlchemyWorkspaceRepository(session)
-        ws = WorkspaceRow(id=uuid.uuid4(), name="alpha", region="us-1", safe_mode=True)
+        ws = WorkspaceRow(id=uuid.uuid4(), name="alpha", safe_mode=True)
         await repo.add(ws)
         await session.flush()
         loaded = await repo.get(ws.id)
         assert loaded is not None
         assert loaded.name == "alpha"
-        assert loaded.region == "us-1"
         assert loaded.safe_mode is True
 
 
@@ -102,25 +101,25 @@ async def test_list_for_user_returns_only_active_membership_live_workspaces() ->
 
 
 @pytest.mark.asyncio
-async def test_list_active_regions_excludes_soft_deleted() -> None:
+async def test_list_active_policies_excludes_soft_deleted() -> None:
     async with memory_session() as session:
         repo = SqlAlchemyWorkspaceRepository(session)
-        a = WorkspaceRow(id=uuid.uuid4(), name="a", region="us-1", safe_mode=True)
-        b = WorkspaceRow(id=uuid.uuid4(), name="b", region="eu-1", safe_mode=False)
-        gone = WorkspaceRow(
-            id=uuid.uuid4(), name="gone", region="us-1", deleted_at=datetime.now(UTC)
-        )
+        a = WorkspaceRow(id=uuid.uuid4(), name="a", safe_mode=True)
+        b = WorkspaceRow(id=uuid.uuid4(), name="b", safe_mode=False)
+        gone = WorkspaceRow(id=uuid.uuid4(), name="gone", deleted_at=datetime.now(UTC))
         for ws in (a, b, gone):
             await repo.add(ws)
         await session.flush()
 
-        triples = await repo.list_active_regions()
-        ids = {wid for wid, _, _ in triples}
+        pairs = await repo.list_active_policies()
+        ids = {wid for wid, _ in pairs}
         assert a.id in ids
         assert b.id in ids
         assert gone.id not in ids
-        a_triple = next(t for t in triples if t[0] == a.id)
-        assert a_triple == (a.id, "us-1", True)
+        # The pair carries the workspace policy and nothing else — it used to
+        # carry a region in the middle, an axis that named a vault directory.
+        assert next(p for p in pairs if p[0] == a.id) == (a.id, True)
+        assert next(p for p in pairs if p[0] == b.id) == (b.id, False)
 
 
 @pytest.mark.asyncio

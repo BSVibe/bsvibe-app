@@ -130,7 +130,7 @@ async def _seed_settle(sf, *, workspace_id: uuid.UUID, summary: str) -> None:
 
 
 def _seed_prior_decision(vault_root: Path, workspace_id: uuid.UUID, *, question: str, answer: str):
-    root = vault_root / _REGION / str(workspace_id)
+    root = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     root.mkdir(parents=True, exist_ok=True)
     writer = GardenWriter(vault=Vault(root))
     summary = f"Decision resolved — Q: {question} A: {answer}"
@@ -152,7 +152,6 @@ def _production_retriever(session, *, settings, workspace_id: uuid.UUID):
     from backend.knowledge.factory import KnowledgeFactory
 
     base = KnowledgeFactory(
-        region=settings.knowledge_default_region,
         workspace_id=str(workspace_id),
         vault_root=Path(settings.knowledge_vault_root),
     ).retriever()
@@ -211,7 +210,7 @@ async def test_accumulated_knowledge_is_used_by_verify_e2e(tmp_path: Path) -> No
         worker = SettleWorker(
             session_factory=sf,
             sink=KnowledgeSettleSink(vault_root=vault_root),
-            config=SettleWorkerConfig(default_region=_REGION),
+            config=SettleWorkerConfig(),
             promoter_factory=build_garden_promoter_factory(vault_root=vault_root),
             embed_hook=build_note_embed_hook(session_factory=sf, settings=settings),
         )

@@ -27,7 +27,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.config import get_settings
 from backend.identity.infrastructure.repositories import SqlAlchemyWorkspaceRepository
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.infrastructure.repositories import SqlAlchemyModelAccountRepository
@@ -35,18 +34,6 @@ from backend.router.infrastructure.repositories import SqlAlchemyModelAccountRep
 # ---------------------------------------------------------------------------
 # bsvibe_workspace_get
 # ---------------------------------------------------------------------------
-
-
-def _effective_region() -> str:
-    """The region actually in effect — a DEPLOYMENT constant.
-
-    Echoing the workspace's stored column here would surface a value that no
-    longer steers
-    anything: every surface resolves the vault through
-    ``backend.knowledge.graph.vault_paths``. Echoing the stale value would tell
-    the caller their notes live somewhere they do not.
-    """
-    return get_settings().knowledge_default_region
 
 
 class WorkspaceGetInput(BaseModel):
@@ -67,7 +54,6 @@ class WorkspaceGetOutput(BaseModel):
 
     id: str
     name: str
-    region: str
     safe_mode: bool
     audit_retention_days: int | None = None
     # Lift E1 — workspace-default ModelAccount for the new
@@ -92,7 +78,6 @@ async def _h_get(_args: WorkspaceGetInput, ctx: ToolContext) -> Any:
     return WorkspaceGetOutput(
         id=str(row.id),
         name=row.name,
-        region=_effective_region(),
         safe_mode=row.safe_mode,
         audit_retention_days=row.audit_retention_days,
         language=row.language,
@@ -131,7 +116,6 @@ async def _h_rename(args: WorkspaceRenameInput, ctx: ToolContext) -> Any:
     return WorkspaceGetOutput(
         id=str(row.id),
         name=row.name,
-        region=_effective_region(),
         safe_mode=row.safe_mode,
         audit_retention_days=row.audit_retention_days,
         language=row.language,
@@ -182,7 +166,6 @@ async def _h_set_default_account(args: WorkspaceSetDefaultAccountInput, ctx: Too
     return WorkspaceGetOutput(
         id=str(row.id),
         name=row.name,
-        region=_effective_region(),
         safe_mode=row.safe_mode,
         audit_retention_days=row.audit_retention_days,
         language=row.language,

@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import backend.workflow.application.verification_service as verification_service
+from backend.config import get_settings
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.application.sandbox_provisioning import _UV_SYNC
@@ -463,8 +464,8 @@ async def test_real_factory_retriever_folds_canon_into_contract(tmp_path: Any) -
     from backend.knowledge.graph.storage import FileSystemStorage
 
     vault_root = tmp_path / "vault"
-    region, ws = "us-1", str(_uuid.uuid4())
-    store = NoteStore(FileSystemStorage(vault_root / region / ws))
+    ws = str(_uuid.uuid4())
+    store = NoteStore(FileSystemStorage(vault_root / get_settings().knowledge_default_region / ws))
     await store.write_concept(
         _models.ConceptEntry(
             concept_id="dependency-pinning",
@@ -475,7 +476,7 @@ async def test_real_factory_retriever_folds_canon_into_contract(tmp_path: Any) -
             updated_at=_dt(2026, 5, 6),
         )
     )
-    retriever = KnowledgeFactory(region=region, workspace_id=ws, vault_root=vault_root).retriever()
+    retriever = KnowledgeFactory(workspace_id=ws, vault_root=vault_root).retriever()
 
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=StubLlm([]), retriever=retriever)
@@ -502,7 +503,7 @@ async def test_real_factory_retriever_empty_workspace_leaves_contract_unchanged(
     from backend.knowledge import KnowledgeFactory
 
     retriever = KnowledgeFactory(
-        region="us-1", workspace_id=str(_uuid.uuid4()), vault_root=tmp_path / "vault"
+        workspace_id=str(_uuid.uuid4()), vault_root=tmp_path / "vault"
     ).retriever()
 
     async with memory_session() as session:

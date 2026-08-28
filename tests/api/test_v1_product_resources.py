@@ -56,7 +56,7 @@ async def client_with_product(db):
     app.dependency_overrides[get_db_session] = _session
 
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="test", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="test", safe_mode=True))
         await s.flush()  # workspace must INSERT before the product (PG FK; SQLite ignores)
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="Blog", slug="blog"))
         await s.commit()
@@ -185,8 +185,8 @@ async def test_resource_workspace_isolation(db) -> None:
     app.dependency_overrides[get_current_user] = fake_current_user()
 
     async with db() as s:
-        s.add(WorkspaceRow(id=ws_a, name="a", region="us-1", safe_mode=True))
-        s.add(WorkspaceRow(id=ws_b, name="b", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=ws_a, name="a", safe_mode=True))
+        s.add(WorkspaceRow(id=ws_b, name="b", safe_mode=True))
         await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=ws_a, name="A blog", slug="a-blog"))
         await s.flush()

@@ -151,7 +151,7 @@ async def test_full_knowledge_accumulation_from_empty_e2e(tmp_path: Path) -> Non
         worker = SettleWorker(
             session_factory=sf,
             sink=KnowledgeSettleSink(vault_root=vault_root),
-            config=SettleWorkerConfig(default_region=_REGION),
+            config=SettleWorkerConfig(),
             promoter_factory=build_garden_promoter_factory(vault_root=vault_root),
             embed_hook=build_note_embed_hook(session_factory=sf, settings=settings),
         )
@@ -206,5 +206,5 @@ async def test_full_knowledge_accumulation_from_empty_e2e(tmp_path: Path) -> Non
 
 
 def _md_notes(vault_root: Path, workspace_id: uuid.UUID) -> list[Path]:
-    ws_dir = vault_root / _REGION / str(workspace_id)
+    ws_dir = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     return list(ws_dir.rglob("*.md")) if ws_dir.exists() else []

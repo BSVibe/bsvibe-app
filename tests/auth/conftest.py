@@ -176,7 +176,7 @@ async def seed_user_workspace(
 ) -> tuple[UserRow, WorkspaceRow, MembershipRow]:
     """Insert a User + Workspace + Membership directly (bypassing the route)."""
     user = UserRow(id=uuid.uuid4(), supabase_user_id=supabase_user_id, email="x@example.com")
-    ws = WorkspaceRow(id=uuid.uuid4(), name="ws", region="us-1", safe_mode=True)
+    ws = WorkspaceRow(id=uuid.uuid4(), name="ws", safe_mode=True)
     session.add(user)
     session.add(ws)
     await session.flush()

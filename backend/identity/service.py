@@ -101,7 +101,6 @@ async def ensure_user_bootstrapped(
     *,
     supabase_user_id: str,
     email: str | None,
-    region: str = "us-1",
 ) -> tuple[UserRow, MembershipRow]:
     """Upsert the user and guarantee they own at least one workspace (§10.1).
 
@@ -131,7 +130,6 @@ async def ensure_user_bootstrapped(
         workspace = WorkspaceRow(
             id=uuid.uuid4(),
             name=_default_workspace_name(email),
-            region=region,
             safe_mode=True,
         )
         await workspaces.add(workspace)

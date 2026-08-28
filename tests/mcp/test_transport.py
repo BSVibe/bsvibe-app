@@ -179,7 +179,7 @@ async def test_streamable_app_delegates_to_manager_when_token_valid(db, monkeypa
     user_id = uuid.uuid4()
     workspace_id = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.flush()
         now = datetime.now(UTC)

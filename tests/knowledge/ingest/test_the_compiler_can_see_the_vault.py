@@ -114,7 +114,6 @@ def test_no_embedding_model_stays_silent_rather_than_guessing(tmp_path: Path) ->
         build_ingest_retriever(
             settings=_settings(None, tmp_path),  # type: ignore[arg-type]
             session_factory=object(),  # type: ignore[arg-type]
-            region="kr",
             workspace_id=uuid.uuid4(),
         )
         is None
@@ -128,7 +127,6 @@ def test_no_session_factory_stays_silent(tmp_path: Path) -> None:
         build_ingest_retriever(
             settings=_settings("text-embedding-3-small", tmp_path),  # type: ignore[arg-type]
             session_factory=None,
-            region="kr",
             workspace_id=uuid.uuid4(),
         )
         is None

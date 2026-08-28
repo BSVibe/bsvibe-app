@@ -68,7 +68,7 @@ async def registry() -> ToolRegistry:
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
     yield
 
@@ -187,7 +187,7 @@ async def test_delete_requires_write_scope(db, workspace_id, user_id, registry, 
 async def test_list_scoped_to_workspace(db, workspace_id, user_id, registry, seeded) -> None:
     other_ws = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=other_ws, name="other", region="us-1"))
+        s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.commit()
     # Create one in mine, one in other.
     async with db() as s:

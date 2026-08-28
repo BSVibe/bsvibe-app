@@ -56,7 +56,6 @@ async def client_with_ws(db):
             WorkspaceRow(
                 id=workspace_id,
                 name="Acme",
-                region="us-1",
                 safe_mode=True,
                 legal_basis="contract",
             )

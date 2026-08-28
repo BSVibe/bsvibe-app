@@ -82,7 +82,7 @@ async def db():
 
 async def _seed_member(db, workspace_id: uuid.UUID, sub: str, role: str = "owner") -> None:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         user_id = uuid.uuid4()
         s.add(UserRow(id=user_id, supabase_user_id=sub, email="m@example.com"))
         await s.flush()

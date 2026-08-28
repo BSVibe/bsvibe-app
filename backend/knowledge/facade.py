@@ -20,7 +20,6 @@ from typing import Any, Protocol, runtime_checkable
 @dataclass(frozen=True)
 class IngestRequest:
     workspace_id: uuid.UUID
-    region: str
     artifacts: list[dict[str, Any]]
 
 
@@ -43,7 +42,6 @@ class IngestResult:
 @dataclass(frozen=True)
 class CanonRetrievalQuery:
     workspace_id: uuid.UUID
-    region: str
     seed_text: str
     k: int = 8
 
@@ -59,4 +57,4 @@ class Knowledge(Protocol):
 
     async def retrieve_canon(self, query: CanonRetrievalQuery) -> CanonRetrievalResult: ...
 
-    async def settle(self, *, workspace_id: uuid.UUID, region: str) -> int: ...
+    async def settle(self, *, workspace_id: uuid.UUID) -> int: ...

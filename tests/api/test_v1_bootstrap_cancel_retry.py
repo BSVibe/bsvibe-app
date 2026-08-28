@@ -47,7 +47,7 @@ async def client_with_ws(db):
     app.dependency_overrides[get_db_session] = _session
 
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="test", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="test", safe_mode=True))
         user = UserRow(id=uuid.uuid4(), supabase_user_id="test-user", email="t@example.com")
         s.add(user)
         await s.flush()

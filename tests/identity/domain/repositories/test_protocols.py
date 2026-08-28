@@ -18,7 +18,7 @@ def test_workspace_repository_protocol_surface() -> None:
     from backend.identity.domain.repositories import WorkspaceRepository
 
     assert issubclass(WorkspaceRepository, Protocol)  # type: ignore[arg-type]
-    for name in ("get", "get_live", "list_for_user", "list_active_regions", "add"):
+    for name in ("get", "get_live", "list_for_user", "list_active_policies", "add"):
         method = getattr(WorkspaceRepository, name, None)
         assert method is not None, f"WorkspaceRepository missing {name}"
         assert inspect.iscoroutinefunction(method), f"{name} must be async"

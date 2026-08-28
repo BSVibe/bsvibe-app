@@ -37,7 +37,6 @@ class WorkspaceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
-    region: str = Field(default="us-1", max_length=32)
     safe_mode: bool = True
 
 
@@ -45,7 +44,6 @@ class WorkspaceUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    region: str | None = Field(default=None, max_length=32)
     safe_mode: bool | None = None
 
 
@@ -54,7 +52,6 @@ class WorkspaceResponse(BaseModel):
 
     id: uuid.UUID
     name: str
-    region: str
     safe_mode: bool
     created_at: datetime
     updated_at: datetime
@@ -100,7 +97,6 @@ async def create_workspace(
     row = WorkspaceRow(
         id=uuid.uuid4(),
         name=payload.name,
-        region=payload.region,
         safe_mode=payload.safe_mode,
     )
     await workspaces.add(row)
@@ -133,7 +129,7 @@ async def update_workspace(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WorkspaceResponse:
     row = await _owned_workspace(workspaces, memberships, user, workspace_id)
-    for field in ("name", "region", "safe_mode"):
+    for field in ("name", "safe_mode"):
         value = getattr(payload, field)
         if value is not None:
             setattr(row, field, value)

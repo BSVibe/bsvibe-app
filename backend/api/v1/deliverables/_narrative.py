@@ -51,7 +51,6 @@ async def _decision_note_paths(workspace_id: uuid.UUID) -> dict[str, str]:
 
     settings = get_settings()
     vault_root = KnowledgeFactory(
-        region=settings.knowledge_default_region,
         workspace_id=str(workspace_id),
         vault_root=Path(settings.knowledge_vault_root),
     ).vault_path

@@ -1,19 +1,22 @@
-"""KnowledgeFactory — per-workspace, per-region constructor for knowledge components.
+"""KnowledgeFactory — per-workspace constructor for knowledge components.
 
 Workspace scoping is enforced at the Vault path layer: every component
 (``GardenWriter``, ``IngestCompiler``, ``VaultRetriever``,
 ``CanonicalizationService``) hangs off a ``Vault`` rooted at
-``<vault_root>/<region>/<workspace_id>/``. Downstream methods do not need a
-per-call ``workspace_id`` argument — the bound Vault already constrains every
-read and write to that workspace.
+``<vault_root>/<deployment region>/<workspace_id>/``. Downstream methods do not
+need a per-call ``workspace_id`` argument — the bound Vault already constrains
+every read and write to that workspace.
 
-Request-handler glue (Bundle API / Bundle G) is expected to:
+The middle segment used to be read from a per-workspace ``Workspace.region``
+column. That column is gone: it named a directory and nothing else, while the
+REST surfaces resolved the same directory from the deployment default — two
+answers that agreed only because prod has one region.
+
+Request-handler glue is expected to:
 
 1. Extract ``workspace_id`` from the verified Supabase JWT
-2. Pick the ``region`` from the ``Workspace.region`` column (defaults to
-   :data:`backend.config.Settings.knowledge_default_region` Phase 1)
-3. Construct a ``KnowledgeFactory`` per request
-4. Pull pre-scoped components from the factory and inject them into plugin
+2. Construct a ``KnowledgeFactory`` per request
+3. Pull pre-scoped components from the factory and inject them into plugin
    / skill / MCP contexts
 
 The factory holds no shared mutable state; one instance per request is the
@@ -35,14 +38,22 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceContext:
-    """Identifies the workspace + region a knowledge factory is bound to."""
+    """Identifies the workspace a knowledge factory is bound to."""
 
-    region: str
     workspace_id: str
 
 
 class KnowledgeFactory:
-    """Per-workspace, per-region factory.
+    """Per-workspace factory.
+
+    The vault root's middle segment is the DEPLOYMENT region
+    (``settings.knowledge_default_region``), not a per-workspace value — see
+    ``backend.knowledge.graph.vault_paths``, which is the definition every
+    production surface uses. This class keeps an injectable ``vault_root``
+    because tests point it at a ``tmp_path``; that makes it the ONE other place
+    the layout is composed, and
+    ``tests/knowledge/test_factory.py::test_the_factory_agrees_with_vault_paths``
+    pins the two together so neither can drift.
 
     Currently exposes a single ``vault()`` accessor; further accessors for
     ``GardenWriter`` / ``IngestCompiler`` / ``VaultRetriever`` /
@@ -56,12 +67,13 @@ class KnowledgeFactory:
     def __init__(
         self,
         *,
-        region: str,
         workspace_id: str,
         vault_root: Path,
     ) -> None:
-        self._context = WorkspaceContext(region=region, workspace_id=workspace_id)
-        self._vault_root = vault_root / region / workspace_id
+        from backend.config import get_settings  # noqa: PLC0415
+
+        self._context = WorkspaceContext(workspace_id=workspace_id)
+        self._vault_root = vault_root / get_settings().knowledge_default_region / workspace_id
         self._vault: Vault | None = None
         self._writer: GardenWriter | None = None
 

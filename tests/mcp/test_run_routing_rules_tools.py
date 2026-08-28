@@ -77,7 +77,7 @@ async def registry() -> ToolRegistry:
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
     """Seed the workspace BEFORE child rows so PG FK references resolve."""
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
     yield
 
@@ -451,7 +451,7 @@ async def test_list_workspace_scoped(db, workspace_id, user_id, registry, seeded
     """A rule in another workspace must not leak into this principal's list."""
     other_ws = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=other_ws, name="other", region="us-1"))
+        s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.commit()
 
     # Create a rule in caller workspace

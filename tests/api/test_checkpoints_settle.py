@@ -198,7 +198,7 @@ async def test_resolve_settle_activity_drains_into_vault(
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     processed = await worker.drain_once()
     assert processed == 1

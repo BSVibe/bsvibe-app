@@ -67,7 +67,7 @@ def _clone_stub(files: dict[str, str]):
 
 async def _seed_product(session_factory, workspace_id: uuid.UUID, product_id: uuid.UUID) -> None:
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
         await s.flush()
         s.add(
             ProductRow(
@@ -91,7 +91,7 @@ async def test_sqlalchemy_repository_marks_status(session_factory):
     workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
         await s.flush()
         s.add(
             ProductRow(
@@ -128,8 +128,8 @@ async def test_sqlalchemy_repository_fetch_progress_workspace_scoped(session_fac
     ws_b = uuid.uuid4()
     product_id = uuid.uuid4()
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=ws_a, name="a", region="us-1", safe_mode=True))
-        s.add(WorkspaceRow(id=ws_b, name="b", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=ws_a, name="a", safe_mode=True))
+        s.add(WorkspaceRow(id=ws_b, name="b", safe_mode=True))
         await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=ws_a, name="p", slug="p"))
         await s.commit()
@@ -143,7 +143,7 @@ async def test_run_job_writes_failed_clone_on_git_error(session_factory, tmp_pat
     workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
         await s.flush()
         s.add(
             ProductRow(
@@ -196,7 +196,7 @@ async def test_run_job_writes_failed_when_workspace_missing(session_factory, tmp
     bogus_workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=real_workspace_id, name="t", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=real_workspace_id, name="t", safe_mode=True))
         await s.flush()
         s.add(
             ProductRow(

@@ -12,7 +12,6 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import get_settings
 from backend.identity.db import MembershipRow
 from backend.identity.workspaces_db import WorkspaceRow
 
@@ -52,16 +51,17 @@ class SqlAlchemyWorkspaceRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def list_active_regions(self) -> list[tuple[uuid.UUID, str, bool]]:
+    async def list_active_policies(self) -> list[tuple[uuid.UUID, bool]]:
+        """``(workspace_id, safe_mode)`` for every live workspace.
+
+        Was ``list_active_regions`` and returned a ``region`` in the middle.
+        That axis is gone; the method now names what it actually answers.
+        """
         stmt = select(WorkspaceRow.id, WorkspaceRow.safe_mode).where(
             WorkspaceRow.deleted_at.is_(None)
         )
         result = await self._session.execute(stmt)
-        # Region is a deployment constant, not a per-workspace value — see
-        # ``backend.knowledge.graph.vault_paths``. Kept in the tuple shape for
-        # the existing callers; every entry carries the same configured value.
-        region = get_settings().knowledge_default_region
-        return [(wid, region, safe) for wid, safe in result.all()]
+        return [(wid, safe) for wid, safe in result.all()]
 
     async def list_with_audit_retention(self) -> list[tuple[uuid.UUID, int]]:
         stmt = select(WorkspaceRow.id, WorkspaceRow.audit_retention_days).where(

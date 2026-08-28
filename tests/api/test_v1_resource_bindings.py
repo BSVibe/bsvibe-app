@@ -59,7 +59,7 @@ async def client_with_parents(db):
     app.dependency_overrides[get_db_session] = _session
 
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="test", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="test", safe_mode=True))
         await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="Blog", slug="blog"))
         s.add(
@@ -249,8 +249,8 @@ async def test_binding_workspace_isolation(db) -> None:
     app.dependency_overrides[get_current_user] = fake_current_user()
 
     async with db() as s:
-        s.add(WorkspaceRow(id=ws_a, name="a", region="us-1", safe_mode=True))
-        s.add(WorkspaceRow(id=ws_b, name="b", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=ws_a, name="a", safe_mode=True))
+        s.add(WorkspaceRow(id=ws_b, name="b", safe_mode=True))
         await s.flush()
         s.add(ProductRow(id=product_a, workspace_id=ws_a, name="A blog", slug="a-blog"))
         s.add(

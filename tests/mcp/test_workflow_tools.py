@@ -80,7 +80,7 @@ async def registry() -> ToolRegistry:
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
     async with db() as s:
-        ws = WorkspaceRow(id=workspace_id, name="ws", region="us-1")
+        ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
         yield
@@ -91,7 +91,7 @@ async def test_products_list_returns_workspace_scoped_rows(
 ) -> None:
     other_ws = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=other_ws, name="other", region="us-1"))
+        s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.flush()
         s.add(ProductRow(workspace_id=workspace_id, name="A", slug="a"))
         s.add(ProductRow(workspace_id=workspace_id, name="B", slug="b"))
@@ -130,7 +130,7 @@ async def test_products_show_other_workspace_not_found(
 ) -> None:
     other_ws = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=other_ws, name="other", region="us-1"))
+        s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.flush()
         s.add(ProductRow(workspace_id=other_ws, name="X", slug="x"))
         await s.commit()

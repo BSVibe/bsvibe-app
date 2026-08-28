@@ -94,7 +94,6 @@ def _build_compiler(
     that proves it see identical paths.
     """
     factory = KnowledgeFactory(
-        region=REGION,
         workspace_id=workspace_id,
         vault_root=vault_root,
     )

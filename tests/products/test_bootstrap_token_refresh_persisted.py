@@ -103,7 +103,7 @@ async def test_bootstrap_persists_a_rotated_github_token(session_factory, tmp_pa
     account_id = uuid.uuid4()
 
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
         await s.flush()
         s.add(
             ProductRow(

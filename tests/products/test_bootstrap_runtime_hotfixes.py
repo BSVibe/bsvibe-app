@@ -51,7 +51,7 @@ async def _seed_workspace_and_product(
     session_factory, *, workspace_id: uuid.UUID, product_id: uuid.UUID
 ) -> None:
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region=_REGION, safe_mode=False))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
         await s.flush()
         s.add(
             ProductRow(
@@ -119,7 +119,7 @@ async def test_bootstrap_marks_failed_when_every_chunk_dropped(
 
             return CanonRetrievalResult(notes=[])
 
-        async def settle(self, *, workspace_id, region):
+        async def settle(self, *, workspace_id):
             return 0
 
     monkeypatch.setattr(
@@ -179,7 +179,7 @@ async def test_bootstrap_marks_complete_when_some_notes_written_despite_failures
 
             return CanonRetrievalResult(notes=[])
 
-        async def settle(self, *, workspace_id, region):
+        async def settle(self, *, workspace_id):
             return 0
 
     monkeypatch.setattr(

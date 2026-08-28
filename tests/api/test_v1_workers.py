@@ -47,7 +47,7 @@ def workspace_id() -> uuid.UUID:
 async def _seed_member(db, workspace_id: uuid.UUID, role: str, sub: str) -> None:
     """Seed a workspace + a member with ``role`` so require_role resolves."""
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         user_id = uuid.uuid4()
         s.add(UserRow(id=user_id, supabase_user_id=sub, email="m@x"))
         await s.flush()

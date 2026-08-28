@@ -43,6 +43,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.config import get_settings
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.models import DecisionEntry
@@ -87,11 +88,9 @@ def _gated_sink(vault_root):
     return KnowledgeSettleSink(vault_root=vault_root)
 
 
-async def _add_workspace(
-    sf, *, workspace_id: uuid.UUID, region: str = _REGION, safe_mode: bool
-) -> None:
+async def _add_workspace(sf, *, workspace_id: uuid.UUID, safe_mode: bool) -> None:
     async with sf() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region=region, safe_mode=safe_mode))
+        s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=safe_mode))
         await s.commit()
 
 
@@ -161,7 +160,7 @@ async def _seed_settle_activity_with_refs(
 
 def _ws_storage(vault_root: Path, workspace_id: uuid.UUID) -> FileSystemStorage:
     """Storage rooted exactly like KnowledgeFactory + the promoter factory."""
-    ws_root = vault_root / _REGION / str(workspace_id)
+    ws_root = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     ws_root.mkdir(parents=True, exist_ok=True)
     return FileSystemStorage(ws_root)
 
@@ -200,7 +199,7 @@ def _written_settle_notes(vault_root: Path, workspace_id: uuid.UUID) -> list[Pat
     (slugified), not ``Settle: …``, so identify sink writes by their source
     stamp rather than a filename prefix — this also excludes the ``obs-*``
     fixtures seeded directly into the vault."""
-    ws_dir = vault_root / _REGION / str(workspace_id)
+    ws_dir = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     if not ws_dir.exists():
         return []
     return [
@@ -219,7 +218,7 @@ async def test_drain_then_promote_permissive_creates_canonical_anchor(sf, tmp_pa
     worker = SettleWorker(
         session_factory=sf,
         sink=_gated_sink(tmp_path),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
     processed = await worker.drain_once()
@@ -274,7 +273,7 @@ async def test_drain_then_promote_safe_mode_auto_applies_low_risk(sf, tmp_path) 
     worker = SettleWorker(
         session_factory=sf,
         sink=_gated_sink(tmp_path),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
     processed = await worker.drain_once()
@@ -334,7 +333,7 @@ async def test_drain_then_promote_safe_mode_queues_conflicting_merge(sf, tmp_pat
     worker = SettleWorker(
         session_factory=sf,
         sink=_gated_sink(tmp_path),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
     assert await worker.drain_once() == 1
@@ -366,13 +365,13 @@ async def test_promotion_failure_is_soft_and_does_not_break_drain(sf, tmp_path) 
         async def promote(self) -> object:
             raise RuntimeError("canon engine exploded")
 
-    def _boom_factory(*, region: str, workspace_id: uuid.UUID, safe_mode: bool):
+    def _boom_factory(*, workspace_id: uuid.UUID, safe_mode: bool):
         return _BoomPromoter()
 
     worker = SettleWorker(
         session_factory=sf,
         sink=_gated_sink(tmp_path),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
         promoter_factory=_boom_factory,
     )
     processed = await worker.drain_once()
@@ -405,15 +404,15 @@ async def test_promotion_runs_per_affected_workspace_in_isolation(sf, tmp_path) 
         async def promote(self) -> object:
             raise RuntimeError("boom")
 
-    def _selective_factory(*, region: str, workspace_id: uuid.UUID, safe_mode: bool):
+    def _selective_factory(*, workspace_id: uuid.UUID, safe_mode: bool):
         if workspace_id == ws_boom:
             return _BoomPromoter()
-        return real_factory(region=region, workspace_id=workspace_id, safe_mode=safe_mode)
+        return real_factory(workspace_id=workspace_id, safe_mode=safe_mode)
 
     worker = SettleWorker(
         session_factory=sf,
         sink=_gated_sink(tmp_path),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
         promoter_factory=_selective_factory,
     )
     processed = await worker.drain_once()
@@ -441,7 +440,7 @@ async def test_promotion_idempotent_across_repeated_drains(sf, tmp_path) -> None
     worker = SettleWorker(
         session_factory=sf,
         sink=_gated_sink(tmp_path),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
     storage = _ws_storage(tmp_path, ws)
@@ -484,7 +483,7 @@ async def test_loop_produces_canon_from_sink_derived_tags_no_seeding(sf, tmp_pat
     worker = SettleWorker(
         session_factory=sf,
         sink=_gated_sink(tmp_path),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
     storage = _ws_storage(tmp_path, ws)
@@ -544,7 +543,7 @@ async def test_loop_clusters_two_runs_by_shared_product_and_intent(sf, tmp_path)
     worker = SettleWorker(
         session_factory=sf,
         sink=_gated_sink(tmp_path),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
         promoter_factory=build_garden_promoter_factory(vault_root=tmp_path),
     )
     storage = _ws_storage(tmp_path, ws)
@@ -607,7 +606,7 @@ async def test_no_promoter_factory_disables_promotion(sf, tmp_path) -> None:
     worker = SettleWorker(
         session_factory=sf,
         sink=_gated_sink(tmp_path),
-        config=SettleWorkerConfig(default_region=_REGION),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
     storage = _ws_storage(tmp_path, ws)

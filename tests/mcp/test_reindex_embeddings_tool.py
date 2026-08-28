@@ -133,7 +133,7 @@ async def seeded_ws(db, workspace_id, monkeypatch, tmp_path) -> AsyncIterator[Pa
     monkeypatch.setenv("BSVIBE_KNOWLEDGE_DEFAULT_REGION", "us-1")
     get_settings.cache_clear()
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="eu-9"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
     yield tmp_path
     get_settings.cache_clear()

@@ -20,8 +20,8 @@ pytestmark = pytest.mark.asyncio
 
 async def _seed(session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:
     ws_a, ws_b = uuid.uuid4(), uuid.uuid4()
-    session.add(WorkspaceRow(id=ws_a, name="a", region="us-1", safe_mode=True))
-    session.add(WorkspaceRow(id=ws_b, name="b", region="us-1", safe_mode=True))
+    session.add(WorkspaceRow(id=ws_a, name="a", safe_mode=True))
+    session.add(WorkspaceRow(id=ws_b, name="b", safe_mode=True))
     await session.flush()
     session.add(ProductRow(id=uuid.uuid4(), workspace_id=ws_a, name="A", slug="a"))
     session.add(ProductRow(id=uuid.uuid4(), workspace_id=ws_b, name="B", slug="b"))

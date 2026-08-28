@@ -49,7 +49,6 @@ def _settlement(
 ) -> Settlement:
     return Settlement(
         workspace_id=uuid.uuid4(),
-        region="us-1",
         run_id=uuid.uuid4(),
         activity_id=uuid.uuid4(),
         verified=True,
@@ -377,7 +376,6 @@ async def test_sink_uses_extracted_entities_as_content_tags(tmp_path) -> None:
 
     async def _factory(
         *,
-        region: str,
         workspace_id,
     ):  # noqa: ANN001, ARG001
         return extractor
@@ -416,7 +414,7 @@ async def test_sink_soft_fallback_when_factory_returns_none(tmp_path) -> None:
     """Factory returns None (no active model account) → deterministic fallback."""
     from backend.knowledge.infrastructure.workers.settle_worker import KnowledgeSettleSink
 
-    async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
+    async def _factory(*, workspace_id):  # noqa: ANN001, ARG001
         return None
 
     sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)
@@ -430,7 +428,7 @@ async def test_sink_soft_fallback_when_extractor_raises(tmp_path) -> None:
     + degrades to the deterministic fallback."""
     from backend.knowledge.infrastructure.workers.settle_worker import KnowledgeSettleSink
 
-    async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
+    async def _factory(*, workspace_id):  # noqa: ANN001, ARG001
         return _StubExtractor(raises=True)
 
     sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)
@@ -448,7 +446,7 @@ async def test_sink_respects_successful_empty_extraction(tmp_path) -> None:
     no-LLM-signal paths only (no factory / extractor None / error)."""
     from backend.knowledge.infrastructure.workers.settle_worker import KnowledgeSettleSink
 
-    async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
+    async def _factory(*, workspace_id):  # noqa: ANN001, ARG001
         return _StubExtractor([])
 
     sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)
@@ -468,7 +466,7 @@ async def test_sink_entity_tags_are_capped_and_normalized(tmp_path) -> None:
 
     many = [f"Entity{i:02d}" for i in range(_MAX_CONTENT_TAGS + 5)]
 
-    async def _factory(*, region: str, workspace_id):  # noqa: ANN001, ARG001
+    async def _factory(*, workspace_id):  # noqa: ANN001, ARG001
         return _StubExtractor(many)
 
     sink = KnowledgeSettleSink(vault_root=tmp_path, extractor_factory=_factory)

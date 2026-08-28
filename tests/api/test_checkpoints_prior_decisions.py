@@ -31,6 +31,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.api.v1.checkpoints import build_decisions_retriever
+from backend.config import get_settings
 from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenNote
@@ -121,7 +122,7 @@ async def _seed_pending(
 async def _seed_resolved_decision_note(
     vault_root: Path, workspace_id: uuid.UUID, *, question: str, answer: str
 ) -> None:
-    root = vault_root / _REGION / str(workspace_id)
+    root = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     root.mkdir(parents=True, exist_ok=True)
     writer = GardenWriter(vault=Vault(root))
     summary = f"Decision resolved — Q: {question} A: {answer}"

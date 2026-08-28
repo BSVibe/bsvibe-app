@@ -52,7 +52,7 @@ def _reset_keys() -> None:
 
 
 async def _seed_user_workspace(session) -> tuple[UserRow, WorkspaceRow]:
-    ws = WorkspaceRow(name="t-ws", region="us-1")
+    ws = WorkspaceRow(name="t-ws")
     session.add(ws)
     user = UserRow(supabase_user_id=f"sb-{uuid.uuid4()}", email="t@example.com")
     session.add(user)

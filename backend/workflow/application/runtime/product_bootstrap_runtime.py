@@ -338,7 +338,6 @@ def build_bootstrap_knowledge(
     *,
     session: AsyncSession,
     workspace_id: uuid.UUID,
-    region: str,
     settings: Settings | None = None,
     redis_client: Any = None,
     progress_subscriber: Any = None,
@@ -388,7 +387,6 @@ def build_bootstrap_knowledge(
     return _build_bootstrap_knowledge_inner(
         session=session,
         workspace_id=workspace_id,
-        region=region,
         settings=settings,
         redis_client=redis_client,
         progress_subscriber=progress_subscriber,
@@ -400,7 +398,6 @@ def _build_bootstrap_knowledge_inner(
     *,
     session: AsyncSession,
     workspace_id: uuid.UUID,
-    region: str,
     settings: Settings,
     redis_client: Any = None,
     progress_subscriber: Any = None,
@@ -425,9 +422,7 @@ def _build_bootstrap_knowledge_inner(
         IngestCompiler,
     )
 
-    async def _build_canonicalization_service(
-        ws_id: uuid.UUID, region_str: str
-    ) -> CanonicalizationService:
+    async def _build_canonicalization_service(ws_id: uuid.UUID) -> CanonicalizationService:
         """Build a vault-scoped service so ingest-time tags auto-create concepts.
 
         Lift A-fix — passing this service to the IngestCompiler closes the gap
@@ -451,7 +446,6 @@ def _build_bootstrap_knowledge_inner(
     async def _ingest_callable(
         *,
         workspace_id: uuid.UUID,
-        region: str,
         artifacts: list[dict[str, object]],
     ) -> _IngestCallResult:
         # Lift E8 Bug 1 — thread ``redis_client`` so an executor adapter
@@ -497,11 +491,10 @@ def _build_bootstrap_knowledge_inner(
             return _IngestCallResult(notes_created=0, notes_updated=0, chunk_failures=0)
         llm = _ResolverCompileLlm(adapter=resolved.adapter)
         factory = KnowledgeFactory(
-            region=region,
             workspace_id=str(workspace_id),
             vault_root=Path(settings.knowledge_vault_root),
         )
-        canon_service = await _build_canonicalization_service(workspace_id, region)
+        canon_service = await _build_canonicalization_service(workspace_id)
         # Lift E9 — wire the progress subscriber onto a fresh EventBus so
         # the compiler emits ``INGEST_COMPILE_BATCH_*`` events into our
         # surface. ``None`` subscriber → still build the bus (zero-cost
@@ -519,7 +512,6 @@ def _build_bootstrap_knowledge_inner(
             retriever=build_ingest_retriever(
                 settings=settings,
                 session_factory=session_factory,
-                region=region,
                 workspace_id=workspace_id,
             ),
             canonicalization_service=canon_service,
@@ -555,7 +547,6 @@ def _build_bootstrap_knowledge_inner(
         async def ingest(self, request: IngestRequest) -> IngestResult:
             call_result = await _ingest_callable(
                 workspace_id=request.workspace_id,
-                region=request.region,
                 artifacts=list(request.artifacts),
             )
             return IngestResult(
@@ -573,8 +564,8 @@ def _build_bootstrap_knowledge_inner(
             del query
             return CanonRetrievalResult(notes=[])
 
-        async def settle(self, *, workspace_id: uuid.UUID, region: str) -> int:
-            del workspace_id, region
+        async def settle(self, *, workspace_id: uuid.UUID) -> int:
+            del workspace_id
             return await _settle_stub()
 
     return _BootstrapKnowledge()
@@ -583,7 +574,6 @@ def _build_bootstrap_knowledge_inner(
 async def _reconcile_embeddings_soft(
     *,
     workspace_id: uuid.UUID,
-    region: str,
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -708,7 +698,6 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
     )
 
     # The workspace must exist before anything is written under its id.
-    # (The vault's region segment is NOT read from this row — see below.)
     async with session_factory() as session:
         ws = await session.get(WorkspaceRow, workspace_id)
         if ws is None:
@@ -725,12 +714,6 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
                 reason="workspace_missing",
             )
             return
-
-    # A DEPLOYMENT constant, not the row's ``region`` column. Reading the column
-    # here made bootstrap write the vault to a directory every REST knowledge
-    # route (which uses the deployment default) would then read as empty. See
-    # ``backend.knowledge.graph.vault_paths``.
-    region = settings.knowledge_default_region
 
     # #692 — a client_attach product runs on the founder's OWN machine, and
     # bootstrap is precisely the step that would put its source on the server
@@ -802,7 +785,6 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
         knowledge = build_bootstrap_knowledge(
             session=session,
             workspace_id=workspace_id,
-            region=region,
             settings=settings,
             redis_client=redis_client,
             progress_subscriber=progress_subscriber,
@@ -840,7 +822,6 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
         outcome = await run_repo_bootstrap(
             repo_root=repo_path,
             workspace_id=workspace_id,
-            region=region,
             knowledge=knowledge,
             # Lift E20 — the orchestrator persists the code graph
             # to ``<vault_root>/code_graph/graph.json`` so the MCP
@@ -856,7 +837,6 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
         # will fill the anchors in.
         await _register_anchors_soft(
             workspace_id=workspace_id,
-            region=region,
             settings=settings,
         )
     except BootstrapTooLargeError as exc:
@@ -932,7 +912,6 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
     # blocks marking the bootstrap complete.
     await _reconcile_embeddings_soft(
         workspace_id=workspace_id,
-        region=region,
         settings=settings,
         session_factory=session_factory,
     )
@@ -1049,7 +1028,6 @@ def _on_task_done(task: asyncio.Task[None]) -> None:
 async def _register_anchors_soft(
     *,
     workspace_id: uuid.UUID,
-    region: str,
     settings: Settings,
 ) -> None:
     """Run :func:`register_bootstrap_anchors` against the workspace vault.
@@ -1072,7 +1050,6 @@ async def _register_anchors_soft(
         logger.info(
             "bootstrap_anchor_registration_vault_missing",
             workspace_id=str(workspace_id),
-            region=region,
         )
         return
 
@@ -1084,7 +1061,6 @@ async def _register_anchors_soft(
         logger.warning(
             "bootstrap_anchor_registration_failed",
             workspace_id=str(workspace_id),
-            region=region,
             error=str(exc),
             exc_info=True,
         )
@@ -1092,7 +1068,6 @@ async def _register_anchors_soft(
     logger.info(
         "bootstrap_anchor_registration_done",
         workspace_id=str(workspace_id),
-        region=region,
         created_concepts=len(result.created_concepts),
         candidate_tags=len(result.candidate_tags),
     )

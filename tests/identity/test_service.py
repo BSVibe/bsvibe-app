@@ -75,7 +75,6 @@ async def test_bootstrap_creates_user_workspace_owner_membership() -> None:
         ws = (await s.execute(select(WorkspaceRow))).scalars().one()
         assert ws.id == membership.workspace_id
         assert ws.name == "founder's workspace"
-        assert ws.region == "us-1"
 
 
 async def test_bootstrap_default_name_without_email() -> None:
@@ -102,13 +101,6 @@ async def test_bootstrap_updates_email_on_change() -> None:
         await ensure_user_bootstrapped(s, supabase_user_id="sb-1", email="new@x.io")
         user = (await s.execute(select(UserRow))).scalars().one()
         assert user.email == "new@x.io"
-
-
-async def test_bootstrap_custom_region() -> None:
-    async with memory_session() as s:
-        await ensure_user_bootstrapped(s, supabase_user_id="sb-1", email=None, region="eu-1")
-        ws = (await s.execute(select(WorkspaceRow))).scalars().one()
-        assert ws.region == "eu-1"
 
 
 async def test_resolve_workspace_id_returns_none_for_unknown_user() -> None:

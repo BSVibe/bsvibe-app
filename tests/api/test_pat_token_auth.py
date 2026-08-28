@@ -79,7 +79,7 @@ async def db(monkeypatch) -> AsyncIterator[Any]:
 async def seeded(db) -> AsyncIterator[tuple[UserRow, uuid.UUID]]:
     """A user with an active membership — what both credential classes resolve to."""
     async with db() as s:
-        ws = WorkspaceRow(name="t-ws", region="us-1")
+        ws = WorkspaceRow(name="t-ws")
         s.add(ws)
         user = UserRow(supabase_user_id=f"sb-{uuid.uuid4()}", email="t@example.com")
         s.add(user)

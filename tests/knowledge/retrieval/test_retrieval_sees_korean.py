@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.config import get_settings
 from backend.knowledge.factory import KnowledgeFactory
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenNote
@@ -109,7 +110,7 @@ def test_ascii_single_token_overlap_still_passes() -> None:
 
 
 async def _seed(vault_root: Path, workspace_id: str, *, question: str, answer: str) -> None:
-    ws_root = vault_root / _REGION / workspace_id
+    ws_root = vault_root / get_settings().knowledge_default_region / workspace_id
     ws_root.mkdir(parents=True, exist_ok=True)
     writer = GardenWriter(vault=Vault(ws_root))
     summary = f"Decision resolved — Q: {question} A: {answer}"
@@ -151,9 +152,7 @@ async def test_a_korean_correction_reaches_a_future_run(
         question="이 작업은 검증됨으로 표시하기 전에 검토가 필요해요",
         answer=_REAL_CORRECTION,
     )
-    retriever = KnowledgeFactory(
-        region=_REGION, workspace_id=workspace_id, vault_root=vault_root
-    ).retriever()
+    retriever = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root).retriever()
 
     statements = await retriever.retrieve_for_signals("명세대로 구현하고 검사를 돌려라")
 
@@ -169,8 +168,6 @@ async def test_an_unrelated_korean_run_pulls_nothing(vault_root: Path, workspace
         question="이 작업은 검증됨으로 표시하기 전에 검토가 필요해요",
         answer=_REAL_CORRECTION,
     )
-    retriever = KnowledgeFactory(
-        region=_REGION, workspace_id=workspace_id, vault_root=vault_root
-    ).retriever()
+    retriever = KnowledgeFactory(workspace_id=workspace_id, vault_root=vault_root).retriever()
 
     assert await retriever.retrieve_for_signals("텔레그램 알림 문구를 친절하게 바꿔줘") == []

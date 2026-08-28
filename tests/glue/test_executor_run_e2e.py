@@ -124,7 +124,6 @@ async def _seed_executor_account(
         ws = WorkspaceRow(
             id=workspace_id,
             name="test-ws",
-            region="us-1",
             safe_mode=True,
             legal_basis="contract",
         )
@@ -207,7 +206,6 @@ async def test_non_executor_account_builds_native_orchestrator(
             WorkspaceRow(
                 id=workspace_id,
                 name="ws",
-                region="us-1",
                 safe_mode=True,
                 legal_basis="contract",
                 default_account_id=account.id,
@@ -299,7 +297,6 @@ def _vault_root_settings(tmp_path: Path, timeout_s: float = 30.0):
 async def _seed_canon_concept(
     *,
     vault_root: Path,
-    region: str,
     workspace_id: uuid.UUID,
     concept_id: str,
     display: str,
@@ -308,7 +305,9 @@ async def _seed_canon_concept(
     from backend.knowledge.canonicalization.store import NoteStore  # noqa: PLC0415
     from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
 
-    store = NoteStore(FileSystemStorage(vault_root / region / str(workspace_id)))
+    store = NoteStore(
+        FileSystemStorage(vault_root / get_settings().knowledge_default_region / str(workspace_id))
+    )
     await store.write_concept(
         models.ConceptEntry(
             concept_id=concept_id,
@@ -352,7 +351,6 @@ async def test_factory_wires_retriever_into_native_orchestrator(
     workspace_id = uuid.uuid4()
     await _seed_canon_concept(
         vault_root=Path(settings.knowledge_vault_root),
-        region=settings.knowledge_default_region,
         workspace_id=workspace_id,
         concept_id="structured-logging",
         display="Use structlog for structured logging",
@@ -377,7 +375,6 @@ async def test_factory_wires_retriever_into_native_orchestrator(
             WorkspaceRow(
                 id=workspace_id,
                 name="ws",
-                region="us-1",
                 safe_mode=True,
                 legal_basis="contract",
                 default_account_id=account.id,

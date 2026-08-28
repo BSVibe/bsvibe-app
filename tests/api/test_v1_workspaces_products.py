@@ -57,7 +57,7 @@ async def client_with_ws(db):
     from backend.identity.workspaces_db import WorkspaceRow
 
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="test", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="test", safe_mode=True))
         user = UserRow(id=uuid.uuid4(), supabase_user_id="test-user", email="t@example.com")
         s.add(user)
         await s.flush()
@@ -96,7 +96,7 @@ async def test_workspaces_full_lifecycle(db) -> None:
         # Create
         r = await c.post(
             "/api/v1/workspaces",
-            json={"name": "Acme", "region": "us-1", "safe_mode": False},
+            json={"name": "Acme", "safe_mode": False},
         )
         assert r.status_code == 201, r.text
         created = r.json()
@@ -112,9 +112,9 @@ async def test_workspaces_full_lifecycle(db) -> None:
         assert r.status_code == 200
 
         # Patch
-        r = await c.patch(f"/api/v1/workspaces/{ws_id}", json={"region": "eu-1"})
+        r = await c.patch(f"/api/v1/workspaces/{ws_id}", json={"safe_mode": True})
         assert r.status_code == 200
-        assert r.json()["region"] == "eu-1"
+        assert r.json()["safe_mode"] is True
 
         # Delete
         r = await c.delete(f"/api/v1/workspaces/{ws_id}")
@@ -337,8 +337,8 @@ async def test_product_workspace_isolation(db) -> None:
 
     product_id = uuid.uuid4()
     async with db() as s:
-        s.add(WorkspaceRow(id=ws_a, name="a", region="us-1", safe_mode=True))
-        s.add(WorkspaceRow(id=ws_b, name="b", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=ws_a, name="a", safe_mode=True))
+        s.add(WorkspaceRow(id=ws_b, name="b", safe_mode=True))
         await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=ws_a, name="A's blog", slug="a-blog"))
         await s.commit()
@@ -419,3 +419,39 @@ async def test_delete_product_reclaims_git_workspace(client_with_ws) -> None:
     assert r.status_code == 204, r.text
 
     assert not path.exists(), "product repo must be reclaimed on delete"
+
+
+async def test_the_api_refuses_a_region(db) -> None:
+    """``region`` is not merely ignored — ``extra="forbid"`` rejects it.
+
+    A deliberate breaking change. The field used to be accepted on BOTH create
+    and PATCH and stored on the row, where it named a vault directory that only
+    the write path honoured; every REST knowledge route resolved that directory
+    from the deployment default instead. Silently accepting the field now would
+    leave a caller believing they had set something.
+    """
+    app = create_app()
+
+    async def _session():
+        async with db() as s:
+            yield s
+
+    async with db() as s:
+        s.add(UserRow(id=uuid.uuid4(), supabase_user_id="test-user", email="t@x"))
+        await s.commit()
+
+    app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[get_current_user] = fake_current_user("test-user")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.post("/api/v1/workspaces", json={"name": "Acme", "region": "us-1"})
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"][0]["loc"] == ["body", "region"]
+
+        r = await c.post("/api/v1/workspaces", json={"name": "Acme"})
+        assert r.status_code == 201, r.text
+        ws_id = r.json()["id"]
+        assert "region" not in r.json()
+
+        r = await c.patch(f"/api/v1/workspaces/{ws_id}", json={"region": "eu-1"})
+        assert r.status_code == 422, r.text

@@ -39,8 +39,8 @@ class _FakeKnowledge:
         del query
         return CanonRetrievalResult(notes=[])
 
-    async def settle(self, *, workspace_id: uuid.UUID, region: str) -> int:
-        del workspace_id, region
+    async def settle(self, *, workspace_id: uuid.UUID) -> int:
+        del workspace_id
         return 0
 
 
@@ -65,14 +65,12 @@ async def test_orchestrator_assembles_and_ingests(tmp_path):
     outcome = await run_repo_bootstrap(
         repo_root=tmp_path,
         workspace_id=workspace,
-        region="us-1",
         knowledge=knowledge,
     )
 
     assert len(knowledge.received) == 1
     req = knowledge.received[0]
     assert req.workspace_id == workspace
-    assert req.region == "us-1"
 
     arts: list[dict[str, Any]] = req.artifacts
     # Lift E20 — the new pipeline emits structural seeds (file-tree +
@@ -101,7 +99,6 @@ async def test_orchestrator_handles_empty_repo(tmp_path):
     outcome = await run_repo_bootstrap(
         repo_root=tmp_path,
         workspace_id=workspace,
-        region="us-1",
         knowledge=knowledge,
     )
     assert outcome.artifacts_count == 1  # empty-repo sentinel artifact
@@ -139,7 +136,6 @@ async def test_orchestrator_propagates_too_large(tmp_path, monkeypatch):
         await run_repo_bootstrap(
             repo_root=tmp_path,
             workspace_id=workspace,
-            region="us-1",
             knowledge=knowledge,
         )
     assert knowledge.received == []

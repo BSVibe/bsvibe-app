@@ -34,7 +34,6 @@ def build_ingest_retriever(
     *,
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession] | None,
-    region: str,
     workspace_id: uuid.UUID,
 ) -> VaultRetriever | None:
     """A workspace-scoped semantic note retriever, or ``None``.

@@ -81,7 +81,7 @@ async def seeded(db, workspace_id, user_id) -> AsyncIterator[uuid.UUID]:
     """Seed a workspace + user + run + deliverable + queue item; yield item_id."""
     item_id: uuid.UUID | None = None
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
         await s.flush()
         run = ExecutionRun(
@@ -341,7 +341,7 @@ async def test_safe_mode_approve_unknown_item_raises(
 
 async def test_direct_requires_a_product(db, workspace_id, user_id, registry) -> None:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.commit()
     async with db() as s:
@@ -374,7 +374,7 @@ async def test_direct_accepts_with_product(
         "backend.mcp.tools.direct_tools.get_emit_redis_client", lambda settings: None
     )
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.flush()
         s.add(ProductRow(workspace_id=workspace_id, name="A", slug="a"))
@@ -399,7 +399,7 @@ def _noop() -> None:
 
 async def test_direct_requires_write_scope(db, workspace_id, user_id, registry) -> None:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.flush()
         s.add(ProductRow(workspace_id=workspace_id, name="A", slug="a"))
@@ -418,7 +418,7 @@ async def test_direct_requires_write_scope(db, workspace_id, user_id, registry) 
 # ---------------------------------------------------------------------------
 async def test_safe_mode_get_returns_workspace_flag(db, workspace_id, user_id, registry) -> None:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         await s.commit()
     async with db() as s:
         ctx = ToolContext(
@@ -431,7 +431,7 @@ async def test_safe_mode_get_returns_workspace_flag(db, workspace_id, user_id, r
 
 async def test_safe_mode_set_switches_to_auto(db, workspace_id, user_id, registry) -> None:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         await s.commit()
     async with db() as s:
         ctx = ToolContext(
@@ -450,7 +450,7 @@ async def test_safe_mode_set_switches_to_auto(db, workspace_id, user_id, registr
 
 async def test_safe_mode_set_requires_write_scope(db, workspace_id, user_id, registry) -> None:
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1", safe_mode=True))
+        s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         await s.commit()
     async with db() as s:
         ctx = ToolContext(
@@ -506,7 +506,7 @@ async def test_safe_mode_approve_run_settles_and_dispatches_every_item(
     run_id = uuid.uuid4()
     dispatcher = _HandleDispatcher()
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
         await s.flush()
         run = ExecutionRun(

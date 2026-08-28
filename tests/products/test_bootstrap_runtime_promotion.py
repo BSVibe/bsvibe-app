@@ -57,7 +57,7 @@ async def test_bootstrap_job_registers_anchors_after_successful_ingest(
     workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region=_REGION, safe_mode=False))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
         await s.flush()
         s.add(
             ProductRow(
@@ -88,7 +88,7 @@ async def test_bootstrap_job_registers_anchors_after_successful_ingest(
 
     # Stub the knowledge facade — its ingest writes seedling notes with
     # recurring tags into the workspace vault, mimicking what real ingest does.
-    workspace_vault = vault_root / _REGION / str(workspace_id)
+    workspace_vault = vault_root / get_settings().knowledge_default_region / str(workspace_id)
 
     class _StubKnowledge:
         async def ingest(self, request):
@@ -111,7 +111,7 @@ async def test_bootstrap_job_registers_anchors_after_successful_ingest(
 
             return CanonRetrievalResult(notes=[])
 
-        async def settle(self, *, workspace_id, region):
+        async def settle(self, *, workspace_id):
             return 0
 
     monkeypatch.setattr(
@@ -156,7 +156,7 @@ async def test_bootstrap_job_reconciles_embeddings_after_successful_ingest(
     workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
     async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", region=_REGION, safe_mode=False))
+        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
         await s.flush()
         s.add(
             ProductRow(
@@ -177,7 +177,7 @@ async def test_bootstrap_job_reconciles_embeddings_after_successful_ingest(
 
     fake_git = MagicMock()
     fake_git.clone = AsyncMock()
-    workspace_vault = vault_root / _REGION / str(workspace_id)
+    workspace_vault = vault_root / get_settings().knowledge_default_region / str(workspace_id)
 
     class _StubKnowledge:
         async def ingest(self, request):
@@ -192,15 +192,15 @@ async def test_bootstrap_job_reconciles_embeddings_after_successful_ingest(
 
             return CanonRetrievalResult(notes=[])
 
-        async def settle(self, *, workspace_id, region):
+        async def settle(self, *, workspace_id):
             return 0
 
     monkeypatch.setattr(rt, "build_bootstrap_knowledge", lambda **_kw: _StubKnowledge())
 
     calls: list[tuple] = []
 
-    async def _spy(*, workspace_id, region, settings, session_factory) -> None:
-        calls.append((workspace_id, region))
+    async def _spy(*, workspace_id, settings, session_factory) -> None:
+        calls.append((workspace_id,))
 
     monkeypatch.setattr(rt, "_reconcile_embeddings_soft", _spy)
 
@@ -216,4 +216,4 @@ async def test_bootstrap_job_reconciles_embeddings_after_successful_ingest(
         row = await s.get(ProductRow, product_id)
         assert row.bootstrap_status == "complete", row.bootstrap_error
     # The imported knowledge was embedded — once, for this workspace.
-    assert calls == [(workspace_id, _REGION)]
+    assert calls == [(workspace_id,)]

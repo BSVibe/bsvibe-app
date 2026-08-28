@@ -151,9 +151,9 @@ async def test_rls_blocks_cross_workspace_select_at_db_layer() -> None:
                 await conn.execute(
                     text(
                         "INSERT INTO workspaces "
-                        "(id, name, region, safe_mode, legal_basis, "
+                        "(id, name, safe_mode, legal_basis, "
                         " created_at, updated_at) "
-                        "VALUES (:id, :name, 'us-1', true, 'contract', "
+                        "VALUES (:id, :name, true, 'contract', "
                         " :now, :now)"
                     ),
                     {"id": ws_id, "name": f"ws-{ws_id.hex[:4]}", "now": now},

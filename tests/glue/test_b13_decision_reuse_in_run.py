@@ -202,14 +202,13 @@ async def test_resolved_decision_seeds_b6_and_folds_into_b3_on_next_run(
     worker = SettleWorker(
         session_factory=sf,
         sink=KnowledgeSettleSink(vault_root=tmp_path),
-        config=SettleWorkerConfig(default_region="us-1"),
+        config=SettleWorkerConfig(),
     )
     assert await worker.drain_once() == 1
 
     # ----------------- Phase B: NEW run with workspace-scoped retriever ----
     # The same seam the production factory wires (workers/run.py::_retriever_for).
     factory = KnowledgeFactory(
-        region="us-1",
         workspace_id=str(workspace_id),
         vault_root=tmp_path,
     )

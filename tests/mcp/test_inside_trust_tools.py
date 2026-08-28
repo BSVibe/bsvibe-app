@@ -75,7 +75,7 @@ async def registry() -> ToolRegistry:
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
     """Stage-flush the workspace parent so PG FKs resolve."""
     async with db() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", region="us-1"))
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
     yield
 

@@ -227,7 +227,7 @@ def build_worker_runtime(
                 # the settle payload). No post-hoc extractor; the sink writes the
                 # agent's own declaration. Routine work declares none → no note.
             ),
-            config=SettleWorkerConfig(default_region=settings.knowledge_default_region),
+            config=SettleWorkerConfig(),
             # Close the §5 ratchet loop: promote each affected workspace's garden
             # observations into canon over the sink's vault boundary. Lift 1b —
             # a routed ConceptFramer distils each new concept body (user-routed

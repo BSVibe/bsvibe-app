@@ -63,7 +63,7 @@ def _seed_observation(vault: Path, slug: str, tags: list[str]) -> None:
 
 def _seed_workspace_vault(vault_root: Path, workspace_id: uuid.UUID) -> Path:
     """Create a per-workspace vault with two recurring tags."""
-    ws_vault = vault_root / _REGION / str(workspace_id)
+    ws_vault = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     ws_vault.mkdir(parents=True)
     _seed_observation(ws_vault, "obs-1", ["settle", "verified-run", "alpha"])
     _seed_observation(ws_vault, "obs-2", ["settle", "verified-run", "alpha"])
@@ -83,9 +83,7 @@ async def _seed_product(
     async with session_factory() as s:
         existing = await s.get(WorkspaceRow, workspace_id)
         if existing is None:
-            s.add(
-                WorkspaceRow(id=workspace_id, name="t", region=_STALE_ROW_REGION, safe_mode=False)
-            )
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
             await s.flush()
         s.add(
             ProductRow(

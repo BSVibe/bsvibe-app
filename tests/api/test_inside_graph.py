@@ -33,6 +33,7 @@ import pytest_asyncio
 from backend.api.deps import get_current_user, get_output_language, get_workspace_id
 from backend.api.main import create_app
 from backend.api.v1.inside import build_inside_storage
+from backend.config import get_settings
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.resolver import TagResolver
@@ -103,7 +104,7 @@ def vault_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def workspace_storage(vault_root: Path, workspace_id: uuid.UUID) -> FileSystemStorage:
-    root = vault_root / _REGION / str(workspace_id)
+    root = vault_root / get_settings().knowledge_default_region / str(workspace_id)
     root.mkdir(parents=True, exist_ok=True)
     return FileSystemStorage(root)
 

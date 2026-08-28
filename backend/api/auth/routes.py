@@ -92,12 +92,10 @@ def _validate_redirect_to(redirect_to: str) -> None:
 
 
 async def _bootstrap(session: AsyncSession, supa: SupabaseSession) -> None:
-    settings = get_settings()
     await ensure_user_bootstrapped(
         session,
         supabase_user_id=supa.supabase_user_id,
         email=supa.email,
-        region=settings.default_workspace_region,
     )
 
 

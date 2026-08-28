@@ -153,7 +153,7 @@ async def test_budget_is_read_from_the_workspace_row() -> None:
 
     async with _two_sessions() as (a, _b):
         wid = uuid.uuid4()
-        a.add(WorkspaceRow(id=wid, name="ws", region="us-1", verify_stack_slots=3))
+        a.add(WorkspaceRow(id=wid, name="ws", verify_stack_slots=3))
         await a.commit()
 
         assert await load_workspace_verify_slots(a, wid) == 3

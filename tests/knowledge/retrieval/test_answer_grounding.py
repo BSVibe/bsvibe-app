@@ -26,6 +26,9 @@ from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 
 pytestmark = pytest.mark.asyncio
 
+#: The deployment region — the vault layout's middle segment.
+_REGION = "us-1"
+
 _NOTE = """---
 captured_at: '2026-07-13'
 tags:
@@ -193,9 +196,9 @@ async def test_build_answer_retriever_reads_real_notes(tmp_path, monkeypatch) ->
 
     from backend.knowledge.retrieval import answer_grounding as ag
 
-    region, ws = "us-1", uuid.uuid4()
+    ws = uuid.uuid4()
     note = "garden/seedling/routing.md"
-    vault_root = tmp_path / region / str(ws)
+    vault_root = tmp_path / _REGION / str(ws)
     (vault_root / "garden" / "seedling").mkdir(parents=True)
     (vault_root / note).write_text(_NOTE, encoding="utf-8")
 
@@ -203,7 +206,7 @@ async def test_build_answer_retriever_reads_real_notes(tmp_path, monkeypatch) ->
     # readable through the wrapper, which is what these two bugs broke.
     monkeypatch.setattr(ag, "_DEFAULT_MAX_CHARS", 1200, raising=False)
     settings = SimpleNamespace(
-        knowledge_default_region=region,
+        knowledge_default_region=_REGION,
         knowledge_vault_root=str(tmp_path),
         knowledge_embedding_model=None,
     )

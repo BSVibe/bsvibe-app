@@ -22,18 +22,28 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from backend.config import get_settings
 
+if TYPE_CHECKING:
+    from backend.config import Settings
 
-def workspace_vault_root(workspace_id: uuid.UUID) -> Path:
+
+def workspace_vault_root(workspace_id: uuid.UUID, *, settings: Settings | None = None) -> Path:
     """``<knowledge_vault_root>/<region>/<workspace_id>/`` for one workspace.
 
     Pure and synchronous ON PURPOSE: the moment this needs a DB read, some
     caller is asking a per-workspace question about a deployment constant, and
     a second answer has been reintroduced.
+
+    ``settings`` is for callers that were HANDED a settings object rather than
+    reading the global — the settle/bootstrap runtimes take one as a parameter,
+    and tests point that copy at a ``tmp_path``. Silently reading the global
+    here would bypass their injection seam and resolve a different vault than
+    the one their sink just wrote to.
     """
-    settings = get_settings()
+    settings = settings or get_settings()
     return (
         Path(settings.knowledge_vault_root) / settings.knowledge_default_region / str(workspace_id)
     )
