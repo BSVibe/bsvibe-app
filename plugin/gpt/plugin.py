@@ -95,14 +95,6 @@ def _resolve_export_file(export_path: str) -> Path:
                     " ISO-8601 string."
                 ),
             },
-            "region": {
-                "type": "string",
-                "description": (
-                    "BSage region the seeds ingest into. Overrides binding"
-                    " config's ``default_region`` (which itself defaults"
-                    " to ``imported-gpt`` if not set)."
-                ),
-            },
         },
         "additionalProperties": False,
     },
@@ -112,7 +104,6 @@ async def import_conversations(
     gpt_binding_id: str | None = None,
     export_path: str | None = None,
     since: str | int | float | None = None,
-    region: str | None = None,
 ) -> dict[str, Any]:
     """Read ``conversations.json`` and seed every conversation.
 
@@ -142,7 +133,6 @@ async def import_conversations(
 
     resolved_binding = gpt_binding_id or context.config.get("binding_id") or "default"
     resolved_since = since if since is not None else context.config.get("since")
-    resolved_region = region or context.config.get("default_region") or "imported-gpt"
 
     json_path = _resolve_export_file(str(resolved_path))
     if not json_path.is_file():
@@ -172,7 +162,6 @@ async def import_conversations(
         seed_data: dict[str, Any] = {
             "title": convo.title,
             "content": markdown,
-            "region": resolved_region,
             # Stable provenance — re-imports of the same conversation hit
             # the IngestCompiler content-hash dedup on the same key.
             "source_ref": f"gpt://{resolved_binding}/{convo.uuid}",
@@ -196,7 +185,6 @@ async def import_conversations(
     logger.info(
         AUDIT_EVENT_IMPORTED,
         binding_id=resolved_binding,
-        region=resolved_region,
         conversations_count=conversations_count,
         messages_count=messages_count,
         skipped=skipped,
@@ -206,7 +194,6 @@ async def import_conversations(
         "conversations_count": conversations_count,
         "messages_count": messages_count,
         "skipped": skipped,
-        "region": resolved_region,
     }
 
 
@@ -242,8 +229,5 @@ async def setup(cred_store: Any) -> dict[str, Any]:
     since = os.environ.get("GPT_SINCE")
     if since:
         data["since"] = since
-    region = os.environ.get("GPT_DEFAULT_REGION")
-    if region:
-        data["default_region"] = region
     await cred_store.store("gpt", data)
     return data

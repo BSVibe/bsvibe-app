@@ -645,10 +645,6 @@
             "label": "제외 패턴",
             "placeholder": ".obsidian/**\nTemplates/**"
           },
-          "defaultRegion": {
-            "label": "영역",
-            "placeholder": "imported"
-          },
           "exportPath": {
             "label": "내보내기 경로",
             "placeholder": "/Users/you/Downloads/conversations.json"

@@ -645,10 +645,6 @@
             "label": "Exclude patterns",
             "placeholder": ".obsidian/**\nTemplates/**"
           },
-          "defaultRegion": {
-            "label": "Region",
-            "placeholder": "imported"
-          },
           "exportPath": {
             "label": "Export path",
             "placeholder": "/Users/you/Downloads/conversations.json"

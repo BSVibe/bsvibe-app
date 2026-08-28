@@ -257,14 +257,6 @@ def _count_blocks(blocks: list[dict[str, Any]]) -> int:
                     " hit IngestCompiler's content-hash dedup."
                 ),
             },
-            "region": {
-                "type": "string",
-                "description": (
-                    "BSage region the seeds ingest into. Overrides binding"
-                    " config's ``default_region`` (which itself defaults to"
-                    " ``imported-notion``)."
-                ),
-            },
             "database_ids": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -282,7 +274,6 @@ def _count_blocks(blocks: list[dict[str, Any]]) -> int:
 async def import_pages(
     context: SkillContext,
     binding_id: str | None = None,
-    region: str | None = None,
     database_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Walk the connected Notion workspace and seed every page.
@@ -305,7 +296,6 @@ async def import_pages(
         )
 
     resolved_binding = binding_id or context.config.get("binding_id") or "default"
-    resolved_region = region or context.config.get("default_region") or "imported-notion"
     resolved_dbs = database_ids
     if resolved_dbs is None:
         resolved_dbs = context.config.get("database_ids")
@@ -340,7 +330,6 @@ async def import_pages(
         seed_data: dict[str, Any] = {
             "title": title,
             "content": markdown,
-            "region": resolved_region,
             # Stable provenance — re-imports of the same page hit the
             # IngestCompiler content-hash dedup on the same key.
             "source_ref": f"notion://{resolved_binding}/{page_id}",
@@ -379,7 +368,6 @@ async def import_pages(
     logger.info(
         AUDIT_EVENT_IMPORTED,
         binding_id=resolved_binding,
-        region=resolved_region,
         pages_count=pages_count,
         blocks_count=blocks_count,
         skipped=skipped,
@@ -389,7 +377,6 @@ async def import_pages(
         "pages_count": pages_count,
         "blocks_count": blocks_count,
         "skipped": skipped,
-        "region": resolved_region,
     }
 
 
@@ -422,8 +409,5 @@ async def setup(cred_store: Any) -> dict[str, Any]:
     db_ids_raw = os.environ.get("NOTION_DATABASE_IDS")
     if db_ids_raw:
         data["database_ids"] = [s.strip() for s in db_ids_raw.split(",") if s.strip()]
-    region = os.environ.get("NOTION_DEFAULT_REGION")
-    if region:
-        data["default_region"] = region
     await cred_store.store("notion", data)
     return data

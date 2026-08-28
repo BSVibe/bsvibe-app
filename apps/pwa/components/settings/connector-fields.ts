@@ -10,7 +10,7 @@
  *
  *  - Inbound-only connectors (Lift B):
  *      • obsidian — `vault_path` + optional `exclude_patterns` (one glob
- *        per line) + optional `default_region`. No webhook secret —
+ *        per line). No webhook secret —
  *        the import is a local-vault scan, but the backend still
  *        requires a non-empty `signing_secret` (it encrypts it). We
  *        send a placeholder string so the wire shape stays uniform.
@@ -103,13 +103,6 @@ const OBSIDIAN: ConnectorFormDescriptor = {
       required: false,
       group: "inbound",
     },
-    {
-      key: "default_region",
-      i18nKey: "defaultRegion",
-      kind: "text",
-      required: false,
-      group: "inbound",
-    },
   ],
   showDeliveryConfigJson: false,
   pack: (values, connector, externalRef) => {
@@ -119,8 +112,6 @@ const OBSIDIAN: ConnectorFormDescriptor = {
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
     if (excludes.length > 0) config.exclude_patterns = excludes;
-    const region = (values.default_region ?? "").trim();
-    if (region.length > 0) config.default_region = region;
     return {
       connector,
       signing_secret: INBOUND_SECRET_PLACEHOLDER,
@@ -130,26 +121,13 @@ const OBSIDIAN: ConnectorFormDescriptor = {
   },
 };
 
-const CONVERSATION_EXPORT = (defaultRegionField: boolean): ConnectorFormDescriptor => ({
+const CONVERSATION_EXPORT = (): ConnectorFormDescriptor => ({
   fields: [
     { key: "export_path", i18nKey: "exportPath", kind: "text", required: true, group: "inbound" },
-    ...(defaultRegionField
-      ? [
-          {
-            key: "default_region",
-            i18nKey: "defaultRegion",
-            kind: "text" as const,
-            required: false,
-            group: "inbound" as const,
-          },
-        ]
-      : []),
   ],
   showDeliveryConfigJson: false,
   pack: (values, connector, externalRef) => {
     const config: Record<string, unknown> = { export_path: values.export_path?.trim() ?? "" };
-    const region = (values.default_region ?? "").trim();
-    if (region.length > 0) config.default_region = region;
     return {
       connector,
       signing_secret: INBOUND_SECRET_PLACEHOLDER,
@@ -295,8 +273,8 @@ const DESCRIPTORS: Record<ConnectorName, ConnectorFormDescriptor> = {
   sentry: OUTBOUND_DEFAULT,
   "email-sender": OUTBOUND_DEFAULT,
   obsidian: OBSIDIAN,
-  claude: CONVERSATION_EXPORT(true),
-  gpt: CONVERSATION_EXPORT(true),
+  claude: CONVERSATION_EXPORT(),
+  gpt: CONVERSATION_EXPORT(),
   notion: NOTION_OAUTH,
 };
 

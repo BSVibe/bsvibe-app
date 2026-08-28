@@ -272,9 +272,13 @@ class TestImportPagesAction:
         assert "import_pages" in P.meta.actions
         cap = P.meta.actions["import_pages"]
         assert cap.input_schema is not None
-        # Schema must declare the optional binding_id/region/database_ids props.
+        # Schema must declare the optional binding_id/database_ids props.
+        # (It also declared ``region`` — an axis that named nothing; the real
+        # ``write_seed`` reads only title/tags/content and dropped the key.)
         props = cap.input_schema["properties"]
-        assert "region" in props
+        assert "binding_id" in props
+        assert "database_ids" in props
+        assert "region" not in props
 
     @respx.mock
     async def test_imports_via_search(self):
@@ -352,78 +356,6 @@ class TestImportPagesAction:
             "notion://binding-x/p-a",
             "notion://binding-x/p-b",
         }
-
-    @respx.mock
-    async def test_default_region_from_binding_config(self):
-        respx.post(f"{API}/v1/search").mock(
-            return_value=httpx.Response(
-                200,
-                json={"results": [_page("p-1", "T")], "has_more": False, "next_cursor": None},
-            )
-        )
-        respx.get(f"{API}/v1/blocks/p-1/children").mock(
-            return_value=httpx.Response(200, json=_empty_blocks_response())
-        )
-        knowledge = _Knowledge()
-        ctx = _ImportCtx(
-            knowledge=knowledge,
-            config={"default_region": "research"},
-        )
-        await _runner().dispatch_action(
-            P.meta,
-            action_name="import_pages",
-            context=ctx,
-            kwargs={"binding_id": "b1"},
-        )
-        _, data = knowledge.calls[0]
-        assert data["region"] == "research"
-
-    @respx.mock
-    async def test_region_kwarg_overrides_binding_default(self):
-        respx.post(f"{API}/v1/search").mock(
-            return_value=httpx.Response(
-                200,
-                json={"results": [_page("p-1", "T")], "has_more": False, "next_cursor": None},
-            )
-        )
-        respx.get(f"{API}/v1/blocks/p-1/children").mock(
-            return_value=httpx.Response(200, json=_empty_blocks_response())
-        )
-        knowledge = _Knowledge()
-        ctx = _ImportCtx(
-            knowledge=knowledge,
-            config={"default_region": "research"},
-        )
-        await _runner().dispatch_action(
-            P.meta,
-            action_name="import_pages",
-            context=ctx,
-            kwargs={"binding_id": "b1", "region": "personal"},
-        )
-        _, data = knowledge.calls[0]
-        assert data["region"] == "personal"
-
-    @respx.mock
-    async def test_default_region_fallback_to_imported_notion(self):
-        respx.post(f"{API}/v1/search").mock(
-            return_value=httpx.Response(
-                200,
-                json={"results": [_page("p-1", "T")], "has_more": False, "next_cursor": None},
-            )
-        )
-        respx.get(f"{API}/v1/blocks/p-1/children").mock(
-            return_value=httpx.Response(200, json=_empty_blocks_response())
-        )
-        knowledge = _Knowledge()
-        ctx = _ImportCtx(knowledge=knowledge)
-        await _runner().dispatch_action(
-            P.meta,
-            action_name="import_pages",
-            context=ctx,
-            kwargs={"binding_id": "b1"},
-        )
-        _, data = knowledge.calls[0]
-        assert data["region"] == "imported-notion"
 
     @respx.mock
     async def test_missing_token_raises(self):
@@ -614,7 +546,6 @@ class TestSetup:
         store = AsyncMock()
         data = await P.meta.setup_fn(store)
         assert data["database_ids"] == ["db-1", "db-2"]
-        assert data["default_region"] == "research"
 
 
 # ── loader discovery ────────────────────────────────────────────────────────

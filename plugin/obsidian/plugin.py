@@ -68,14 +68,6 @@ p = plugin(
                     "Optional fnmatch globs to skip (default: .obsidian/**, Templates/**)."
                 ),
             },
-            "region": {
-                "type": "string",
-                "description": (
-                    "BSage region the seeds ingest into. Overrides binding"
-                    " config's ``default_region`` (which itself defaults to"
-                    " ``imported``)."
-                ),
-            },
         },
         "additionalProperties": False,
     },
@@ -84,7 +76,6 @@ async def import_vault(
     context: SkillContext,
     vault_path: str | None = None,
     exclude_patterns: list[str] | None = None,
-    region: str | None = None,
 ) -> dict[str, Any]:
     """Walk the founder's Obsidian vault and seed every markdown note.
 
@@ -114,7 +105,6 @@ async def import_vault(
     resolved_excludes = exclude_patterns
     if resolved_excludes is None:
         resolved_excludes = context.config.get("exclude_patterns")  # may be None
-    resolved_region = region or context.config.get("default_region") or "imported"
 
     scanner = VaultScanner(Path(resolved_path), exclude_patterns=resolved_excludes)
 
@@ -143,7 +133,6 @@ async def import_vault(
         seed_data: dict[str, Any] = {
             "title": title,
             "content": body,
-            "region": resolved_region,
             # Stable provenance suffix so re-imports of the same note hit
             # IngestCompiler's content-hash dedup path on the same key.
             "source_ref": f"obsidian://{note.relative_path}",
@@ -171,7 +160,6 @@ async def import_vault(
     logger.info(
         AUDIT_EVENT_IMPORTED,
         vault_path=str(resolved_path),
-        region=resolved_region,
         notes_count=notes_count,
         scanned_count=scanned_count,
         skipped_count=skipped_count,
@@ -181,7 +169,6 @@ async def import_vault(
         "notes_count": notes_count,
         "scanned_count": scanned_count,
         "skipped_count": skipped_count,
-        "region": resolved_region,
     }
 
 
@@ -214,8 +201,5 @@ async def setup(cred_store: Any) -> dict[str, Any]:
     excludes_raw = os.environ.get("OBSIDIAN_EXCLUDE_PATTERNS")
     if excludes_raw:
         data["exclude_patterns"] = [p.strip() for p in excludes_raw.split(",") if p.strip()]
-    region = os.environ.get("OBSIDIAN_DEFAULT_REGION")
-    if region:
-        data["default_region"] = region
     await cred_store.store("obsidian", data)
     return data
