@@ -57,6 +57,7 @@ from backend.knowledge.facade import (
     IngestResult,
     Knowledge,
 )
+from backend.knowledge.graph.vault_paths import workspace_vault_root
 from backend.knowledge.retrieval.ingest_retriever import build_ingest_retriever
 from backend.products.application.bootstrap import (
     BootstrapProgress,
@@ -435,7 +436,7 @@ def _build_bootstrap_knowledge_inner(
         Default permissive policy (Safe Mode off) lets the resolver auto-apply
         a ``create-concept`` action per new tag at write time.
         """
-        vault_root = Path(settings.knowledge_vault_root) / region_str / str(ws_id)
+        vault_root = workspace_vault_root(ws_id)
         vault_root.mkdir(parents=True, exist_ok=True)
         storage = FileSystemStorage(vault_root)
         index = CanonicalizationIndex()
@@ -595,7 +596,6 @@ async def _reconcile_embeddings_soft(
     workspace vault once ingest succeeds. Soft-fail + own session: a missing or
     failed embedder never reverts the completed bootstrap; no-op when no
     embedding model is configured."""
-    from pathlib import Path  # noqa: PLC0415
 
     from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
     from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
@@ -608,7 +608,7 @@ async def _reconcile_embeddings_soft(
         embedder = resolve_knowledge_embedder(settings)
         if not embedder.enabled or embedder.model is None:
             return
-        vault = Vault(Path(settings.knowledge_vault_root) / region / str(workspace_id))
+        vault = Vault(workspace_vault_root(workspace_id))
         async with session_factory() as session:
             backend = PgNoteVectorBackend(
                 session, workspace_id=workspace_id, embedding_model=embedder.model
@@ -707,8 +707,8 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
         repo_url=repo_url,
     )
 
-    # Look up the workspace's region (vault paths + knowledge-facade
-    # construction need it).
+    # The workspace must exist before anything is written under its id.
+    # (The vault's region segment is NOT read from this row — see below.)
     async with session_factory() as session:
         ws = await session.get(WorkspaceRow, workspace_id)
         if ws is None:
@@ -725,7 +725,12 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
                 reason="workspace_missing",
             )
             return
-        region = ws.region
+
+    # A DEPLOYMENT constant, not the row's ``region`` column. Reading the column
+    # here made bootstrap write the vault to a directory every REST knowledge
+    # route (which uses the deployment default) would then read as empty. See
+    # ``backend.knowledge.graph.vault_paths``.
+    region = settings.knowledge_default_region
 
     # #692 — a client_attach product runs on the founder's OWN machine, and
     # bootstrap is precisely the step that would put its source on the server
@@ -840,7 +845,7 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
             # Lift E20 — the orchestrator persists the code graph
             # to ``<vault_root>/code_graph/graph.json`` so the MCP
             # graph query surface can serve it later.
-            vault_root=Path(settings.knowledge_vault_root) / region / str(workspace_id),
+            vault_root=workspace_vault_root(workspace_id),
         )
         # Lift A-fix — promote LLM-classified seedling tags into
         # ``concepts/active/<id>.md`` canonical anchors so the PWA
@@ -1062,7 +1067,7 @@ async def _register_anchors_soft(
     can retrofit anchors later. A canonicalization hiccup must not turn a
     successful ingest into ``failed:ingest``.
     """
-    vault_root = Path(settings.knowledge_vault_root) / region / str(workspace_id)
+    vault_root = workspace_vault_root(workspace_id)
     if not vault_root.exists():
         logger.info(
             "bootstrap_anchor_registration_vault_missing",

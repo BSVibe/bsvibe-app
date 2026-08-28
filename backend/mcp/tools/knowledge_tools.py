@@ -26,7 +26,7 @@ from backend.knowledge.graph.markdown_utils import extract_frontmatter
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenWriter
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
-from backend.mcp.tools._helpers import vault_root_for, workspace_region
+from backend.mcp.tools._helpers import vault_root_for
 
 logger = structlog.get_logger(__name__)
 
@@ -41,8 +41,7 @@ class _PermissiveModel(BaseModel):
 # Vault factory — one Vault per tool call, rooted at the principal's workspace.
 # ---------------------------------------------------------------------------
 async def _vault_for_call(ctx: ToolContext) -> Vault:
-    region = await workspace_region(ctx.session, ctx.principal.workspace_id)
-    root = vault_root_for(region=region, workspace_id=ctx.principal.workspace_id)
+    root = vault_root_for(workspace_id=ctx.principal.workspace_id)
     root.mkdir(parents=True, exist_ok=True)
     return Vault(root)
 

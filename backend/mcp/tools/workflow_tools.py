@@ -298,11 +298,9 @@ async def _wipe_workspace_vault_subtrees(ctx: ToolContext) -> None:
 
     from backend.mcp.tools._helpers import (  # noqa: PLC0415
         vault_root_for,
-        workspace_region,
     )
 
-    region = await workspace_region(ctx.session, ctx.principal.workspace_id)
-    vault_root = vault_root_for(region=region, workspace_id=ctx.principal.workspace_id)
+    vault_root = vault_root_for(workspace_id=ctx.principal.workspace_id)
     for subdir in _RESETTABLE_VAULT_SUBDIRS:
         target = vault_root / subdir
         if not target.exists():

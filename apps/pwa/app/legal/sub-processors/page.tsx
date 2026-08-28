@@ -33,7 +33,10 @@ const SUB_PROCESSORS: readonly SubProcessor[] = [
   {
     name: "Supabase",
     purpose: "Authentication (Supabase Auth, JWKS) + Postgres database hosting.",
-    region: "us-east-1 / eu-west-1 (per workspace region)",
+    // NOT per-workspace. BSVibe runs ONE Supabase project; the workspace
+    // `region` column never steered where data is processed. Mirrors the Art. 30
+    // record served by /api/v1/workspace/compliance.
+    region: "ap-south-1 (single shared project)",
   },
   {
     name: "Vercel",

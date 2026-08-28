@@ -21,6 +21,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.api.v1.inside import build_inside_index, build_inside_storage
+from backend.config import get_settings
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from backend.knowledge.canonicalization import models
@@ -213,7 +214,12 @@ async def test_processing_record_returns_art30_doc(client_with_ws) -> None:
     ):
         assert key in body, f"missing Art. 30 key {key} in {sorted(body.keys())}"
     assert body["workspace_id"] == str(workspace_id)
-    assert body["region"] == "eu-1"
+    # The region where processing ACTUALLY happens — a deployment constant.
+    # The fixture's workspace row says ``eu-1``; that column never steered
+    # where anything is processed, so echoing it into an Art. 30 record
+    # asserted a residency control the system does not implement.
+    assert body["region"] == get_settings().knowledge_default_region
+    assert body["region"] != "eu-1", "Art. 30 record echoed the stale region column"
     assert body["legal_basis"] == "contract"
     assert isinstance(body["sub_processors"], list)
     # The sub-processor list must include the obvious ones.

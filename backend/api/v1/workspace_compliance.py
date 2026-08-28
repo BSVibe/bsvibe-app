@@ -40,6 +40,7 @@ from backend.api.v1._identity_deps import (
     get_workspace_repository,
 )
 from backend.api.v1.inside import build_inside_index, build_inside_storage
+from backend.config import get_settings
 from backend.identity.db import UserRow
 from backend.identity.domain.repositories import (
     MembershipRepository,
@@ -87,7 +88,12 @@ SUB_PROCESSORS: tuple[SubProcessor, ...] = (
     SubProcessor(
         name="Supabase",
         purpose="Authentication (Supabase Auth, JWKS) + Postgres database hosting.",
-        region="us-east-1 / eu-west-1 (per workspace region)",
+        # NOT per-workspace. BSVibe runs ONE Supabase project; the workspace
+        # ``region`` column never steered where data is processed (it only ever
+        # named a local vault directory, and is now a deployment constant).
+        # Claiming per-workspace residency in an Art. 30 record asserted a
+        # control the system does not implement.
+        region="ap-south-1 (single shared project)",
     ),
     SubProcessor(
         name="Vercel",
@@ -115,7 +121,11 @@ def _processing_record(workspace: WorkspaceRow) -> dict[str, Any]:
             "contact": "privacy@bsvibe.dev",
         },
         "workspace_id": str(workspace.id),
-        "region": workspace.region,
+        # The region processing ACTUALLY happens in — a deployment constant.
+        # Echoing ``workspace.region`` here put a column that never steered
+        # anything into an Art. 30 record, which is a statement about where
+        # data is processed. See ``backend.knowledge.graph.vault_paths``.
+        "region": get_settings().knowledge_default_region,
         "legal_basis": workspace.legal_basis,
         "purposes": [
             "Operate the BSVibe AI agent OS on behalf of the workspace owner.",
@@ -125,7 +135,7 @@ def _processing_record(workspace: WorkspaceRow) -> dict[str, Any]:
         ],
         "categories_of_data": [
             "Identity (email, Supabase user id) — to authenticate the founder.",
-            "Workspace metadata (name, region, safe-mode setting, legal basis).",
+            "Workspace metadata (name, safe-mode setting, legal basis).",
             "Operational records (runs, work-steps, deliverables, decisions).",
             "Connector bindings (third-party identifiers under founder control).",
             "Free-text payloads (founder-typed intent, rationale, notes).",

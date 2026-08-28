@@ -41,7 +41,7 @@ from backend.knowledge.code_graph.pipeline import (
     community_labels_vault_path,
 )
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
-from backend.mcp.tools._helpers import vault_root_for, workspace_region
+from backend.mcp.tools._helpers import vault_root_for
 
 logger = structlog.get_logger(__name__)
 
@@ -50,8 +50,7 @@ async def _community_labels_for_call(ctx: ToolContext) -> dict[int, dict[str, An
     """Async sibling of :func:`_graph_for_call` for the labels sidecar."""
     import json as _json  # noqa: PLC0415
 
-    region = await workspace_region(ctx.session, ctx.principal.workspace_id)
-    vault_root = vault_root_for(region=region, workspace_id=ctx.principal.workspace_id)
+    vault_root = vault_root_for(workspace_id=ctx.principal.workspace_id)
     path = community_labels_vault_path(vault_root=vault_root)
     if not path.is_file():
         return {}
@@ -73,8 +72,7 @@ async def _community_labels_for_call(ctx: ToolContext) -> dict[int, dict[str, An
 # bootstrapped yet — handlers turn that into a precise ToolError.
 # ---------------------------------------------------------------------------
 async def _graph_for_call(ctx: ToolContext) -> nx.DiGraph | None:
-    region = await workspace_region(ctx.session, ctx.principal.workspace_id)
-    vault_root = vault_root_for(region=region, workspace_id=ctx.principal.workspace_id)
+    vault_root = vault_root_for(workspace_id=ctx.principal.workspace_id)
     path = code_graph_vault_path(vault_root=vault_root)
     if not path.is_file():
         return None

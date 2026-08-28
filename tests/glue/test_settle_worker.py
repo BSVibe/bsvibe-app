@@ -437,11 +437,18 @@ async def test_settle_worker_idempotent_redrain(sf, tmp_path) -> None:
 
 
 async def test_settle_worker_workspace_isolation(sf, tmp_path) -> None:
+    """Two workspaces settling in the same drain get separate vault dirs.
+
+    ``ws_b`` has a ``workspaces`` row and ``ws_a`` does not — so this also
+    covers the missing-row fallback (telemetry can outlive its workspace).
+    Both land under the SAME region directory: the region is a deployment
+    constant, not a per-workspace value, so the workspace id is the only
+    boundary keeping these two apart. That makes it the thing to test.
+    """
     ws_a = uuid.uuid4()
     ws_b = uuid.uuid4()
-    # ws_b lives in a different region — exercises per-workspace region resolution.
     async with sf() as s:
-        s.add(WorkspaceRow(id=ws_b, name="ws-b", region="eu-1"))
+        s.add(WorkspaceRow(id=ws_b, name="ws-b"))
         await s.commit()
 
     await _seed_settle_activity(sf, workspace_id=ws_a, summary="alpha learning", knowledge=True)
@@ -456,7 +463,7 @@ async def test_settle_worker_workspace_isolation(sf, tmp_path) -> None:
     assert processed == 2
 
     a_notes = _written_notes(tmp_path, "us-1", ws_a)
-    b_notes = _written_notes(tmp_path, "eu-1", ws_b)
+    b_notes = _written_notes(tmp_path, "us-1", ws_b)
     assert len(a_notes) == 1
     assert len(b_notes) == 1
     assert "alpha learning" in a_notes[0].read_text(encoding="utf-8")
@@ -467,9 +474,9 @@ async def test_settle_worker_workspace_isolation(sf, tmp_path) -> None:
     b_body = b_notes[0].read_text(encoding="utf-8")
     assert "beta learning" not in a_body
     assert "alpha learning" not in b_body
-    # ws_a's vault dir must contain only ws_a content.
-    assert not _ws_dir(tmp_path, "eu-1", ws_a).exists()
-    assert not _ws_dir(tmp_path, "us-1", ws_b).exists()
+    # Every note written by this drain sits under the deployment region — a
+    # row-derived region would have parked ws_b's note in a sibling directory.
+    assert sorted(d.name for d in tmp_path.iterdir() if d.is_dir()) == ["us-1"]
 
 
 async def test_settle_worker_ignores_non_settle_activities(sf, tmp_path) -> None:

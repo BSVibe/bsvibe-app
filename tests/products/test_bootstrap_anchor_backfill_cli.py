@@ -14,6 +14,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.config import get_settings
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from backend.workflow.application.runtime.bootstrap_anchor_backfill import run_backfill
 
@@ -21,7 +22,27 @@ from .._support import db_engine
 
 pytestmark = pytest.mark.asyncio
 
+# The deployment region — the ONE directory every writer and reader uses.
 _REGION = "us-1"
+# What the workspaces row says. Deliberately different: this CLI used to build
+# its vault path from ``ws.region``, so seeding a row that disagrees turns every
+# test below into a negative control against that regression returning.
+_STALE_ROW_REGION = "eu-9"
+
+
+@pytest.fixture(autouse=True)
+def _vault_root(monkeypatch, tmp_path: Path):
+    """Point the deployment vault root at ``tmp_path``.
+
+    ``run_backfill`` no longer takes a ``vault_root`` argument — it resolves
+    each workspace through ``vault_paths.workspace_vault_root`` so there is one
+    definition of where a vault lives.
+    """
+    monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("BSVIBE_KNOWLEDGE_DEFAULT_REGION", _REGION)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest_asyncio.fixture
@@ -62,7 +83,9 @@ async def _seed_product(
     async with session_factory() as s:
         existing = await s.get(WorkspaceRow, workspace_id)
         if existing is None:
-            s.add(WorkspaceRow(id=workspace_id, name="t", region=_REGION, safe_mode=False))
+            s.add(
+                WorkspaceRow(id=workspace_id, name="t", region=_STALE_ROW_REGION, safe_mode=False)
+            )
             await s.flush()
         s.add(
             ProductRow(
@@ -93,7 +116,6 @@ async def test_backfill_by_product_slug_creates_anchors(session_factory, tmp_pat
         session_factory=session_factory,
         product_slug="alpha-product",
         workspace_id=None,
-        vault_root=tmp_path,
         dry_run=False,
     )
 
@@ -118,7 +140,6 @@ async def test_backfill_dry_run_does_not_mutate_vault(session_factory, tmp_path:
         session_factory=session_factory,
         product_slug="dry-run-product",
         workspace_id=None,
-        vault_root=tmp_path,
         dry_run=True,
     )
 
@@ -132,7 +153,6 @@ async def test_backfill_returns_zero_when_no_match(session_factory, tmp_path: Pa
         session_factory=session_factory,
         product_slug="does-not-exist",
         workspace_id=None,
-        vault_root=tmp_path,
         dry_run=False,
     )
     assert processed == 0
@@ -155,7 +175,6 @@ async def test_backfill_skips_incomplete_bootstrap_products(session_factory, tmp
         session_factory=session_factory,
         product_slug="failed-product",
         workspace_id=None,
-        vault_root=tmp_path,
         dry_run=False,
     )
 
@@ -178,7 +197,6 @@ async def test_backfill_idempotent_on_second_run(session_factory, tmp_path: Path
         session_factory=session_factory,
         product_slug="idem-product",
         workspace_id=None,
-        vault_root=tmp_path,
         dry_run=False,
     )
     first_listing = sorted(p.name for p in (ws_vault / "concepts" / "active").iterdir())
@@ -187,7 +205,6 @@ async def test_backfill_idempotent_on_second_run(session_factory, tmp_path: Path
         session_factory=session_factory,
         product_slug="idem-product",
         workspace_id=None,
-        vault_root=tmp_path,
         dry_run=False,
     )
     second_listing = sorted(p.name for p in (ws_vault / "concepts" / "active").iterdir())
@@ -218,7 +235,6 @@ async def test_backfill_by_workspace_id_processes_every_product(session_factory,
         session_factory=session_factory,
         product_slug=None,
         workspace_id=workspace_id,
-        vault_root=tmp_path,
         dry_run=False,
     )
     # Both products map to the SAME workspace vault, but the retrofit is

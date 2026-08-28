@@ -16,7 +16,6 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status
 
 from backend.api.deps import get_workspace_id
-from backend.config import get_settings
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.index import (
     CanonicalizationIndex,
@@ -27,18 +26,18 @@ from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.service import CanonicalizationService
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import FileSystemStorage
+from backend.knowledge.graph.vault_paths import workspace_vault_root
 
 
 def _vault_root(workspace_id: uuid.UUID) -> Path:
-    """``<knowledge_vault_root>/<region>/<workspace_id>/`` for the caller.
+    """The caller's vault root — delegates to the ONE definition.
 
-    Single source of the per-workspace vault path so the list dependency and
-    the resolution service address the exact same store.
+    This used to compute the path itself. That made it a SECOND answer to
+    "where does this workspace's vault live", and it disagreed with the writers
+    (settle hook / MCP), which read a per-workspace ``region`` column. See
+    ``backend.knowledge.graph.vault_paths``.
     """
-    settings = get_settings()
-    return (
-        Path(settings.knowledge_vault_root) / settings.knowledge_default_region / str(workspace_id)
-    )
+    return workspace_vault_root(workspace_id)
 
 
 async def build_canonicalization_index(

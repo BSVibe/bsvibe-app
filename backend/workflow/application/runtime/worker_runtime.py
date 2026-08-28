@@ -171,14 +171,11 @@ async def _retraction_writer_for(workspace_id: uuid.UUID) -> Any:
     are LOCAL: this module is the worker composition root and must not pull the
     knowledge vault stack at import time.
     """
-    from backend.data.session import session_scope  # noqa: PLC0415 — composition root
     from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
     from backend.knowledge.graph.writer import GardenWriter  # noqa: PLC0415
-    from backend.mcp.tools._helpers import vault_root_for, workspace_region  # noqa: PLC0415
+    from backend.mcp.tools._helpers import vault_root_for  # noqa: PLC0415
 
-    async with session_scope() as session:
-        region = await workspace_region(session, workspace_id)
-    root = vault_root_for(region=region, workspace_id=workspace_id)
+    root = vault_root_for(workspace_id=workspace_id)
     root.mkdir(parents=True, exist_ok=True)
     return GardenWriter(vault=Vault(root))
 
