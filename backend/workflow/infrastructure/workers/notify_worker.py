@@ -145,6 +145,31 @@ def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
 
 
+#: Events whose push channels default ON for anything bound, rather than
+#: waiting to be opted into.
+#:
+#: An absent key in a stored matrix means "the founder never saw this choice",
+#: not "no" — a channel bound after prefs were last saved is simply missing
+#: (measured on prod 2026-08-28: telegram active with a delivery config, and no
+#: telegram key in the matrix). For ordinary moments that opt-in default is
+#: right. For an auth outage it is not: the in-app inbox is part of what breaks,
+#: so an alert nobody opted into is an alert nobody gets.
+#:
+#: An explicit ``False`` is still a No. This changes the default for a key the
+#: founder never set — never a choice they made.
+DEFAULT_ON_EVENTS: frozenset[str] = frozenset({"auth_down"})
+
+
+def _enabled_push_channels(
+    matrix: dict[str, dict[str, bool]], *, event: str, bound: set[str]
+) -> set[str]:
+    """The push channels this event may use, before quiet hours and bindings."""
+    prefs = matrix.get(event, {})
+    if event in DEFAULT_ON_EVENTS:
+        return {ch for ch in bound if prefs.get(ch, True) and ch != IN_APP_CHANNEL}
+    return {ch for ch, on in prefs.items() if on and ch != IN_APP_CHANNEL}
+
+
 class NotifyWorker(BaseWorker):
     """Periodic drain of ``notification_outbox`` into the founder's push channels."""
 
@@ -195,9 +220,11 @@ class NotifyWorker(BaseWorker):
     async def _deliver_row(self, session: AsyncSession, row: NotificationEventRow) -> None:
         """Evaluate prefs + quiet hours for one row and fan out its push channels."""
         matrix = await self._matrix(session, row.workspace_id)
-        enabled = {
-            ch for ch, on in matrix.get(row.event, {}).items() if on and ch != IN_APP_CHANNEL
-        }
+        # Bindings are resolved BEFORE the prefs decision because a default-on
+        # event needs to know what channels exist to default them on.
+        bindings = await resolve_notify_bindings(session, workspace_id=row.workspace_id)
+        binding_by_connector = {b.connector: b for b in bindings}
+        enabled = _enabled_push_channels(matrix, event=row.event, bound=set(binding_by_connector))
 
         # Quiet hours suppress ONLY push channels; the in-app inbox is unaffected
         # (the Decision already surfaces there — the worker never sends in_app).
@@ -211,8 +238,6 @@ class NotifyWorker(BaseWorker):
 
         # Only channels that are BOTH matrix-enabled AND actually bound as a
         # notify channel for this workspace (available_channels ∩ enabled).
-        bindings = await resolve_notify_bindings(session, workspace_id=row.workspace_id)
-        binding_by_connector = {b.connector: b for b in bindings}
         targets = [c for c in enabled if c in binding_by_connector]
 
         content = await self._localized_content(session, row)

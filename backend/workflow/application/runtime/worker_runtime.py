@@ -62,6 +62,9 @@ from backend.workflow.infrastructure.workers.agent_worker import (
     AgentExecutionDeps,
     AgentWorker,
 )
+from backend.workflow.infrastructure.workers.auth_dependency_worker import (
+    AuthDependencyWorker,
+)
 from backend.workflow.infrastructure.workers.daily_brief_worker import DailyBriefWorker
 from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,
@@ -208,6 +211,10 @@ def build_worker_runtime(
         NotifyWorker(session_factory=session_factory, sender=notify_sender),
         # Notifier daily_brief — per-workspace once-a-day digest producer.
         DailyBriefWorker(session_factory=session_factory),
+        # Platform health — actively probes the user-JWT key source, because the
+        # only passive signal is a sign-in failing and a quiet stretch has none
+        # (prod 2026-08-28: a paused Supabase project took auth down unseen).
+        AuthDependencyWorker(session_factory=session_factory),
         SettleWorker(
             session_factory=session_factory,
             sink=KnowledgeSettleSink(

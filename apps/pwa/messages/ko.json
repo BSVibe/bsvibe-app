@@ -734,7 +734,8 @@
         "triggered": "외부에서 시작됨",
         "shipped": "출시됨",
         "failed": "실패함",
-        "daily_brief": "일일 요약"
+        "daily_brief": "일일 요약",
+        "auth_down": "로그인 장애"
       },
       "channel": {
         "in_app": "인앱 인박스",

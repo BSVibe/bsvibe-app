@@ -219,8 +219,8 @@ def test_workers_main_entrypoint_still_wires() -> None:
 
 def test_build_worker_runtime_constructs_expected_workers() -> None:
     """Smoke — ``build_worker_runtime`` returns a ``WorkerRuntime`` whose
-    ``workers`` list contains the 7 expected workers (intake, agent, delivery,
-    settle, relay, schedule, safe_mode_expiry). Behavior identical to pre-lift.
+    ``workers`` list is exactly the expected worker set, each with a distinct
+    ``_name``. The set below is the contract; do not re-add a magic count.
     """
     from unittest.mock import MagicMock
 
@@ -241,8 +241,12 @@ def test_build_worker_runtime_constructs_expected_workers() -> None:
         notify_sender=notify_sender,
     )
     assert isinstance(runtime, WorkerRuntime)
-    assert len(runtime.workers) == 11
     names = {getattr(w, "_name", None) for w in runtime.workers}
+    # NOT a magic count: the number drifted out of date the moment a worker was
+    # added (this docstring said "7" while the assertion said 11). What the
+    # count was really guarding is that no two workers share a ``_name`` — the
+    # set comparison below would silently swallow a duplicate otherwise.
+    assert len(runtime.workers) == len(names), "two workers share a _name"
     expected = {
         "intake_worker",
         "agent_worker",
@@ -258,6 +262,10 @@ def test_build_worker_runtime_constructs_expected_workers() -> None:
         # Lift Q1 — third ScheduleWorker driving the audit_outbox
         # retention sweep on a daily cadence.
         "audit_retention_sweep_worker",
+        # Platform health — actively probes the user-JWT key source. The only
+        # passive signal is a sign-in failing, and a quiet stretch produces none
+        # (prod 2026-08-28: a paused Supabase project took auth down unseen).
+        "auth_dependency_worker",
         # The retract queue's sweep — its tombstones used to land only when an
         # agent happened to read the garden over MCP.
         "retraction_sweep_worker",

@@ -37,7 +37,17 @@ import { useEffect, useState } from "react";
  */
 
 // Matrix rows — every one of them delivering, every one of them togglable.
-const DELIVERING_EVENTS = ["needs_you", "triggered", "shipped", "failed", "daily_brief"] as const;
+const DELIVERING_EVENTS = [
+  "needs_you",
+  "triggered",
+  "shipped",
+  "failed",
+  "daily_brief",
+  // Platform health, not a run moment. Its push channels default ON for any
+  // bound connector (backend `DEFAULT_ON_EVENTS`) — during this outage the
+  // in-app inbox is part of what breaks, so opt-in-by-absence defeats it.
+  "auth_down",
+] as const;
 const IN_APP = "in_app";
 
 type EventId = (typeof DELIVERING_EVENTS)[number];

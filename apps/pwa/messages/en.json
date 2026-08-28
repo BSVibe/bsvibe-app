@@ -734,7 +734,8 @@
         "triggered": "Triggered",
         "shipped": "Shipped",
         "failed": "Failed",
-        "daily_brief": "Daily digest"
+        "daily_brief": "Daily digest",
+        "auth_down": "Sign-in down"
       },
       "channel": {
         "in_app": "In-app inbox",
