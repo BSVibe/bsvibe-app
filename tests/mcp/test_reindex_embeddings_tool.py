@@ -7,11 +7,13 @@ actually REACH it. Before this tool the only deliberate trigger was
 whole repo — were tests and nothing else: no MCP tool, no PWA control, no SDK
 method. A backfill nobody can fire is a backfill that only runs by accident.
 
-The region test is a positive/negative control pair, not a shape assertion: the
-vault a workspace's notes actually live in is keyed by the workspace's OWN
-``region`` (that is the boundary the settle hook writes through). Resolving it
-from ``knowledge_default_region`` instead reads an empty directory and reports
-``scanned: 0`` — a silent no-op wearing a success shape.
+The region test is a negative control, not a shape assertion. The vault a
+workspace's notes live in is keyed by the DEPLOYMENT region — one directory for
+the whole install (see ``backend.knowledge.graph.vault_paths``). The workspaces
+row still carries a stale ``region`` column; a reader that trusted it would open
+an empty directory and report ``scanned: 0`` — a silent no-op wearing a success
+shape. The fixture therefore seeds a row whose column DISAGREES with the
+deployment, so a regression to reading it fails loudly.
 """
 
 from __future__ import annotations
@@ -121,7 +123,12 @@ def stub_embedder(monkeypatch: pytest.MonkeyPatch) -> _StubEmbedder:
 
 @pytest_asyncio.fixture
 async def seeded_ws(db, workspace_id, monkeypatch, tmp_path) -> AsyncIterator[Path]:
-    """A workspace in a NON-default region, with its vault populated there."""
+    """A workspace whose stored ``region`` disagrees with the deployment's.
+
+    The vault is under ``us-1`` (the deployment region, where every writer
+    actually puts notes); the row says ``eu-9``. Any reader that resolved the
+    vault from the row would find nothing.
+    """
     monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(tmp_path))
     monkeypatch.setenv("BSVIBE_KNOWLEDGE_DEFAULT_REGION", "us-1")
     get_settings.cache_clear()
@@ -136,7 +143,7 @@ async def test_reindex_tool_backfills_the_workspaces_knowledge_notes(
     db, workspace_id, user_id, registry, seeded_ws, stub_embedder
 ) -> None:
     """The founder fires the backfill and gets the real counts back."""
-    ws_vault = seeded_ws / "eu-9" / str(workspace_id)
+    ws_vault = seeded_ws / "us-1" / str(workspace_id)
     _write_note(ws_vault, "garden/seedling/a.md", "Alpha principle")
     _write_note(ws_vault, "concepts/active/c.md", "Gamma synthesis")
 
@@ -160,16 +167,17 @@ async def test_reindex_tool_backfills_the_workspaces_knowledge_notes(
     assert len(stub_embedder.calls) == 2
 
 
-async def test_reindex_tool_reads_the_workspace_region_not_the_default(
+async def test_reindex_tool_ignores_the_stale_region_column(
     db, workspace_id, user_id, registry, seeded_ws, stub_embedder
 ) -> None:
-    """Negative control: notes under the DEFAULT region are not this workspace's.
+    """Negative control: the stored ``region`` must not steer the vault lookup.
 
-    The workspace's region is ``eu-9``. A note parked under ``us-1`` (the
-    deployment default) belongs to no one here — resolving the vault from the
-    default region would scan it and report success over the wrong corpus.
+    The row says ``eu-9``; the deployment writes to ``us-1``. A note parked
+    under the row's region belongs to no vault anyone writes — a reader that
+    trusted the column would scan it and report success over a corpus the
+    settle hook never fills.
     """
-    _write_note(seeded_ws / "us-1" / str(workspace_id), "garden/seedling/x.md", "Wrong region")
+    _write_note(seeded_ws / "eu-9" / str(workspace_id), "garden/seedling/x.md", "Stale region")
 
     async with db() as s:
         ctx = ToolContext(
@@ -180,15 +188,43 @@ async def test_reindex_tool_reads_the_workspace_region_not_the_default(
         )
         out = await registry.call_tool(TOOL, {}, ctx)
 
-    assert out["scanned"] == 0, "scanned the default-region vault instead of the workspace's"
+    assert out["scanned"] == 0, "resolved the vault from the workspaces.region column"
     assert stub_embedder.calls == []
+
+
+async def test_reindex_tool_scans_only_this_workspaces_vault(
+    db, workspace_id, user_id, registry, seeded_ws, stub_embedder
+) -> None:
+    """Negative control: the workspace id is the boundary that survives.
+
+    With region collapsed to a deployment constant, every workspace's vault is
+    a sibling directory under the same region — so the id is the ONLY thing
+    keeping one founder's corpus out of another's backfill.
+    """
+    other = uuid.uuid4()
+    _write_note(seeded_ws / "us-1" / str(other), "garden/seedling/x.md", "Someone else's note")
+    _write_note(seeded_ws / "us-1" / str(workspace_id), "garden/seedling/a.md", "Mine")
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        out = await registry.call_tool(TOOL, {}, ctx)
+
+    assert out["scanned"] == 1, "scanned a neighbouring workspace's vault"
+    assert len(stub_embedder.calls) == 1
+    assert "Mine" in stub_embedder.calls[0]
+    assert "Someone else's note" not in stub_embedder.calls[0]
 
 
 async def test_reindex_tool_is_idempotent(
     db, workspace_id, user_id, registry, seeded_ws, stub_embedder
 ) -> None:
     """Second pass re-embeds nothing — the fingerprint is unchanged."""
-    ws_vault = seeded_ws / "eu-9" / str(workspace_id)
+    ws_vault = seeded_ws / "us-1" / str(workspace_id)
     _write_note(ws_vault, "garden/seedling/a.md", "Alpha principle")
 
     async with db() as s:
@@ -239,7 +275,7 @@ async def test_reindex_tool_reports_disabled_when_no_embedding_model(
         "backend.knowledge.retrieval.embedder_resolution.resolve_knowledge_embedder",
         lambda _settings: GatewayEmbedder(None),
     )
-    _write_note(seeded_ws / "eu-9" / str(workspace_id), "garden/seedling/a.md", "Alpha")
+    _write_note(seeded_ws / "us-1" / str(workspace_id), "garden/seedling/a.md", "Alpha")
 
     async with db() as s:
         ctx = ToolContext(
@@ -271,7 +307,7 @@ async def test_reindex_tool_bounds_one_pass_and_reports_the_rest(
     reports ``remaining``; the caller re-invokes until it is 0.
     """
     monkeypatch.setattr("backend.mcp.tools.reindex_tools._HTTP_PASS_MAX_EMBEDS", 2)
-    ws_vault = seeded_ws / "eu-9" / str(workspace_id)
+    ws_vault = seeded_ws / "us-1" / str(workspace_id)
     for i in range(5):
         _write_note(ws_vault, f"garden/seedling/n{i}.md", f"Body {i}")
 
@@ -293,7 +329,7 @@ async def test_reindex_tool_drains_across_calls_to_zero_remaining(
 ) -> None:
     """Repeated calls finish the corpus — the resume protocol, with no job row."""
     monkeypatch.setattr("backend.mcp.tools.reindex_tools._HTTP_PASS_MAX_EMBEDS", 2)
-    ws_vault = seeded_ws / "eu-9" / str(workspace_id)
+    ws_vault = seeded_ws / "us-1" / str(workspace_id)
     for i in range(5):
         _write_note(ws_vault, f"garden/seedling/n{i}.md", f"Body {i}")
 

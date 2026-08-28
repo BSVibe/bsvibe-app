@@ -31,16 +31,15 @@ import sys
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.config import get_settings
 from backend.data.session import make_engine
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.knowledge.graph.storage import FileSystemStorage
+from backend.knowledge.graph.vault_paths import workspace_vault_root
 from backend.products.application.bootstrap import register_bootstrap_anchors
 from backend.shared.core.logging import configure_logging
 
@@ -52,7 +51,6 @@ class _Target:
     """One workspace vault to retrofit."""
 
     workspace_id: uuid.UUID
-    region: str
     product_slug: str
     product_id: uuid.UUID
 
@@ -79,7 +77,6 @@ async def _resolve_targets(
     return [
         _Target(
             workspace_id=ws.id,
-            region=ws.region,
             product_slug=p.slug,
             product_id=p.id,
         )
@@ -87,14 +84,20 @@ async def _resolve_targets(
     ]
 
 
-async def _retrofit_target(target: _Target, vault_root: Path, *, dry_run: bool) -> None:
-    """Run anchor registration against one workspace vault."""
-    workspace_vault = vault_root / target.region / str(target.workspace_id)
+async def _retrofit_target(target: _Target, *, dry_run: bool) -> None:
+    """Run anchor registration against one workspace vault.
+
+    The vault is resolved through the single definition rather than composed
+    here: this CLI used to build ``vault_root / ws.region / <id>`` from the
+    workspaces row, so a workspace whose column differed from the deployment
+    would have been retrofitted in a directory nothing else reads — and the
+    CLI would have logged ``anchor_backfill_done`` over it.
+    """
+    workspace_vault = workspace_vault_root(target.workspace_id)
     if not workspace_vault.exists():
         logger.warning(
             "anchor_backfill_vault_missing",
             workspace_id=str(target.workspace_id),
-            region=target.region,
             product_slug=target.product_slug,
         )
         return
@@ -103,7 +106,6 @@ async def _retrofit_target(target: _Target, vault_root: Path, *, dry_run: bool) 
         logger.info(
             "anchor_backfill_dry_run",
             workspace_id=str(target.workspace_id),
-            region=target.region,
             product_slug=target.product_slug,
             vault=str(workspace_vault),
         )
@@ -114,7 +116,6 @@ async def _retrofit_target(target: _Target, vault_root: Path, *, dry_run: bool) 
     logger.info(
         "anchor_backfill_done",
         workspace_id=str(target.workspace_id),
-        region=target.region,
         product_slug=target.product_slug,
         candidate_tags=len(result.candidate_tags),
         created_concepts=len(result.created_concepts),
@@ -126,7 +127,6 @@ async def run_backfill(
     session_factory: async_sessionmaker[AsyncSession],
     product_slug: str | None,
     workspace_id: uuid.UUID | None,
-    vault_root: Path,
     dry_run: bool,
 ) -> int:
     """Top-level coroutine — resolve targets, then retrofit each.
@@ -149,7 +149,7 @@ async def run_backfill(
         )
         return 0
     for target in targets:
-        await _retrofit_target(target, vault_root, dry_run=dry_run)
+        await _retrofit_target(target, dry_run=dry_run)
     return len(targets)
 
 
@@ -180,16 +180,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 async def _main_async(args: argparse.Namespace) -> int:
     """Async body of :func:`main` — opens its own engine so the CLI is self-contained."""
-    settings = get_settings()
     engine = make_engine()
     try:
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        vault_root = Path(settings.knowledge_vault_root)
         processed = await run_backfill(
             session_factory=session_factory,
             product_slug=args.product_slug,
             workspace_id=args.workspace_id,
-            vault_root=vault_root,
             dry_run=bool(args.dry_run),
         )
     finally:

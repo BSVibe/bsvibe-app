@@ -6,29 +6,26 @@ import uuid
 from pathlib import Path
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import get_settings
-from backend.identity.workspaces_db import WorkspaceRow
+from backend.knowledge.graph.vault_paths import workspace_vault_root
 
 logger = structlog.get_logger(__name__)
 
 
-async def workspace_region(session: AsyncSession, workspace_id: uuid.UUID) -> str:
-    """Resolve the ``region`` for ``workspace_id``, falling back to the default."""
-    row = await session.get(WorkspaceRow, workspace_id)
-    if row is None:
-        return get_settings().knowledge_default_region
-    return row.region
+def vault_root_for(*, workspace_id: uuid.UUID) -> Path:
+    """The on-disk vault root for one workspace.
 
-
-def vault_root_for(*, region: str, workspace_id: uuid.UUID) -> Path:
-    """Return the on-disk vault root for one (region, workspace_id)."""
-    settings = get_settings()
-    return Path(settings.knowledge_vault_root) / region / str(workspace_id)
+    Thin re-export of the ONE definition
+    (:func:`backend.knowledge.graph.vault_paths.workspace_vault_root`) so the
+    existing MCP callers keep their import. There used to be a sibling
+    ``workspace_region`` here that read ``WorkspaceRow.region`` — a second
+    answer to "where does this workspace's vault live", which every REST route
+    answered differently. Region is a deployment constant; see the module
+    docstring of ``vault_paths``.
+    """
+    return workspace_vault_root(workspace_id)
 
 
 __all__ = [
     "vault_root_for",
-    "workspace_region",
 ]

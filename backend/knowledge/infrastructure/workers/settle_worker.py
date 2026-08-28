@@ -1070,21 +1070,23 @@ class SettleWorker(BaseWorker):
     async def _resolve_workspaces(
         self, session: AsyncSession, workspace_ids: Iterable[uuid.UUID]
     ) -> dict[uuid.UUID, _WorkspacePolicy]:
-        """Resolve region + canonicalization policy for each workspace.
+        """Resolve the canonicalization policy for each workspace.
 
         A missing row (telemetry can outlive its workspace) falls back to the
-        configured default region + the strict Safe-Mode default — never
-        auto-applying canon for an unknown workspace.
+        strict Safe-Mode default — never auto-applying canon for an unknown
+        workspace.
+
+        The region is NOT read per workspace. It is a deployment constant (see
+        ``backend.knowledge.graph.vault_paths``); reading a column here made
+        this worker's vault boundary disagree with every REST route's.
         """
         ids = list(workspace_ids)
         if not ids:
             return {}
-        stmt = select(WorkspaceRow.id, WorkspaceRow.region, WorkspaceRow.safe_mode).where(
-            WorkspaceRow.id.in_(ids)
-        )
+        stmt = select(WorkspaceRow.id, WorkspaceRow.safe_mode).where(WorkspaceRow.id.in_(ids))
         return {
-            wid: _WorkspacePolicy(region, bool(safe_mode))
-            for wid, region, safe_mode in (await session.execute(stmt)).all()
+            wid: _WorkspacePolicy(self._cfg.default_region, bool(safe_mode))
+            for wid, safe_mode in (await session.execute(stmt)).all()
         }
 
 

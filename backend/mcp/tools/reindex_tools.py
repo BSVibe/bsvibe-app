@@ -12,10 +12,10 @@ REST, the settle hook and this tool share, and the skip decision stays inside
 second copy of "what text represents this note" is the exact drift that keyed
 1,724 prod vectors to a work-log line (#837/#838).
 
-The vault is resolved through ``workspace_region`` + ``vault_root_for``, i.e. the
-workspace's OWN region — the same boundary the settle hook writes through. Using
-the deployment default region instead would read an empty directory and report
-``scanned: 0`` as a success.
+The vault is resolved through the ONE definition
+(``backend.knowledge.graph.vault_paths.workspace_vault_root``) that every other
+surface now shares — region is a deployment constant, so REST, MCP and the
+settle hook cannot disagree about which directory a workspace's notes live in.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from backend.mcp.api import Tool, ToolContext, ToolRegistry
-from backend.mcp.tools._helpers import vault_root_for, workspace_region
+from backend.mcp.tools._helpers import vault_root_for
 
 #: Notes embedded per HTTP-shaped pass. Measured on prod 2026-08-28: ~0.43s per
 #: note, and Cloudflare cuts an idle client at ~100s. 100 keeps one pass well
@@ -72,8 +72,7 @@ async def _h_reindex(_args: ReindexEmbeddingsInput, ctx: ToolContext) -> Any:
             scanned=0, embedded=0, already=0, disabled=True, remaining=0, removed=0
         )
 
-    region = await workspace_region(ctx.session, workspace_id)
-    vault = Vault(vault_root_for(region=region, workspace_id=workspace_id))
+    vault = Vault(vault_root_for(workspace_id=workspace_id))
     backend = PgNoteVectorBackend(
         ctx.session, workspace_id=workspace_id, embedding_model=embedder.model
     )

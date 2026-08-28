@@ -27,14 +27,28 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.config import get_settings
 from backend.identity.infrastructure.repositories import SqlAlchemyWorkspaceRepository
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.infrastructure.repositories import SqlAlchemyModelAccountRepository
 
-
 # ---------------------------------------------------------------------------
 # bsvibe_workspace_get
 # ---------------------------------------------------------------------------
+
+
+def _effective_region() -> str:
+    """The region actually in effect — a DEPLOYMENT constant.
+
+    Echoing the workspace's stored column here would surface a value that no
+    longer steers
+    anything: every surface resolves the vault through
+    ``backend.knowledge.graph.vault_paths``. Echoing the stale value would tell
+    the caller their notes live somewhere they do not.
+    """
+    return get_settings().knowledge_default_region
+
+
 class WorkspaceGetInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -78,7 +92,7 @@ async def _h_get(_args: WorkspaceGetInput, ctx: ToolContext) -> Any:
     return WorkspaceGetOutput(
         id=str(row.id),
         name=row.name,
-        region=row.region,
+        region=_effective_region(),
         safe_mode=row.safe_mode,
         audit_retention_days=row.audit_retention_days,
         language=row.language,
@@ -117,7 +131,7 @@ async def _h_rename(args: WorkspaceRenameInput, ctx: ToolContext) -> Any:
     return WorkspaceGetOutput(
         id=str(row.id),
         name=row.name,
-        region=row.region,
+        region=_effective_region(),
         safe_mode=row.safe_mode,
         audit_retention_days=row.audit_retention_days,
         language=row.language,
@@ -168,7 +182,7 @@ async def _h_set_default_account(args: WorkspaceSetDefaultAccountInput, ctx: Too
     return WorkspaceGetOutput(
         id=str(row.id),
         name=row.name,
-        region=row.region,
+        region=_effective_region(),
         safe_mode=row.safe_mode,
         audit_retention_days=row.audit_retention_days,
         language=row.language,

@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import get_settings
 from backend.identity.db import MembershipRow
 from backend.identity.workspaces_db import WorkspaceRow
 
@@ -52,11 +53,15 @@ class SqlAlchemyWorkspaceRepository:
         return list(result.scalars().all())
 
     async def list_active_regions(self) -> list[tuple[uuid.UUID, str, bool]]:
-        stmt = select(WorkspaceRow.id, WorkspaceRow.region, WorkspaceRow.safe_mode).where(
+        stmt = select(WorkspaceRow.id, WorkspaceRow.safe_mode).where(
             WorkspaceRow.deleted_at.is_(None)
         )
         result = await self._session.execute(stmt)
-        return [(wid, region, safe) for wid, region, safe in result.all()]
+        # Region is a deployment constant, not a per-workspace value — see
+        # ``backend.knowledge.graph.vault_paths``. Kept in the tuple shape for
+        # the existing callers; every entry carries the same configured value.
+        region = get_settings().knowledge_default_region
+        return [(wid, region, safe) for wid, safe in result.all()]
 
     async def list_with_audit_retention(self) -> list[tuple[uuid.UUID, int]]:
         stmt = select(WorkspaceRow.id, WorkspaceRow.audit_retention_days).where(

@@ -28,7 +28,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from backend.config import get_settings
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.index import (
     CanonicalizationIndex,
@@ -39,6 +38,7 @@ from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.service import CanonicalizationService
 from backend.knowledge.canonicalization.store import NoteStore
 from backend.knowledge.graph.storage import FileSystemStorage
+from backend.knowledge.graph.vault_paths import workspace_vault_root
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 
 
@@ -47,13 +47,17 @@ class _Envelope(RootModel[Any]):
 
 
 # ---------------------------------------------------------------------------
-# Vault rooting — mirrors backend.api.v1.decisions._helpers._vault_root
+# Vault rooting — delegates to the ONE definition
 # ---------------------------------------------------------------------------
 def _vault_root(workspace_id: uuid.UUID) -> Path:
-    settings = get_settings()
-    return (
-        Path(settings.knowledge_vault_root) / settings.knowledge_default_region / str(workspace_id)
-    )
+    """The caller's vault root.
+
+    This used to compose the path itself and carried the comment "mirrors
+    ``backend.api.v1.decisions._helpers._vault_root``". A surface that mirrors
+    another is a surface that can drift from it; the layout now has a single
+    definition and both sides call it.
+    """
+    return workspace_vault_root(workspace_id)
 
 
 async def _build_index(ctx: ToolContext) -> CanonicalizationIndex:
