@@ -30,8 +30,8 @@ DEFAULT_EXCLUDE_PATTERNS: tuple[str, ...] = (
 class ScannedNote:
     """One markdown note found in the vault.
 
-    ``relative_path`` is POSIX-style relative to the vault root so it works
-    as a stable cross-platform ``source_ref`` suffix. ``text`` is the raw
+    ``relative_path`` is POSIX-style relative to the vault root so exclude
+    patterns match the same way on every platform. ``text`` is the raw
     file contents (UTF-8, errors replaced) — the parser will pull
     frontmatter out of it.
     """

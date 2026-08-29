@@ -133,9 +133,6 @@ async def import_vault(
         seed_data: dict[str, Any] = {
             "title": title,
             "content": body,
-            # Stable provenance suffix so re-imports of the same note hit
-            # IngestCompiler's content-hash dedup path on the same key.
-            "source_ref": f"obsidian://{note.relative_path}",
         }
         if tags is not None:
             seed_data["tags"] = tags

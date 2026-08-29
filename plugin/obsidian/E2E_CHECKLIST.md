@@ -22,8 +22,7 @@ uv run pytest plugin/obsidian/tests -q
       `write_seed("obsidian", ...)` per note
       — `TestImportVault::test_imports_all_markdown_notes`
 - [x] **import_vault**: frontmatter `title` / `tags` flow through to the
-      seed payload; `source_ref` carries the `obsidian://<relative-path>`
-      provenance
+      seed payload
       — `TestImportVault::test_passes_frontmatter_to_seed_metadata`
 - [x] **import_vault**: default exclude patterns drop `.obsidian/**` and
       `Templates/**`

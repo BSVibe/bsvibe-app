@@ -253,8 +253,8 @@ def _count_blocks(blocks: list[dict[str, Any]]) -> int:
                 "type": "string",
                 "description": (
                     "Identifier of the BSage binding the import is scoped"
-                    " to. Used as the ``source_ref`` prefix so re-imports"
-                    " hit IngestCompiler's content-hash dedup."
+                    " to. Names the binding config the import reads, and"
+                    " labels the audit event this import emits."
                 ),
             },
             "database_ids": {
@@ -330,9 +330,6 @@ async def import_pages(
         seed_data: dict[str, Any] = {
             "title": title,
             "content": markdown,
-            # Stable provenance — re-imports of the same page hit the
-            # IngestCompiler content-hash dedup on the same key.
-            "source_ref": f"notion://{resolved_binding}/{page_id}",
             "frontmatter": {
                 "notion_page_id": page_id,
                 "url": page.get("url"),

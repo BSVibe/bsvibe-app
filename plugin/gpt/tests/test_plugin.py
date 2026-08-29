@@ -129,7 +129,7 @@ class TestImportConversations:
         assert result["conversations_count"] == 2
 
     @pytest.mark.asyncio
-    async def test_source_ref_uses_binding_and_id(self, tmp_path):
+    async def test_seeds_every_valid_conversation(self, tmp_path):
         json_path = _write_fixture_to(tmp_path)
         knowledge = _Knowledge()
         ctx = _Ctx(knowledge=knowledge)
@@ -142,10 +142,13 @@ class TestImportConversations:
                 "export_path": str(json_path),
             },
         )
-        refs = {data["source_ref"] for _, data in knowledge.calls}
-        assert refs == {
-            "gpt://binding-x/conv-abc-123",
-            "gpt://binding-x/conv-def-456",
+        # 제목으로 센다 — ``write_seed`` 가 실제로 소비하는 축이다.
+        # 이 단언의 앞 세대는 ``source_ref`` 로 셌는데, 그 값은 노트에
+        # 도달한 적이 없어 통과해도 아무것도 보장하지 않았다.
+        titles = {data["title"] for _, data in knowledge.calls}
+        assert titles == {
+            "Brainstorming about marketing",
+            "Conversation with tool call",
         }
 
     @pytest.mark.asyncio
@@ -165,7 +168,7 @@ class TestImportConversations:
         )
         assert result["conversations_count"] == 1
         _, data = knowledge.calls[0]
-        assert "conv-def-456" in data["source_ref"]
+        assert data["title"] == "Conversation with tool call"
 
     @pytest.mark.asyncio
     async def test_export_path_falls_back_to_binding_config(self, tmp_path):
@@ -255,7 +258,7 @@ class TestImportConversations:
         class _FlakeyKnowledge(_Knowledge):
             async def write_seed(self, source, data):  # type: ignore[override]
                 self.calls.append((source, data))
-                if "conv-def-456" in data["source_ref"]:
+                if data["title"] == "Conversation with tool call":
                     raise RuntimeError("boom")
                 return f"/seeds/{source}/{len(self.calls)}.md"
 

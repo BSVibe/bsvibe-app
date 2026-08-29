@@ -318,7 +318,6 @@ class TestImportPagesAction:
         assert source == "notion"
         assert data["title"] == "Hello"
         assert "body line" in data["content"]
-        assert data["source_ref"] == "notion://binding-x/p-1"
 
     @respx.mock
     async def test_imports_via_database_ids(self):
@@ -350,12 +349,9 @@ class TestImportPagesAction:
             kwargs={"binding_id": "binding-x"},
         )
         assert result["pages_count"] == 2
-        # Both seeded with the binding-scoped source_ref.
-        refs = {data["source_ref"] for _, data in knowledge.calls}
-        assert refs == {
-            "notion://binding-x/p-a",
-            "notion://binding-x/p-b",
-        }
+        # 제목으로 센다 — ``write_seed`` 가 실제로 소비하는 축이다.
+        titles = {data["title"] for _, data in knowledge.calls}
+        assert titles == {"A", "B"}
 
     @respx.mock
     async def test_missing_token_raises(self):

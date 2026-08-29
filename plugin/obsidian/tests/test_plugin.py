@@ -126,9 +126,6 @@ class TestImportVault:
         assert data["title"] == "Hello"
         assert data["tags"] == ["x"]
         assert "The body." in data["content"]
-        # source_ref preserves provenance (relative path in vault).
-        assert data["source_ref"].endswith("note.md")
-        assert data["source_ref"].startswith("obsidian://")
 
     @pytest.mark.asyncio
     async def test_excludes_default_dirs(self, tmp_path):
@@ -158,9 +155,10 @@ class TestImportVault:
                 "exclude_patterns": ["skip/**"],
             },
         )
-        rels = [c[1]["source_ref"].split("/", maxsplit=2)[-1] for c in knowledge.calls]
-        assert all("skip" not in r for r in rels)
-        assert any("keep.md" in r for r in rels)
+        # 제목으로 센다 — ``write_seed`` 가 실제로 소비하는 축이다.
+        # (obsidian 제목은 frontmatter title 이 없으면 파일 stem 이다)
+        titles = {c[1]["title"] for c in knowledge.calls}
+        assert titles == {"keep"}
 
     @pytest.mark.asyncio
     async def test_missing_vault_path_in_args_falls_back_to_config(self, tmp_path):
