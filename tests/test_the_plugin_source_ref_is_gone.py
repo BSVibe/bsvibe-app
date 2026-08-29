@@ -46,7 +46,13 @@ _KEY = "source" + "_ref"
 
 #: ``write_seed`` 가 ``data`` 에서 실제로 읽는 키. 이 PR 의 삭제가 안전한
 #: **이유** 그 자체이므로 명제 그대로 박아둔다.
-_CONSUMED_SEED_KEYS = frozenset({"title", "tags", "content"})
+#:
+#: 2026-08-29 갱신 — 이 가드가 설계대로 발화했다. ``frontmatter`` 를 반영하는
+#: 변경이 여기서 걸렸고, *"떨어지면 이 PR 의 전제가 바뀐 것이니 가드를 고치기
+#: 전에 그 판단부터"* 라는 지시대로 판단을 거쳤다(형님, *"1은 반영하게 하자"*).
+#: ``source_ref`` 가 여전히 이 집합에 **없다**는 것이 이 파일의 명제이고, 그건
+#: 그대로다 — 바뀐 것은 형제 키 하나가 소비자를 얻었다는 사실뿐이다.
+_CONSUMED_SEED_KEYS = frozenset({"title", "tags", "content", "frontmatter"})
 
 _SCANNED = ("backend", "plugin", "bsvibe_sdk", "tests")
 
