@@ -69,8 +69,8 @@ def _resolve_export_file(export_path: str) -> Path:
                 "type": "string",
                 "description": (
                     "Identifier of the BSage binding the import is scoped"
-                    " to. Used as the ``source_ref`` prefix so re-imports"
-                    " hit IngestCompiler's content-hash dedup."
+                    " to. Names the binding config the import reads, and"
+                    " labels the audit event this import emits."
                 ),
             },
             "export_path": {
@@ -159,9 +159,6 @@ async def import_conversations(
         seed_data: dict[str, Any] = {
             "title": convo.title,
             "content": markdown,
-            # Stable provenance — re-imports of the same conversation hit
-            # the IngestCompiler content-hash dedup on the same key.
-            "source_ref": f"claude://{resolved_binding}/{convo.uuid}",
             "frontmatter": render_frontmatter_only(convo),
         }
 
