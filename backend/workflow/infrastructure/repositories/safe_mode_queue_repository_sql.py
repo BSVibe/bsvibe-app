@@ -2,7 +2,7 @@
 
 v8 D44/D45. The :class:`SafeModeQueue` application service constructs one
 of these per its session. The Repository is the raw persistence seam
-(``get`` / ``list_*`` / ``enqueue`` / ``mark_expired_bulk``); the service owns
+(``get`` / ``list_*`` / ``enqueue``); the service owns
 the rich lifecycle transitions on the returned rows.
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.channels import SAFE_MODE_QUEUE_ITEMS
@@ -111,22 +111,6 @@ class SqlAlchemySafeModeQueueRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
-
-    async def mark_expired_bulk(self, *, workspace_id: uuid.UUID, now: datetime) -> int:
-        stmt = (
-            update(SafeModeQueueItemRow)
-            .where(
-                SafeModeQueueItemRow.workspace_id == workspace_id,
-                SafeModeQueueItemRow.status.in_([SafeModeStatus.PENDING, SafeModeStatus.EXTENDED]),
-                SafeModeQueueItemRow.expires_at <= now,
-            )
-            .values(status=SafeModeStatus.EXPIRED, decided_at=now)
-            .returning(SafeModeQueueItemRow.id)
-        )
-        result = await self._session.execute(stmt)
-        ids = result.scalars().all()
-        await self._session.flush()
-        return len(ids)
 
     async def enqueue(self, item: SafeModeQueueItemRow, *, producer_id: str) -> None:
         SAFE_MODE_QUEUE_ITEMS.emit(self._session, item, producer_id=producer_id)

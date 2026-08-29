@@ -8,7 +8,7 @@ for outbound deliveries. The lifecycle has rich domain semantics
 already owns those transitions.
 
 This Protocol is the **persistence seam beneath** that service: it captures
-the raw read/write surface (``get``, ``list_*``, ``enqueue``, ``mark_expired_bulk``)
+the raw read/write surface (``get``, ``list_*``, ``enqueue``)
 so the service no longer issues raw ``select(SafeModeQueueItemRow)`` /
 ``session.get(SafeModeQueueItemRow, ...)`` queries. Lifecycle methods
 (``approve``/``deny``/``mark_delivered``/``extend``/etc.) stay on the
@@ -65,14 +65,6 @@ class SafeModeQueueRepository(Protocol):
         System-wide read (no workspace filter) — D3a / M1 plug-in for
         :class:`SafeModeExpirySweepRunner`, which transitions each returned
         row to ``EXPIRED`` and emits ONE audit row for the batch.
-        """
-
-    async def mark_expired_bulk(self, *, workspace_id: uuid.UUID, now: datetime) -> int:
-        """Single-statement bulk transition of every PENDING / EXTENDED row past
-        ``expires_at`` in one workspace to EXPIRED. Returns the count.
-
-        Per-workspace path with no audit emission — the D3a sweep uses the
-        per-row :meth:`SafeModeQueue.mark_expired` for glass-box auditing.
         """
 
     async def enqueue(self, item: SafeModeQueueItemRow, *, producer_id: str) -> None:

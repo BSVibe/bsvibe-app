@@ -19,6 +19,9 @@ from backend.workflow.infrastructure.delivery.db import (
     SafeModeQueueItemRow,
     SafeModeStatus,
 )
+from backend.workflow.infrastructure.repositories.safe_mode_queue_repository_sql import (
+    SqlAlchemySafeModeQueueRepository,
+)
 
 from .._support import db_engine
 
@@ -126,7 +129,13 @@ async def test_extend_caps_at_max(session: AsyncSession) -> None:
     assert row.extension_count == MAX_EXTENSIONS
 
 
-async def test_expire_sweeps_overdue(session: AsyncSession) -> None:
+async def test_overdue_rows_are_found_and_flipped_per_row(session: AsyncSession) -> None:
+    """살아 있는 만료 경로 그대로 — ``list_due_expired`` 로 찾고 per-row 로 뒤집는다.
+
+    앞 세대는 ``SafeModeQueue.expire`` (벌크)를 불렀는데 그건 프로덕션 호출자가
+    0인 추월당한 변형이었다. 커버리지("기한 지난 행이 EXPIRED 가 된다")는 그대로
+    두고 축만 ``SafeModeExpirySweepRunner`` 가 실제로 도는 경로로 옮겼다.
+    """
     q = SafeModeQueue(session)
     ws = uuid.uuid4()
     # Hand-craft an overdue row to skip the 90d wait.
@@ -142,8 +151,44 @@ async def test_expire_sweeps_overdue(session: AsyncSession) -> None:
     session.add(row)
     await session.commit()
 
-    swept = await q.expire(workspace_id=ws)
+    due = await SqlAlchemySafeModeQueueRepository(session).list_due_expired()
+    assert [r.id for r in due] == [row.id]
+    assert await q.mark_expired(workspace_id=ws, item_id=row.id) is True
     await session.commit()
-    assert swept == 1
+    fresh = await session.get(SafeModeQueueItemRow, row.id)
+    assert fresh.status is SafeModeStatus.EXPIRED
+
+
+async def test_mark_expired_is_workspace_scoped(session: AsyncSession) -> None:
+    """다른 워크스페이스의 행은 만료시킬 수 없다 — 테넌트 격리.
+
+    이 커버리지는 원래 ``repo.mark_expired_bulk`` 의 워크스페이스 스코핑을
+    검증하던 것이다. 그 벌크 변형은 프로덕션 호출자가 0이라 지웠지만,
+    **격리 성질은 지울 수 없다** — 살아 있는 per-row 경로가 같은 것을 강제하므로
+    (``row.workspace_id != workspace_id`` → ``False``) 그쪽으로 옮겼다.
+    """
+    q = SafeModeQueue(session)
+    mine, theirs = uuid.uuid4(), uuid.uuid4()
+    row = SafeModeQueueItemRow(
+        id=uuid.uuid4(),
+        workspace_id=theirs,
+        deliverable_id=uuid.uuid4(),
+        status=SafeModeStatus.PENDING,
+        expires_at=datetime.now(tz=UTC) - timedelta(days=1),
+        extension_count=0,
+        created_at=datetime.now(tz=UTC) - timedelta(days=91),
+    )
+    session.add(row)
+    await session.commit()
+
+    # 남의 워크스페이스 id 로는 못 뒤집는다.
+    assert await q.mark_expired(workspace_id=mine, item_id=row.id) is False
+    await session.commit()
+    fresh = await session.get(SafeModeQueueItemRow, row.id)
+    assert fresh.status is SafeModeStatus.PENDING
+
+    # 양성 대조군 — 주인은 뒤집을 수 있다(위 False 가 "언제나 False" 가 아님).
+    assert await q.mark_expired(workspace_id=theirs, item_id=row.id) is True
+    await session.commit()
     fresh = await session.get(SafeModeQueueItemRow, row.id)
     assert fresh.status is SafeModeStatus.EXPIRED

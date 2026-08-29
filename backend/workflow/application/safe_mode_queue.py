@@ -392,18 +392,6 @@ class SafeModeQueue:
         await self._session.flush()
         return True
 
-    async def expire(self, *, workspace_id: uuid.UUID) -> int:
-        """Sweep pending items past ``expires_at`` to ``expired``. Returns count."""
-        now = datetime.now(tz=UTC)
-        count = await self._repo.mark_expired_bulk(workspace_id=workspace_id, now=now)
-        if count:
-            logger.info(
-                "safe_mode_expired",
-                workspace_id=str(workspace_id),
-                count=count,
-            )
-        return count
-
     async def mark_expired(
         self,
         *,
@@ -416,16 +404,14 @@ class SafeModeQueue:
         vocabulary so the lifecycle is enum-shaped + glass-box (the
         :class:`SafeModeStatus.EXPIRED` transition is named, not piggybacked on
         ``mark_deleted`` with a reason). The system-wide sweep
-        (:meth:`expire_all_due`, driven by the M1 schedule runner) calls this
-        method per row so individual transitions stay observable.
+        (:class:`~backend.workflow.application.safe_mode_expiry.SafeModeExpirySweepRunner`)
+        calls this method per row so individual transitions stay observable.
 
         Returns ``False`` if not found / not in ``PENDING`` or ``EXTENDED`` —
         the edge is enforced, so an already-settled item (approved/denied/
         delivered/archived/deleted/expired) cannot regress to ``EXPIRED``.
         ``decided_at`` is stamped here (the founder didn't decide, but the
-        system did — the row LEFT the active queue at this instant, which is
-        the same semantic ``decided_at`` already carries for ``EXPIRED``-via-
-        :meth:`expire`).
+        system did — the row LEFT the active queue at this instant).
         """
         row = await self._repo.get(item_id)
         if row is None or row.workspace_id != workspace_id:

@@ -75,7 +75,6 @@ def test_safe_mode_queue_repository_protocol_surface() -> None:
         "list_pending_for_run",
         "list_resolved_by_workspace",
         "list_due_expired",
-        "mark_expired_bulk",
         "enqueue",
     ):
         method = getattr(SafeModeQueueRepository, name, None)
