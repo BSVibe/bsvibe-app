@@ -27,6 +27,7 @@ from backend.knowledge.graph.writer_core._entity_stub import (
     _create_entity_stub,
     _update_entity_stub_mentions,
 )
+from backend.knowledge.graph.writer_core._seed_frontmatter import merge_seed_frontmatter
 
 if TYPE_CHECKING:
     from backend.knowledge._internal.events import EventBus
@@ -108,6 +109,11 @@ class _WriterIOMixin:
 
         Creates a file at seeds/{source}/{YYYY-MM-DD_HHMM}.md with
         YAML frontmatter containing type, source, and captured_at.
+
+        ``data["frontmatter"]`` carries caller-supplied provenance and is
+        folded in by :func:`merge_seed_frontmatter` — see that module for the
+        precedence and serializability rules. Precedence, strongest first:
+        system fields, then top-level ``title`` / ``tags``, then the mapping.
         """
         now = datetime.now(tz=UTC)
         date_str = now.strftime("%Y-%m-%d")
@@ -120,6 +126,7 @@ class _WriterIOMixin:
             "source": source,
             "captured_at": date_str,
         }
+        merged_extra = merge_seed_frontmatter(metadata, data.get("frontmatter"), source=source)
         if "title" in data:
             metadata["title"] = data["title"]
         if "tags" in data:
@@ -130,7 +137,9 @@ class _WriterIOMixin:
         if "title" in data and "content" in data:
             body = data["content"]
         else:
-            body = yaml.dump(data, default_flow_style=False, allow_unicode=True)
+            # Whatever was merged above must not also be dumped into the body.
+            dumped = {k: v for k, v in data.items() if k != "frontmatter"} if merged_extra else data
+            body = yaml.dump(dumped, default_flow_style=False, allow_unicode=True)
         content = f"{frontmatter}\n{body}\n"
 
         async with self._seed_lock:

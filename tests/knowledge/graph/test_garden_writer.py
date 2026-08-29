@@ -809,3 +809,169 @@ class TestHandleDeleteNote:
         result = await writer.handle_delete_note({"path": rel_path})
         assert result["status"] == "deleted"
         assert not path.exists()
+
+
+class TestWriteSeedFrontmatter:
+    """``data["frontmatter"]`` 를 노트 frontmatter 에 반영한다.
+
+    이 키는 플러그인 4종이 채우는데 ``write_seed`` 가 ``title``/``tags``/
+    ``content`` 만 읽어서 **버려지고 있었다** — notion 은 ``notion_page_id`` ·
+    ``url`` · 원본 ``properties`` 를, claude/gpt 는 ``conversation_uuid`` ·
+    타임스탬프 · 메시지 수를 여기 담는다. 전부 노트에 도달하지 않았다.
+
+    의도는 처음부터 이 자리였다: ``render_frontmatter_only`` 의 docstring 이
+    *"handy for write_seed metadata"* 라고 적혀 있다. 배선만 없었다.
+    """
+
+    @staticmethod
+    def _writer(tmp_path: Path) -> GardenWriter:
+        vault = Vault(tmp_path)
+        vault.ensure_dirs()
+        return GardenWriter(vault)
+
+    @staticmethod
+    def _meta(path: Path) -> dict:
+        import yaml
+
+        return yaml.safe_load(path.read_text().split("---\n")[1])
+
+    @pytest.mark.asyncio
+    async def test_plugin_frontmatter_keys_reach_the_note(self, tmp_path: Path) -> None:
+        result = await self._writer(tmp_path).write_seed(
+            "notion",
+            {
+                "title": "Hello",
+                "content": "body line",
+                "frontmatter": {"notion_page_id": "p-1", "url": "https://notion.so/p-1"},
+            },
+        )
+        meta = self._meta(result)
+        assert meta["notion_page_id"] == "p-1"
+        assert meta["url"] == "https://notion.so/p-1"
+
+    @pytest.mark.asyncio
+    async def test_system_fields_win_over_plugin_frontmatter(self, tmp_path: Path) -> None:
+        """claude 의 frontmatter 는 ``source: claude.ai`` 를 담는다 — 충돌한다.
+
+        ``source`` 는 seed 가 **어느 디렉터리에 사는지**를 말하는 시스템 필드다.
+        플러그인이 이걸 덮으면 frontmatter 가 자기 경로와 어긋난 말을 하게 된다.
+        """
+        result = await self._writer(tmp_path).write_seed(
+            "claude",
+            {
+                "title": "T",
+                "content": "b",
+                "frontmatter": {
+                    "source": "claude.ai",
+                    "type": "conversation",
+                    # 충돌하지 않는 키 — 이게 없으면 이 테스트는 frontmatter 를
+                    # 통째로 무시하는 no-op 구현에서도 통과한다(알리바이).
+                    "conversation_uuid": "conv-001",
+                },
+            },
+        )
+        meta = self._meta(result)
+        assert meta["source"] == "claude"
+        assert meta["type"] == "seed"
+        assert result.parent.name == "claude"
+        assert meta["conversation_uuid"] == "conv-001"
+
+    @pytest.mark.asyncio
+    async def test_top_level_title_and_tags_win(self, tmp_path: Path) -> None:
+        """최상위 ``title``/``tags`` 가 명시적 계약이다 — frontmatter 보다 세다."""
+        result = await self._writer(tmp_path).write_seed(
+            "gpt",
+            {
+                "title": "explicit",
+                "tags": ["a"],
+                "content": "b",
+                "frontmatter": {
+                    "title": "from-frontmatter",
+                    "tags": ["z"],
+                    "message_count": 7,  # 병합이 일어났음을 증명하는 비충돌 키
+                },
+            },
+        )
+        meta = self._meta(result)
+        assert meta["title"] == "explicit"
+        assert meta["tags"] == ["a"]
+        assert meta["message_count"] == 7
+
+    @pytest.mark.asyncio
+    async def test_the_frontmatter_key_itself_is_not_emitted(self, tmp_path: Path) -> None:
+        """병합이지 중첩이 아니다 — ``frontmatter:`` 라는 키가 남으면 안 된다."""
+        result = await self._writer(tmp_path).write_seed(
+            "notion", {"title": "T", "content": "b", "frontmatter": {"k": "v"}}
+        )
+        meta = self._meta(result)
+        assert "frontmatter" not in meta
+        assert meta["k"] == "v"  # 중첩이 아니라 병합이라는 증거
+
+    @pytest.mark.asyncio
+    async def test_a_non_dict_frontmatter_does_not_break_the_write(self, tmp_path: Path) -> None:
+        """배선이 새 실패 모드를 열면 안 된다 — 지금은 무시되므로 절대 안 깨진다.
+
+        seed 쓰기가 죽으면 플러그인이 그 항목을 통째로 건너뛴다. 계약을 어긴
+        값 하나 때문에 임포트를 잃는 것보다 그 값을 빼고 쓰는 편이 낫다.
+        """
+        result = await self._writer(tmp_path).write_seed(
+            "obsidian", {"title": "T", "content": "b", "frontmatter": "not-a-dict"}
+        )
+        meta = self._meta(result)
+        assert meta["title"] == "T"
+        assert "frontmatter" not in meta
+
+    @pytest.mark.asyncio
+    async def test_the_body_is_still_the_content(self, tmp_path: Path) -> None:
+        """양성 대조군 — 변경 전에도 green 이어야 한다.
+
+        frontmatter 를 반영하면서 본문을 건드리면 안 된다.
+        """
+        result = await self._writer(tmp_path).write_seed(
+            "notion", {"title": "T", "content": "the body", "frontmatter": {"k": "v"}}
+        )
+        body = result.read_text().split("---\n", 2)[2]
+        assert body.strip() == "the body"
+
+    @pytest.mark.asyncio
+    async def test_a_seed_without_frontmatter_is_unchanged(self, tmp_path: Path) -> None:
+        """양성 대조군 — frontmatter 를 안 주는 호출자가 훨씬 많다."""
+        result = await self._writer(tmp_path).write_seed("calendar", {"title": "T", "content": "b"})
+        meta = self._meta(result)
+        assert meta == {
+            "type": "seed",
+            "source": "calendar",
+            "captured_at": meta["captured_at"],
+            "title": "T",
+        }
+
+    @pytest.mark.asyncio
+    async def test_an_unserializable_value_cannot_poison_the_note(self, tmp_path: Path) -> None:
+        """쓰기가 죽는 게 아니라 **읽을 수 없는 노트**가 되는 게 진짜 위험이다.
+
+        ``build_frontmatter`` 는 ``yaml.dump`` 를 쓴다 — 임의 객체에 예외를 내지
+        않고 ``!!python/object:`` 태그를 **써 넣는다**. 그런데 이 저장소에서 노트
+        frontmatter 를 읽는 코드는 전부 ``yaml.safe_load`` 이고, safe_load 는 그
+        태그에서 터진다. 쓰기는 성공하고 그 뒤로 아무도 그 노트를 못 읽는다.
+
+        나쁜 키만 버리고 나머지는 살린다 — 필드 하나 때문에 출처 전체를 잃지 않는다.
+        """
+        import yaml
+
+        class _Weird:
+            pass
+
+        result = await self._writer(tmp_path).write_seed(
+            "notion",
+            {
+                "title": "T",
+                "content": "b",
+                "frontmatter": {"notion_page_id": "p-1", "raw": _Weird()},
+            },
+        )
+        text = result.read_text()
+        assert "!!python/object" not in text
+        meta = yaml.safe_load(text.split("---\n")[1])  # safe_load 가 터지면 안 된다
+        assert meta["notion_page_id"] == "p-1"
+        assert "raw" not in meta
+        assert meta["title"] == "T"
