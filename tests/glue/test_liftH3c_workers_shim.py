@@ -4,7 +4,7 @@ Per v8 §13 Lift H final + D34 (workers belong in
 ``<context>/infrastructure/workers/``):
 
 * 6 workflow workers move to ``backend/workflow/infrastructure/workers/``:
-  ``agent_worker``, ``verifier_worker``, ``relay_worker``, ``run``,
+  ``agent_worker``, ``relay_worker``, ``run``,
   ``intake_worker``, ``delivery_worker``.
 * ``settle_worker`` moves to ``backend/knowledge/infrastructure/workers/``.
 * ``schedule_runner`` stays at ``backend/workers/`` pending the Schedule
@@ -33,7 +33,6 @@ import pytest
     "module_name,symbol",
     [
         ("backend.workflow.infrastructure.workers.agent_worker", "AgentWorker"),
-        ("backend.workflow.infrastructure.workers.verifier_worker", "VerifierWorker"),
         ("backend.workflow.infrastructure.workers.relay_worker", "RelayWorker"),
         ("backend.workflow.infrastructure.workers.run", "build_worker_runtime"),
         ("backend.workflow.infrastructure.workers.intake_worker", "IntakeWorker"),
@@ -69,7 +68,6 @@ def test_settle_worker_at_new_location() -> None:
         # String-concatenated so the bulk import rewriter cannot rewrite
         # them out — the whole point is to assert the old path is gone.
         "backend.workers" + ".agent_worker",
-        "backend.workers" + ".verifier_worker",
         "backend.workers" + ".relay_worker",
         "backend.workers" + ".intake_worker",
         "backend.workers" + ".delivery_worker",
@@ -194,7 +192,6 @@ def test_workers_init_does_not_export_moved_workers() -> None:
         "IntakeWorker",
         "RelayWorker",
         "SettleWorker",
-        "VerifierWorker",
     ):
         assert not hasattr(pkg, sym), (
             f"backend.workers re-exports moved worker {sym!r} — "

@@ -3,7 +3,8 @@
 D3 (PR #215) added Safe Mode queue lifecycle methods (``mark_delivered`` /
 ``archive`` / ``mark_deleted``) but left expiry unwired — a Safe Mode-gated
 queue row past ``expires_at`` sat forever unless a per-workspace caller
-explicitly invoked :meth:`SafeModeQueue.expire`. D3a closes the loop by
+explicitly invoked a bulk expire (since deleted — prod callers 0). D3a closes
+the loop by
 plugging the system-wide sweep into M1's
 :class:`~backend.schedule.domain.runner_protocol.ScheduleRunnerProtocol` (PR #219).
 
@@ -62,8 +63,7 @@ SAFE_MODE_EXPIRY_SOURCE = "system.safe_mode_expiry"
 """The audit-payload ``source`` tag — identifies the sweep as the producer.
 
 A founder reading the audit log can tell the expiry came from the SYSTEM
-sweep (this exact source string), NOT from a per-workspace
-:meth:`SafeModeQueue.expire` call or a user retract. The pairing
+sweep (this exact source string), NOT from a user retract. The pairing
 ``trigger=schedule`` + ``source=system.safe_mode_expiry`` is the glass-box
 contract any future audit subscriber filters on.
 """

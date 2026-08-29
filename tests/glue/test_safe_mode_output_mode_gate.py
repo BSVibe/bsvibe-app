@@ -434,12 +434,12 @@ async def test_expire_sweep_moves_stale_pending(
         item_id = row.id
 
         q = SafeModeQueue(s)
-        swept = await q.expire(workspace_id=ws)
+        # 살아 있는 만료 경로 — per-row ``mark_expired`` (벌크 변형은 지워졌다).
+        assert await q.mark_expired(workspace_id=ws, item_id=item_id) is True
         await s.commit()
-        assert swept == 1
 
-    # Read in a FRESH session: ``expire`` runs a core bulk UPDATE, so the row
-    # in the writing session's identity map is stale until reloaded.
+    # Read in a FRESH session so the write session's identity map cannot
+    # answer from a stale copy.
     async with sf() as s2:
         fresh = await s2.get(SafeModeQueueItemRow, item_id)
         # pending → expired (transition), and decided_at stamped.

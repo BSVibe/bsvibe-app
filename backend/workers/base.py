@@ -1,6 +1,6 @@
 """BaseWorker — the polling-loop shell shared by every DB-polling worker.
 
-AgentWorker / DeliveryWorker / VerifierWorker / RelayWorker all had the
+AgentWorker / DeliveryWorker / RelayWorker all had the
 identical ``start`` / ``stop`` / ``_run`` machinery (stop-event guarded
 background task + "process one batch, then wait poll_interval" loop) and
 differed only in the per-batch body. That body stays in each subclass as

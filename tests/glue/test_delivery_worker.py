@@ -1,4 +1,4 @@
-"""DeliveryWorker + VerifierWorker drain loops against real PG."""
+"""DeliveryWorker drain loop against real PG."""
 
 from __future__ import annotations
 
@@ -14,20 +14,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.db import (
     ExecutionBase,
-    ExecutionRun,
-    ProofState,
-    RunStatus,
-    VerificationOutcome,
-    VerificationResult,
-    WorkStep,
-    WorkStepStatus,
 )
 from backend.workflow.infrastructure.delivery.db import DeliveryBase, DeliveryEventRow
 from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,
     DeliveryWorkerConfig,
 )
-from backend.workflow.infrastructure.workers.verifier_worker import VerifierConfig, VerifierWorker
 
 from .._support import db_engine
 
@@ -240,95 +232,3 @@ async def test_delivery_worker_failed_row_retries_on_next_tick(sf) -> None:
         remaining = (await s.execute(select(DeliveryEventRow))).scalars().all()
         assert remaining == []
     assert failing_deliverable in dispatcher.calls
-
-
-class _FakeVerifier:
-    def __init__(self, outcome: VerificationOutcome) -> None:
-        self.outcome = outcome
-
-    async def verify(self, *, work_step: WorkStep) -> tuple[VerificationOutcome, dict]:
-        return self.outcome, {"checked_step": str(work_step.id)}
-
-
-async def _seed_running_step(sf, *, ws: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
-    run_id = uuid.uuid4()
-    step_id = uuid.uuid4()
-    async with sf() as s:
-        s.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=ws,
-                status=RunStatus.RUNNING,
-                payload={},
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
-            )
-        )
-        await s.flush()
-        s.add(
-            WorkStep(
-                id=step_id,
-                run_id=run_id,
-                workspace_id=ws,
-                title="run tests",
-                status=WorkStepStatus.RUNNING,
-                proof_state=ProofState.UNTESTED,
-                payload={},
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
-            )
-        )
-        await s.commit()
-    return run_id, step_id
-
-
-async def test_verifier_worker_marks_verified_on_pass(sf) -> None:
-    ws = uuid.uuid4()
-    _, step_id = await _seed_running_step(sf, ws=ws)
-    worker = VerifierWorker(
-        session_factory=sf,
-        verifier=_FakeVerifier(VerificationOutcome.PASSED),
-        config=VerifierConfig(batch_size=10, poll_interval_s=0.01),
-    )
-    processed = await worker.verify_once()
-    assert processed == 1
-    async with sf() as s:
-        step = await s.get(WorkStep, step_id)
-        assert step.status is WorkStepStatus.VERIFIED
-        assert step.proof_state is ProofState.PROVED
-        results = (await s.execute(select(VerificationResult))).scalars().all()
-        assert len(results) == 1
-        assert results[0].outcome is VerificationOutcome.PASSED
-
-
-async def test_verifier_worker_marks_rejected_on_fail(sf) -> None:
-    ws = uuid.uuid4()
-    _, step_id = await _seed_running_step(sf, ws=ws)
-    worker = VerifierWorker(session_factory=sf, verifier=_FakeVerifier(VerificationOutcome.FAILED))
-    await worker.verify_once()
-    async with sf() as s:
-        step = await s.get(WorkStep, step_id)
-        assert step.status is WorkStepStatus.REJECTED
-        assert step.proof_state is ProofState.REFUTED
-
-
-async def test_verifier_worker_inconclusive_on_exception(sf) -> None:
-    ws = uuid.uuid4()
-    _, step_id = await _seed_running_step(sf, ws=ws)
-
-    class _Boom:
-        async def verify(self, **_: Any):
-            raise RuntimeError("sandbox down")
-
-    worker = VerifierWorker(session_factory=sf, verifier=_Boom())
-    await worker.verify_once()
-    async with sf() as s:
-        results = (await s.execute(select(VerificationResult))).scalars().all()
-        assert len(results) == 1
-        assert results[0].outcome is VerificationOutcome.INCONCLUSIVE
-        assert "sandbox down" in results[0].result["error"]
-
-
-async def test_verifier_worker_empty_queue(sf) -> None:
-    worker = VerifierWorker(session_factory=sf, verifier=_FakeVerifier(VerificationOutcome.PASSED))
-    assert await worker.verify_once() == 0
