@@ -40,6 +40,26 @@
 # `dockerd-entrypoint.sh` (the docker:dind image's real entrypoint — it does TLS
 # scaffolding, iptables enablement, storage setup) as PID 1 with the original
 # args. NEVER replace that entrypoint; wrap it.
+#
+# WHY IT FAILS CLOSED (2026-08-30)
+# --------------------------------
+# The waiter runs in the BACKGROUND, so its exit status is structurally
+# unreadable — nothing waits on it. Before this change a failure to apply (chain
+# never appeared, iptables unavailable, rules silently dropped by another layer)
+# left the daemon serving nested containers with NO isolation, and the only
+# trace was one stderr line. A nested container in that state reaches
+# postgres/redis/backend and the :2375 control socket — every tenant's data plus
+# container escape.
+#
+# So two things changed:
+#   1. VERIFY after applying. `-I` returning 0 means "the command was accepted",
+#      NOT "the rule is in the table now". Each rule is re-checked with `-C`.
+#   2. On any failure, KILL PID 1. A daemon that cannot prove its isolation must
+#      not accept work — dying loudly beats serving silently unprotected.
+#
+# `SBX_FW_SELFTEST=1` runs apply+verify and exits with that status instead of
+# exec'ing dockerd, so CI can prove this behaviour against a stubbed `iptables`
+# on PATH (there is no privileged Docker in CI).
 set -eu
 
 NESTED_BRIDGE="docker0"
@@ -48,14 +68,16 @@ NESTED_BRIDGE="docker0"
 # and the nested bridge gateway all live inside them.
 PRIVATE_RANGES="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16"
 DAEMON_PORT="2375"
+# Wait budget (tries ≈ seconds). Overridable so CI can run the selftest fast.
+WAIT_TRIES="${SBX_FW_WAIT_TRIES:-120}"
 
 apply_firewall() {
     # Wait for the nested bridge to appear (dockerd creates it on start).
     i=0
     while ! ip link show "$NESTED_BRIDGE" >/dev/null 2>&1; do
         i=$((i + 1))
-        if [ "$i" -gt 120 ]; then
-            echo "[sbx-fw] FATAL: $NESTED_BRIDGE never appeared after 120s" >&2
+        if [ "$i" -ge "$WAIT_TRIES" ]; then
+            echo "[sbx-fw] FATAL: $NESTED_BRIDGE never appeared" >&2
             return 1
         fi
         sleep 1
@@ -67,8 +89,8 @@ apply_firewall() {
     i=0
     while ! iptables -w -n -L DOCKER-USER >/dev/null 2>&1; do
         i=$((i + 1))
-        if [ "$i" -gt 120 ]; then
-            echo "[sbx-fw] FATAL: DOCKER-USER chain never appeared after 120s" >&2
+        if [ "$i" -ge "$WAIT_TRIES" ]; then
+            echo "[sbx-fw] FATAL: DOCKER-USER chain never appeared" >&2
             return 1
         fi
         sleep 1
@@ -97,8 +119,44 @@ apply_firewall() {
         "private ranges dropped, :$DAEMON_PORT blocked from nested)" >&2
 }
 
-# Run the firewall setup in the background so it can wait for dockerd without
-# blocking dockerd itself, then hand PID 1 to the stock dind entrypoint.
-apply_firewall &
+# Applying is not the same proposition as being applied. `-I` returns 0 when the
+# command was accepted; it says nothing about the table's state afterwards.
+verify_firewall() {
+    missing=""
+    for cidr in $PRIVATE_RANGES; do
+        iptables -w -C DOCKER-USER -i "$NESTED_BRIDGE" -d "$cidr" -j DROP 2>/dev/null \
+            || missing="$missing FORWARD:$cidr"
+    done
+    iptables -w -C INPUT -i "$NESTED_BRIDGE" -p tcp --dport "$DAEMON_PORT" -j DROP 2>/dev/null \
+        || missing="$missing INPUT:$DAEMON_PORT"
+
+    if [ -n "$missing" ]; then
+        echo "[sbx-fw] FATAL: rules absent after apply —$missing" >&2
+        return 1
+    fi
+    echo "[sbx-fw] verified: every isolation rule is present" >&2
+}
+
+guard() {
+    apply_firewall && verify_firewall
+}
+
+if [ "${SBX_FW_SELFTEST:-}" = "1" ]; then
+    # CI path: prove the guard's behaviour against a stubbed iptables, then stop.
+    # Never exec dockerd here — there is no daemon to run in a test.
+    guard
+    exit $?
+fi
+
+# Run the setup in the background so it can wait for dockerd without blocking
+# dockerd itself. Its exit status is unreadable from here, so on failure it
+# terminates PID 1 directly: a daemon that cannot prove its isolation must not
+# accept nested containers.
+{
+    if ! guard; then
+        echo "[sbx-fw] FATAL: isolation could not be established — killing the daemon" >&2
+        kill 1
+    fi
+} &
 
 exec dockerd-entrypoint.sh "$@"
