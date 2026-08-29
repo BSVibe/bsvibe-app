@@ -431,8 +431,8 @@ class SafeModeQueue:
         which transitions each returned row to ``EXPIRED`` via
         :meth:`mark_expired` and emits ONE audit-outbox row for the batch (the
         glass-box provenance — ``trigger=schedule``, ``source=system.safe_mode_expiry``).
-        Per-workspace callers should keep using :meth:`expire` (single-statement
-        update, no audit emission)."""
+        This sweep is the ONLY expiry path — the per-workspace bulk variant was
+        deleted (prod callers 0); per-row is what keeps transitions auditable."""
         return await self._repo.list_due_expired(now=now)
 
     async def _transition(

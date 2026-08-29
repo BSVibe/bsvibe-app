@@ -93,10 +93,47 @@ def test_the_superseded_bulk_expiry_is_gone() -> None:
     )
 
 
-def test_no_docstring_still_points_at_a_method_that_does_not_exist() -> None:
-    """``expire_all_due`` 는 정의가 없다 — 산문이 유령을 가리키고 있었다.
+#: 이 PR 이 지운 메서드 이름들. Sphinx 상호참조가 이들을 가리키면 그 링크는
+#: 아무 데도 닿지 않는다.
+_DEAD_METHODS = ("expire_all" + "_due", "SafeModeQueue.expire", "mark_expired" + "_bulk")
 
-    이건 식별자가 아니라 **텍스트**로 센다: 사라져야 하는 것이 산문 그 자체다.
+
+def test_no_cross_reference_points_at_a_method_that_does_not_exist() -> None:
+    """죽은 링크를 잡는다 — **언급**이 아니라 **가리킴**이 결함이다.
+
+    첫 판은 ``expire_all_due`` 한 이름만 텍스트로 셌다. 그러다 이 PR 자신이
+    같은 썩음을 **새로 만들었다**: ``SafeModeQueue.expire`` 를 지웠는데
+    ``safe_mode_expiry.py`` 와 ``safe_mode_queue.py`` 의 docstring 이 여전히
+    그것을 ``:meth:`` 로 가리키고 있었고, 그중 하나는 *"Per-workspace callers
+    should keep using ``expire``"* 라며 **없는 메서드를 쓰라고 지시**했다.
+    유령 이름 하나만 박아둔 가드는 **자기 PR 이 만든 유령을 못 잡는다.**
+
+    그래서 규칙을 바꿨다: 지운 이름을 **왜 지웠는지 서술하는 산문은 정당**하고
+    (이 파일이 그렇다), 정당하지 않은 것은 ``:meth:`` **상호참조**다 — 그건
+    독자를 없는 곳으로 보내는 포인터다.
+    """
+    survivors: list[str] = []
+    for name in _SCANNED:
+        root = _ROOT / name
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*.py"):
+            if path == Path(__file__):
+                continue
+            text = path.read_text(encoding="utf-8")
+            survivors += [
+                f"{path.relative_to(_ROOT)} -> {dead}"
+                for dead in _DEAD_METHODS
+                if f":meth:`{dead}`" in text or f":meth:`~{dead}`" in text
+            ]
+    assert not survivors, "아무 데도 닿지 않는 상호참조:\n  " + "\n  ".join(survivors)
+
+
+def test_the_ghost_method_name_is_gone_from_prose_too() -> None:
+    """``expire_all_due`` 는 **한 번도 존재한 적이 없다** — 언급 자체가 오해다.
+
+    지워진 것을 서술하는 산문(``SafeModeQueue.expire``)과는 다르다: 이 이름은
+    독자에게 *있었던 것*이라는 인상마저 주면 안 된다.
     """
     ghost = "expire_all" + "_due"
     survivors = [
@@ -106,7 +143,7 @@ def test_no_docstring_still_points_at_a_method_that_does_not_exist() -> None:
         for p in (_ROOT / name).rglob("*.py")
         if p != Path(__file__) and ghost in p.read_text(encoding="utf-8")
     ]
-    assert not survivors, f"존재하지 않는 {ghost} 를 가리키는 파일: {survivors}"
+    assert not survivors, f"존재한 적 없는 {ghost} 를 언급하는 파일: {survivors}"
 
 
 # ── 양성 대조군 ────────────────────────────────────────────────────────────

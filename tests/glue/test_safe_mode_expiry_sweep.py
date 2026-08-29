@@ -22,8 +22,7 @@ Proves the four deltas attributable to this lift:
 4. **Glass-box.** The spawned :class:`AuditOutboxRecord` carries
    ``payload["trigger"] == "schedule"`` AND
    ``payload["source"] == "system.safe_mode_expiry"`` so a founder can
-   tell the expiry came from the sweep, not a user retract or a
-   per-workspace ``expire`` call.
+   tell the expiry came from the sweep, not a user retract.
 
 The sweep does NOT auto-fire compensation — that's D3b (next PR). D3a's
 deliverable is just the expiry transition + the audit hook so D3b can
@@ -339,8 +338,8 @@ async def test_sweep_with_no_expired_emits_no_audit(
 async def test_sweep_is_system_wide_across_workspaces(
     sf: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Unlike :meth:`SafeModeQueue.expire` (per-workspace), the sweep is
-    system-wide: a single tick sweeps every workspace's expired rows. This
+    """The sweep is system-wide: a single tick sweeps every workspace's
+    expired rows (no per-workspace variant exists — it was deleted). This
     is the property that makes Option A' work without a system-tenant
     workspace_id on ``workspace_schedules``."""
     ws_a = uuid.uuid4()
