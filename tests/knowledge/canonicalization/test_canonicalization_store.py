@@ -263,7 +263,6 @@ class TestReadWriteAction:
             params={"concept": "ml", "title": "Machine Learning"},
             created_at=datetime(2026, 5, 6, 14, 30, 12),
             updated_at=datetime(2026, 5, 6, 14, 30, 12),
-            expires_at=datetime(2026, 5, 7, 14, 30, 12),
         )
         await store.write_action(entry)
 
@@ -272,7 +271,6 @@ class TestReadWriteAction:
         assert got.kind == "create-concept"
         assert got.status == "draft"
         assert got.params == {"concept": "ml", "title": "Machine Learning"}
-        assert got.expires_at == datetime(2026, 5, 7, 14, 30, 12)
         assert got.affected_paths == []
 
     @pytest.mark.asyncio
@@ -288,7 +286,6 @@ class TestReadWriteAction:
             params={"changes": []},
             created_at=datetime(2026, 5, 6, 14, 30, 55),
             updated_at=datetime(2026, 5, 6, 14, 30, 55),
-            expires_at=datetime(2026, 5, 7, 14, 30, 55),
         )
         await store.write_action(entry)
 
@@ -306,7 +303,6 @@ class TestReadWriteAction:
             params={"concept": "ml", "title": "ML"},
             created_at=datetime(2026, 5, 6),
             updated_at=datetime(2026, 5, 6, 15, 0, 0),
-            expires_at=datetime(2026, 5, 7),
             affected_paths=["concepts/active/ml.md"],
         )
         entry.execution.status = "ok"
@@ -344,7 +340,6 @@ class TestListExistingActionPaths:
                 params={"concept": slug, "title": slug.upper()},
                 created_at=datetime(2026, 5, 6),
                 updated_at=datetime(2026, 5, 6),
-                expires_at=datetime(2026, 5, 7),
             )
             await store.write_action(entry)
 
@@ -365,7 +360,6 @@ class TestListExistingActionPaths:
             params={"changes": []},
             created_at=datetime(2026, 5, 6),
             updated_at=datetime(2026, 5, 6),
-            expires_at=datetime(2026, 5, 7),
         )
         await store.write_action(entry)
 

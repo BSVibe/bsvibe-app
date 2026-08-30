@@ -49,7 +49,6 @@ async def list_proposals(
                 status=prop.status,
                 score=prop.proposal_score,
                 created_at=prop.created_at,
-                expires_at=prop.expires_at,
             )
         )
     return out

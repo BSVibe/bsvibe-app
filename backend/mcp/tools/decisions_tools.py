@@ -112,7 +112,6 @@ def _proposal_to_dict(proposal: models.ProposalEntry) -> dict[str, Any]:
         "status": proposal.status,
         "score": proposal.proposal_score,
         "created_at": proposal.created_at.isoformat() if proposal.created_at else None,
-        "expires_at": proposal.expires_at.isoformat() if proposal.expires_at else None,
         "strategy": proposal.strategy,
         "generator": proposal.generator,
         "generator_version": proposal.generator_version,

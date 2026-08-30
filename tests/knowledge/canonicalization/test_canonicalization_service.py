@@ -208,7 +208,6 @@ class TestApplyCreateConcept:
                 params={"concept": "Bad_ID", "title": "Bad"},
                 created_at=datetime(2026, 5, 6),
                 updated_at=datetime(2026, 5, 6),
-                expires_at=datetime(2026, 5, 7),
             )
         )
         result = await service.apply_action(bad_path, actor="cli")

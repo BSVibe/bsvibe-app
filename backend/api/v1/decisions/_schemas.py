@@ -34,7 +34,6 @@ class ProposalResponse(BaseModel):
     status: str
     score: float | None = None
     created_at: datetime
-    expires_at: datetime | None = None
 
 
 class DecisionResponse(BaseModel):

@@ -13,11 +13,9 @@ Mixin contract:
 - Depends on ``self._invalidate_index`` + ``self._emit`` + ``self._emit_action_status``
   (provided by the apply pipeline mixin)
 
-Mutex note: ``expire_stale`` acquires ``self._lock.guard(entry.path)``
-PER ACTION inside the sweep loop. Each acquisition is wholly contained
-within the per-action loop body — the lock is NEVER held across actions.
-``accept_proposal`` does NOT acquire the lock itself; it delegates to
-``apply_action`` which takes the lock per individual action draft.
+Mutex note: ``accept_proposal`` does NOT acquire the lock itself; it
+delegates to ``apply_action`` which takes the lock per individual action
+draft, so the lock is NEVER held across drafts.
 """
 
 from __future__ import annotations
@@ -26,11 +24,6 @@ from datetime import datetime
 
 from backend.knowledge.canonicalization import models
 from backend.knowledge.canonicalization.service._base import _ServiceBase
-
-# Per Handoff §6 — these statuses are eligible for expire_stale rewrite.
-# applied / rejected / expired / superseded / failed / blocked are terminal
-# from the staleness perspective.
-_NON_TERMINAL_ACTION_STATUSES: frozenset[str] = frozenset({"draft", "pending_approval"})
 
 
 def _aware_dt(dt: datetime) -> datetime:
@@ -42,64 +35,6 @@ def _aware_dt(dt: datetime) -> datetime:
 
 class _ProposalLifecycleMixin(_ServiceBase):
     """Proposal accept/reject + the cron expire sweep."""
-
-    async def expire_stale(self, *, now: datetime | None = None) -> models.ExpireResult:
-        """Flip non-terminal actions/proposals past their expires_at to expired.
-
-        Per Handoff §15.3 (canon-expire plugin) and §13 step 3 — staleness
-        gating happens before apply. This sweep is safe to call from cron;
-        it acquires the per-action lock before mutating each action note.
-        Proposals don't have a lock (no apply-via-proposal), so they're
-        updated directly through the store.
-        """
-        result = models.ExpireResult()
-        cutoff = _aware_dt(now or self._clock())
-        if self._index is None:
-            return result
-
-        # Actions
-        for entry in await self._index.list_actions():
-            if entry.status not in _NON_TERMINAL_ACTION_STATUSES:
-                continue
-            if _aware_dt(entry.expires_at) > cutoff:
-                continue
-            previous_status = entry.status
-            async with self._lock.guard(entry.path):
-                # Re-read under lock — another writer may have already applied/rejected.
-                fresh = await self._store.read_action(entry.path)
-                if fresh is None or fresh.status not in _NON_TERMINAL_ACTION_STATUSES:
-                    continue
-                if _aware_dt(fresh.expires_at) > cutoff:
-                    continue
-                fresh.status = "expired"
-                fresh.updated_at = self._clock()
-                await self._store.write_action(fresh)
-                await self._invalidate_index([fresh.path])
-                await self._emit_action_status(fresh, previous_status)
-                result.expired_actions.append(fresh.path)
-
-        # Proposals
-        for prop in await self._index.list_proposals(status="pending"):
-            if _aware_dt(prop.expires_at) > cutoff:
-                continue
-            previous_status = prop.status
-            prop.status = "expired"
-            prop.updated_at = self._clock()
-            await self._store.write_proposal(prop)
-            await self._invalidate_index([prop.path])
-            await self._emit(
-                "CANONICALIZATION_PROPOSAL_STATUS_CHANGED",
-                {
-                    "schema_version": "canonicalization-event-v1",
-                    "path": prop.path,
-                    "kind": prop.kind,
-                    "status": "expired",
-                    "previous_status": previous_status,
-                },
-            )
-            result.expired_proposals.append(prop.path)
-
-        return result
 
     async def accept_proposal(self, proposal_path: str, *, actor: str) -> list[models.ApplyResult]:
         """Accept a pending proposal — apply every linked action draft.

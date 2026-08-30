@@ -25,7 +25,7 @@ further split would harm readability.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import structlog
@@ -40,7 +40,6 @@ logger = structlog.get_logger(__name__)
 
 _NGRAM_N = 3
 _DEFAULT_THRESHOLD = 0.6
-_DEFAULT_PROPOSAL_TTL = timedelta(days=7)
 _GENERATOR_NAME = "deterministic-v1"
 _GENERATOR_VERSION = "canonicalization-generator-v1"
 
@@ -297,7 +296,6 @@ class DeterministicProposer:
             proposal_score=proposal_score,
             created_at=now,
             updated_at=now,
-            expires_at=now + _DEFAULT_PROPOSAL_TTL,
             freshness={},
             evidence=evidence,
             affected_paths=[],
@@ -330,7 +328,6 @@ class DeterministicProposer:
             params={"canonical": canonical, "merge": list(merge)},
             created_at=now,
             updated_at=now,
-            expires_at=now + _DEFAULT_PROPOSAL_TTL,
         )
         await self._store.write_action(entry)
         await self._index.invalidate(action_path)

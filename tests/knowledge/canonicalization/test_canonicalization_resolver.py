@@ -226,7 +226,6 @@ class TestResolvePendingCandidate:
                 params={"concept": "machine-learning", "title": "ML"},
                 created_at=datetime(2026, 5, 6),
                 updated_at=datetime(2026, 5, 6),
-                expires_at=datetime(2026, 5, 7),
             )
         )
         await resolver._index.rebuild_from_vault(storage)

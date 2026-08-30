@@ -35,7 +35,7 @@ files — see ``tests/knowledge/canonicalization/test_service_package_smoke.py``
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from backend.knowledge._internal.events import EventBus
@@ -53,7 +53,6 @@ from backend.knowledge.canonicalization.service._safe_mode import _SafeModeMixin
 from backend.knowledge.canonicalization.service._validators import _ValidatorsMixin
 from backend.knowledge.canonicalization.store import NoteStore
 
-_DEFAULT_EXPIRY = timedelta(days=1)
 # Action kinds available for ``create_action_draft`` + ``apply_action``.
 # Expands as later slices add kinds (split-concept, deprecate-concept, etc.).
 _SUPPORTED_KINDS: frozenset[str] = frozenset(
@@ -147,7 +146,6 @@ class CanonicalizationService(
         *,
         slug: str | None = None,
         source_proposal: str | None = None,
-        expires_in: timedelta = _DEFAULT_EXPIRY,
     ) -> str:
         if kind not in _SUPPORTED_KINDS:
             msg = f"action kind {kind!r} not yet supported (only {sorted(_SUPPORTED_KINDS)})"
@@ -175,7 +173,6 @@ class CanonicalizationService(
             params=dict(params),
             created_at=now,
             updated_at=now,
-            expires_at=now + expires_in,
             source_proposal=source_proposal,
         )
         await self._store.write_action(entry)

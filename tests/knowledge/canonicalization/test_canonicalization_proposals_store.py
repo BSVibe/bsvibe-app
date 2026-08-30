@@ -59,7 +59,6 @@ class TestProposalEntryShape:
             proposal_score=0.91,
             created_at=datetime(2026, 5, 6),
             updated_at=datetime(2026, 5, 6),
-            expires_at=datetime(2026, 5, 13),
         )
         assert entry.evidence == []
         assert entry.action_drafts == []
@@ -79,7 +78,6 @@ class TestReadWriteProposal:
             proposal_score=0.85,
             created_at=datetime(2026, 5, 6, 15, 0, 12),
             updated_at=datetime(2026, 5, 6, 15, 0, 12),
-            expires_at=datetime(2026, 5, 13, 15, 0, 12),
             evidence=[
                 {
                     "kind": "alias_exact",
@@ -115,7 +113,6 @@ class TestReadWriteProposal:
             proposal_score=0.5,
             created_at=datetime(2026, 5, 6),
             updated_at=datetime(2026, 5, 6),
-            expires_at=datetime(2026, 5, 13),
         )
         await store.write_proposal(entry)
         raw = await storage.read(entry.path)
@@ -145,7 +142,6 @@ class TestListExistingProposalPaths:
                 proposal_score=0.5,
                 created_at=datetime(2026, 5, 6),
                 updated_at=datetime(2026, 5, 6),
-                expires_at=datetime(2026, 5, 13),
             )
             await store.write_proposal(entry)
         result = await store.list_existing_proposal_paths("merge-concepts")
