@@ -191,6 +191,8 @@ class DockerSandboxManager:
         self._locks: dict[uuid.UUID, asyncio.Lock] = {}
         self._containers: dict[uuid.UUID, _Entry] = {}
         self._held: set[uuid.UUID] = set()
+        # 프로세스당 1회 — 고아 스윕은 기동 시 한 번이면 충분하다.
+        self._swept = False
         self._registry_lock = asyncio.Lock()
 
     async def _docker(
@@ -230,6 +232,13 @@ class DockerSandboxManager:
         deadline = time.monotonic() + _DIND_STARTUP_TIMEOUT_S
         while True:
             if await self.health():
+                # First contact in this process: reap what a previous process
+                # left behind. Wiring it HERE (not in a worker) is deliberate —
+                # the sweep needs a reachable daemon, and this is the one place
+                # that already waits for one.
+                if not self._swept:
+                    self._swept = True
+                    await self.sweep_orphans()
                 return
             if time.monotonic() >= deadline:
                 raise SandboxUnavailable(
@@ -409,6 +418,56 @@ class DockerSandboxManager:
             lock = self._locks.setdefault(project_id, asyncio.Lock())
         async with lock:
             await self._teardown(project_id)
+
+    async def sweep_orphans(self) -> None:
+        """Reap sandboxes/sidecars/networks the daemon still holds but nobody owns.
+
+        :meth:`reap_idle` walks ``self._containers`` — **in-memory**. A worker
+        restart empties that map, so every container, sidecar and network alive
+        at that moment becomes permanently unreachable by the reaper. Measured
+        on the prod DinD 2026-08-30: two exited sandboxes (4 days, **6 weeks**)
+        and a ``sbxnet-*`` network with zero attached containers.
+
+        So this sweep reads the DAEMON's state, not ours.
+
+        **Only non-running things are touched.** One DinD can be shared by more
+        than one worker process, so "not in my map ⇒ orphan" would kill another
+        process's live work. A live sandbox is running by definition; an exited
+        one is finished no matter who started it. Same for networks: zero
+        attached containers means nothing is using it.
+
+        Best-effort throughout — a sweep that raises would take down startup,
+        and a leaked container is worth less than a booting worker.
+        """
+        code, out, _err = await self._docker(
+            ["ps", "-a", "--format", "{{.Names}}\t{{.State}}"], timeout_s=_DOCKER_OP_TIMEOUT_S
+        )
+        if code == 0:
+            for line in out.decode("utf-8", errors="replace").splitlines():
+                name, _, state = line.partition("\t")
+                if not name.startswith(_CONTAINER_PREFIX):
+                    continue
+                if state.strip().lower() in {"running", "true"}:
+                    continue
+                await self._docker(["rm", "-f", name], timeout_s=_DOCKER_OP_TIMEOUT_S)
+                logger.info("sandbox_orphan_reaped", container=name)
+
+        code, out, _err = await self._docker(
+            ["network", "ls", "--format", "{{.Name}}"], timeout_s=_DOCKER_OP_TIMEOUT_S
+        )
+        if code != 0:
+            return
+        for name in out.decode("utf-8", errors="replace").splitlines():
+            if not name.startswith(_NETWORK_PREFIX):
+                continue
+            ncode, nout, _ = await self._docker(
+                ["network", "inspect", "-f", "{{len .Containers}}", name],
+                timeout_s=_DOCKER_OP_TIMEOUT_S,
+            )
+            if ncode != 0 or nout.decode("utf-8", errors="replace").strip() not in {"0", ""}:
+                continue
+            await self._docker(["network", "rm", name], timeout_s=_DOCKER_OP_TIMEOUT_S)
+            logger.info("sandbox_orphan_network_reaped", network=name)
 
     async def reap_idle(self) -> None:
         now = time.monotonic()
