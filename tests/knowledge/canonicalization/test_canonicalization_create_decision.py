@@ -79,7 +79,6 @@ class TestCreateDecisionValidation:
                 },
                 created_at=datetime(2026, 5, 7),
                 updated_at=datetime(2026, 5, 7),
-                expires_at=datetime(2026, 5, 8),
             )
         )
         result = await service.apply_action(bad_path, actor="cli")

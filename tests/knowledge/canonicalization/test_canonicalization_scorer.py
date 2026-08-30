@@ -68,7 +68,6 @@ def _action(
         params=params or {"canonical": "ci", "merge": ["cd"]},
         created_at=datetime(2026, 5, 7),
         updated_at=datetime(2026, 5, 7),
-        expires_at=datetime(2026, 5, 8),
     )
     # Simulate a previously-computed affected_paths estimate
     entry.affected_paths = [f"path/{i}.md" for i in range(affected)]

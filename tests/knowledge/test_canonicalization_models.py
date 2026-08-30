@@ -44,7 +44,6 @@ class TestActionEntry:
             params={"concept": "ml", "title": "Machine Learning"},
             created_at=datetime(2026, 5, 6, 14, 30, 12),
             updated_at=datetime(2026, 5, 6, 14, 30, 12),
-            expires_at=datetime(2026, 5, 7, 14, 30, 12),
         )
         assert entry.status == "draft"
         assert entry.affected_paths == []
@@ -63,7 +62,6 @@ class TestActionEntry:
             params={},
             created_at=datetime(2026, 5, 6),
             updated_at=datetime(2026, 5, 6),
-            expires_at=datetime(2026, 5, 7),
         )
         assert entry.status == "applied"
 

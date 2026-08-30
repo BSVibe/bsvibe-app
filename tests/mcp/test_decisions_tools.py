@@ -98,7 +98,6 @@ def _proposal(
         proposal_score=0.8,
         created_at=now,
         updated_at=now,
-        expires_at=now,
         action_drafts=action_drafts or ["actions/merge/2026-06-05T12-00-00Z__merge.md"],
     )
 

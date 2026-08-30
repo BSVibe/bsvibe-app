@@ -1,7 +1,7 @@
 """Shared base for canonicalization service mixins (typing-only).
 
 The mixin decomposition per v8 §17.4 splits the apply pipeline across files.
-Mixin methods cross-reference each other (e.g. ``_proposal_lifecycle.expire_stale``
+Mixin methods cross-reference each other (e.g. ``_proposal_lifecycle.accept_proposal``
 calls ``self._invalidate_index`` implemented in ``_apply_pipeline``). To keep
 mypy --strict happy without coupling the mixins via inheritance order, we
 declare a single ``_ServiceBase`` with type-only stubs for every cross-mixin

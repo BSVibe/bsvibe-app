@@ -143,7 +143,6 @@ class ProposalEntry:
     proposal_score: float
     created_at: datetime
     updated_at: datetime
-    expires_at: datetime
     freshness: dict[str, Any] = field(default_factory=dict)
     evidence: list[dict[str, Any]] = field(default_factory=list)
     affected_paths: list[str] = field(default_factory=list)
@@ -215,7 +214,6 @@ class ActionEntry:
     params: dict[str, Any]
     created_at: datetime
     updated_at: datetime
-    expires_at: datetime
     source_proposal: str | None = None
     freshness: dict[str, Any] = field(default_factory=dict)
     validation: ValidationResult = field(default_factory=ValidationResult)
@@ -240,14 +238,6 @@ class ApplyResult:
     affected_paths: list[str]
     domain_effects: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
-
-
-@dataclass
-class ExpireResult:
-    """Outcome of ``service.expire_stale()`` (Handoff §15.3 canon-expire)."""
-
-    expired_actions: list[str] = field(default_factory=list)
-    expired_proposals: list[str] = field(default_factory=list)
 
 
 # Per Handoff §8.1

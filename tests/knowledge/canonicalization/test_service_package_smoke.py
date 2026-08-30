@@ -105,7 +105,6 @@ async def test_canonicalization_service_constructs() -> None:
         assert callable(svc.apply_action)
         assert callable(svc.approve_action)
         assert callable(svc.reject_action)
-        assert callable(svc.expire_stale)
         assert callable(svc.resolve_and_canonicalize)
         assert callable(svc.accept_proposal)
         assert callable(svc.reject_proposal)

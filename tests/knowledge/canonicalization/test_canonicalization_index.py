@@ -87,7 +87,6 @@ async def _seed_action(
             params=params,
             created_at=datetime(2026, 5, 6),
             updated_at=datetime(2026, 5, 6),
-            expires_at=datetime(2026, 5, 7),
         )
     )
 
