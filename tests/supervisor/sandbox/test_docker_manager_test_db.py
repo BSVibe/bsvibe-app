@@ -148,7 +148,12 @@ class TestOffPathByteIdentical:
     async def test_off_path_issues_no_network_or_sidecar_calls(self, tmp_path):
         mgr, fake = _mgr(test_db_enabled=False)
         await mgr.acquire(uuid.uuid4(), str(tmp_path))
-        assert not any(argv[0] == "network" for argv in fake.calls)
+        # 사이드카의 **지문**으로 좁힌다 — ``network create``. 앞 판은
+        # ``argv[0] == "network"`` 였는데, 그건 이 테스트의 주제(사이드카 경로)가
+        # 아닌 호출까지 잡는다: 기동 시 1회 도는 고아 스윕이 ``network ls`` 를
+        # 낸다. 명제는 그대로다 — "OFF 면 사이드카 기계가 돌지 않는다".
+        assert not any(argv[:2] == ["network", "create"] for argv in fake.calls)
+        assert not any(argv[:2] == ["network", "rm"] for argv in fake.calls)
         assert not any("pg_isready" in argv for argv in fake.calls)
         # Only one `run` (the sandbox); no sidecar run.
         assert sum(1 for argv in fake.calls if argv[0] == "run") == 1
