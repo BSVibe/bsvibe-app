@@ -4,9 +4,13 @@
 import { apiFetch } from "./client";
 import type { Run, RunCancel, RunDetail, RunRetry } from "./types";
 
-/** Recent ExecutionRun rows for the active workspace (newest first). */
-export function listRuns(limit = 50): Promise<Run[]> {
-  return apiFetch<Run[]>(`/api/v1/runs?limit=${limit}`);
+/** Recent ExecutionRun rows for the active workspace (newest first).
+ *  `productId` narrows to one product server-side — the backend filters in the
+ *  query, so a quiet product's history is not truncated by other products'
+ *  newer runs. */
+export function listRuns(limit = 50, productId?: string): Promise<Run[]> {
+  const scope = productId ? `&product_id=${encodeURIComponent(productId)}` : "";
+  return apiFetch<Run[]>(`/api/v1/runs?limit=${limit}${scope}`);
 }
 
 /** The inspectable run-detail surface for one run — trigger context, paused-run

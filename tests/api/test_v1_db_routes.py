@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -135,3 +135,49 @@ async def test_runs_list_empty(configured_client) -> None:
     r = await configured_client.get("/api/v1/runs")
     assert r.status_code == 200
     assert r.json() == []
+
+
+async def test_runs_list_filters_by_product(configured_client, db, workspace_id) -> None:
+    """``GET /runs?product_id=`` narrows to one product, scoped in the query.
+
+    The MCP surface has had a product axis for a while and REST had none —
+    the drift §Ⅳ.5 named. Filtering must happen in the query, so the answer
+    does not depend on how many newer runs other products produced.
+    """
+    product_id = uuid.uuid4()
+    mine = uuid.uuid4()
+    base = datetime.now(tz=UTC)
+    async with db() as s:
+        s.add(
+            ExecutionRun(
+                id=mine,
+                workspace_id=workspace_id,
+                product_id=product_id,
+                status=RunStatus.OPEN,
+                payload={},
+                created_at=base - timedelta(hours=4),
+                updated_at=base - timedelta(hours=4),
+            )
+        )
+        for hours in (3, 2, 1):
+            s.add(
+                ExecutionRun(
+                    id=uuid.uuid4(),
+                    workspace_id=workspace_id,
+                    product_id=uuid.uuid4(),
+                    status=RunStatus.OPEN,
+                    payload={},
+                    created_at=base - timedelta(hours=hours),
+                    updated_at=base - timedelta(hours=hours),
+                )
+            )
+        await s.commit()
+
+    r = await configured_client.get(f"/api/v1/runs?product_id={product_id}&limit=2")
+    assert r.status_code == 200, r.text
+    assert [row["id"] for row in r.json()] == [str(mine)]
+
+    # No filter → the workspace-wide page is unchanged.
+    r2 = await configured_client.get("/api/v1/runs")
+    assert r2.status_code == 200
+    assert len(r2.json()) == 4

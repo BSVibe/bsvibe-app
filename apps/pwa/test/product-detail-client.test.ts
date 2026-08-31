@@ -3,7 +3,7 @@
  * mocked fetch and asserts it composes the focused per-product view ENTIRELY
  * client-side from the list endpoints:
  *  - finds the product in /api/v1/products by slug (unknown slug → null)
- *  - filters /api/v1/runs by product_id (newest-first preserved)
+ *  - asks /api/v1/runs to narrow by product_id (newest-first preserved)
  *  - derives the header status from the product's LATEST run
  *  - eagerly fetches /api/v1/deliverables?run_id= for the SHIPPED runs only
  *  - degrades a failing per-run deliverables read to no artifacts, not a throw
@@ -87,7 +87,13 @@ function mockFetch(opts: {
       return new Response(JSON.stringify(opts.products), { status: 200 });
     }
     if (url.startsWith("/api/v1/runs")) {
-      return new Response(JSON.stringify(opts.runs), { status: 200 });
+      // Mirror the real endpoint: `product_id` narrows server-side. A mock that
+      // ignored it would let a client-side-filtering regression pass.
+      const productId = new URLSearchParams(url.split("?")[1] ?? "").get("product_id");
+      const rows = productId
+        ? (opts.runs as { product_id: string | null }[]).filter((r) => r.product_id === productId)
+        : opts.runs;
+      return new Response(JSON.stringify(rows), { status: 200 });
     }
     if (url.startsWith("/api/v1/deliverables")) {
       const runId = new URLSearchParams(url.split("?")[1] ?? "").get("run_id") ?? "";
@@ -136,7 +142,7 @@ describe("getProductDetail (real-data composition)", () => {
     expect(view?.repoUrl).toBe("https://github.com/acme/blog");
   });
 
-  it("filters runs to this product only, newest-first preserved", async () => {
+  it("asks for this product's runs only, newest-first preserved", async () => {
     global.fetch = mockFetch({
       products: [product("p1", "blog", "Blog"), product("p2", "store", "Store")],
       runs: [
@@ -148,7 +154,8 @@ describe("getProductDetail (real-data composition)", () => {
 
     const view = await getProductDetail("blog");
     expect(view?.runs.map((r) => r.runId)).toEqual(["r-new", "r-old"]);
-    // No run from the other product leaked in.
+    // No run from the other product leaked in. The mock narrows by `product_id`
+    // like the real endpoint, so this fails if the client stops sending it.
     expect(view?.runs.some((r) => r.runId === "r-other")).toBe(false);
   });
 
@@ -297,6 +304,35 @@ describe("getProductDetail (real-data composition)", () => {
     const view = await getProductDetail("blog");
     // The good run's artifact still shows; the failing run just contributes none.
     expect(view?.shipped.map((s) => s.id)).toEqual(["d1"]);
+  });
+
+  it("asks the backend for THIS product's runs, so a quiet product is not truncated", async () => {
+    // The regression: the runs read was workspace-wide and the filter was
+    // client-side, so a product whose runs sat outside the newest `runLimit`
+    // rows rendered as a product with no history. This mock behaves like the
+    // real endpoint — it honours `product_id` and applies `limit` — so the
+    // assertion only passes when the narrowing is asked of the server.
+    const busy = Array.from({ length: 5 }, (_, i) => run(`r-other-${i}`, "p-other", "shipped"));
+    const mine = run("r-mine", "p1", "shipped");
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/api/v1/products")) {
+        return new Response(JSON.stringify([product("p1", "blog", "Blog")]), { status: 200 });
+      }
+      if (url.startsWith("/api/v1/runs")) {
+        const params = new URLSearchParams(url.split("?")[1] ?? "");
+        const productId = params.get("product_id");
+        const limit = Number(params.get("limit") ?? "50");
+        // Newest-first, with the product's only run OLDEST in the workspace.
+        const all = [...busy, mine];
+        const scoped = productId ? all.filter((r) => r.product_id === productId) : all;
+        return new Response(JSON.stringify(scoped.slice(0, limit)), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const view = await getProductDetail("blog", 3);
+    expect(view?.runs.map((r) => r.runId)).toEqual(["r-mine"]);
   });
 
   it("bubbles up a core-read failure (surface shows the inline error)", async () => {

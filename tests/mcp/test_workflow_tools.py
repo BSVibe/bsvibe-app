@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -487,3 +487,65 @@ async def test_products_set_metadata_requires_write_scope(
                 {"slug_or_id": "a", "metadata": {"x": 1}},
                 ctx,
             )
+
+
+async def test_runs_list_by_product_is_not_truncated_by_newer_other_runs(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """Asking for a product's runs must not depend on how busy the rest of the
+    workspace has been.
+
+    The regression this pins: the product axis used to be a *client-side*
+    filter applied to a workspace-wide page, so a product whose runs were
+    older than ``limit`` other runs came back empty — the tool reported
+    "no runs" for a product that has one. Scoping the query to the product
+    is what makes the answer about the product.
+    """
+    product_id = uuid.uuid4()
+    async with db() as s:
+        s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="P", slug="p"))
+        await s.commit()
+
+    # The product's only run is the OLDEST row in the workspace. The
+    # timestamps are explicit rather than "whatever now() gave us" — the
+    # ordering IS the condition under test, so it must not depend on how
+    # fast the seeds ran.
+    product_run = uuid.uuid4()
+    base = datetime.now(UTC)
+    async with db() as s:
+        s.add(
+            ExecutionRun(
+                id=product_run,
+                workspace_id=workspace_id,
+                product_id=product_id,
+                status=RunStatus.RUNNING,
+                payload={},
+                created_at=base - timedelta(hours=4),
+                updated_at=base - timedelta(hours=4),
+            )
+        )
+        for hours in (3, 2, 1):
+            s.add(
+                ExecutionRun(
+                    id=uuid.uuid4(),
+                    workspace_id=workspace_id,
+                    product_id=None,
+                    status=RunStatus.RUNNING,
+                    payload={},
+                    created_at=base - timedelta(hours=hours),
+                    updated_at=base - timedelta(hours=hours),
+                )
+            )
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        # A page smaller than the number of newer, unrelated runs.
+        listed = await registry.call_tool(
+            "bsvibe_runs_list", {"product_slug_or_id": "p", "limit": 2}, ctx
+        )
+
+    assert [row["id"] for row in listed] == [str(product_run)]

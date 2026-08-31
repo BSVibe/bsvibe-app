@@ -467,11 +467,18 @@ class RunsListInput(BaseModel):
 
 
 async def _h_runs_list(args: RunsListInput, ctx: ToolContext) -> Any:
+    # The product axis is a *query* filter, not a post-filter on a
+    # workspace-wide page: narrowing after the limit made the answer depend on
+    # how busy the rest of the workspace had been, so a product whose runs were
+    # older than ``limit`` other runs came back as "no runs".
     runs_repo = SqlAlchemyRunRepository(ctx.session)
-    rows = await runs_repo.list_by_workspace(ctx.principal.workspace_id, limit=args.limit)
     if args.product_slug_or_id:
         product = await _resolve_product(ctx, args.product_slug_or_id)
-        rows = [r for r in rows if r.product_id == product.id]
+        rows = await runs_repo.list_by_product(
+            ctx.principal.workspace_id, product.id, limit=args.limit
+        )
+    else:
+        rows = await runs_repo.list_by_workspace(ctx.principal.workspace_id, limit=args.limit)
     return _Envelope([_run_to_dict(r) for r in rows])
 
 
