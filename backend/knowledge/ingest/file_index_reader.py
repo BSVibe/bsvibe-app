@@ -177,7 +177,12 @@ class FileIndexReader:
             except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError, KeyError):
                 logger.debug("scan_note_failed", path=rel_path, exc_info=True)
 
-        # Also scan subdirectories (e.g. seeds/telegram-input/)
+        # Also scan subdirectories — the runtime originals land one level down
+        # (``seeds/request/`` · ``seeds/feedback/`` · ``seeds/retrospect/``), so a
+        # flat scan of ``seeds/`` would miss every one of them.
+        #
+        # (The earlier example here, ``seeds/telegram-input/``, was never a path:
+        # ``telegram-input`` is a ``seed_source`` VALUE, not a directory.)
         base = self._vault.resolve_path(category)
 
         def _list_subdirs() -> list[str]:
