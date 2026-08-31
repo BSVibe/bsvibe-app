@@ -198,6 +198,16 @@ class ToolRegistry:
         # deliverable summary is composed from. So the writes ride the same per-run state the
         # contract does.
         self._written_paths: list[str] = []
+        #: 이 런에서 **성공한** 도구 호출 수 — "에이전트가 일을 했는가"의 신호.
+        #:
+        #: ``written_paths`` 로는 답할 수 없는 질문이다. 조사만 하는 작업은 파일을
+        #: 하나도 안 고치는 것이 정답이고(형님이 그렇게 지시한다), 그때 파일 수로
+        #: 판정하면 제대로 조사한 에이전트를 "일을 안 했다"고 다그치게 된다 —
+        #: prod 2026-08-24 · 08-25 · 08-31 ×2 에서 실제로 그랬다.
+        #:
+        #: ``_grounded_paths`` 로도 답할 수 없다: 그건 ``file_read``/``file_write``
+        #: 만 채우므로 grep·find 로만 조사한 런이 여전히 0 이 된다.
+        self.succeeded_tool_calls: int = 0
         self._register_defaults()
 
     @property
@@ -229,6 +239,9 @@ class ToolRegistry:
             # What the agent DID — the loop's only channel to the work an executor agent did
             # over MCP, in another process.
             "written_paths": list(self._written_paths),
+            # MCP 트랜스포트는 요청마다 레지스트리를 새로 만든다. 이게 실리지
+            # 않으면 executor 런은 매번 0 호출로 보여 계속 다그쳐진다.
+            "succeeded_tool_calls": self.succeeded_tool_calls,
             # The agent's retrospective knowledge. Dropped here before, so an executor-driven
             # run could never produce a knowledge note — the settle path had nothing to write.
             "declared_knowledge": (
@@ -252,6 +265,10 @@ class ToolRegistry:
         self._grounded_paths |= {str(p) for p in (state.get("grounded_paths") or [])}
         for path in state.get("written_paths") or []:
             self._record_write(str(path))
+        # 단조 증가 — 복원이 이미 센 것을 깎으면 안 된다.
+        self.succeeded_tool_calls = max(
+            self.succeeded_tool_calls, int(state.get("succeeded_tool_calls") or 0)
+        )
         patterns = state.get("declaration_patterns")
         if patterns:
             self.declaration_patterns = [str(p) for p in patterns]
@@ -296,11 +313,20 @@ class ToolRegistry:
 
     async def invoke(self, name: str, arguments: dict[str, Any]) -> str:
         """Run a tool by name. Returns the result string the dispatcher
-        appends as the tool message."""
+        appends as the tool message.
+
+        Counts the call into :attr:`succeeded_tool_calls` only when the handler
+        RETURNS. A refusal (``ToolError`` — B7 verify-first gate, path escape,
+        denylist) is not work; counting it would let an agent that kept trying
+        to write without declaring buy its way out of the no-work nudge with
+        its own failures.
+        """
         tool = self._tools.get(name)
         if tool is None:
             raise ToolError(f"Unknown tool: {name!r}")
-        return await tool.handler(arguments)
+        result = await tool.handler(arguments)
+        self.succeeded_tool_calls += 1
+        return result
 
     def has(self, name: str) -> bool:
         return name in self._tools

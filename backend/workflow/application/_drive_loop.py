@@ -398,6 +398,21 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         if (
             not written_paths
             and registry.declared_contract is None
+            # 파일을 안 고친 것과 **일을 안 한 것**은 다르다. 형님이 "조사만 하고
+            # 보고해라 — 파일은 하나도 쓰지 마라" 로 스코프한 런은 파일을 안 고치는
+            # 것이 정답이고, 그때 이 nudge 는 제대로 조사한 에이전트를 다그친다.
+            # prod 실측(2026-08-24 · 08-25 · 08-31 ×2): 그 런들의 ``writes`` 는 전부
+            # 비어 있었고, 에이전트는 정확한 답을 냈으며, 한 번은 결국 형님께 질문을
+            # 올려 런이 멈췄다.
+            #
+            # 형님 판정 2026-08-20 — *"정말 검증할게 없어서 아무것도 안한거는 통과야"*
+            # — 은 ``settle_undeclared_verification`` 에 이미 적용돼 있다. 여기가
+            # 그 판정을 못 받은 두 번째 지점이었다.
+            #
+            # 그래도 막아야 할 것은 그대로 막힌다: 도구를 **한 번도** 안 쓰고 산문만
+            # 뱉는 것. 거부당한 호출(B7 게이트·denylist)은 세지 않으므로, 선언 없이
+            # 쓰려다 막힌 에이전트가 자기 실패로 면제를 사지 못한다.
+            and registry.succeeded_tool_calls == 0
             and no_work_nudges < MAX_NO_WORK_NUDGES
         ):
             no_work_nudges += 1
@@ -406,9 +421,10 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 {
                     "role": "user",
                     "content": (
-                        "You have not changed any file or declared a verification contract yet. "
-                        "A prose answer is not a deliverable. Use the tools to do the work, then "
-                        "declare_verification, then summarise."
+                        "You have not used any tool yet — no file changed, no verification "
+                        "declared, nothing read or run. A prose answer alone is not a "
+                        "deliverable. Use the tools to do the work; if it changes files, "
+                        "declare_verification first, then summarise."
                     ),
                 }
             )
