@@ -4,3 +4,9 @@ out/
 .env.local
 *.log
 *.tsbuildinfo
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

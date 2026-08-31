@@ -128,3 +128,24 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # 브라우저 E2E — vitest 가 구조적으로 못 보는 것만 본다(라우팅 조립,
+      # 하이드레이션, 인증 게이트의 실제 리다이렉트). Playwright 설정이
+      # `next build && next start` 를 띄우므로 **배포되는 것**을 검사한다:
+      # dev 모드에서는 게이트된 라우트가 하이드레이션을 못 끝내 제품에 없는
+      # 실패를 5건 만든다(실측 2026-08-31).
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E (playwright)
+        run: pnpm test:e2e
+
+      - name: Upload E2E artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/pwa/playwright-report/
+            apps/pwa/test-results/
+          retention-days: 7

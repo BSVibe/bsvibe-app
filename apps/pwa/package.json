@@ -10,7 +10,9 @@
     "lint:fix": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@git-diff-view/react": "^0.1.6",
@@ -35,7 +37,8 @@
     "@vitejs/plugin-react": "^4.7.0",
     "jsdom": "^25.0.1",
     "typescript": "5.6.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "@playwright/test": "^1.56.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["@biomejs/biome", "esbuild", "sharp"]
