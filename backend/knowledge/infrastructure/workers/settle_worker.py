@@ -421,9 +421,76 @@ class KnowledgeSettleSink:
         # deterministic fallback — the sink never *requires* an LLM.
         self._extractor_factory = extractor_factory
 
+    async def _record_originals(self, settlement: Settlement) -> None:
+        """이 settlement 이 나르는 원본을 ``seeds/<kind>/`` 에 불변으로 남긴다.
+
+        여기서 남기는 것은 **런 안에서 발생하는** 둘이다 — ``founder_text``
+        (피드백) · ``agent_knowledge``(회고). 요청 원본은 여기 없다: 그건
+        :meth:`~backend.workflow.infrastructure.workers.intake_worker.IntakeWorker._record_request_original`
+        이 Request 가 만들어지는 순간 남긴다.
+
+        왜 요청을 여기서 안 남기는가 — prod 실측(2026-08-31)이 두 번 뒤집었다:
+        런 231건 중 **116건(절반)이 끝내 정착하지 않았고**, request 13개가 런을
+        2~3개씩 낳아 ``run_id`` 키로는 같은 지시문이 중복된다. 정착에 매달면
+        형님 지시문의 절반을 잃는다. 한 원본은 한 곳에서만 기록한다.
+
+        키: settle 행당 하나이므로 ``activity_id``. 백필도 같은 행에서 같은 키를
+        뽑으므로 실시간 기록과 백필이 서로를 덮지 않는다
+        (:func:`~backend.knowledge.originals.record_original` 이 ``O_EXCL``).
+
+        ``founder_text`` 는 :func:`~backend.common.settle_kinds.founder_authored_text`
+        가 이미 걸러 준 것 — 원클릭 액션의 ``answer`` 는 버튼 키이지 형님이 쓴
+        글자가 아니므로 여기 오지 않는다. 규칙을 두 번 적지 않는다.
+        """
+        from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415 — lazy heavy import
+        from backend.knowledge.originals import OriginalKind, record_original  # noqa: PLC0415
+
+        provenance = {"run_id": str(settlement.run_id), "activity_id": str(settlement.activity_id)}
+        candidates: list[tuple[OriginalKind, str, str, str]] = []
+        if settlement.founder_text:
+            candidates.append(
+                (
+                    "feedback",
+                    str(settlement.activity_id),
+                    settlement.question or "피드백",
+                    settlement.founder_text,
+                )
+            )
+        if settlement.agent_knowledge is not None:
+            candidates.append(
+                (
+                    "retrospect",
+                    str(settlement.activity_id),
+                    settlement.agent_knowledge.topic,
+                    settlement.agent_knowledge.insight,
+                )
+            )
+        if not candidates:
+            return
+
+        vault = KnowledgeFactory(
+            workspace_id=str(settlement.workspace_id), vault_root=self._vault_root
+        ).vault()
+        for kind, key, title, content in candidates:
+            await record_original(
+                vault=vault,
+                kind=kind,
+                key=key,
+                title=title,
+                content=content,
+                provenance=provenance,
+            )
+
     async def absorb(self, settlement: Settlement) -> str | None:
         from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415 — lazy heavy import
         from backend.knowledge.graph.writer import GardenNote  # noqa: PLC0415
+
+        # ORIGINALS (형님 지시 2026-08-31) — 런 안에서 발생한 원본(피드백·회고)을
+        # 가공 전 상태로 먼저 떨군다. 아래 게이트보다 **앞**인 것이 요점이다:
+        # 관찰 노트는 "기억할 가치"를 판단해 걸러도 원본은 히스토리라 거르지 않는다.
+        # (요청 원본은 IntakeWorker 가 Request 생성 시점에 남긴다 — 런 231건 중
+        # 116건이 끝내 정착하지 않으므로 여기 매달면 절반을 잃는다.)
+        await self._record_originals(settlement)
 
         summary = settlement.summary.strip()
         # GATE (founder directive, v2): decide whether this settlement is worth a

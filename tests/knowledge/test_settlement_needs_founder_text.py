@@ -195,9 +195,33 @@ async def _settle_payloads(sf, kind: str) -> list[dict]:
     return [r.payload for r in rows if (r.payload or {}).get("kind") == kind]
 
 
+def _ws_dir(vault_root, workspace_id: uuid.UUID):
+    return vault_root / get_settings().knowledge_default_region / str(workspace_id)
+
+
 def _notes(vault_root, workspace_id: uuid.UUID) -> list:
-    ws_dir = vault_root / get_settings().knowledge_default_region / str(workspace_id)
-    return list(ws_dir.rglob("*.md")) if ws_dir.exists() else []
+    """§13 이 말하는 **vault 노트** — 싱크가 만드는 가든 관찰 노트.
+
+    ``garden/`` 으로 좁혀 둔다. 예전에는 워크스페이스 vault 전체를 ``rglob``
+    했고, 그래서 ``== []`` 가 사실은 *"이 워크스페이스에 파일이 하나도 없다"* 는
+    훨씬 넓은 주장을 하고 있었다. §13 의 명제는 그게 아니다 — 형님이 쓴 글자가
+    0자면 **그 글자로 만든 노트**가 없어야 한다는 것이다. 원본 레이어가 같은
+    vault 에 요청 원문을 남기는 것은 그 명제와 무관하고, 오히려 형님이 남기라고
+    지시한 히스토리다.
+    """
+    garden = _ws_dir(vault_root, workspace_id) / "garden"
+    return list(garden.rglob("*.md")) if garden.exists() else []
+
+
+def _feedback_originals(vault_root, workspace_id: uuid.UUID) -> list:
+    """형님이 쓴 글자로 만들어진 **원본** — §13 이 0자일 때 없어야 하는 쪽.
+
+    ``_notes`` 를 좁히면 원본이 이 파일의 사정거리 밖으로 빠진다. 그러면 §13 의
+    구멍이 원본 레이어에서 조용히 다시 열려도 아무도 모른다 — 그래서 명제를
+    원본에도 그대로 건다.
+    """
+    feedback = _ws_dir(vault_root, workspace_id) / "seeds" / "feedback"
+    return list(feedback.rglob("*.md")) if feedback.exists() else []
 
 
 async def _drain(sf, vault_root) -> int:
@@ -237,6 +261,8 @@ async def test_one_click_acknowledge_leaves_no_vault_note(
     # 그러나 vault 노트는 하나도 안 생긴다.
     assert await _drain(sf, tmp_path) == 1
     assert _notes(tmp_path, workspace_id) == []
+    # 원본 레이어에서도 마찬가지다 — 형님이 쓴 글자가 0자면 피드백 원본도 없다.
+    assert _feedback_originals(tmp_path, workspace_id) == []
 
 
 async def test_one_click_discard_without_a_reason_leaves_no_vault_note(
@@ -265,6 +291,7 @@ async def test_one_click_discard_without_a_reason_leaves_no_vault_note(
 
     assert await _drain(sf, tmp_path) == 1
     assert _notes(tmp_path, workspace_id) == []
+    assert _feedback_originals(tmp_path, workspace_id) == []
 
 
 async def test_discard_with_a_reason_keeps_only_the_founders_own_words(

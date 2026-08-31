@@ -17,9 +17,11 @@ committed the event no longer matches.
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -93,6 +95,47 @@ class IntakeWorker(BaseWorker):
         self._redis_client = redis_client
         self._settings = settings or get_settings()
 
+    async def _record_request_original(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        request_id: uuid.UUID,
+        payload: Mapping[str, Any],
+    ) -> None:
+        """형님이 쓴 지시문을 ``seeds/request/<request_id>.md`` 에 불변으로 남긴다.
+
+        ``text`` 가 주류이고 ``intent_text`` 도 쓰인다 (prod 실측: 213 / 10). 둘 다
+        없는 트리거 — 스케줄 tick, GitHub 웹훅 — 은 형님이 쓴 글자가 없으므로
+        원본이 아니다. 빈 파일을 쌓지 않는다.
+
+        기록 실패는 삼킨다. 이건 intake 의 부수 효과이고, vault 사고가 **일 자체를
+        못 들어오게** 막으면 안 된다.
+        """
+        raw = payload.get("text") or payload.get("intent_text")
+        if not isinstance(raw, str) or not raw.strip():
+            return
+
+        from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415 — lazy heavy import
+        from backend.knowledge.originals import record_original  # noqa: PLC0415
+
+        try:
+            vault = KnowledgeFactory(
+                workspace_id=str(workspace_id),
+                vault_root=Path(self._settings.knowledge_vault_root),
+            ).vault()
+        except OSError:
+            logger.warning("request_original_vault_unavailable", request_id=str(request_id))
+            return
+
+        await record_original(
+            vault=vault,
+            kind="request",
+            key=str(request_id),
+            title=raw.strip().splitlines()[0][:80],
+            content=raw,
+            provenance={"request_id": str(request_id)},
+        )
+
     async def _tick(self) -> int:
         return await self.drain_once()
 
@@ -156,6 +199,16 @@ class IntakeWorker(BaseWorker):
                         updated_at=now,
                     ),
                     producer_id="worker:intake_worker",
+                )
+                # ORIGINALS (형님 지시 2026-08-31) — 형님이 쓴 지시문을 여기서,
+                # 런이 존재하기도 전에 그대로 떨군다. 정착(settle)에 매달면 절반을
+                # 잃는다: prod 실측 런 231건 중 116건이 끝내 정착하지 않았다.
+                # 키가 ``request_id`` 인 이유도 실측이다 — request 13개가 런을
+                # 2~3개씩 낳으므로 run_id 로 잡으면 같은 지시문이 중복된다.
+                await self._record_request_original(
+                    workspace_id=trig.workspace_id,
+                    request_id=request_id,
+                    payload=outcome.request_payload,
                 )
                 # Notifier N3 — an autonomous/external trigger just started work.
                 # Queue a ``triggered`` notification in THIS transaction (confirmed
