@@ -107,8 +107,23 @@ def _ws_dir(vault_root, workspace_id: uuid.UUID):
 
 
 def _written_notes(vault_root, workspace_id: uuid.UUID) -> list:
-    ws_dir = _ws_dir(vault_root, workspace_id)
-    return list(ws_dir.rglob("*.md")) if ws_dir.exists() else []
+    """The GARDEN notes the sink deposited — what ``absorb`` returns a path to.
+
+    Scoped to ``garden/`` on purpose. This used to ``rglob`` the whole workspace
+    vault, which made every ``len(...) == 1`` here really assert *"exactly one
+    file exists anywhere in this workspace"* — a much broader claim than the
+    tests mean, and one that breaks the moment any other surface writes into the
+    same vault (the originals layer now does). An assertion should name what it
+    guards; use :func:`_written_originals` for the originals surface.
+    """
+    garden = _ws_dir(vault_root, workspace_id) / "garden"
+    return list(garden.rglob("*.md")) if garden.exists() else []
+
+
+def _written_originals(vault_root, workspace_id: uuid.UUID) -> list:
+    """The immutable originals (``seeds/<kind>/``) recorded for this workspace."""
+    seeds = _ws_dir(vault_root, workspace_id) / "seeds"
+    return list(seeds.rglob("*.md")) if seeds.exists() else []
 
 
 def _knowledge(insight: str, *, topic: str = "Remembered knowledge") -> dict:
@@ -467,6 +482,16 @@ async def test_settle_worker_workspace_isolation(sf, tmp_path) -> None:
     b_notes = _written_notes(tmp_path, ws_b)
     assert len(a_notes) == 1
     assert len(b_notes) == 1
+
+    # The originals layer writes into the SAME per-workspace vault, so the
+    # boundary has to hold for it too — narrowing ``_written_notes`` to
+    # ``garden/`` must not quietly drop originals out of this test's reach.
+    a_originals = _written_originals(tmp_path, ws_a)
+    b_originals = _written_originals(tmp_path, ws_b)
+    assert len(a_originals) == 1
+    assert len(b_originals) == 1
+    assert "alpha learning" in a_originals[0].read_text(encoding="utf-8")
+    assert "beta learning" in b_originals[0].read_text(encoding="utf-8")
     assert "alpha learning" in a_notes[0].read_text(encoding="utf-8")
     assert "beta learning" in b_notes[0].read_text(encoding="utf-8")
 

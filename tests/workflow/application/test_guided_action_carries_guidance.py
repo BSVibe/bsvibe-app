@@ -207,9 +207,32 @@ async def _settle_payloads(sf, kind: str) -> list[dict]:
     return [r.payload for r in rows if (r.payload or {}).get("kind") == kind]
 
 
+def _ws_dir(vault_root: Path, workspace_id: uuid.UUID) -> Path:
+    return vault_root / get_settings().knowledge_default_region / str(workspace_id)
+
+
 def _notes(vault_root: Path, workspace_id: uuid.UUID) -> list[Path]:
-    ws_dir = vault_root / get_settings().knowledge_default_region / str(workspace_id)
-    return list(ws_dir.rglob("*.md")) if ws_dir.exists() else []
+    """The garden observation notes — what "지식이 된다" means here.
+
+    Scoped to ``garden/``: this used to ``rglob`` the whole workspace vault, so
+    every count really claimed *"exactly N files exist anywhere in this
+    workspace"*. The originals layer writes the founder's own request text into
+    the same vault, which is history rather than a derived note, and has no
+    bearing on whether a guided retry became knowledge.
+    """
+    garden = _ws_dir(vault_root, workspace_id) / "garden"
+    return list(garden.rglob("*.md")) if garden.exists() else []
+
+
+def _feedback_originals(vault_root: Path, workspace_id: uuid.UUID) -> list[Path]:
+    """Originals made from words the founder actually typed.
+
+    A text-free action must produce none of these — the same proposition
+    ``_notes`` guards, re-stated on the originals surface so narrowing the
+    helper above does not quietly move the hole somewhere nobody looks.
+    """
+    feedback = _ws_dir(vault_root, workspace_id) / "seeds" / "feedback"
+    return list(feedback.rglob("*.md")) if feedback.exists() else []
 
 
 async def _drain(sf, vault_root: Path) -> int:
@@ -382,6 +405,8 @@ async def test_a_text_free_retry_still_earns_no_note(
     assert len(await _settle_payloads(sf, DECISION_RESOLUTION_SETTLE_KIND)) == 1
     assert await _drain(sf, tmp_path) == 1
     assert _notes(tmp_path, workspace_id) == []
+    # 형님이 친 글자가 없으면 원본 쪽에도 피드백이 남지 않는다.
+    assert _feedback_originals(tmp_path, workspace_id) == []
 
 
 async def test_a_pwa_discard_with_a_reason_still_keeps_exactly_one_note(
