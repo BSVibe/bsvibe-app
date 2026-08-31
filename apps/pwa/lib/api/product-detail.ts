@@ -168,22 +168,25 @@ function toDetailRun(run: Run, lookup: ReviewLookup): ProductDetailRun {
  * (the products / runs read throwing) bubbles up to the surface's inline error
  * state instead.
  *
- * @param runLimit how many runs to scan for this product's history (the runs
- *   list is workspace-wide and newest-first; we client-side filter to this
- *   product_id). Defaults to a generous window so the header status reflects
- *   the genuine latest run.
+ * @param runLimit how many of THIS product's runs to load for its history
+ *   (newest-first, narrowed by the backend). Defaults to a generous window so
+ *   the header status reflects the genuine latest run.
  */
 export async function getProductDetail(
   slug: string,
   runLimit = 100,
 ): Promise<ProductDetailView | null> {
-  const [products, runs] = await Promise.all([listProducts(), listRuns(runLimit)]);
+  // Sequential on purpose: the runs read is scoped to this product, and the
+  // product id only exists once the slug is resolved. The alternative — one
+  // parallel workspace-wide page, filtered here — made a product's history
+  // depend on how busy the OTHER products had been.
+  const products = await listProducts();
 
   const product = products.find((p) => p.slug === slug) as Product | undefined;
   if (!product) return null;
 
-  // Runs for THIS product, preserving the newest-first order of the list.
-  const productRuns = runs.filter((r) => r.product_id === product.id);
+  // Runs for THIS product, newest-first, narrowed by the backend.
+  const productRuns = await listRuns(runLimit, product.id);
   const latest = productRuns[0];
   const { statusKey: currentStatusKey, tone: currentTone } = headlineFor(latest);
 

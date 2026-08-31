@@ -29,10 +29,20 @@ async def list_runs(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     runs: Annotated[RunRepository, Depends(get_run_repository)],
     limit: int = 50,
+    product_id: uuid.UUID | None = None,
 ) -> list[RunResponse]:
-    """List recent ExecutionRun rows for the workspace, newest first."""
+    """List recent ExecutionRun rows for the workspace, newest first.
+
+    ``product_id`` narrows to one product. The narrowing happens in the query,
+    not after the page is cut, so the answer for a quiet product does not
+    depend on how busy the rest of the workspace has been.
+    """
     limit = max(1, min(limit, 200))
-    rows = await runs.list_by_workspace(workspace_id, limit=limit)
+    rows = (
+        await runs.list_by_product(workspace_id, product_id, limit=limit)
+        if product_id is not None
+        else await runs.list_by_workspace(workspace_id, limit=limit)
+    )
     return [
         RunResponse(
             id=row.id,
