@@ -85,6 +85,7 @@ from backend.knowledge.extraction.worth_remembering import (
     is_inherently_notable,
     parse_declared_knowledge,
 )
+from backend.knowledge.originals import OriginalKind
 from backend.workers.base import BaseWorker
 from backend.workers.db import SettleDrainRow
 from backend.workflow.infrastructure.db import ExecutionRunActivity
@@ -422,55 +423,23 @@ class KnowledgeSettleSink:
         self._extractor_factory = extractor_factory
 
     async def _record_originals(self, settlement: Settlement) -> None:
-        """이 settlement 이 나르는 원본을 ``seeds/<kind>/`` 에 불변으로 남긴다.
+        """이 settlement 이 나르는 원본을 vault 에 남긴다 (실시간 경로).
 
-        여기서 남기는 것은 **런 안에서 발생하는** 둘이다 — ``founder_text``
-        (피드백) · ``agent_knowledge``(회고). 요청 원본은 여기 없다: 그건
-        :meth:`~backend.workflow.infrastructure.workers.intake_worker.IntakeWorker._record_request_original`
-        이 Request 가 만들어지는 순간 남긴다.
-
-        왜 요청을 여기서 안 남기는가 — prod 실측(2026-08-31)이 두 번 뒤집었다:
-        런 231건 중 **116건(절반)이 끝내 정착하지 않았고**, request 13개가 런을
-        2~3개씩 낳아 ``run_id`` 키로는 같은 지시문이 중복된다. 정착에 매달면
-        형님 지시문의 절반을 잃는다. 한 원본은 한 곳에서만 기록한다.
-
-        키: settle 행당 하나이므로 ``activity_id``. 백필도 같은 행에서 같은 키를
-        뽑으므로 실시간 기록과 백필이 서로를 덮지 않는다
-        (:func:`~backend.knowledge.originals.record_original` 이 ``O_EXCL``).
-
-        ``founder_text`` 는 :func:`~backend.common.settle_kinds.founder_authored_text`
-        가 이미 걸러 준 것 — 원클릭 액션의 ``answer`` 는 버튼 키이지 형님이 쓴
-        글자가 아니므로 여기 오지 않는다. 규칙을 두 번 적지 않는다.
+        파생은 :func:`settlement_originals` 한 곳에만 있다 — 백필도 같은 함수를
+        쓴다. 두 벌이 되는 순간 §13 원클릭 가드가 한쪽에서만 지켜지고, 그게
+        정확히 #823 이 남긴 교훈이다.
         """
         from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415 — lazy heavy import
-        from backend.knowledge.originals import OriginalKind, record_original  # noqa: PLC0415
+        from backend.knowledge.originals import record_original  # noqa: PLC0415
 
-        provenance = {"run_id": str(settlement.run_id), "activity_id": str(settlement.activity_id)}
-        candidates: list[tuple[OriginalKind, str, str, str]] = []
-        if settlement.founder_text:
-            candidates.append(
-                (
-                    "feedback",
-                    str(settlement.activity_id),
-                    settlement.question or "피드백",
-                    settlement.founder_text,
-                )
-            )
-        if settlement.agent_knowledge is not None:
-            candidates.append(
-                (
-                    "retrospect",
-                    str(settlement.activity_id),
-                    settlement.agent_knowledge.topic,
-                    settlement.agent_knowledge.insight,
-                )
-            )
+        candidates = settlement_originals(settlement)
         if not candidates:
             return
 
         vault = KnowledgeFactory(
             workspace_id=str(settlement.workspace_id), vault_root=self._vault_root
         ).vault()
+        provenance = {"run_id": str(settlement.run_id), "activity_id": str(settlement.activity_id)}
         for kind, key, title, content in candidates:
             await record_original(
                 vault=vault,
@@ -1175,6 +1144,58 @@ def _opt_str(value: object) -> str | None:
     return stripped or None
 
 
+def settlement_originals(
+    settlement: Settlement,
+) -> list[tuple[OriginalKind, str, str, str]]:
+    """이 settlement 이 나르는 원본들을 ``(kind, key, title, content)`` 로 뽑는다.
+
+    **파생 규칙의 유일한 정의.** 실시간 경로(:meth:`KnowledgeSettleSink._record_originals`)
+    와 백필(:mod:`backend.knowledge.originals_backfill`)이 둘 다 이것을 쓴다 —
+    규칙이 두 벌이면 §13 원클릭 가드가 한쪽에서만 지켜지고, prod 에서 형님이 한
+    글자도 안 쓴 '피드백'이 쌓인다(실측 2026-08-25: 11건 중 6건이 그랬다).
+
+    여기서 나오는 것은 **런 안에서 발생하는** 둘뿐이다 — ``founder_text``(피드백)
+    와 ``agent_knowledge``(회고). 요청 원본은 여기 없다: 그건
+    :meth:`~backend.workflow.infrastructure.workers.intake_worker.IntakeWorker._record_request_original`
+    이 Request 생성 시점에 남긴다. prod 실측(2026-08-31) — 런 231건 중 **116건
+    (절반)이 끝내 정착하지 않고**, request 13개가 런을 2~3개씩 낳아 ``run_id``
+    키로는 같은 지시문이 중복된다. 한 원본은 한 곳에서만 기록한다.
+
+    키는 settle 행당 하나이므로 ``activity_id``. 백필도 같은 행에서 같은 키를
+    뽑으므로 실시간 기록과 백필이 서로를 덮지 않는다
+    (:func:`~backend.knowledge.originals.record_original` 이 ``O_EXCL``).
+
+    ``founder_text`` 는 :func:`~backend.common.settle_kinds.founder_authored_text`
+    가 이미 걸러 준 것 — 원클릭 액션의 ``answer`` 는 버튼 키이지 형님이 쓴 글자가
+    아니므로 여기 오지 않는다.
+    """
+    out: list[tuple[OriginalKind, str, str, str]] = []
+    if settlement.founder_text:
+        out.append(
+            (
+                "feedback",
+                str(settlement.activity_id),
+                settlement.question or "피드백",
+                settlement.founder_text,
+            )
+        )
+    if settlement.agent_knowledge is not None:
+        out.append(
+            (
+                "retrospect",
+                str(settlement.activity_id),
+                settlement.agent_knowledge.topic,
+                settlement.agent_knowledge.insight,
+            )
+        )
+    return out
+
+
+def to_settlement(row: ExecutionRunActivity) -> Settlement:
+    """settle 활동 행 → :class:`Settlement`. 워커와 백필이 공유하는 파싱."""
+    return _to_settlement(row)
+
+
 def _to_settlement(row: ExecutionRunActivity) -> Settlement:
     payload = row.payload or {}
     refs = payload.get("artifact_refs") or []
@@ -1212,6 +1233,8 @@ __all__ = [
     "EntityExtractor",
     "ExtractorFactory",
     "KnowledgeSettleSink",
+    "settlement_originals",
+    "to_settlement",
     "NoteEmbedHook",
     "PromoterFactory",
     "ReconcileHook",

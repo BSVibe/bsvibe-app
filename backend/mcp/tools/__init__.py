@@ -18,6 +18,7 @@ from backend.mcp.tools.knowledge_retraction_tools import (
 from backend.mcp.tools.knowledge_tools import register_knowledge_tools
 from backend.mcp.tools.model_accounts_tools import register_model_accounts_tools
 from backend.mcp.tools.notifications_tools import register_notifications_tools
+from backend.mcp.tools.originals_backfill_tools import register_originals_backfill_tools
 from backend.mcp.tools.reindex_tools import register_reindex_tools
 from backend.mcp.tools.run_routing_rules_tools import register_run_routing_rules_tools
 from backend.mcp.tools.safe_mode_tools import register_safe_mode_tools
@@ -95,6 +96,7 @@ def register_all_tools(
     register_workspace_tools(registry)
     register_inside_trust_tools(registry)
     # The embedding backfill's only deliberate trigger was REST-only (callers: tests).
+    register_originals_backfill_tools(registry)
     register_reindex_tools(registry)
     register_account_tools(registry)
     register_workers_tools(registry)
@@ -116,6 +118,7 @@ __all__ = [
     "register_knowledge_retraction_tools",
     "register_knowledge_tools",
     "register_model_accounts_tools",
+    "register_originals_backfill_tools",
     "register_reindex_tools",
     "register_notifications_tools",
     "register_run_routing_rules_tools",
