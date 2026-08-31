@@ -509,9 +509,28 @@ async def write_answer_deliverable(
     return deliverable
 
 
+def diff_of(payload: dict[str, Any]) -> tuple[str | None, bool]:
+    """Pull the captured unified diff + truncation flag out of the payload.
+
+    The read side of the ``payload["diff"]`` / ``payload["diff_truncated"]``
+    keys :func:`write_verified_deliverable` writes above — kept beside the write
+    so the two never disagree about the key names, and so both surfaces that
+    serve the diff (the REST ``/diff`` route and the MCP
+    ``bsvibe_deliverables_diff`` tool) read it through one function.
+
+    Returns ``(diff, truncated)`` — ``(None, False)`` when no diff was captured
+    (a non-product run / a pre-feature row), defensively coercing odd shapes.
+    """
+    diff = payload.get("diff")
+    if not isinstance(diff, str):
+        return None, False
+    return diff, payload.get("diff_truncated") is True
+
+
 __all__ = [
     "ANSWER_DELIVERABLE_KIND",
     "PARTIAL_DELIVERABLE_KIND",
+    "diff_of",
     "settle_run_context",
     "write_answer_deliverable",
     "write_partial_deliverable",

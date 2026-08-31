@@ -157,17 +157,6 @@ def artifact_refs_of(payload: dict[str, Any]) -> list[str]:
     return []
 
 
-def diff_of(payload: dict[str, Any]) -> tuple[str | None, bool]:
-    """Pull the captured unified diff + truncation flag out of the payload.
-
-    Returns ``(diff, truncated)`` — ``(None, False)`` when no diff was captured
-    (a non-product run / a pre-feature row), defensively coercing odd shapes."""
-    diff = payload.get("diff")
-    if not isinstance(diff, str):
-        return None, False
-    return diff, payload.get("diff_truncated") is True
-
-
 def request_text_of(payload: dict[str, Any]) -> str | None:
     """Pull the founder's Direction out of the producing run's free-form payload
     (``intent_text`` from intake, or ``text``), the same keys the run-detail

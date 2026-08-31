@@ -22,8 +22,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from backend.api.deps import get_workspace_id
 from backend.api.v1._workflow_deps import get_deliverable_repository
 from backend.workflow.domain.repositories import DeliverableRepository
+from backend.workflow.domain.verified_deliverable import diff_of
 
-from ._schemas import DeliverableDiffResponse, diff_of
+from ._schemas import DeliverableDiffResponse
 
 router = APIRouter()
 

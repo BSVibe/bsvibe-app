@@ -36,6 +36,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import structlog
 from sqlalchemy import select
@@ -428,6 +429,36 @@ async def _cancel(session: AsyncSession, run: ExecutionRun, *, reason: str) -> b
     return True
 
 
+async def _reopen(session: AsyncSession, run: ExecutionRun, *, reason: str) -> None:
+    """Flip a terminal-failed run back to OPEN + append the audit-history row.
+
+    The re-open counterpart of :func:`_cancel`, and the one exit
+    :meth:`AgentRunner.transition` allows out of CANCELLED.
+    """
+    from_status = run.status
+    run.status = RunStatus.OPEN
+    run.updated_at = datetime.now(tz=UTC)
+    session.add(
+        ExecutionRunHistory(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=run.workspace_id,
+            from_status=from_status,
+            to_status=RunStatus.OPEN,
+            reason=reason,
+            created_at=datetime.now(tz=UTC),
+        )
+    )
+    await session.flush()
+    logger.info(
+        "run_reopened",
+        run_id=str(run.id),
+        workspace_id=str(run.workspace_id),
+        from_status=from_status.value,
+        reason=reason,
+    )
+
+
 async def _resolve_pending_decisions(
     session: AsyncSession,
     run: ExecutionRun,
@@ -500,6 +531,75 @@ class DiscardOutcome:
     deliverables_need_compensation: list[str] = field(default_factory=list)
     decisions_resolved: list[str] = field(default_factory=list)
     safe_mode_items_resolved: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RetryOutcome:
+    """Result of :func:`retry_run`."""
+
+    found: bool
+    retried: bool
+    status: str | None  # run status value after the call, or None when not found
+    retry_count: int = 0
+
+
+# Only a terminal-FAILED run can be retried. A paused (RUNNING, needs-decision)
+# run is resolved via the Decision's ``retry`` action instead.
+_RETRYABLE: frozenset[RunStatus] = frozenset({RunStatus.FAILED, RunStatus.CANCELLED})
+
+
+async def retry_run(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+) -> RetryOutcome:
+    """Re-open a FAILED / CANCELLED run for another attempt (L2 / #9).
+
+    The single rule behind ``POST /runs/{id}/retry`` and ``bsvibe_runs_retry``.
+    Runs are still never *created* through either surface — retry is the one
+    founder-initiated mutation on an existing one: a failed run is recoverable,
+    not a dead end.
+
+    ``found=False`` for an unknown / cross-workspace id (existence is never
+    leaked across the boundary); ``retried=False`` with the current status for a
+    run that is not terminal-failed. Like :func:`cancel_run`, the caller owns
+    the commit — both surfaces commit after mapping the outcome.
+    """
+    runs = SqlAlchemyRunRepository(session)
+    run = await runs.get(run_id)
+    if run is None or run.workspace_id != workspace_id:
+        return RetryOutcome(found=False, retried=False, status=None)
+    if run.status not in _RETRYABLE:
+        return RetryOutcome(found=True, retried=False, status=run.status.value)
+
+    # Bump a retry marker on the free-form payload (re-assign, not in-place
+    # mutate, so SQLAlchemy detects the JSON-column change). drive_once preserves
+    # it (it spreads the existing payload), so observability + future loop logic
+    # can see this is a re-attempt.
+    payload: dict[str, Any] = dict(run.payload or {})
+    retry_count = int(payload.get("retry_count", 0)) + 1
+    payload["retry_count"] = retry_count
+    # L9 — reset the elapsed-time clock: the review surfaces count from
+    # ``restarted_at`` (when present) instead of ``created_at`` so a retried run
+    # shows time since THIS attempt began, not since the first start.
+    payload["restarted_at"] = datetime.now(tz=UTC).isoformat()
+    run.payload = payload
+    await session.flush()
+
+    # FAILED / CANCELLED → OPEN so AgentWorker.drive_once (scans OPEN runs)
+    # re-picks it for a fresh attempt. The history row records the re-open.
+    #
+    # Inlined like :func:`_cancel` rather than calling ``AgentRunner.transition``
+    # — see the module docstring: this service is reachable from the MCP leaf
+    # surface and must not drag the agent engine into its import graph. OPEN is
+    # safe to inline because ``transition``'s side effects are all keyed on
+    # other targets (the FAILED notification funnel, the REVIEW_READY auto-ship
+    # + step handoff); none of them fire for OPEN.
+    await _reopen(session, run, reason=f"founder retry (attempt {retry_count + 1})")
+    return RetryOutcome(
+        found=True, retried=True, status=RunStatus.OPEN.value, retry_count=retry_count
+    )
 
 
 async def cancel_run(
@@ -682,7 +782,9 @@ async def _abort_merge_best_effort(run: ExecutionRun) -> None:
 __all__ = [
     "CancelOutcome",
     "DiscardOutcome",
+    "RetryOutcome",
     "cancel_product_runs",
     "cancel_run",
     "discard_run",
+    "retry_run",
 ]
