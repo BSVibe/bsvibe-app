@@ -236,6 +236,14 @@ def _merge_work_tool_state(*, current: dict[str, Any], incoming: dict[str, Any])
             set(_union(current.get("grounded_paths"), incoming.get("grounded_paths")))
         ),
         "written_paths": _union(current.get("written_paths"), incoming.get("written_paths")),
+        # "에이전트가 일을 했는가" 신호. 콜마다 레지스트리가 새로 만들어지므로
+        # MAX 를 쓴다 — 아무것도 모르는 콜(0)이 이미 센 것을 깎으면, executor 런은
+        # 매 요청 0 호출로 보여 no-work nudge 를 영원히 받는다. 합이 아니라 최대인
+        # 이유는 incoming 이 이미 current 를 복원한 뒤의 누적값이기 때문이다.
+        "succeeded_tool_calls": max(
+            int(current.get("succeeded_tool_calls") or 0),
+            int(incoming.get("succeeded_tool_calls") or 0),
+        ),
         # A-2a 관측치 — 선언 시점에 조회된 패턴. UNION 이 아니라 **교체**다:
         # 재선언은 그 시점의 패턴이 맞고 오래된 것을 끌고 다니면 안 된다
         # (레지스트리의 재선언 동작과 같은 규칙). 아무것도 모르는 콜은
