@@ -22,6 +22,7 @@ from backend.identity.workspaces_db import ProductRow
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.workflow.application.product_secrets import sealed_product_metadata
 from backend.workflow.domain.execution_target import read_execution_target
+from backend.workflow.domain.verified_deliverable import diff_of
 from backend.workflow.domain.verify_secrets import redact_secrets
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyDeliverableRepository,
@@ -590,6 +591,70 @@ async def _h_deliverables_show(args: DeliverablesShowInput, ctx: ToolContext) ->
 
 
 # ---------------------------------------------------------------------------
+# REST parity — retry / diff
+#
+# Each of these mirrors a REST route the browser has had for a while and the
+# agent has not: the founder could re-open a failed run from the PWA, the agent
+# could not. The *rule* behind each one is shared with its route (``retry_run``
+# in the workflow layer, ``diff_of`` beside the code that writes the diff), so
+# the two surfaces cannot disagree about what happens; only the error vocabulary
+# is per-surface — ``ToolError`` here, status codes there.
+#
+# ``test_rest_surface_has_an_mcp_twin`` holds this structurally: a new REST
+# route on either surface fails that guard until it has a tool here. The
+# ``retract`` / ``report`` / ``detail`` routes are pinned as open gaps there —
+# their rules sit in ``backend.api``, which this context may not import.
+# ---------------------------------------------------------------------------
+class RunsRetryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: uuid.UUID
+
+
+async def _h_runs_retry(args: RunsRetryInput, ctx: ToolContext) -> Any:
+    from backend.workflow.application.run_cleanup import retry_run  # noqa: PLC0415
+
+    outcome = await retry_run(
+        ctx.session,
+        run_id=args.run_id,
+        workspace_id=ctx.principal.workspace_id,
+    )
+    if not outcome.found:
+        raise ToolError(f"run not found: {args.run_id}")
+    if not outcome.retried:
+        raise ToolError(
+            f"run {args.run_id} is {outcome.status}; only a failed or cancelled run can "
+            f"be retried — an in-flight run is still working, and a paused one is "
+            f"resolved through its decision"
+        )
+    await ctx.session.commit()
+    return _Envelope(
+        {
+            "run_id": str(args.run_id),
+            "status": outcome.status,
+            "retried": True,
+            "retry_count": outcome.retry_count,
+        }
+    )
+
+
+class DeliverablesDiffInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deliverable_id: uuid.UUID
+
+
+async def _h_deliverables_diff(args: DeliverablesDiffInput, ctx: ToolContext) -> Any:
+    repo = SqlAlchemyDeliverableRepository(ctx.session)
+    row = await repo.get(args.deliverable_id)
+    if row is None or row.workspace_id != ctx.principal.workspace_id:
+        raise ToolError(f"deliverable not found: {args.deliverable_id}")
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    diff, truncated = diff_of(payload)
+    # A Direct (non-product) run captures no diff. Like the REST route, that is
+    # a calm ``diff: null`` — not an error: there is nothing wrong with it.
+    return _Envelope({"diff": diff, "truncated": truncated})
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 def register_workflow_tools(registry: ToolRegistry) -> None:
@@ -765,6 +830,35 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             input_schema=DeliverablesShowInput,
             output_schema=_Envelope,
             handler=_h_deliverables_show,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_runs_retry",
+            description=(
+                "Re-open a failed or cancelled Run for another attempt — the worker "
+                "re-picks it and drives a fresh try. A failed run is recoverable, not a "
+                "dead end. Errors for an in-flight run (nothing to retry)."
+            ),
+            input_schema=RunsRetryInput,
+            output_schema=_Envelope,
+            handler=_h_runs_retry,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.runs_retry.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_deliverables_diff",
+            description=(
+                "Show one Deliverable's captured old↔new changes as a unified git-diff "
+                "patch. Returns `diff: null` when the producing run captured none (a "
+                "Direct run) — that is normal, not an error."
+            ),
+            input_schema=DeliverablesDiffInput,
+            output_schema=_Envelope,
+            handler=_h_deliverables_diff,
             required_scopes=("mcp:read",),
         )
     )
