@@ -38,12 +38,11 @@ from .._support import db_engine, fake_current_user
 pytestmark = pytest.mark.asyncio
 
 # The seed channel set for a fresh workspace (no connectors) is the inbox only.
-_SEED_CHANNELS = ("in_app",)
 
 
-def _full_grid(value: bool, channels: tuple[str, ...] = _SEED_CHANNELS) -> dict:
-    """A matrix covering exactly the known events, each with ``channels`` set."""
-    return {event: {ch: value for ch in channels} for event in DEFAULT_EVENTS}
+def _full_grid(value: bool) -> dict:
+    """알려진 이벤트 전부를 덮는 매트릭스 — 이벤트당 스위치 하나."""
+    return {event: value for event in DEFAULT_EVENTS}
 
 
 @pytest_asyncio.fixture
@@ -89,11 +88,11 @@ async def test_get_prefs_returns_defaults_when_none_exist(client) -> None:
     # Every event row is present; the seed expresses only the in_app inbox.
     assert set(body["matrix"].keys()) == set(DEFAULT_EVENTS)
     for event_id in DEFAULT_EVENTS:
-        assert set(body["matrix"][event_id].keys()) == {"in_app"}
+        assert isinstance(body["matrix"][event_id], bool)
 
     # Sensible defaults: "needs you" lands in the inbox; daily brief is calm.
-    assert body["matrix"]["needs_you"] == {"in_app": True}
-    assert body["matrix"]["daily_brief"] == {"in_app": False}
+    assert body["matrix"]["needs_you"] is True
+    assert body["matrix"]["daily_brief"] is False
 
     # No connectors bound → only the inbox is an available channel.
     assert body["available_channels"] == ["in_app"]
@@ -145,7 +144,7 @@ async def test_get_prefs_persists_single_row(client, db) -> None:
 async def test_put_then_get_round_trips_matrix_and_quiet_hours(client, workspace_id) -> None:
     """PUT replaces the matrix + quiet hours; the next GET reflects it."""
     new_matrix = _full_grid(False)
-    new_matrix["shipped"]["in_app"] = True
+    new_matrix["shipped"] = True
     payload = {
         "matrix": new_matrix,
         "quiet_hours_enabled": True,
@@ -154,24 +153,29 @@ async def test_put_then_get_round_trips_matrix_and_quiet_hours(client, workspace
     }
     put = await client.put("/api/v1/notifications/prefs", json=payload)
     assert put.status_code == 200, put.text
-    assert put.json()["matrix"]["shipped"]["in_app"] is True
-    assert put.json()["matrix"]["needs_you"]["in_app"] is False
+    assert put.json()["matrix"]["shipped"] is True
+    assert put.json()["matrix"]["needs_you"] is False
     # PUT response also carries the derived channels.
     assert put.json()["available_channels"] == ["in_app"]
 
     got = await client.get("/api/v1/notifications/prefs")
     assert got.status_code == 200
     body = got.json()
-    assert body["matrix"]["shipped"]["in_app"] is True
-    assert body["matrix"]["needs_you"]["in_app"] is False
+    assert body["matrix"]["shipped"] is True
+    assert body["matrix"]["needs_you"] is False
     assert body["quiet_hours_enabled"] is True
     assert body["quiet_hours_start"] == "23:30"
     assert body["quiet_hours_end"] == "07:15"
 
 
-async def test_put_tolerates_a_connector_channel_key(client) -> None:
-    """Channel columns are derived, so any channel key (e.g. telegram) is
-    accepted — the pre-N1a exact-grid validator would have rejected it."""
+async def test_put_rejects_the_old_per_channel_shape(client) -> None:
+    """전제가 뒤집혔다 — 채널 축을 접었으므로 중첩 모양은 **거절**한다.
+
+    앞 세대는 *"채널 키는 파생되므로 무엇이든 관용한다"* 였다. 그 관용이 바로
+    형님이 겪은 버그의 토대였다: 저장된 키만 배달되므로, 관용된 키 집합이 곧
+    조용한 정책이 됐다. 두 형태가 공존하면 send 경로가 중첩 dict 를 truthy 로
+    읽어 **끈 이벤트까지 켜진다.**
+    """
     matrix = {event: {"in_app": True, "telegram": True} for event in DEFAULT_EVENTS}
     payload = {
         "matrix": matrix,
@@ -180,8 +184,7 @@ async def test_put_tolerates_a_connector_channel_key(client) -> None:
         "quiet_hours_end": "08:00",
     }
     r = await client.put("/api/v1/notifications/prefs", json=payload)
-    assert r.status_code == 200, r.text
-    assert r.json()["matrix"]["needs_you"]["telegram"] is True
+    assert r.status_code == 422, r.text
 
 
 async def test_put_is_scoped_to_a_single_row_per_workspace(client, db) -> None:

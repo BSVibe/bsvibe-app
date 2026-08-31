@@ -7,19 +7,23 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 /**
- * Settings → Notifications (N2b): the real events × channels matrix.
+ * Settings → Notifications: one switch per event.
  *
  * Delivery is now wired (N2a/N3): needs_you / triggered / shipped / failed each
  * stage an outbox row that the NotifyWorker drains to the workspace's bound push
  * channels. So this surface is no longer the honest "coming soon" stub — it is a
  * live grid the founder can steer. The honesty rules baked in here:
  *
- *  - Columns are DERIVED from `available_channels` (in_app + the workspace's bound
- *    notify connectors), never a hardcoded list — bind Telegram and a Telegram
- *    column appears; unbind it and the column is gone.
- *  - The `in_app` column is INFORMATIONAL, not a toggle. The NotifyWorker never
- *    sends in_app (a Decision already surfaces in the Brief / SSE inbox), so a
- *    switch there would pretend to gate an always-on inbox. It renders "always on".
+ *  - The CHANNEL AXIS IS GONE (2026-08-31). It never differentiated anything:
+ *    measured on prod, one workspace carried columns for channels that had never
+ *    been bound while LACKING the column for the one that was — so the founder
+ *    bound Telegram and received nothing but `auth_down`, because the send path
+ *    reads stored keys and an absent key meant "no". One switch per event removes
+ *    the class of bug: there is no per-channel key that can be missing.
+ *  - On means the in-app inbox AND every bound push channel. Noise is steered by
+ *    WHICH connectors you bind, not by a grid.
+ *  - `available_channels` is still shown — as a caption naming where an enabled
+ *    event will actually land, so the switch never over-promises.
  *  - `daily_brief` is a LIVE row like the rest. It was rendered inert on the
  *    grounds that it "has NO producer yet"; measured in prod 2026-08-26 the
  *    DailyBriefWorker was running and `notification_events` held 76 daily_brief
@@ -32,11 +36,11 @@ import { useEffect, useState } from "react";
  *    Connectors), not a bare in-app-only grid.
  *
  * Writes are optimistic with revert-on-failure (mirrors GeneralTab's
- * `chooseSafeMode`): flip the cell immediately, PUT the whole matrix + quiet
+ * `chooseSafeMode`): flip the switch immediately, PUT the whole matrix + quiet
  * hours, reconcile from the response, revert on error.
  */
 
-// Matrix rows — every one of them delivering, every one of them togglable.
+// Every one of them delivering, every one of them togglable.
 const DELIVERING_EVENTS = [
   "needs_you",
   "triggered",
@@ -85,11 +89,9 @@ export default function NotificationsTab() {
       .finally(() => setSaving(false));
   }
 
-  function toggleCell(event: EventId, channel: string, on: boolean) {
+  function toggleEvent(event: EventId, on: boolean) {
     if (!prefs) return;
-    const nextMatrix = { ...prefs.matrix };
-    nextMatrix[event] = { ...(nextMatrix[event] ?? {}), [channel]: on };
-    commit({ ...prefs, matrix: nextMatrix });
+    commit({ ...prefs, matrix: { ...prefs.matrix, [event]: on } });
   }
 
   function setQuietEnabled(on: boolean) {
@@ -153,52 +155,29 @@ export default function NotificationsTab() {
         <section className="notifications-matrix" aria-label={t("matrixTitle")}>
           <h2 className="section-label">{t("matrixTitle")}</h2>
           <p className="settings-field__caption">{t("matrixCaption")}</p>
-          <div className="notifications-matrix__scroll">
-            <table className="notifications-grid">
-              <thead>
-                <tr>
-                  <th scope="col" className="notifications-grid__event-head">
-                    {t("eventColumn")}
-                  </th>
-                  <th scope="col" className="notifications-grid__channel-head">
-                    {channelLabel(IN_APP)}
-                    <span className="notifications-grid__always">{t("inAppAlways")}</span>
-                  </th>
-                  {pushChannels.map((channel) => (
-                    <th scope="col" key={channel} className="notifications-grid__channel-head">
-                      {channelLabel(channel)}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {DELIVERING_EVENTS.map((event) => (
-                  <tr key={event}>
-                    <th scope="row" className="notifications-grid__event">
-                      {eventLabel(event)}
-                    </th>
-                    <td className="notifications-grid__cell notifications-grid__cell--inapp">
-                      <span className="notifications-grid__dot" title={t("inAppTooltip")}>
-                        {t("inAppOn")}
-                      </span>
-                    </td>
-                    {pushChannels.map((channel) => (
-                      <td key={channel} className="notifications-grid__cell">
-                        <input
-                          type="checkbox"
-                          className="notifications-grid__toggle"
-                          aria-label={`${eventLabel(event)} — ${channelLabel(channel)}`}
-                          checked={Boolean(prefs.matrix[event]?.[channel])}
-                          disabled={saving}
-                          onChange={(e) => toggleCell(event, channel, e.target.checked)}
-                        />
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {/* 켜면 어디로 가는지 이름을 밝힌다 — 스위치가 과약속하지 않도록. */}
+          <p className="settings-field__caption">
+            {t("deliversTo", {
+              channels: [channelLabel(IN_APP), ...pushChannels.map(channelLabel)].join(", "),
+            })}
+          </p>
+          <ul className="notifications-events">
+            {DELIVERING_EVENTS.map((event) => (
+              <li key={event} className="notifications-events__row">
+                <label className="notifications-events__label">
+                  <input
+                    type="checkbox"
+                    className="notifications-grid__toggle"
+                    aria-label={eventLabel(event)}
+                    checked={Boolean(prefs.matrix[event])}
+                    disabled={saving}
+                    onChange={(e) => toggleEvent(event, e.target.checked)}
+                  />
+                  <span>{eventLabel(event)}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
           <p className="settings-field__caption">{t("inAppCaption")}</p>
         </section>
       )}

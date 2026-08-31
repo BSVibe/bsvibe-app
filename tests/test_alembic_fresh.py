@@ -125,7 +125,9 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "drop_workspace_region", f"expected head drop_workspace_region, got {stamped}"
+    assert stamped == "flatten_notification_matrix", (
+        f"expected head flatten_notification_matrix, got {stamped}"
+    )
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -133,16 +135,20 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "drop_workspace_region"
+    assert stamped == "flatten_notification_matrix"
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
-    """Notifier N1a — the matrix ``email`` key is renamed to ``email-sender``.
+    """레거시 중첩 매트릭스가 **체인 끝에서 평면 스위치가 된다.**
 
-    Seed a ``notification_prefs`` row carrying a legacy ``"email"`` channel key
-    (the pre-N1a hardcoded grid), run the migration, and assert the key is now
-    ``"email-sender"`` (the email connector's name) with its value preserved,
-    while ``"in_app"`` / ``"slack"`` are untouched. Downgrade restores ``email``.
+    앞 세대는 채널 키 rename(``email`` → ``email-sender``)을 검증했다. 그 명제는
+    죽었다 — 채널 축을 접으면서 키 자체가 사라졌기 때문이다(2026-08-31). 그래서
+    같은 픽스처로 **더 값진 것**을 검증한다: 실제 마이그레이션 체인을 끝까지 태워
+    옛 모양의 행이 ``{event: bool}`` 이 되고, 살아남는 값이 ``in_app`` 인지.
+
+    ``in_app`` 이 승격되는 이유는 그 워크스페이스가 **실제로 도달하는 채널**에 대해
+    내린 유일한 판단이기 때문이다(푸시 채널 값들은 바인딩된 적 없는 채널의 것이라
+    의도의 증거가 아니다).
     """
     import uuid as _uuid
     from datetime import UTC, datetime
@@ -203,22 +209,24 @@ def test_notification_channel_keys_renames_email_to_email_sender():
 
     asyncio.run(_seed())
 
-    # Step up over the N1a migration.
+    # 체인을 끝까지 — rename 을 지나 평면화까지.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     after = asyncio.run(_read_matrix())
-    for event, channels in after.items():
-        assert "email" not in channels, f"{event} still carries legacy 'email' key"
-    assert after["needs_you"]["email-sender"] is True
-    assert after["triggered"]["email-sender"] is False
-    # Untouched keys survive verbatim.
-    assert after["triggered"]["slack"] is True
-    assert after["needs_you"]["in_app"] is True
 
-    # Downgrade restores the legacy key.
-    _alembic(["downgrade", "runtime_role"], env_extra=env_extra)
+    for event, value in after.items():
+        assert isinstance(value, bool), f"{event} 이 아직 채널로 중첩돼 있다: {value!r}"
+    # 살아남는 값은 ``in_app`` 이다 — 푸시 채널 값이 아니라.
+    assert after["needs_you"] is True  # legacy in_app=True
+    assert after["daily_brief"] is False  # legacy in_app=False
+    # 옛 채널 키는 어디에도 남지 않는다.
+    assert not any(isinstance(v, dict) for v in after.values())
+
+    # 다운그레이드는 ``{"in_app": <값>}`` 으로 되돌린다. 채널별 선택은 복원되지
+    # 않는다 — 접을 때 버려졌고, 애초에 바인딩된 적 없는 채널의 값이었다.
+    _alembic(["downgrade", "drop_workspace_region"], env_extra=env_extra)
     restored = asyncio.run(_read_matrix())
-    assert restored["needs_you"]["email"] is True
-    assert all("email-sender" not in ch for ch in restored.values())
+    assert restored["needs_you"] == {"in_app": True}
+    assert restored["daily_brief"] == {"in_app": False}
 
 
 def test_workspace_timezone_column_round_trips():

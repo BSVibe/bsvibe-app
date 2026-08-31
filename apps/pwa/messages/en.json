@@ -739,7 +739,8 @@
         "slack": "Slack",
         "discord": "Discord",
         "email_sender": "Email"
-      }
+      },
+      "deliversTo": "When on, delivered to: {channels}"
     },
     "schedules": {
       "lede": "Schedule instructions for BSVibe to run on its own, on a recurring cadence. The instruction is the task the scheduled run works on.",

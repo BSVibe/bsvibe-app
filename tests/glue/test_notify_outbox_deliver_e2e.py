@@ -120,7 +120,7 @@ async def _seed_workspace_with_telegram(
         s.add(
             NotificationPrefsRow(
                 workspace_id=ws,
-                matrix={"needs_you": {"in_app": True, "telegram": True}},
+                matrix={"needs_you": True},
             )
         )
         await s.commit()

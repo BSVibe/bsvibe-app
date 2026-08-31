@@ -52,30 +52,37 @@ DEFAULT_EVENTS: tuple[str, ...] = (
     "auth_down",
 )
 
-# The seed matrix a fresh workspace reads: only the always-present ``in_app``
-# inbox is expressed, since a fresh workspace has no connector channels yet.
-# A decision waiting on you / an outside trigger / a verified ship / a give-up
-# all land in the inbox; the daily brief is a calm digest, off in-app by
-# default. Connector channels (slack/telegram/discord/email-sender) appear as
-# columns the moment they are bound — the PWA renders them from
-# ``available_channels`` and a PUT persists the founder's choice for them.
-DEFAULT_MATRIX: dict[str, dict[str, bool]] = {
-    "needs_you": {"in_app": True},
-    "triggered": {"in_app": True},
-    "shipped": {"in_app": True},
-    "failed": {"in_app": True},
-    "daily_brief": {"in_app": False},
-    # Seeded on; the worker additionally defaults its PUSH channels on for
-    # anything bound (see ``DEFAULT_ON_EVENTS``) — during this outage the
-    # in-app inbox is part of what is broken.
-    "auth_down": {"in_app": True},
+# The seed matrix a fresh workspace reads: ONE switch per event.
+#
+# The channel axis is gone (2026-08-31). It never differentiated anything:
+# measured on prod, one workspace carried columns for channels that were never
+# bound (``slack`` / ``email-sender``) while LACKING the column for the one that
+# was (``telegram``) — so the founder bound telegram and received nothing but
+# ``auth_down``. An absent key meant "no" to the send path even though nobody
+# had chosen it.
+#
+# On means: the in-app inbox AND every bound push channel. Off means nothing.
+# Noise is controlled by which connectors you bind, not by a grid — and binding
+# now takes effect with no second step, because there is no per-channel key that
+# can be missing.
+DEFAULT_MATRIX: dict[str, bool] = {
+    "needs_you": True,
+    "triggered": True,
+    "shipped": True,
+    "failed": True,
+    # A calm digest — off unless asked for.
+    "daily_brief": False,
+    # The deployment telling the founder it cannot verify anyone's session.
+    # The worker additionally forces this on for anything bound (see
+    # ``DEFAULT_ON_EVENTS``): during this outage the inbox is part of what breaks.
+    "auth_down": True,
 }
 
 DEFAULT_QUIET_HOURS_START = "22:00"
 DEFAULT_QUIET_HOURS_END = "08:00"
 
 
-def default_matrix() -> dict[str, dict[str, bool]]:
+def default_matrix() -> dict[str, bool]:
     """A fresh deep copy of :data:`DEFAULT_MATRIX` (never share the mutable
     module-level dict across rows)."""
     return copy.deepcopy(DEFAULT_MATRIX)
@@ -95,9 +102,7 @@ class NotificationPrefsRow(NotificationsBase):
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     # event_id -> channel_id -> enabled. A small fixed grid; JSON keeps it
     # one column without a child table for a v1 surface.
-    matrix: Mapped[dict[str, dict[str, bool]]] = mapped_column(
-        JSON, nullable=False, default=default_matrix
-    )
+    matrix: Mapped[dict[str, bool]] = mapped_column(JSON, nullable=False, default=default_matrix)
     quiet_hours_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     quiet_hours_start: Mapped[str] = mapped_column(
         String(5), nullable=False, default=DEFAULT_QUIET_HOURS_START

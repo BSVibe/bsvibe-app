@@ -59,7 +59,7 @@ async def _h_get(_args: NotificationPrefsGetInput, ctx: ToolContext) -> Any:
 class NotificationPrefsUpdateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    matrix: dict[str, dict[str, bool]] = Field(
+    matrix: dict[str, bool] = Field(
         ..., description="Full events × channels enable matrix — replaces wholesale."
     )
     quiet_hours_enabled: bool
@@ -68,7 +68,7 @@ class NotificationPrefsUpdateInput(BaseModel):
 
     @field_validator("matrix")
     @classmethod
-    def _check_matrix(cls, v: dict[str, dict[str, bool]]) -> dict[str, dict[str, bool]]:
+    def _check_matrix(cls, v: dict[str, bool]) -> dict[str, bool]:
         return _validate_matrix(v)
 
     @field_validator("quiet_hours_start", "quiet_hours_end")

@@ -230,7 +230,7 @@ async def test_disabled_workspace_gets_no_brief(
 ) -> None:
     """daily_brief off for every channel ⇒ no row even at local morning."""
     ws = uuid.uuid4()
-    await _seed_workspace(sf, ws=ws, timezone="UTC", matrix={"daily_brief": {"in_app": False}})
+    await _seed_workspace(sf, ws=ws, timezone="UTC", matrix={"daily_brief": False})
 
     worker = DailyBriefWorker(session_factory=sf, clock=lambda: _UTC_MORNING)
     emitted = await worker.run_once()
