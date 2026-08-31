@@ -163,22 +163,27 @@ def _cmd_status(args: argparse.Namespace) -> int:  # noqa: ARG001
 _PAT_PATH = "/api/v1/oauth/pats"
 
 
-def _pat_transport() -> httpx.BaseTransport | None:
-    """Seam so tests can serve these calls without a network. ``None`` = real."""
+def _api_transport() -> httpx.BaseTransport | None:
+    """Seam so tests can serve these calls without a network. ``None`` = real.
+
+    PAT 명령만의 것이 아니다 — 이슈어(=백엔드, ``api.bsvibe.dev``)에 인증해 붙는
+    모든 CLI 조회가 같은 관문을 쓴다. 제품 표면을 붙이며 두 번째 클라이언트를
+    만들 뻔했고, 그러면 인증 헤더·타임아웃·오류 보고가 두 벌로 갈라진다.
+    """
     return None
 
 
-def _pat_client(creds: HostCredentials) -> httpx.Client:
+def _api_client(creds: HostCredentials) -> httpx.Client:
     base = (creds.issuer or _DEFAULT_ISSUER).rstrip("/")
     return httpx.Client(
         base_url=base,
         timeout=30.0,
-        transport=_pat_transport(),
+        transport=_api_transport(),
         headers={"Authorization": f"Bearer {creds.access_token}"},
     )
 
 
-def _pat_credentials() -> HostCredentials | None:
+def _api_credentials() -> HostCredentials | None:
     try:
         return load_host_credentials()
     except CredentialsNotFound as exc:
@@ -192,14 +197,14 @@ def _pat_credentials() -> HostCredentials | None:
         return None
 
 
-def _pat_http_failed(exc: httpx.HTTPStatusError) -> int:
+def _api_http_failed(exc: httpx.HTTPStatusError) -> int:
     """Report the server's own words — a swallowed reason wastes the next hour."""
     print(f"request failed: HTTP {exc.response.status_code} {exc.response.text}", file=sys.stderr)
     return 1
 
 
 def _cmd_pat_create(args: argparse.Namespace) -> int:
-    creds = _pat_credentials()
+    creds = _api_credentials()
     if creds is None:
         return 1
     payload: dict[str, object] = {"name": args.name}
@@ -209,12 +214,12 @@ def _cmd_pat_create(args: argparse.Namespace) -> int:
     if args.expires_in_days is not None:
         payload["expires_in_days"] = args.expires_in_days
 
-    with _pat_client(creds) as client:
+    with _api_client(creds) as client:
         try:
             resp = client.post(_PAT_PATH, json=payload)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            return _pat_http_failed(exc)
+            return _api_http_failed(exc)
     body = resp.json()
 
     if args.quiet:
@@ -236,15 +241,15 @@ def _cmd_pat_create(args: argparse.Namespace) -> int:
 
 
 def _cmd_pat_list(args: argparse.Namespace) -> int:
-    creds = _pat_credentials()
+    creds = _api_credentials()
     if creds is None:
         return 1
-    with _pat_client(creds) as client:
+    with _api_client(creds) as client:
         try:
             resp = client.get(_PAT_PATH)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            return _pat_http_failed(exc)
+            return _api_http_failed(exc)
     rows = resp.json()
     if not rows:
         print("No personal access tokens yet. Create one with `bsvibe pat create --name <name>`.")
@@ -256,17 +261,163 @@ def _cmd_pat_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_pat_revoke(args: argparse.Namespace) -> int:
-    creds = _pat_credentials()
+    creds = _api_credentials()
     if creds is None:
         return 1
-    with _pat_client(creds) as client:
+    with _api_client(creds) as client:
         try:
             resp = client.delete(f"{_PAT_PATH}/{args.pat_id}")
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            return _pat_http_failed(exc)
+            return _api_http_failed(exc)
     print(f"revoked {args.pat_id}", file=sys.stderr)
     return 0
+
+
+# ---------------------------------------------------------------------------
+# ``bsvibe products`` / ``runs`` / ``deliverables`` — 터미널에서 제품을 본다.
+#
+# REST 는 이미 다 있었다. 없던 것은 서브시스템이 아니라 명령 몇 개다: CLI 는
+# auth + 워커 등록 전용이었고(실측 2026-08-31), SSH 로 붙은 호스트에서 "지금 뭐가
+# 돌고 있지" 를 물으려면 브라우저를 열거나 MCP 클라이언트를 붙여야 했다.
+#
+# ⚠️ 조회만 연다. 터미널에서 런을 취소하거나 산출물을 회수하는 표면은 승인
+# 흐름(Safe Mode·체크포인트)을 우회하므로 별도 결정이다.
+# ---------------------------------------------------------------------------
+_PRODUCTS_PATH = "/api/v1/products"
+_RUNS_PATH = "/api/v1/runs"
+_DELIVERABLES_PATH = "/api/v1/deliverables"
+
+#: 목록 한 줄에 싣는 지시문 길이. 지시문은 여러 줄이라 그대로 두면 목록이
+#: 깨져 한 화면에 안 들어온다 — 자른다는 사실은 말줄임표로 보인다.
+_INTENT_CELL = 60
+
+
+def _one_line(text: str, *, width: int = _INTENT_CELL) -> str:
+    """여러 줄 텍스트를 목록 한 칸으로 — 자를 때는 잘랐다고 보인다."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= width else flat[: width - 1] + "…"
+
+
+def _fetch(path: str, params: dict[str, Any] | None = None) -> Any | None:
+    """인증된 GET 하나. 실패는 서버의 말 그대로 보고하고 ``None``."""
+    creds = _api_credentials()
+    if creds is None:
+        return None
+    with _api_client(creds) as client:
+        try:
+            resp = client.get(path, params=params or None)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            _api_http_failed(exc)
+            return None
+    return resp.json()
+
+
+def _print_ids(rows: list[dict[str, Any]]) -> int:
+    """``--quiet`` 의 유일한 출력 — id 만 한 줄에 하나.
+
+    사람이 읽는 문장을 여기 섞으면 ``for id in $(… --quiet)`` 가 그것을 id 로
+    읽는다. 빈 목록은 **아무것도** 출력하지 않는다.
+    """
+    for row in rows:
+        print(row["id"])
+    return 0
+
+
+def _cmd_products_list(args: argparse.Namespace) -> int:
+    rows = _fetch(_PRODUCTS_PATH)
+    if rows is None:
+        return 1
+    if args.quiet:
+        return _print_ids(rows)
+    if not rows:
+        print("No products yet. Create one in the app, or with `bsvibe_products_create` over MCP.")
+        return 0
+    for row in rows:
+        # ⚠️ REST ``ProductResponse`` 의 필드만 읽는다. MCP ``bsvibe_products_list``
+        # 는 ``execution_target`` 을 얹어 주지만 REST 는 아니다 — MCP 응답을 보고
+        # 필드를 지으면 목록이 통째로 "-" 가 된다.
+        status = row.get("bootstrap_status") or "-"
+        print(f"{row['id']}  {row['slug']:<20} {status:<24} {row.get('name') or ''}")
+    return 0
+
+
+def _cmd_runs_list(args: argparse.Namespace) -> int:
+    # ⚠️ 서버가 아는 파라미터만 보낸다. ``GET /api/v1/runs`` 는 ``limit`` 하나만
+    # 받는다 — 모르는 쿼리는 **에러가 아니라 무시**되므로, 있지도 않은
+    # ``--product`` 를 실어 보내면 필터가 걸린 것처럼 보이고 전체가 돌아온다.
+    # (MCP ``bsvibe_runs_list`` 는 전체를 받아 클라이언트 측에서 거른다. REST 에
+    # 같은 축을 여는 것은 별도 변경이다 — 이 PR 은 조회 표면만 연다.)
+    params: dict[str, Any] = {}
+    if args.limit:
+        params["limit"] = args.limit
+    rows = _fetch(_RUNS_PATH, params)
+    if rows is None:
+        return 1
+    if args.quiet:
+        return _print_ids(rows)
+    if not rows:
+        print("No runs yet.")
+        return 0
+    for row in rows:
+        status = row.get("status") or "-"
+        print(f"{row['id']}  {status:<14} {_one_line(str(row.get('intent') or ''))}")
+    return 0
+
+
+def _cmd_deliverables_list(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {}
+    if args.run:
+        params["run_id"] = args.run
+    if args.limit:
+        params["limit"] = args.limit
+    rows = _fetch(_DELIVERABLES_PATH, params)
+    if rows is None:
+        return 1
+    if args.quiet:
+        return _print_ids(rows)
+    if not rows:
+        print("No deliverables yet.")
+        return 0
+    for row in rows:
+        kind = row.get("deliverable_type") or "-"
+        # ``verified`` 는 PASSED 검증이 실재할 때만 True 다(B4) — 행이 있다는
+        # 사실만으로 초록을 주지 않는다. 목록에서도 그 구분이 보여야 한다.
+        mark = "verified" if row.get("verified") else "unverified"
+        print(f"{row['id']}  {kind:<16} {mark:<11} run={row.get('run_id')}")
+    return 0
+
+
+def _add_quiet(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Print ONLY ids, one per line — safe for `for id in $(… --quiet)`.",
+    )
+
+
+def _add_product_surface_parsers(sub: Any) -> None:
+    p_products = sub.add_parser("products", help="List products in this workspace.")
+    products_sub = p_products.add_subparsers(dest="products_cmd", required=True)
+    p_pl = products_sub.add_parser("list", help="List products.")
+    _add_quiet(p_pl)
+    p_pl.set_defaults(func=_cmd_products_list)
+
+    p_runs = sub.add_parser("runs", help="List execution runs.")
+    runs_sub = p_runs.add_subparsers(dest="runs_cmd", required=True)
+    p_rl = runs_sub.add_parser("list", help="List runs, newest first.")
+    p_rl.add_argument("--limit", type=int, default=None, help="How many to return.")
+    _add_quiet(p_rl)
+    p_rl.set_defaults(func=_cmd_runs_list)
+
+    p_del = sub.add_parser("deliverables", help="List deliverables.")
+    del_sub = p_del.add_subparsers(dest="deliverables_cmd", required=True)
+    p_dl = del_sub.add_parser("list", help="List deliverables, newest first.")
+    p_dl.add_argument("--run", default=None, help="Narrow to one run id.")
+    p_dl.add_argument("--limit", type=int, default=None, help="How many to return.")
+    _add_quiet(p_dl)
+    p_dl.set_defaults(func=_cmd_deliverables_list)
 
 
 def _add_pat_parser(sub: Any) -> None:
@@ -337,6 +488,7 @@ def build_bsvibe_parser() -> argparse.ArgumentParser:
     p_status.set_defaults(func=_cmd_status)
 
     _add_pat_parser(sub)
+    _add_product_surface_parsers(sub)
 
     return parser
 

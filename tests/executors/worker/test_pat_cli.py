@@ -61,7 +61,7 @@ def test_create_prints_only_the_token_in_quiet_mode(
         seen["auth"] = request.headers.get("authorization")
         return httpx.Response(201, json=PAT_BODY)
 
-    monkeypatch.setattr(cli_mod, "_pat_transport", lambda: _transport(handler))
+    monkeypatch.setattr(cli_mod, "_api_transport", lambda: _transport(handler))
 
     rc = cli_mod.run_bsvibe_cli(["pat", "create", "--name", "mac-mini", "--quiet"])
     assert rc == 0
@@ -77,7 +77,7 @@ def test_create_verbose_shows_the_token_and_says_it_is_the_only_time(
     signed_in: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(
-        cli_mod, "_pat_transport", lambda: _transport(lambda r: httpx.Response(201, json=PAT_BODY))
+        cli_mod, "_api_transport", lambda: _transport(lambda r: httpx.Response(201, json=PAT_BODY))
     )
 
     assert cli_mod.run_bsvibe_cli(["pat", "create", "--name", "mac-mini"]) == 0
@@ -97,7 +97,7 @@ def test_create_sends_scope_and_expiry_when_given(
         seen["body"] = json.loads(request.content)
         return httpx.Response(201, json=PAT_BODY)
 
-    monkeypatch.setattr(cli_mod, "_pat_transport", lambda: _transport(handler))
+    monkeypatch.setattr(cli_mod, "_api_transport", lambda: _transport(handler))
 
     cli_mod.run_bsvibe_cli(
         ["pat", "create", "--name", "ci", "--scope", "mcp:read", "--expires-in-days", "30"]
@@ -119,7 +119,7 @@ def test_create_without_expiry_omits_the_field(
         seen["body"] = json.loads(request.content)
         return httpx.Response(201, json=PAT_BODY)
 
-    monkeypatch.setattr(cli_mod, "_pat_transport", lambda: _transport(handler))
+    monkeypatch.setattr(cli_mod, "_api_transport", lambda: _transport(handler))
     cli_mod.run_bsvibe_cli(["pat", "create", "--name", "forever"])
     assert "expires_in_days" not in seen["body"]
 
@@ -129,7 +129,7 @@ def test_list_renders_rows(
 ) -> None:
     rows = [{k: v for k, v in PAT_BODY.items() if k != "token"}]
     monkeypatch.setattr(
-        cli_mod, "_pat_transport", lambda: _transport(lambda r: httpx.Response(200, json=rows))
+        cli_mod, "_api_transport", lambda: _transport(lambda r: httpx.Response(200, json=rows))
     )
 
     assert cli_mod.run_bsvibe_cli(["pat", "list"]) == 0
@@ -144,7 +144,7 @@ def test_list_empty_says_so(
     signed_in: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(
-        cli_mod, "_pat_transport", lambda: _transport(lambda r: httpx.Response(200, json=[]))
+        cli_mod, "_api_transport", lambda: _transport(lambda r: httpx.Response(200, json=[]))
     )
     assert cli_mod.run_bsvibe_cli(["pat", "list"]) == 0
     assert "no personal access tokens" in capsys.readouterr().out.lower()
@@ -158,7 +158,7 @@ def test_revoke_calls_delete(signed_in: None, monkeypatch: pytest.MonkeyPatch) -
         seen["url"] = str(request.url)
         return httpx.Response(204)
 
-    monkeypatch.setattr(cli_mod, "_pat_transport", lambda: _transport(handler))
+    monkeypatch.setattr(cli_mod, "_api_transport", lambda: _transport(handler))
 
     assert cli_mod.run_bsvibe_cli(["pat", "revoke", PAT_BODY["id"]]) == 0
     assert seen["method"] == "DELETE"
@@ -185,7 +185,7 @@ def test_http_error_surfaces_the_servers_own_words(
 ) -> None:
     monkeypatch.setattr(
         cli_mod,
-        "_pat_transport",
+        "_api_transport",
         lambda: _transport(
             lambda r: httpx.Response(
                 403, json={"detail": "managing personal access tokens requires the mcp:admin scope"}
