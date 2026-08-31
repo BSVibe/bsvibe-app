@@ -60,33 +60,20 @@ def _settlement(**overrides: object) -> Settlement:
     return Settlement(**base)  # type: ignore[arg-type]
 
 
-class TestTheRequestOriginalIsKept:
+class TestTheRequestOriginalIsNotThisSinksJob:
     @pytest.mark.asyncio
-    async def test_intent_text_is_recorded_verbatim(self, tmp_path: Path) -> None:
-        """형님이 런을 시작시킨 지시문이 글자 그대로 남는다."""
-        intent = "라우팅 규칙이 몇 개인지 한 문장으로만 답해줘.\n조사만 하고 보고해라 — 파일은 하나도 쓰지 마라."
+    async def test_settle_does_not_record_the_request(self, tmp_path: Path) -> None:
+        """요청 원본은 여기서 안 남긴다 — IntakeWorker 의 몫이다.
 
-        await _sink(tmp_path).absorb(_settlement(intent_text=intent))
-
-        written = list(_seeds(tmp_path, "request").glob("*.md"))
-        assert len(written) == 1
-        assert written[0].stem == str(RUN)
-        assert intent in written[0].read_text(encoding="utf-8")
-
-    @pytest.mark.asyncio
-    async def test_request_is_kept_even_when_no_note_is_worth_writing(self, tmp_path: Path) -> None:
-        """관찰 노트 게이트를 못 넘는 평범한 작업도 요청 원본은 남는다.
-
-        이 경계가 이 PR 의 요점이다 — 원본 보존은 '기억할 가치' 판단과
-        독립이다. 회고를 선언하지 않은 런이 147건 중 137건이었고, 그 137건의
-        요청도 전부 히스토리다.
+        처음엔 여기서 ``Settlement.intent_text`` 로 남겼다. prod 재측정이 그
+        설계를 뒤집었다: 런 231건 중 **116건(절반)이 끝내 정착하지 않고**,
+        request 13개가 런을 2~3개씩 낳아 ``run_id`` 키로는 같은 지시문이
+        중복된다. 한 원본은 한 곳에서만 기록한다
+        (``tests/workflow/test_intake_records_the_request_original.py``).
         """
-        settlement = _settlement(intent_text="평범한 작업 지시", agent_knowledge=None)
+        await _sink(tmp_path).absorb(_settlement(intent_text="라우팅 규칙 개수 확인"))
 
-        note = await _sink(tmp_path).absorb(settlement)
-
-        assert note is None, "회고도 형님 텍스트도 없으면 관찰 노트는 안 생긴다"
-        assert list(_seeds(tmp_path, "request").glob("*.md")), "그래도 요청 원본은 남아야 한다"
+        assert not list(_seeds(tmp_path, "request").glob("*.md"))
 
 
 class TestTheFeedbackOriginalIsKept:
@@ -104,6 +91,26 @@ class TestTheFeedbackOriginalIsKept:
 
         written = list(_seeds(tmp_path, "feedback").glob("*.md"))
         assert len(written) == 1
+        assert answer in written[0].read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_it_is_kept_even_when_no_note_is_worth_writing(self, tmp_path: Path) -> None:
+        """관찰 노트 게이트를 못 넘어도 형님이 쓴 글자는 남는다.
+
+        ``is_inherently_notable`` 은 kind 가 두 개 중 하나여야 참이다. 형님이 글을
+        썼는데 kind 가 그 둘이 아니면 노트는 안 생긴다 — 그래도 **원본은** 남아야
+        한다. 원본 보존은 '기억할 가치' 판단과 독립이다.
+
+        이 테스트가 ``_record_originals`` 호출이 게이트보다 **앞**에 있음을
+        고정한다. 뒤로 옮기면 여기서 빨개진다.
+        """
+        answer = "형님이 직접 쓴 문장인데 kind 는 notable 이 아니다"
+
+        note = await _sink(tmp_path).absorb(_settlement(kind=None, answer=answer))
+
+        assert note is None, "notable kind 가 아니고 회고도 없으면 관찰 노트는 안 생긴다"
+        written = list(_seeds(tmp_path, "feedback").glob("*.md"))
+        assert len(written) == 1, "그래도 형님이 쓴 원본은 남아야 한다"
         assert answer in written[0].read_text(encoding="utf-8")
 
     @pytest.mark.asyncio
