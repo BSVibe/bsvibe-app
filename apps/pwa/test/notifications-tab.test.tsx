@@ -41,11 +41,11 @@ vi.mock("@/lib/api/notifications", () => ({
 function prefs(overrides: Partial<NotificationPrefsView> = {}): NotificationPrefsView {
   return {
     matrix: {
-      needs_you: { in_app: true },
-      triggered: { in_app: true },
-      shipped: { in_app: true },
-      failed: { in_app: true },
-      daily_brief: { in_app: false, telegram: true },
+      needs_you: true,
+      triggered: true,
+      shipped: true,
+      failed: true,
+      daily_brief: true,
     },
     quiet_hours_enabled: false,
     quiet_hours_start: "22:00",
@@ -64,41 +64,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("NotificationsTab — events × channels matrix", () => {
-  it("renders columns derived from available_channels (Telegram, not Slack)", async () => {
+describe("NotificationsTab — one switch per event", () => {
+  it("names where an enabled event will actually land", async () => {
+    // 채널 축은 사라졌지만 `available_channels` 는 여전히 쓰인다 — 이제 열이 아니라
+    // 캡션으로. 스위치가 "어디로 가는지" 말하지 않으면 과약속이 된다.
     getNotificationPrefs.mockResolvedValue(prefs());
     render(<NotificationsTab />);
 
-    // Async: the grid appears only after the on-mount fetch resolves.
-    expect(await screen.findByRole("columnheader", { name: /telegram/i })).toBeInTheDocument();
-    expect(screen.queryByRole("columnheader", { name: /slack/i })).toBeNull();
+    expect(await screen.findByText(/telegram/i)).toBeInTheDocument();
+    expect(screen.queryByText(/slack/i)).toBeNull();
   });
 
-  it("toggling a push cell PUTs the flipped matrix", async () => {
+  it("toggling an event PUTs the flipped matrix", async () => {
     getNotificationPrefs.mockResolvedValue(prefs());
     updateNotificationPrefs.mockResolvedValue(prefs());
     render(<NotificationsTab />);
 
-    const cell = await screen.findByRole("checkbox", { name: /needs you.*telegram/i });
-    expect(cell).not.toBeChecked();
+    const cell = await screen.findByRole("checkbox", { name: /needs you/i });
+    expect(cell).toBeChecked();
     await userEvent.click(cell);
 
     expect(updateNotificationPrefs).toHaveBeenCalledWith(
       expect.objectContaining({
         matrix: expect.objectContaining({
-          needs_you: expect.objectContaining({ telegram: true }),
+          needs_you: false,
         }),
       }),
     );
   });
 
-  it("in_app is shown as always-on, not a togglable checkbox", async () => {
+  it("has exactly one switch per event — no per-channel cells", async () => {
+    // 채널 축이 살아 있으면 이벤트당 체크박스가 여러 개다. 하나여야 한다.
     getNotificationPrefs.mockResolvedValue(prefs());
     render(<NotificationsTab />);
-    // The in_app column header renders...
-    expect(await screen.findByRole("columnheader", { name: /in-app/i })).toBeInTheDocument();
-    // ...but there is no in_app toggle to pretend to gate the always-on inbox.
-    expect(screen.queryByRole("checkbox", { name: /needs you.*in-app/i })).toBeNull();
+    await screen.findByRole("checkbox", { name: /needs you/i });
+    expect(screen.getAllByRole("checkbox", { name: /needs you/i })).toHaveLength(1);
   });
 
   // `daily_brief` was rendered inert on the stated grounds that it "has NO
@@ -116,14 +116,14 @@ describe("NotificationsTab — events × channels matrix", () => {
   it("daily_brief is a live toggle — it has a producer", async () => {
     getNotificationPrefs.mockResolvedValue(prefs());
     render(<NotificationsTab />);
-    const cell = await screen.findByRole("checkbox", { name: /daily digest.*telegram/i });
+    const cell = await screen.findByRole("checkbox", { name: /daily digest/i });
     expect(cell).toBeEnabled();
   });
 
   it("daily_brief reflects the stored preference instead of a hardcoded false", async () => {
     getNotificationPrefs.mockResolvedValue(prefs());
     render(<NotificationsTab />);
-    const cell = await screen.findByRole("checkbox", { name: /daily digest.*telegram/i });
+    const cell = await screen.findByRole("checkbox", { name: /daily digest/i });
     expect(cell).toBeChecked();
   });
 
@@ -131,12 +131,12 @@ describe("NotificationsTab — events × channels matrix", () => {
     getNotificationPrefs.mockResolvedValue(prefs());
     updateNotificationPrefs.mockResolvedValue(prefs());
     render(<NotificationsTab />);
-    const cell = await screen.findByRole("checkbox", { name: /daily digest.*telegram/i });
+    const cell = await screen.findByRole("checkbox", { name: /daily digest/i });
     await userEvent.click(cell);
 
     expect(updateNotificationPrefs).toHaveBeenCalledTimes(1);
     const sent = updateNotificationPrefs.mock.calls[0][0];
-    expect(sent.matrix.daily_brief.telegram).toBe(false);
+    expect(sent.matrix.daily_brief).toBe(false);
   });
 
   it("zero push connectors ⇒ connect-a-channel empty state, no grid", async () => {

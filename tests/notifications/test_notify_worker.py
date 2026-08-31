@@ -155,7 +155,7 @@ async def test_soft_fail_one_channel_does_not_block_the_other(
         sf,
         ws=ws,
         connectors=[("slack", {"channel": "C1"}), ("telegram", {"chat_id": "42"})],
-        matrix={"needs_you": {"in_app": True, "slack": True, "telegram": True}},
+        matrix={"needs_you": True},
     )
     sender = _RecordingSender(fail={"slack"})
     worker = NotifyWorker(session_factory=sf, sender=sender)
@@ -178,7 +178,7 @@ async def test_all_channels_failing_leaves_row_pending_then_fails_after_budget(
         sf,
         ws=ws,
         connectors=[("telegram", {"chat_id": "42"})],
-        matrix={"needs_you": {"in_app": True, "telegram": True}},
+        matrix={"needs_you": True},
     )
     sender = _RecordingSender(fail={"telegram"})
     worker = NotifyWorker(
@@ -203,7 +203,7 @@ async def test_quiet_hours_suppresses_push_but_settles_the_row(
         sf,
         ws=ws,
         connectors=[("telegram", {"chat_id": "42"})],
-        matrix={"needs_you": {"in_app": True, "telegram": True}},
+        matrix={"needs_you": True},
         quiet=("00:00", "23:59"),
         timezone="UTC",
     )
@@ -217,30 +217,31 @@ async def test_quiet_hours_suppresses_push_but_settles_the_row(
     assert (await _row(sf, row_id)).status is NotificationStatus.SENT
 
 
-async def test_channel_derivation_only_bound_and_enabled_channels(
+async def test_an_enabled_event_reaches_every_bound_channel(
     sf: async_sessionmaker[AsyncSession],
 ) -> None:
-    """[C-worker] only channels BOTH matrix-enabled AND bound are attempted.
+    """[C-worker] **바인딩이 게이트다** — 켠 이벤트는 바인딩된 것 전부로 간다.
 
-    slack is matrix-enabled but NOT bound (no connector) → not attempted; email
-    is bound but matrix-disabled → not attempted; only telegram (enabled + bound)
-    is sent.
+    앞 세대는 *"matrix-enabled AND bound"* 두 조건을 검사했다. 채널 축을 접은 뒤
+    남는 명제는 하나다: 이벤트가 켜져 있으면 **바인딩된 채널 전부**, 꺼져 있으면
+    아무것도. 켰다고 바인딩 안 된 채널로 가지는 않는다.
     """
     ws = uuid.uuid4()
     await _seed(
         sf,
         ws=ws,
         connectors=[("telegram", {"chat_id": "42"}), ("email-sender", {"to": "a@b.c"})],
-        matrix={
-            "needs_you": {"in_app": True, "slack": True, "telegram": True, "email-sender": False}
-        },
+        matrix={"needs_you": True},
     )
     sender = _RecordingSender()
     worker = NotifyWorker(session_factory=sf, sender=sender)
 
     await worker.drain_once()
 
-    assert sender.sent == ["telegram"]
+    # 켠 이벤트 → 바인딩된 것 전부. slack 은 바인딩되지 않았으므로 오지 않는다
+    # (바인딩이 여전히 게이트라는 증거 — 켠다고 없는 채널로 가지 않는다).
+    assert sorted(sender.sent) == ["email-sender", "telegram"]
+    assert "slack" not in sender.sent
 
 
 async def test_no_push_channels_still_settles_sent(
@@ -253,7 +254,7 @@ async def test_no_push_channels_still_settles_sent(
         sf,
         ws=ws,
         connectors=[],
-        matrix={"needs_you": {"in_app": True}},
+        matrix={"needs_you": True},
     )
     sender = _RecordingSender()
     worker = NotifyWorker(session_factory=sf, sender=sender)
@@ -276,7 +277,7 @@ async def test_push_link_is_rendered_as_absolute_localized_cta(
         sf,
         ws=ws,
         connectors=[("telegram", {"chat_id": "42"})],
-        matrix={"needs_you": {"in_app": True, "telegram": True}},
+        matrix={"needs_you": True},
         language="ko",
         link="/brief",
     )
@@ -299,7 +300,7 @@ async def test_shipped_link_is_rendered_as_report_cta(
         sf,
         ws=ws,
         connectors=[("telegram", {"chat_id": "42"})],
-        matrix={"shipped": {"in_app": True, "telegram": True}},
+        matrix={"shipped": True},
         language="ko",
         link="/deliverables/abc",
         event="shipped",
@@ -323,7 +324,7 @@ async def test_shipped_row_threads_deliverable_id_and_language_into_content(
         sf,
         ws=ws,
         connectors=[("telegram", {"chat_id": "42"})],
-        matrix={"shipped": {"in_app": True, "telegram": True}},
+        matrix={"shipped": True},
         language="ko",
         link="/deliverables/abc",
         event="shipped",
@@ -403,7 +404,7 @@ async def test_auth_down_reaches_a_bound_channel_absent_from_the_stored_matrix(
         ws=ws,
         connectors=[("telegram", {"chat_id": "42"})],
         # Exactly the prod shape: a saved matrix that predates the binding.
-        matrix={"needs_you": {"in_app": True, "slack": False}},
+        matrix={"needs_you": True},
         event="auth_down",
     )
     sender = _RecordingSender()
@@ -417,13 +418,16 @@ async def test_auth_down_reaches_a_bound_channel_absent_from_the_stored_matrix(
 async def test_auth_down_still_honours_an_explicit_no(
     sf: async_sessionmaker[AsyncSession],
 ) -> None:
-    """A stored False is the founder's choice, not an absent key. Respect it."""
+    """저장된 ``False`` 는 형님이 고른 값이다 — 어떤 기본값도 이기지 못한다.
+
+    ``DEFAULT_ON_EVENTS`` 는 **부재한** 스위치의 기본값만 바꾼다.
+    """
     ws = uuid.uuid4()
     await _seed(
         sf,
         ws=ws,
         connectors=[("telegram", {"chat_id": "42"})],
-        matrix={"auth_down": {"telegram": False}},
+        matrix={"auth_down": False},
         event="auth_down",
     )
     sender = _RecordingSender()
@@ -434,21 +438,22 @@ async def test_auth_down_still_honours_an_explicit_no(
     assert sender.sent == []
 
 
-async def test_ordinary_events_keep_their_opt_in_default(
+async def test_an_explicit_off_survives_every_default(
     sf: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Negative control: the flipped default must not leak to other events.
+    """음성 대조군 — **형님이 끈 것은 꺼진 채로 남아야 한다.**
 
-    The same workspace, the same absent telegram key — a ``needs_you`` row must
-    still NOT go to telegram, or this change would silently rewrite every
-    founder's notification settings.
+    앞 세대는 *"부재한 telegram 키는 배달하지 않는다"* 를 지켰다. 채널 축을 접으며
+    그 전제는 **의도적으로 뒤집혔다**(부재 = 고른 적 없음 ≠ 아니오). 그래서 그
+    테스트가 지키던 진짜 관심사 — *"이 변경이 형님 설정을 조용히 재작성하면 안
+    된다"* — 를 새 형태로 옮긴다: **명시적 ``False`` 는 어떤 기본값도 못 이긴다.**
     """
     ws = uuid.uuid4()
     await _seed(
         sf,
         ws=ws,
         connectors=[("telegram", {"chat_id": "42"})],
-        matrix={"needs_you": {"in_app": True}},
+        matrix={"needs_you": False},
         event="needs_you",
     )
     sender = _RecordingSender()
@@ -456,4 +461,4 @@ async def test_ordinary_events_keep_their_opt_in_default(
 
     await worker.drain_once()
 
-    assert sender.sent == []
+    assert sender.sent == [], "형님이 끈 이벤트가 배달됐다"

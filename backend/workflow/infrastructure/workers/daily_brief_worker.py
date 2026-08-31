@@ -90,13 +90,14 @@ def _resolve_tz(timezone: str) -> tzinfo:
         return UTC
 
 
-def _daily_brief_enabled(matrix: dict[str, dict[str, bool]]) -> bool:
-    """Has this workspace opted in on ANY channel (incl. ``in_app``)?
+def _daily_brief_enabled(matrix: dict[str, bool]) -> bool:
+    """Has this workspace opted in to the daily brief?
 
-    An in-app-only brief is still worth producing — it surfaces in the Brief
-    inbox even with no push channel bound.
+    One switch per event since 2026-08-31 (the channel axis is gone). A brief
+    with no push channel bound is still worth producing — it surfaces in the
+    Brief inbox.
     """
-    return any(bool(on) for on in matrix.get("daily_brief", {}).values())
+    return bool(matrix.get("daily_brief", False))
 
 
 class DailyBriefWorker(BaseWorker):
@@ -226,7 +227,7 @@ class DailyBriefWorker(BaseWorker):
         return list(result.scalars().all())
 
     @staticmethod
-    async def _matrix(session: AsyncSession, workspace_id: uuid.UUID) -> dict[str, dict[str, bool]]:
+    async def _matrix(session: AsyncSession, workspace_id: uuid.UUID) -> dict[str, bool]:
         """The workspace's prefs matrix (its own, or the default seed matrix)."""
         prefs = (
             await session.execute(

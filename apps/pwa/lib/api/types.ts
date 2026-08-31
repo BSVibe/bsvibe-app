@@ -1315,7 +1315,7 @@ export interface BriefView {
  *  shape only — `available_channels` is response-only (see
  *  {@link NotificationPrefsView}) and must NOT be echoed back on PUT. */
 export interface NotificationPrefs {
-  matrix: Record<string, Record<string, boolean>>;
+  matrix: Record<string, boolean>;
   quiet_hours_enabled: boolean;
   quiet_hours_start: string;
   quiet_hours_end: string;

@@ -160,14 +160,24 @@ def _utcnow() -> datetime:
 DEFAULT_ON_EVENTS: frozenset[str] = frozenset({"auth_down"})
 
 
-def _enabled_push_channels(
-    matrix: dict[str, dict[str, bool]], *, event: str, bound: set[str]
-) -> set[str]:
-    """The push channels this event may use, before quiet hours and bindings."""
-    prefs = matrix.get(event, {})
-    if event in DEFAULT_ON_EVENTS:
-        return {ch for ch in bound if prefs.get(ch, True) and ch != IN_APP_CHANNEL}
-    return {ch for ch, on in prefs.items() if on and ch != IN_APP_CHANNEL}
+def channels_for_event(matrix: dict[str, bool], *, event: str, bound: set[str]) -> set[str]:
+    """The push channels this event may use, before quiet hours.
+
+    One switch per event: on ⇒ every bound push channel. The channel axis is
+    gone (see :data:`~backend.notifications.db.DEFAULT_MATRIX`) — there is no
+    per-channel key that can be absent, which is exactly the bug that made a
+    freshly-bound telegram silent on prod.
+
+    ``DEFAULT_ON_EVENTS`` still overrides an absent switch: during an auth
+    outage the inbox is part of what breaks, so waiting to be opted into is
+    waiting forever.
+    """
+    # ``DEFAULT_ON_EVENTS`` only changes the default for an ABSENT switch.
+    # An explicit ``False`` is still a No — the founder turning an alert off is
+    # a choice they made, and no default may override it.
+    if not matrix.get(event, event in DEFAULT_ON_EVENTS):
+        return set()
+    return {ch for ch in bound if ch != IN_APP_CHANNEL}
 
 
 class NotifyWorker(BaseWorker):
@@ -224,7 +234,7 @@ class NotifyWorker(BaseWorker):
         # event needs to know what channels exist to default them on.
         bindings = await resolve_notify_bindings(session, workspace_id=row.workspace_id)
         binding_by_connector = {b.connector: b for b in bindings}
-        enabled = _enabled_push_channels(matrix, event=row.event, bound=set(binding_by_connector))
+        enabled = channels_for_event(matrix, event=row.event, bound=set(binding_by_connector))
 
         # Quiet hours suppress ONLY push channels; the in-app inbox is unaffected
         # (the Decision already surfaces there — the worker never sends in_app).
@@ -333,7 +343,7 @@ class NotifyWorker(BaseWorker):
         return replace(content, link=f"{label} → {url}", cta_label=label, cta_url=url)
 
     @staticmethod
-    async def _matrix(session: AsyncSession, workspace_id: uuid.UUID) -> dict[str, dict[str, bool]]:
+    async def _matrix(session: AsyncSession, workspace_id: uuid.UUID) -> dict[str, bool]:
         """The workspace's prefs matrix (its own, or the default seed matrix)."""
         prefs = (
             await session.execute(

@@ -116,7 +116,7 @@ async def test_update_replaces_matrix_wholesale(
 ) -> None:
     new_matrix = default_matrix()
     # Flip everything off for triggered.
-    new_matrix["triggered"] = {"in_app": False, "email": False, "slack": False}
+    new_matrix["triggered"] = False
     payload = {
         "matrix": new_matrix,
         "quiet_hours_enabled": True,
@@ -135,7 +135,7 @@ async def test_update_replaces_matrix_wholesale(
         out = await registry.call_tool("bsvibe_notification_prefs_update", payload, ctx)
     assert out["quiet_hours_enabled"] is True
     assert out["quiet_hours_start"] == "20:00"
-    assert out["matrix"]["triggered"]["in_app"] is False
+    assert out["matrix"]["triggered"] is False
 
     # Re-read confirms persistence.
     async with db() as s:
@@ -145,7 +145,7 @@ async def test_update_replaces_matrix_wholesale(
         )
         out2 = await registry.call_tool("bsvibe_notification_prefs_get", {}, ctx)
     assert out2["quiet_hours_enabled"] is True
-    assert out2["matrix"]["triggered"]["in_app"] is False
+    assert out2["matrix"]["triggered"] is False
 
 
 async def test_update_requires_write_scope(db, workspace_id, user_id, registry, seeded) -> None:
@@ -169,7 +169,7 @@ async def test_update_requires_write_scope(db, workspace_id, user_id, registry, 
 
 async def test_update_rejects_unknown_event(db, workspace_id, user_id, registry, seeded) -> None:
     bad = default_matrix()
-    bad["bogus_event"] = {"in_app": True, "email": True, "slack": False}
+    bad["bogus_event"] = True  # 타입은 유효 — 걸려야 하는 건 **이벤트 집합**이다
     async with db() as s:
         ctx = ToolContext(
             principal=_principal(

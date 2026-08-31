@@ -43,25 +43,24 @@ __all__ = [
 ]
 
 
-def validate_matrix(matrix: dict[str, dict[str, bool]]) -> dict[str, dict[str, bool]]:
-    """Validate the matrix: exactly the known events; any channel keys tolerated.
+def validate_matrix(matrix: dict[str, bool]) -> dict[str, bool]:
+    """Validate the matrix: exactly the known events, each mapping to a bool.
 
-    Events are still the fixed :data:`DEFAULT_EVENTS`. Channels are NOT fixed —
-    they are derived per workspace from connector bindings, so the validator
-    accepts any subset of channel keys (a stale key for a since-removed connector
-    is harmless — ignored at send time — rather than rejected). Values must be
-    booleans.
+    The channel axis was removed (2026-08-31) — see :data:`DEFAULT_MATRIX` for
+    why. A nested value is REJECTED rather than tolerated: silently accepting
+    the old shape would let two formats coexist, and the send path would read
+    the nested dict as a truthy "on" for every event including the ones the
+    founder turned off.
     """
     if set(matrix.keys()) != EVENT_SET:
         raise ValueError(
             f"matrix events must be exactly {sorted(EVENT_SET)}; got {sorted(matrix.keys())}"
         )
-    for event_id, channels in matrix.items():
-        for channel_id, enabled in channels.items():
-            if not isinstance(enabled, bool):
-                raise ValueError(
-                    f"matrix[{event_id!r}][{channel_id!r}] must be a bool; got {enabled!r}"
-                )
+    for event_id, enabled in matrix.items():
+        if not isinstance(enabled, bool):
+            raise ValueError(
+                f"matrix[{event_id!r}] must be a bool (the channel axis is gone); got {enabled!r}"
+            )
     return matrix
 
 
@@ -70,14 +69,14 @@ class PrefsBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    matrix: dict[str, dict[str, bool]]
+    matrix: dict[str, bool]
     quiet_hours_enabled: bool
     quiet_hours_start: str
     quiet_hours_end: str
 
     @field_validator("matrix")
     @classmethod
-    def _check_matrix(cls, v: dict[str, dict[str, bool]]) -> dict[str, dict[str, bool]]:
+    def _check_matrix(cls, v: dict[str, bool]) -> dict[str, bool]:
         return validate_matrix(v)
 
     @field_validator("quiet_hours_start", "quiet_hours_end")

@@ -23,11 +23,11 @@ const SESSION: Session = {
 
 const PREFS: NotificationPrefs = {
   matrix: {
-    needs_you: { in_app: true, email: true, slack: true },
-    triggered: { in_app: true, email: true, slack: false },
-    shipped: { in_app: true, email: true, slack: false },
-    failed: { in_app: true, email: true, slack: false },
-    daily_brief: { in_app: false, email: true, slack: false },
+    needs_you: true,
+    triggered: true,
+    shipped: true,
+    failed: true,
+    daily_brief: false,
   },
   quiet_hours_enabled: false,
   quiet_hours_start: "22:00",
