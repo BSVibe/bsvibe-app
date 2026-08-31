@@ -121,12 +121,16 @@ class IngestCompiler:
     ) -> CompileResult:
         """Compile multiple seeds with a single LLM plan.
 
-        Plugins that import N files (ai-memory-input ZIP, chatgpt
-        conversation export, etc.) call this once per import — the LLM
-        sees every seed at once and produces a consolidated plan that
-        can deduplicate, merge, and cross-reference across the batch.
-        Cuts a 30-call import down to one (or a small number of
-        chunks when the combined text exceeds ``_BATCH_CHAR_BUDGET``).
+        The LLM sees every seed at once and produces a consolidated plan that
+        can deduplicate, merge, and cross-reference across the batch — cutting
+        an N-call import down to one (or a small number of chunks when the
+        combined text exceeds ``_BATCH_CHAR_BUDGET``).
+
+        One production caller today: product bootstrap
+        (``product_bootstrap_runtime``, ``seed_source="product-bootstrap"``).
+        This docstring used to say "plugins that import N files call this once
+        per import" — no plugin has ever called it; that was a prediction, not
+        a description.
         """
         if not items:
             return empty_compile_result()
