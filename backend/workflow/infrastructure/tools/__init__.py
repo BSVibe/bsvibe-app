@@ -493,7 +493,7 @@ class ToolRegistry:
                 "FORMAT your changed files before declaring done (the project quality "
                 "gate runs `ruff format --check` on them) — e.g. `uv run ruff format "
                 "src/foo.py tests/test_foo.py`. "
-                "You may call this again to refine the contract."
+                "You may call this again — a re-declaration REPLACES the contract, so repeat every check you still want. Do call it once more at the END if the work taught you something worth remembering (see `knowledge`)."
             ),
             parameters_schema={
                 "type": "object",

@@ -20,6 +20,25 @@ The cost of NOT saying it, twice measured:
   apparatus that already existed. Told — in one sentence, with no names — that a
   disposable per-run environment exists, it found all of it in the repo itself.
 
+회고(``knowledge``)가 여기 있는 이유 — 실측 2026-09-01. 회고에는 자기 툴이 없다
+(``record_knowledge`` 는 코드 어디에도 없었고 주석에만 있었다). 유일한 채널은
+``declare_verification`` 의 OPTIONAL ``knowledge`` 인자인데, 그 툴은 바로 이 브리핑이
+**쓰기 전에** 부르게 하는 툴이다 — 즉 그 블록을 채울 수 있는 유일한 순간(작업을 마친
+뒤)에는 **아무도 그것을 요청하지 않았다.** 스키마 자신이 *"Only you, who did the work,
+can see the tacit knowledge"* 라고 쓰면서 정작 작업 **전에** 묻고 있었다. 브리핑 전문에
+``knowledge`` 는 한 글자도 없었다. 선언율 9.4%(코드 변경 96건 중 9건)는 프롬프트가
+서툴러서가 아니라 **요청이 존재하지 않아서**다. 없던 것은 서브시스템이 아니라 링크 하나다.
+
+⚠️ 그 문장은 **끝나는 지시문 안에** 있어야 한다. 뒤에 문단으로 덧붙이면 "stop calling
+tools and reply" 라는 종료 신호에 진다 — 에이전트는 이미 끝냈다고 판단한 뒤다.
+
+⚠️ 그리고 재선언은 계약을 **덮어쓴다**(``checks`` 는 필수 인자다). 초안은
+*"re-declaring keeps the contract you already made"* 라고 썼고 **그것은 거짓이었다** —
+그대로 나갔다면 회고를 남기려던 에이전트가 stub check 로 재선언해 자기 진짜 계약을
+조용히 파괴했을 것이다. 프로브로 재서 잡았다. 동작 쪽 핀은
+``tests/execution/test_tools_verify_first_gate.py`` 에 있고, 그것이 빨개지면 이 문구도
+같이 고쳐야 한다.
+
 ⚠️ This rides EVERY turn of EVERY run, and this repo respects a local-model
 generation budget. It is not a capability catalogue: only facts that change what
 the agent DOES earn a place, and ``tests/workflow/test_platform_briefing.py``
@@ -36,8 +55,15 @@ _SYSTEM_PROMPT = (
     "command check that runs the real test/lint, scoped to the files you "
     "changed). Reading files (file_read, file_list) is allowed first. When the "
     "step is complete, stop calling tools and reply with a short plain-text "
-    "summary — that triggers verification. If you are blocked on a decision "
-    "only the founder can make, call ask_user_question. "
+    "summary — that triggers verification. Before that last reply, if this work "
+    "taught you something non-obvious the diff does not show — a gotcha, a "
+    "constraint you discovered, why one approach beat another — call "
+    "declare_verification once more, REPEATING your same checks and adding a "
+    "`knowledge` block ({topic, insight}); a re-declaration REPLACES the "
+    "contract, so checks you leave out are lost, and your first call could not "
+    "carry the knowledge because you had not done the work yet. Omit the block "
+    "for routine work — that is the common case. If you are blocked on a "
+    "decision only the founder can make, call ask_user_question. "
     "W2 — your work is committed to a per-run git branch and merged into the "
     "product's main on verify. If verify reports a merge conflict, the "
     "conflicting files in your workspace will contain '<<<<<<<', '=======', "

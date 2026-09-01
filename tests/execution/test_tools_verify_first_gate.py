@@ -185,3 +185,96 @@ def test_declare_verification_directive_steers_uv_run_and_format(tmp_path: Path)
     assert "ruff format" in desc
     # the anti-pattern is called out explicitly
     assert "No module named pytest" in desc
+
+
+# ── 늦은 회고 선언 — 브리핑이 에이전트에게 시키는 바로 그 경로 ──────────────────
+#
+# 회고(``declared_knowledge``)에는 자기 툴이 없다. ``record_knowledge`` 는 코드에
+# **주석으로만** 존재했고(``_drive_loop.py:489``), 유일한 채널은 이 툴의 OPTIONAL
+# ``knowledge`` 인자다. 그런데 B7 게이트는 이 툴을 **쓰기 전에** 부르게 한다 — 그
+# 시점에 에이전트는 아직 아무것도 배우지 않았다.
+#
+# 그래서 ``_SYSTEM_PROMPT`` 는 끝에서 한 번 더 부르라고 시킨다. 아래 둘은 그 지시가
+# 참이 되게 하는 조건이며, **문구가 아니라 동작**을 고정한다.
+
+
+async def test_knowledge_declared_after_the_work_is_latched(tmp_path: Path) -> None:
+    """게이트를 만족시킨 첫 선언에는 회고가 없고, 작업을 마친 뒤의 재선언이 그것을 싣는다.
+
+    이것이 prod 에서 회고가 생길 수 있는 유일한 모양이다. 재선언이 거부되거나 회고를
+    못 실으면 브리핑의 지시는 에이전트를 막다른 길로 보낸다.
+    """
+    from backend.knowledge.extraction.worth_remembering import RememberableKnowledge
+
+    registry = _registry(tmp_path)
+    await _declare(registry)  # 1st — 게이트를 연다. 배운 것은 아직 없다.
+    assert registry.declared_knowledge is None
+    await registry.invoke("file_write", {"path": "out.txt", "content": "work"})
+
+    await registry.invoke(  # 2nd — 일을 마친 뒤. 같은 checks + 회고.
+        "declare_verification",
+        {
+            "checks": [{"kind": "command", "command": "test -f out.txt"}],
+            "knowledge": {"topic": "늦은 선언", "insight": "배운 뒤에야 회고할 수 있다."},
+        },
+    )
+    assert registry.declared_knowledge == RememberableKnowledge(
+        topic="늦은 선언", insight="배운 뒤에야 회고할 수 있다."
+    )
+
+
+async def test_redeclaring_replaces_the_contract_so_the_briefing_must_say_so(
+    tmp_path: Path,
+) -> None:
+    """재선언은 계약을 **덮어쓴다** — 합치지 않는다.
+
+    실측 2026-09-01. 이 사실 때문에 브리핑은 "checks 를 그대로 다시 내라"고 말해야
+    한다. 처음 쓴 초안은 *"re-declaring keeps the contract you already made"* 였고,
+    그대로 나갔다면 회고를 남기려던 에이전트가 stub check 로 재선언해 자기 진짜 계약을
+    조용히 파괴했을 것이다.
+
+    ⚠️ 이 테스트는 동작을 고정한다. 나중에 재선언이 **병합**으로 바뀌면 여기가 빨개지고,
+    그때 브리핑 문구도 같이 고쳐야 한다는 뜻이다 — 산문과 동작이 갈라지지 못하게.
+    """
+    registry = _registry(tmp_path)
+    await _declare(registry)
+    assert registry.declared_contract is not None
+    first = [c["command"] for c in registry.declared_contract["checks"]]
+    assert first == ["test -f out.txt"]
+
+    await registry.invoke(
+        "declare_verification",
+        {"checks": [{"kind": "command", "command": "true"}]},
+    )
+    assert registry.declared_contract is not None
+    second = [c["command"] for c in registry.declared_contract["checks"]]
+    assert second == ["true"], "재선언이 병합된다면 브리핑의 경고가 거짓이 된다"
+
+
+def test_both_declare_surfaces_warn_that_redeclaring_replaces() -> None:
+    """네이티브 레지스트리와 MCP 트랜스포트가 **같은** 경고를 싣는다.
+
+    둘 다 *"You may call this again to refine the contract"* 라고 적혀 있었다.
+    "refine" 은 덧붙이기로 읽히는데 실제 동작은 **덮어쓰기**다 — 브리핑이 재선언을
+    시키기 시작한 이상, 에이전트가 재선언 직전에 읽는 자리에도 사실이 있어야 한다.
+
+    ⚠️ 미러된 표면은 덜 쓰이는 쪽으로 갈라진다. 그래서 **한쪽만** 고치는 것을 여기서 막는다.
+    """
+    from backend.mcp.tools.work_tools import WORK_TOOL_FORWARDING_SPECS
+
+    registry = ToolRegistry(workspace_dir=Path("."))
+    # ⚠️ ``["parameters"]`` 만 보면 안 된다 — 네이티브 쪽은 그 문장을 **툴 description**
+    # 에, MCP 쪽은 필드 description 에 싣는다. 명제는 "에이전트가 보는 스키마에 있다"이므로
+    # function 전체를 본다.
+    native_text = str(registry.schema_for(["declare_verification"])[0]["function"])
+
+    mcp_schema = next(
+        s["input_schema"]
+        for s in WORK_TOOL_FORWARDING_SPECS
+        if s["inner"] == "declare_verification"
+    )
+    mcp_text = str(mcp_schema.model_json_schema())
+
+    for label, text in (("native", native_text), ("mcp", mcp_text)):
+        assert "REPLACES the contract" in text, f"{label} surface lost the replace warning"
+        assert "knowledge" in text, f"{label} surface no longer points at the knowledge block"
