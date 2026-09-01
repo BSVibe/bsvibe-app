@@ -18,9 +18,9 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from backend.api.v1.runs._helpers import _activity_label
 from backend.mcp.api import McpPrincipal, ToolContext
 from backend.workflow.application.mcp_work_effects import record_progress
+from backend.workflow.application.run_detail import _activity_label
 from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunActivity, RunStatus
 from tests._support import memory_session
 

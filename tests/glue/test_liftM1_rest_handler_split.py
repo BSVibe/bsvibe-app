@@ -171,8 +171,6 @@ EXPECTED_SUBMODULES: dict[str, list[str]] = {
         "backend.api.v1.runs.retry",
         # L9 — the founder-initiated cancel mutation in its own thin sub-file.
         "backend.api.v1.runs.cancel",
-        "backend.api.v1.runs._schemas",
-        "backend.api.v1.runs._helpers",
     ],
     "backend.api.v1.inside": [
         "backend.api.v1.inside.concepts",

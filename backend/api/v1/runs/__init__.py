@@ -9,8 +9,11 @@ app service → serialize):
   surface bundling trigger / decisions / verification / partial+final
   deliverables / STORY timeline).
 
-Shared response models live in :mod:`._schemas`; defensive payload mappers +
-the timeline builder live in :mod:`._helpers`.
+Shared response models live in
+:mod:`backend.workflow.serialization.run_views`; the defensive payload mappers
+and the timeline builder live in
+:mod:`backend.workflow.application.run_detail` — in the context that owns the
+rows, so the MCP tools reuse the same derivation instead of mirroring it.
 
 Runs are *created* only by the agent loop / workers (Bundle G), never by an
 HTTP POST. The one founder-initiated mutation is :mod:`.retry` — re-opening a

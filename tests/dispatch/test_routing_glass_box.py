@@ -24,13 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Registers ExecutionRun / ExecutionRunActivity on the shared Base.metadata.
 import backend.workflow.infrastructure.db  # noqa: F401
-from backend.api.v1.runs._helpers import _activity_label, _build_timeline
 from backend.config import get_settings
 from backend.dispatch.caller_registry import CALLER_FRAME
 from backend.dispatch.resolver import ModelAccountResolver
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.models import ModelAccount
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
+from backend.workflow.application.run_detail import _activity_label, _build_timeline
 from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunActivity, RunStatus
 
 pytestmark = pytest.mark.asyncio
