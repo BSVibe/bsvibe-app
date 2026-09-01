@@ -833,3 +833,115 @@ async def test_deliverables_report_other_workspace_is_not_found(
     # satisfied by "unknown tool", i.e. it would pass before the tool exists.
     assert str(deliverable_id) in str(err.value)
     assert "unknown tool" not in str(err.value)
+
+
+async def _seed_with_artifact(db, workspace_id, run_id, tmp_path, *, ref: str, body: bytes):
+    """Seed a deliverable declaring ``ref`` and put ``body`` in the run dir."""
+    run_dir = tmp_path / str(run_id)
+    target = run_dir / ref
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(body)
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "built", "artifact_refs": [ref]},
+                created_at=datetime.now(UTC),
+            )
+        )
+        await s.commit()
+    return deliverable_id
+
+
+async def test_deliverables_artifacts_serves_a_declared_ref(
+    db, workspace_id, user_id, registry, seeded, tmp_path, monkeypatch
+) -> None:
+    """The tool reads a declared artifact through the shared rule."""
+    monkeypatch.setenv("BSVIBE_RUN_WORKSPACE_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.SHIPPED)
+    deliverable_id = await _seed_with_artifact(
+        db, workspace_id, run_id, tmp_path, ref="src/app.py", body=b"print('hi')\n"
+    )
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_deliverables_artifacts",
+            {"deliverable_id": str(deliverable_id), "ref": "src/app.py"},
+            ctx,
+        )
+    get_settings.cache_clear()
+
+    assert out["ref"] == "src/app.py"
+    assert out["content"] == "print('hi')\n"
+    assert out["binary"] is False
+    assert out["truncated"] is False
+
+
+async def test_deliverables_artifacts_refuses_a_ref_the_deliverable_never_declared(
+    db, workspace_id, user_id, registry, seeded, tmp_path, monkeypatch
+) -> None:
+    """The ref whitelist travels WITH the rule — the tool cannot be laxer.
+
+    The file exists on disk and is readable; the ONLY reason it is refused is
+    that this deliverable never declared it. Without the whitelist a workspace
+    token would read any path under the run dir.
+    """
+    monkeypatch.setenv("BSVIBE_RUN_WORKSPACE_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.SHIPPED)
+    deliverable_id = await _seed_with_artifact(
+        db, workspace_id, run_id, tmp_path, ref="src/app.py", body=b"declared\n"
+    )
+    # A real, readable neighbour that this deliverable does NOT declare.
+    (tmp_path / str(run_id) / ".env").write_bytes(b"SECRET=1\n")
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(ToolError) as err:
+            await registry.call_tool(
+                "bsvibe_deliverables_artifacts",
+                {"deliverable_id": str(deliverable_id), "ref": ".env"},
+                ctx,
+            )
+    get_settings.cache_clear()
+    assert "unknown tool" not in str(err.value)
+
+
+async def test_deliverables_artifacts_reports_binary_without_the_bytes(
+    db, workspace_id, user_id, registry, seeded, tmp_path, monkeypatch
+) -> None:
+    """A binary artifact yields a note, never raw bytes."""
+    monkeypatch.setenv("BSVIBE_RUN_WORKSPACE_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.SHIPPED)
+    deliverable_id = await _seed_with_artifact(
+        db, workspace_id, run_id, tmp_path, ref="logo.png", body=b"\x89PNG\x00\x01\x02"
+    )
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_deliverables_artifacts",
+            {"deliverable_id": str(deliverable_id), "ref": "logo.png"},
+            ctx,
+        )
+    get_settings.cache_clear()
+
+    assert out["binary"] is True
+    assert "\x00" not in out["content"]
+    assert "bytes" in out["content"]
