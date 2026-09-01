@@ -58,6 +58,7 @@ def build_server(
     delivery_dispatcher: Any | None = None,
     client_sandbox: Any | None = None,
     retract_handler: Any | None = None,
+    narrative_generator: Any | None = None,
 ) -> Server:
     """Construct an MCP :class:`Server` wired to ``session_factory``.
 
@@ -120,6 +121,11 @@ def build_server(
                 # founder's own machine, and addressing it means reaching the executor
                 # dispatch substrate — forbidden to this context, so it is handed in.
                 extras["client_sandbox"] = client_sandbox
+            if narrative_generator is not None:
+                # Writes the report's plain-language sentence. Same reason again:
+                # it calls an LLM through the workspace's model account. Absent,
+                # the report still composes — it just has no fresh narrative.
+                extras["narrative_generator"] = narrative_generator
             if retract_handler is not None:
                 # The runtime that calls a plugin's @p.compensate. Same reason as
                 # the two above: it reaches backend.extensions / .connectors /

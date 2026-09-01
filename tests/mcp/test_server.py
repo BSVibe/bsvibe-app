@@ -220,7 +220,7 @@ async def test_call_tool_sets_workspace_guc(db, workspace_id, user_id, seeded, m
     assert calls == [workspace_id]
 
 
-async def test_build_server_installs_the_retract_handler_into_every_tool_context(
+async def test_build_server_installs_the_injected_runtimes_into_every_tool_context(
     db, workspace_id, user_id, seeded
 ) -> None:
     """The injected compensation runtime actually REACHES the tool.
@@ -237,13 +237,16 @@ async def test_build_server_installs_the_retract_handler_into_every_tool_context
     from backend.mcp.server import build_registry
 
     sentinel = object()
+    narrative_sentinel = object()
     seen: list[object] = []
+    seen_narrative: list[object] = []
 
     class _Probe(BaseModel):
         model_config = ConfigDict(extra="forbid")
 
     async def _handler(_args: _Probe, ctx: ToolContext) -> dict[str, object]:
         seen.append(ctx.extras.get("retract_handler") if ctx.extras else None)
+        seen_narrative.append(ctx.extras.get("narrative_generator") if ctx.extras else None)
         return {"ok": True}
 
     registry = build_registry()
@@ -257,7 +260,12 @@ async def test_build_server_installs_the_retract_handler_into_every_tool_context
             required_scopes=("mcp:read",),
         )
     )
-    server = build_server(session_factory=db, registry=registry, retract_handler=sentinel)
+    server = build_server(
+        session_factory=db,
+        registry=registry,
+        retract_handler=sentinel,
+        narrative_generator=narrative_sentinel,
+    )
 
     handler_fn = server.request_handlers[CallToolRequest]
     token = set_request_principal(
@@ -274,3 +282,4 @@ async def test_build_server_installs_the_retract_handler_into_every_tool_context
         reset_request_principal(token)
 
     assert seen == [sentinel]
+    assert seen_narrative == [narrative_sentinel]

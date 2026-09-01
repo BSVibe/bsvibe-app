@@ -13,7 +13,8 @@ adapters: parse → app service → serialize):
   from ``backend.workflow.application.deliverable_retraction``, where the
   retraction rule lives so REST and MCP share one).
 
-Shared response models + payload mappers live in :mod:`._schemas`;
+Shared response models + payload mappers live in
+:mod:`backend.workflow.serialization.deliverable_views`;
 verified-run lookup helpers live in :mod:`._helpers`.
 
 Read-mostly: deliverables are *produced* by the agent loop / workers on a

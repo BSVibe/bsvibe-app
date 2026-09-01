@@ -32,7 +32,7 @@ from backend.workflow.application.verification_service import (
 )
 
 if TYPE_CHECKING:
-    from ._schemas import VerificationReport
+    from backend.workflow.serialization.deliverable_views import VerificationReport
 
 
 class ReferenceOut(BaseModel):

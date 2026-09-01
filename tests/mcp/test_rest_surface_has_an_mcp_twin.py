@@ -56,9 +56,6 @@ _KNOWN_GAPS: dict[str, str] = {
     # pattern ``register_all_tools`` already uses for ``record_deliverable``:
     #   * retract dispatches plugin compensation → reaches backend.extensions
     #   * report builds the narrative → reaches backend.connectors transitively
-    "GET /deliverables/{deliverable_id}/report": (
-        "report builder reaches backend.connectors via the narrative; same move needed"
-    ),
 }
 
 # Routers are mounted by ``backend.api.v1.__init__`` under these prefixes; the
