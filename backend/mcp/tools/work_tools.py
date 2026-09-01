@@ -166,7 +166,7 @@ class DeclareVerificationInput(_WorkInput):
             "commitment; the file tools refuse until you do). Declare test, lint and build as "
             "SEPARATE command checks where they apply. A check that merely compiles or imports "
             "a file does NOT exercise its behaviour: when the step has tests, run the test "
-            "runner. You may call this again to refine the contract."
+            "runner. You may call this again — a re-declaration REPLACES the contract, so repeat every check you still want. Do call it once more at the END if the work taught you something worth remembering (see `knowledge`)."
         ),
     )
     knowledge: dict[str, Any] | None = Field(

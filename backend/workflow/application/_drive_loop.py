@@ -486,7 +486,10 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         )
         if verdict.outcome is VerificationOutcome.PASSED:
             # v2 — thread the agent's own retrospective knowledge declaration
-            # (latched on the registry by declare_verification / record_knowledge)
+            # (latched on the registry by declare_verification — its OPTIONAL
+            # ``knowledge`` arg is the ONLY channel; there is no ``record_knowledge``
+            # tool, and naming one here sent 2026-09-01 hunting for it. The briefing
+            # asks for the block at the END, since a first call cannot carry it.)
             # into the settle payload. None for routine work → no note.
             result = await orch._finish_verified(
                 run,
