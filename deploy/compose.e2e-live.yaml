@@ -1,0 +1,92 @@
+# BSVibe — disposable stack for the **authenticated** browser E2E suite.
+#
+# `apps/pwa/e2e/` (the suite CI runs) deliberately points the PWA at an
+# unreachable backend, so it can only ever judge the pre-auth surface and the
+# gate's redirect. Everything BEHIND the gate — the app shell assembling, a
+# real session surviving a reload, sign-out actually clearing it — needs a
+# backend that can complete a real GoTrue login. That is what this stack is.
+#
+# ⚠️ WHY THIS IS A SEPARATE PROJECT, NOT `compose.yaml` AS-IS.
+#
+# `compose.yaml` publishes the backend on host port **8700** — and on the
+# founder's Mac that port is already taken by the **production** stack
+# (`docker compose ls` → project `bsvibe-prod`, `0.0.0.0:8700->8000`). So on
+# this machine "local backend" and "prod backend" are BOTH on loopback, and a
+# suite that trusted `127.0.0.1` alone would have driven a real browser
+# through a real login against **production data**. Loopback is not evidence.
+#
+# So this overlay does two things:
+#   1. moves every published port off the ones prod/local already own, and
+#   2. stamps the backend with a marker sha the suite verifies before it
+#      types a single credential (see `e2e-live/guard.ts`). The suite proves
+#      it is talking to *the stack it started*, rather than trusting a host.
+#
+# Usage (from the repo root):
+#   set -a; . ./deploy/.env.prod; set +a          # Supabase IdP creds only
+#   docker compose -f deploy/compose.yaml -f deploy/compose.e2e-live.yaml \
+#     up -d postgres redis backend
+#   cd apps/pwa && pnpm test:e2e:live
+#
+# The database is a project-scoped volume, so it starts EMPTY and the backend
+# entrypoint migrates it. That is deliberate: a fresh DB exercises the
+# first-login bootstrap (`ensure_user_bootstrapped`) instead of hiding it
+# behind state some earlier run left behind.
+
+name: bsvibe-e2e-live
+
+services:
+  postgres:
+    # `!override` (not append) — compose CONCATENATES sequences by default, so
+    # without it this stack would inherit `5442:5432` from compose.yaml and
+    # collide with the local stack the founder may already be running.
+    ports: !override ["${BSVIBE_E2E_PG_PORT:-5452}:5432"]
+
+  redis:
+    ports: !override ["${BSVIBE_E2E_REDIS_PORT:-6397}:6379"]
+
+  backend:
+    ports: !override ["${BSVIBE_E2E_APP_PORT:-8710}:8000"]
+    environment:
+      # The marker the suite checks. It rides on `git_sha` because that is
+      # what `/api/health` ALREADY reports — no new endpoint, and no way for
+      # the check to pass against a stack that was not started from here.
+      # Keep in sync with `E2E_STACK_MARKER` in apps/pwa/e2e-live/guard.ts.
+      BSVIBE_GIT_SHA: e2e-live-stack
+      # GoTrue is a shared, real IdP — there is no local Supabase. The suite
+      # signs in as a real test account; that is the point of it. Only the
+      # *publishable* key is needed (it is the browser-facing key), never a
+      # service-role key.
+      BSVIBE_SUPABASE_URL: "${BSVIBE_SUPABASE_URL:?set BSVIBE_SUPABASE_URL — try: set -a; . ./deploy/.env.prod; set +a}"
+      BSVIBE_SUPABASE_PUBLISHABLE_KEY: "${BSVIBE_SUPABASE_PUBLISHABLE_KEY:?set BSVIBE_SUPABASE_PUBLISHABLE_KEY}"
+      # ⚠️ Auth has TWO halves and they are configured separately. The
+      # BSVIBE_SUPABASE_* pair above lets the backend ISSUE a session by
+      # calling GoTrue; these let it VERIFY the JWT that comes back on every
+      # subsequent request (backend.shared.authz.settings, USER_JWT_*).
+      # With only the first half the stack looks almost right and is useless:
+      # POST /api/auth/login returns 200, and then every single authenticated
+      # call 401s, so the PWA signs in and is bounced straight back to /login.
+      # (Measured, not guessed — that is exactly how this suite first failed.)
+      # None of these four are secrets; they describe the public IdP.
+      USER_JWT_JWKS_URL: "${USER_JWT_JWKS_URL:?set USER_JWT_JWKS_URL — it ships in the same env file as BSVIBE_SUPABASE_URL}"
+      USER_JWT_ISSUER: "${USER_JWT_ISSUER:?set USER_JWT_ISSUER}"
+      USER_JWT_ALGORITHM: "${USER_JWT_ALGORITHM:-ES256}"
+      USER_JWT_AUDIENCE: "${USER_JWT_AUDIENCE:-authenticated}"
+      # Credential cipher key. The app refuses to boot without one. This is
+      # deliberately NOT the prod key from .env.prod — the stack's database is
+      # disposable and encrypts nothing real, and copying a production KMS key
+      # into a throwaway container is how prod keys end up in shell history.
+      # Generate a per-shell one:  export BSVIBE_E2E_KMS_KEY_B64=$(openssl rand -base64 32)
+      # Keep it STABLE for the life of the volume; rotating it without
+      # `down -v` leaves rows the new key cannot decrypt.
+      BSVIBE_GATEWAY_KMS_KEY_B64: "${BSVIBE_E2E_KMS_KEY_B64:?generate one — export BSVIBE_E2E_KMS_KEY_B64=$(openssl rand -base64 32)}"
+      # The PWA under test is served by Playwright's own webServer, not by the
+      # `pwa` service, so its origin is NOT the default localhost:3700.
+      BSVIBE_CORS_ALLOWED_ORIGINS: "${BSVIBE_E2E_ORIGIN:-http://127.0.0.1:3798}"
+
+  pwa:
+    # This stack never serves the PWA — Playwright's `webServer` builds and
+    # serves it, so the suite tests the exact bundle it configured. The
+    # service still exists in the merged project though, and it inherits
+    # `3700:3700` from compose.yaml — which the **prod** stack already owns on
+    # this machine. Reset it so a bare `up` (no service list) cannot collide.
+    ports: !reset []
