@@ -57,6 +57,7 @@ def build_server(
     registry: ToolRegistry | None = None,
     delivery_dispatcher: Any | None = None,
     client_sandbox: Any | None = None,
+    retract_handler: Any | None = None,
 ) -> Server:
     """Construct an MCP :class:`Server` wired to ``session_factory``.
 
@@ -119,6 +120,12 @@ def build_server(
                 # founder's own machine, and addressing it means reaching the executor
                 # dispatch substrate — forbidden to this context, so it is handed in.
                 extras["client_sandbox"] = client_sandbox
+            if retract_handler is not None:
+                # The runtime that calls a plugin's @p.compensate. Same reason as
+                # the two above: it reaches backend.extensions / .connectors /
+                # .router. The RULE it serves lives in workflow.application, so
+                # both surfaces run one retraction, not two.
+                extras["retract_handler"] = retract_handler
             ctx = ToolContext(
                 principal=principal,
                 session=session,

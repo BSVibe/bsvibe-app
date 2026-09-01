@@ -12,6 +12,7 @@ import base64
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -605,3 +606,120 @@ async def test_runs_detail_other_workspace_is_not_found(
     # satisfied by "unknown tool", so it would pass before the tool exists.
     assert str(run_id) in str(err.value)
     assert "unknown tool" not in str(err.value)
+
+
+class _StubRetractHandler:
+    """Records what it was asked to compensate; never touches a plugin."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[dict[str, Any]] = []
+
+    async def compensate(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        if self.fail:
+            raise RuntimeError("upstream said no")
+        return {"reverted": True}
+
+
+async def _seed_retractable(db, workspace_id, run_id) -> uuid.UUID:
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.DIRECT_OUTPUT,
+                payload={"summary": "delivered"},
+                compensation_handles=[
+                    {"plugin": "slack", "artifact_type": "message", "handle": {"ts": "1"}}
+                ],
+                created_at=datetime.now(UTC),
+            )
+        )
+        await s.commit()
+    return deliverable_id
+
+
+async def test_deliverables_retract_runs_the_rule_and_marks_the_row(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """The MCP write goes through the SAME rule the REST route uses.
+
+    The handler that actually calls a plugin is injected — the MCP context may
+    not import it — so the tool is asserted on what the *rule* does: fire one
+    compensate per stored handle, then flip ``retracted_at``.
+    """
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.SHIPPED)
+    deliverable_id = await _seed_retractable(db, workspace_id, run_id)
+    handler = _StubRetractHandler()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+            extras={"retract_handler": handler},
+        )
+        out = await registry.call_tool(
+            "bsvibe_deliverables_retract", {"deliverable_id": str(deliverable_id)}, ctx
+        )
+
+    assert out["retracted"] is True
+    assert out["already_retracted"] is False
+    assert [c["plugin"] for c in handler.calls] == ["slack"]
+    async with db() as s:
+        row = await s.get(Deliverable, deliverable_id)
+        assert row is not None and row.retracted_at is not None
+
+
+async def test_deliverables_retract_does_not_mark_the_row_when_compensate_fails(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """All-or-nothing: a failed dispatch leaves the row retractable."""
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.SHIPPED)
+    deliverable_id = await _seed_retractable(db, workspace_id, run_id)
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+            extras={"retract_handler": _StubRetractHandler(fail=True)},
+        )
+        with pytest.raises(ToolError) as err:
+            await registry.call_tool(
+                "bsvibe_deliverables_retract", {"deliverable_id": str(deliverable_id)}, ctx
+            )
+    assert "upstream said no" in str(err.value)
+
+    async with db() as s:
+        row = await s.get(Deliverable, deliverable_id)
+        assert row is not None and row.retracted_at is None
+
+
+async def test_deliverables_retract_without_an_injected_handler_refuses(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """``build_registry()`` is also called with no injection (server.py).
+
+    The tool must still REGISTER on that path — dropping it would break the
+    REST↔MCP parity guard — so absence has to surface at call time, as a clear
+    refusal rather than a crash or a silent no-op that reports success.
+    """
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.SHIPPED)
+    deliverable_id = await _seed_retractable(db, workspace_id, run_id)
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        with pytest.raises(ToolError) as err:
+            await registry.call_tool(
+                "bsvibe_deliverables_retract", {"deliverable_id": str(deliverable_id)}, ctx
+            )
+    assert "unknown tool" not in str(err.value)
+
+    async with db() as s:
+        row = await s.get(Deliverable, deliverable_id)
+        assert row is not None and row.retracted_at is None

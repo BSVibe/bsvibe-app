@@ -218,3 +218,59 @@ async def test_call_tool_sets_workspace_guc(db, workspace_id, user_id, seeded, m
     finally:
         reset_request_principal(token)
     assert calls == [workspace_id]
+
+
+async def test_build_server_installs_the_retract_handler_into_every_tool_context(
+    db, workspace_id, user_id, seeded
+) -> None:
+    """The injected compensation runtime actually REACHES the tool.
+
+    The tool's own tests hand it ``extras`` directly, which proves the handler
+    is used but not that anything wires it. This asserts the seam itself: what
+    ``build_server`` is given is what a tool call sees. Without it the
+    composition root could stop passing it and every test would stay green
+    while retract-over-MCP refused in production.
+    """
+    from pydantic import BaseModel, ConfigDict
+
+    from backend.mcp.api import Tool
+    from backend.mcp.server import build_registry
+
+    sentinel = object()
+    seen: list[object] = []
+
+    class _Probe(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    async def _handler(_args: _Probe, ctx: ToolContext) -> dict[str, object]:
+        seen.append(ctx.extras.get("retract_handler") if ctx.extras else None)
+        return {"ok": True}
+
+    registry = build_registry()
+    registry.register(
+        Tool(
+            name="probe_extras",
+            description="probe",
+            input_schema=_Probe,
+            output_schema=_Probe,
+            handler=_handler,
+            required_scopes=("mcp:read",),
+        )
+    )
+    server = build_server(session_factory=db, registry=registry, retract_handler=sentinel)
+
+    handler_fn = server.request_handlers[CallToolRequest]
+    token = set_request_principal(
+        _principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",))
+    )
+    try:
+        await handler_fn(
+            CallToolRequest(
+                method="tools/call",
+                params=CallToolRequestParams(name="probe_extras", arguments={}),
+            )
+        )
+    finally:
+        reset_request_principal(token)
+
+    assert seen == [sentinel]

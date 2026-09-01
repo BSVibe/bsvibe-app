@@ -56,10 +56,6 @@ _KNOWN_GAPS: dict[str, str] = {
     # pattern ``register_all_tools`` already uses for ``record_deliverable``:
     #   * retract dispatches plugin compensation → reaches backend.extensions
     #   * report builds the narrative → reaches backend.connectors transitively
-    "POST /deliverables/{deliverable_id}/retract": (
-        "rule lives in backend.api and dispatches plugin compensation; needs the "
-        "workflow-layer + composition-root-injection move before MCP can call it"
-    ),
     "GET /deliverables/{deliverable_id}/report": (
         "report builder reaches backend.connectors via the narrative; same move needed"
     ),

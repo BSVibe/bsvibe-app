@@ -36,6 +36,7 @@ async def mcp_lifespan(
     session_factory: async_sessionmaker[Any],
     delivery_dispatcher: Any | None = None,
     client_sandbox: Any | None = None,
+    retract_handler: Any | None = None,
     record_question: Any | None = None,
     record_deliverable: Any | None = None,
     record_progress: Any | None = None,
@@ -47,6 +48,10 @@ async def mcp_lifespan(
     MCP ``bsvibe_safe_mode_approve`` handler dispatches through the
     same code path as the REST route. Passed through to
     :func:`build_server` and installed into every :class:`ToolContext`.
+
+    ``retract_handler`` (optional) — same shape again: the plugin-compensation
+    runtime behind ``bsvibe_deliverables_retract``. The retraction *rule* is in
+    ``workflow.application``; only the runtime that calls a plugin is handed in.
 
     ``client_sandbox`` (optional) — same shape: resolves the founder's own machine for a
     ``client_attach`` run, injected because addressing it reaches the executor dispatch
@@ -64,6 +69,7 @@ async def mcp_lifespan(
         registry=registry,
         delivery_dispatcher=delivery_dispatcher,
         client_sandbox=client_sandbox,
+        retract_handler=retract_handler,
     )
     manager = StreamableHTTPSessionManager(
         app=server,

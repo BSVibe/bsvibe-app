@@ -628,6 +628,64 @@ async def _h_deliverables_show(args: DeliverablesShowInput, ctx: ToolContext) ->
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_deliverables_retract — roll a delivered artifact back
+#
+# The rule (order, idempotency, the all-or-nothing flip) lives in
+# ``workflow.application.deliverable_retraction`` so this surface and the REST
+# route cannot disagree about when a row may be marked retracted. The runtime
+# that actually calls a plugin's ``@p.compensate`` reaches backend.extensions /
+# .connectors / .router — forbidden here — so the composition root installs it
+# into every ToolContext, the same way ``delivery_dispatcher`` is injected.
+# ---------------------------------------------------------------------------
+class DeliverablesRetractInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deliverable_id: uuid.UUID
+
+
+async def _h_deliverables_retract(args: DeliverablesRetractInput, ctx: ToolContext) -> Any:
+    from backend.workflow.application.deliverable_retraction import (  # noqa: PLC0415
+        retract_deliverable,
+    )
+
+    handler = ctx.extras.get("retract_handler") if ctx.extras else None
+    if handler is None:
+        # Registration must NOT depend on the injection — dropping the tool on
+        # the un-injected ``build_registry()`` path would break the REST↔MCP
+        # parity guard — so absence surfaces here, as a refusal rather than a
+        # no-op that would report a retraction that never happened.
+        raise ToolError("retract is not available on this server: no compensation runtime is wired")
+
+    outcome = await retract_deliverable(
+        ctx.session,
+        SqlAlchemyDeliverableRepository(ctx.session),
+        deliverable_id=args.deliverable_id,
+        workspace_id=ctx.principal.workspace_id,
+        handler=handler,
+    )
+    if not outcome.found:
+        raise ToolError(f"deliverable not found: {args.deliverable_id}")
+    if outcome.no_handles:
+        raise ToolError(
+            f"deliverable {args.deliverable_id} has no captured compensation handles — "
+            f"nothing was delivered that can be reverted"
+        )
+    if outcome.failure is not None:
+        raise ToolError(f"compensate failed (row NOT retracted, safe to retry): {outcome.failure}")
+    return _Envelope(
+        {
+            "deliverable_id": str(args.deliverable_id),
+            "retracted": True,
+            "retracted_at": outcome.retracted_at.isoformat() if outcome.retracted_at else None,
+            "already_retracted": outcome.already_retracted,
+            "compensated": [
+                {"plugin": e.plugin, "artifact_type": e.artifact_type, "output": e.output}
+                for e in outcome.compensated
+            ],
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # REST parity — retry / diff
 #
 # Each of these mirrors a REST route the browser has had for a while and the
@@ -884,6 +942,23 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             output_schema=_Envelope,
             handler=_h_deliverables_show,
             required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_deliverables_retract",
+            description=(
+                "Roll a delivered artifact back: calls each originating plugin's "
+                "compensate handler with the handle captured at delivery time, then "
+                "marks the deliverable retracted. All-or-nothing — if any compensate "
+                "fails the row stays un-retracted so it is safe to retry. Re-retracting "
+                "is a no-op."
+            ),
+            input_schema=DeliverablesRetractInput,
+            output_schema=_Envelope,
+            handler=_h_deliverables_retract,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.deliverables_retract.invoked",
         )
     )
     registry.register(
