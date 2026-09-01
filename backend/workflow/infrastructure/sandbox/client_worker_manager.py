@@ -51,6 +51,12 @@ _WORKTREE_TIMEOUT_S = 120.0
 
 _EXIT_RE = re.compile(r"exit (\d+)")
 
+#: Prefix of the message this session builds itself when the AWAITER gives up
+#: (never heard back from the worker) — distinct from the worker's own
+#: ``_exec_timeout_error`` (backend/executors/worker/main.py), which fires
+#: when the worker's subprocess itself exceeds its budget.
+_AWAITER_TIMEOUT_PREFIX = "exec timed out after "
+
 
 def _map_result(row: Any) -> SandboxResult:
     """Map a terminal :class:`ExecutorTaskRow` back to a :class:`SandboxResult`.
@@ -221,7 +227,7 @@ class ClientWorkerSandboxSession:
                         # (the ratio is just ``_AWAIT_SLACK_S``), and that
                         # reading sent an investigation to "starved CI runner"
                         # on 2026-09-01. Reproduced on an idle laptop.
-                        f"exec timed out after {timeout_s + _AWAIT_SLACK_S}s "
+                        f"{_AWAITER_TIMEOUT_PREFIX}{timeout_s + _AWAIT_SLACK_S}s "
                         f"(command budget {timeout_s}s + {_AWAIT_SLACK_S}s report slack; "
                         f"{exc.polls} polls in {exc.elapsed_s:.1f}s, {seen})"
                     ),

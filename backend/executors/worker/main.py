@@ -181,6 +181,16 @@ _EXEC_TIMEOUT_S = 900.0
 _EXEC_OUTPUT_MAX = 20_000
 
 
+def _exec_timeout_error(command: str) -> str:
+    """The ``error_message`` posted when a command exceeds ``_EXEC_TIMEOUT_S``.
+
+    Consumed by ``ClientWorkerSandboxSession._map_result``, which recognises a
+    timeout by this message's prefix — pulled out so a test can drive the SAME
+    string-building code both sides read, instead of retyping the literal.
+    """
+    return f"exec timed out after {_EXEC_TIMEOUT_S:.0f}s: {command}"
+
+
 def _exec_env(task: dict[str, Any]) -> dict[str, str]:
     """The exec command's environment, as dispatched.
 
@@ -270,7 +280,7 @@ async def _handle_exec_task(
             done_chan=done_chan,
             success=False,
             output="",
-            error=f"exec timed out after {_EXEC_TIMEOUT_S:.0f}s: {command}",
+            error=_exec_timeout_error(command),
         )
         return
 
