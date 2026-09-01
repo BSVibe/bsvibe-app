@@ -34,29 +34,12 @@ from backend.mcp.tools import register_all_tools
 # Routes that legitimately have no MCP twin, each with the reason it is not a
 # gap. Anything not listed here MUST have a tool. Kept as data (not a regex or
 # a skip) so closing a gap forces the entry out — a stale pin fails the test.
-_KNOWN_GAPS: dict[str, str] = {
-    # Serves raw artifact BYTES (with a binary sniff + a traversal guard) for
-    # the browser's file viewer. The MCP surface reads run files through the
-    # run-scoped ``bsvibe_work_file_read`` instead; a workspace-token tool that
-    # streams arbitrary bytes out of a deliverable is a separate design
-    # question, not a mechanical mirror. Tracked for the parity follow-up.
-    "GET /deliverables/{deliverable_id}/artifacts/{ref:path}": (
-        "raw-bytes viewer surface; MCP byte reads go through bsvibe_work_file_read"
-    ),
-    # These two are real gaps whose fix is NOT "add a tool". Their rules live in
-    # ``backend.api.v1.deliverables`` today, and the import contract "MCP context
-    # depends only on Identity + Workflow + Knowledge + common" forbids
-    # ``backend.mcp -> backend.api`` — deliberately, so an MCP tool never reaches
-    # across a boundary the REST surface doesn't. Copying the rule into the MCP
-    # module would satisfy this guard while creating exactly the drift it exists
-    # to prevent, so the honest state is a pin.
-    #
-    # Closing them means moving the rule into ``backend.workflow.application``
-    # and injecting what it may not import from the composition root — the
-    # pattern ``register_all_tools`` already uses for ``record_deliverable``:
-    #   * retract dispatches plugin compensation → reaches backend.extensions
-    #   * report builds the narrative → reaches backend.connectors transitively
-}
+# EMPTY, and that is the point: as of 2026-09-01 every mounted /runs and
+# /deliverables route has an MCP twin. The dict stays because it is the
+# fail-closed seam — a NEW route with no tool fails the guard until someone
+# either writes the tool or writes down, here, why it is not a gap. Do not
+# delete it as dead code; its emptiness is the result being asserted.
+_KNOWN_GAPS: dict[str, str] = {}
 
 # Routers are mounted by ``backend.api.v1.__init__`` under these prefixes; the
 # prefix also names the MCP tool family (``/runs`` → ``bsvibe_runs_*``).

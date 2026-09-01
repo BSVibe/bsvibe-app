@@ -719,6 +719,45 @@ async def _h_deliverables_report(args: DeliverablesReportInput, ctx: ToolContext
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_deliverables_artifacts — read one file the deliverable declared
+#
+# 형님 판단 2026-09-01: offered with the REST constraints UNCHANGED. The rule
+# (ref whitelist, traversal guard, 256 KiB cap, binary refusal) lives in
+# ``workflow.application.deliverable_artifact``, so this tool cannot end up
+# laxer than the browser's viewer — the constraints are properties of the rule,
+# not of either adapter.
+# ---------------------------------------------------------------------------
+class DeliverablesArtifactsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deliverable_id: uuid.UUID
+    ref: str = Field(max_length=1024)
+
+
+async def _h_deliverables_artifacts(args: DeliverablesArtifactsInput, ctx: ToolContext) -> Any:
+    from backend.workflow.application.deliverable_artifact import (  # noqa: PLC0415
+        read_deliverable_artifact,
+        run_artifact_store,
+    )
+
+    content = await read_deliverable_artifact(
+        deliverable_id=args.deliverable_id,
+        ref=args.ref,
+        workspace_id=ctx.principal.workspace_id,
+        session=ctx.session,
+        store=run_artifact_store(),
+        deliverables=SqlAlchemyDeliverableRepository(ctx.session),
+    )
+    if content is None:
+        # Every refusal collapses here on purpose — wrong workspace, undeclared
+        # ref, traversal, and "gone" are indistinguishable, so nothing leaks.
+        raise ToolError(
+            f"artifact not readable for deliverable {args.deliverable_id}: {args.ref!r} "
+            f"(it must be one of that deliverable's own artifact_refs)"
+        )
+    return _Envelope(content.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
 # REST parity — retry / diff
 #
 # Each of these mirrors a REST route the browser has had for a while and the
@@ -1007,6 +1046,21 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             input_schema=DeliverablesReportInput,
             output_schema=_Envelope,
             handler=_h_deliverables_report,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_deliverables_artifacts",
+            description=(
+                "Read the CONTENT of one file this deliverable produced. `ref` must be "
+                "one of the deliverable's own declared artifact_refs — arbitrary paths "
+                "are refused. Text is returned UTF-8 and capped at 256 KiB "
+                "(`truncated`); a binary file returns a short note, not bytes."
+            ),
+            input_schema=DeliverablesArtifactsInput,
+            output_schema=_Envelope,
+            handler=_h_deliverables_artifacts,
             required_scopes=("mcp:read",),
         )
     )

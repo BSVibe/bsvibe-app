@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -39,7 +38,7 @@ from backend.identity.service import (
 )
 from backend.shared.authz.deps import get_current_user
 from backend.shared.authz.types import User
-from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
+from backend.storage.artifact_store import ArtifactStore
 
 # Re-export so routes / tests refer to one canonical auth dependency.
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -120,10 +119,11 @@ def get_artifact_store() -> ArtifactStore:
     a tmp dir per-test). Construction is cheap (one ``Path.resolve``); no
     singleton needed at this seam.
     """
-    from backend.config import get_settings  # noqa: PLC0415
+    from backend.workflow.application.deliverable_artifact import (  # noqa: PLC0415
+        run_artifact_store,
+    )
 
-    settings = get_settings()
-    return LocalFilesystemArtifactStore(Path(settings.run_workspace_root))
+    return run_artifact_store()
 
 
 # ---------------------------------------------------------------------------
