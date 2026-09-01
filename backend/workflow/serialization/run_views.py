@@ -1,8 +1,10 @@
-"""Shared Pydantic schemas for the ``/api/v1/runs`` surface (Lift M1).
+"""Response shapes for the run surface — ONE definition for REST and MCP.
 
-Used by :mod:`.list_get` (the list / single-row read) and :mod:`.detail`
-(the inspectable run-detail view) — split into a shared module so the two
-endpoint files can stay D35-thin without duplicating the response shapes.
+Owned by the Workflow context (it owns ``ExecutionRun``), kept out of the
+SQLAlchemy module so the presentation shape and the table mapping stay
+separable. The REST ``/api/v1/runs`` routes and the ``bsvibe_runs_*`` MCP
+tools both build these, so the two surfaces cannot drift apart in what a run
+looks like.
 """
 
 from __future__ import annotations

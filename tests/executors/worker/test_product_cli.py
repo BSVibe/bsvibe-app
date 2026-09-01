@@ -276,7 +276,7 @@ class TestTheFixturesAreNotImagined:
         ("fixture", "model_path"),
         [
             (PRODUCTS[0], "backend.api.v1.products._schemas:ProductResponse"),
-            (RUNS[0], "backend.api.v1.runs._schemas:RunResponse"),
+            (RUNS[0], "backend.workflow.serialization.run_views:RunResponse"),
             (DELIVERABLES[0], "backend.api.v1.deliverables._schemas:DeliverableResponse"),
         ],
     )

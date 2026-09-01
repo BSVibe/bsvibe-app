@@ -549,3 +549,59 @@ async def test_runs_list_by_product_is_not_truncated_by_newer_other_runs(
         )
 
     assert [row["id"] for row in listed] == [str(product_run)]
+
+
+async def test_runs_detail_returns_the_same_derivation_the_browser_gets(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """``bsvibe_runs_detail`` runs the REST route's builder, not a copy of it.
+
+    The parity gap this closes was not "no tool" but "the rule lives somewhere
+    MCP may not import". The assertion therefore checks a field the *builder*
+    derives (``trigger``, read defensively out of the free-form payload) rather
+    than a column the row already carries — a mirrored tool would have to
+    re-derive that, and this is where the two would drift.
+    """
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.RUNNING)
+    async with db() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        run.payload = {"intent_text": "ship the export", "frame": {"summary_title": "Export"}}
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        detail = await registry.call_tool("bsvibe_runs_detail", {"run_id": str(run_id)}, ctx)
+
+    assert detail["id"] == str(run_id)
+    assert detail["trigger"]["intent_text"] == "ship the export"
+    # Read-only surfaces still answer for a run with nothing around it.
+    assert detail["decisions"] == []
+    assert detail["verification"] is None
+    assert detail["deliverable_id"] is None
+
+
+async def test_runs_detail_other_workspace_is_not_found(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """A cross-workspace id is indistinguishable from an unknown one."""
+    other_ws = uuid.uuid4()
+    async with db() as s:
+        s.add(WorkspaceRow(id=other_ws, name="other"))
+        await s.commit()
+    run_id = await _seed_run(db, other_ws, status=RunStatus.RUNNING)
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(ToolError) as err:
+            await registry.call_tool("bsvibe_runs_detail", {"run_id": str(run_id)}, ctx)
+    # Pinned to the *run* being unknown: a bare `raises(ToolError)` is also
+    # satisfied by "unknown tool", so it would pass before the tool exists.
+    assert str(run_id) in str(err.value)
+    assert "unknown tool" not in str(err.value)

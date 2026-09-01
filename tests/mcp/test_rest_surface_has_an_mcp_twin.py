@@ -43,10 +43,6 @@ _KNOWN_GAPS: dict[str, str] = {
     "GET /deliverables/{deliverable_id}/artifacts/{ref:path}": (
         "raw-bytes viewer surface; MCP byte reads go through bsvibe_work_file_read"
     ),
-    # The inspectable run view (timeline + decisions + verifications + partial
-    # deliverables). A real gap: it needs the detail builder extracted into the
-    # workflow context first, for the same reason as the two below.
-    "GET /runs/{run_id}/detail": "detail builder not yet extracted for reuse — parity follow-up",
     # These two are real gaps whose fix is NOT "add a tool". Their rules live in
     # ``backend.api.v1.deliverables`` today, and the import contract "MCP context
     # depends only on Identity + Workflow + Knowledge + common" forbids

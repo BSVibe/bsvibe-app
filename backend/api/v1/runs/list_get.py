@@ -16,10 +16,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from backend.api.deps import get_workspace_id
 from backend.api.v1._workflow_deps import get_run_repository
+from backend.workflow.application.run_detail import (
+    _frame_field,
+    _intent_of,
+    _restarted_at_of,
+)
 from backend.workflow.domain.repositories import RunRepository
-
-from ._helpers import _frame_field, _intent_of, _restarted_at_of
-from ._schemas import RunResponse
+from backend.workflow.serialization.run_views import RunResponse
 
 router = APIRouter()
 

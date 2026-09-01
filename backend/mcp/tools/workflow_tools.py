@@ -25,6 +25,7 @@ from backend.workflow.domain.execution_target import read_execution_target
 from backend.workflow.domain.verified_deliverable import diff_of
 from backend.workflow.domain.verify_secrets import redact_secrets
 from backend.workflow.infrastructure.repositories import (
+    SqlAlchemyDecisionRepository,
     SqlAlchemyDeliverableRepository,
     SqlAlchemyRunRepository,
 )
@@ -563,6 +564,35 @@ async def _h_runs_discard(args: RunsDiscardInput, ctx: ToolContext) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_runs_detail — the inspectable run view the browser has had all along
+#
+# The gap here was never "nobody wrote the tool": the derivation lived under
+# ``backend.api``, which the MCP import contract forbids this context from
+# reaching. It now lives in ``workflow.application.run_detail``, so BOTH
+# surfaces run the one builder and cannot disagree about what a run's story is.
+# ---------------------------------------------------------------------------
+class RunsDetailInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: uuid.UUID
+
+
+async def _h_runs_detail(args: RunsDetailInput, ctx: ToolContext) -> Any:
+    from backend.workflow.application.run_detail import build_run_detail  # noqa: PLC0415
+
+    detail = await build_run_detail(
+        run_id=args.run_id,
+        workspace_id=ctx.principal.workspace_id,
+        session=ctx.session,
+        runs=SqlAlchemyRunRepository(ctx.session),
+        decisions=SqlAlchemyDecisionRepository(ctx.session),
+        deliverables=SqlAlchemyDeliverableRepository(ctx.session),
+    )
+    if detail is None:
+        raise ToolError(f"run not found: {args.run_id}")
+    return _Envelope(detail.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
 # bsvibe_deliverables_list
 # ---------------------------------------------------------------------------
 class DeliverablesListInput(BaseModel):
@@ -815,6 +845,22 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             handler=_h_runs_discard,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.runs_discard.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_runs_detail",
+            description=(
+                "The inspectable view of ONE run: its trigger context, the blocking "
+                "questions it raised, the latest verification outcome, its final and "
+                "mid-loop partial deliverables, and the timeline of what it actually "
+                "did. Use this when `bsvibe_runs_show` is not enough to say WHY a run "
+                "ended the way it did."
+            ),
+            input_schema=RunsDetailInput,
+            output_schema=_Envelope,
+            handler=_h_runs_detail,
+            required_scopes=("mcp:read",),
         )
     )
     registry.register(

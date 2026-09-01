@@ -1,8 +1,14 @@
-"""Shared adapter helpers for the ``/api/v1/runs`` surface (Lift M1).
+"""The run-detail read model — derivation shared by REST and MCP.
 
-Defensive payload mappers + timeline builders, factored out so each endpoint
-body stays a thin parse → app-service → serialize adapter (D35). The detail
-endpoint uses every helper here; the list / single-row reads use ``_intent_of``.
+Reads an ``ExecutionRun`` and the rows around it (decisions, the latest
+verification, final + partial deliverables, the activity timeline) into the
+:mod:`backend.workflow.serialization.run_views` shapes. Strictly read-only —
+every write happens inside the agent loop.
+
+Lives in the Workflow context, not under ``backend.api``, so the MCP
+``bsvibe_runs_detail`` tool runs the SAME derivation the browser's run view
+runs. Mirroring it into the MCP module would satisfy the parity guard while
+creating exactly the drift that guard exists to catch.
 """
 
 from __future__ import annotations
@@ -12,17 +18,31 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.identity.workspaces_db import load_workspace_language
+from backend.workflow.domain.repositories import (
+    DecisionRepository,
+    DeliverableRepository,
+    RunRepository,
+)
+from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIND
 from backend.workflow.infrastructure.db import (
     Decision,
     Deliverable,
     ExecutionRunActivity,
+    ExecutionRunHistory,
+    RunStatus,
     VerificationResult,
 )
-
-from ._schemas import (
+from backend.workflow.serialization.run_views import (
     RunActivity,
+    RunDecision,
+    RunDetailResponse,
     RunPartialDeliverable,
     RunTriggerContext,
+    RunVerification,
 )
 
 
@@ -283,8 +303,145 @@ def _build_timeline(
     return derived, "derived"
 
 
+async def build_run_detail(
+    *,
+    run_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    session: AsyncSession,
+    runs: RunRepository,
+    decisions: DecisionRepository,
+    deliverables: DeliverableRepository,
+) -> RunDetailResponse | None:
+    """Compose the inspectable run-detail view, or ``None`` if the run is not
+    in this workspace.
+
+    Bundles the run's trigger context (defensively read out of the free-form
+    ``payload``), its paused-run Decisions (the blocking questions the founder
+    resolves via /api/v1/checkpoints), the latest VerificationResult outcome,
+    and the resulting Deliverable id (so a caller can link to its Delivery
+    Report). A run with a sparse payload degrades to a calm minimal detail
+    rather than erroring.
+    """
+    run = await runs.get(run_id)
+    if run is None or run.workspace_id != workspace_id:
+        # ``None`` rather than an HTTP error: the caller decides how "unknown
+        # here" is spelled (REST 404, MCP ToolError). A cross-workspace id is
+        # indistinguishable from an unknown one, so neither surface leaks.
+        return None
+
+    decision_rows = await decisions.list_by_run(run_id, workspace_id)
+
+    latest_verification_stmt = (
+        select(VerificationResult)
+        .where(
+            VerificationResult.run_id == run_id,
+            VerificationResult.workspace_id == workspace_id,
+        )
+        .order_by(VerificationResult.created_at.desc())
+        .limit(1)
+    )
+    verification_row = (await session.execute(latest_verification_stmt)).scalars().first()
+
+    # D6 — Deliverables for this run: the verified-final + any mid-loop partials.
+    # We load all rows once and split by ``payload["kind"] == PARTIAL_DELIVERABLE_KIND``
+    # so ``deliverable_id`` returns the verified-final regardless of timing (a
+    # late-arriving partial must NOT shadow the terminal on the Run-view), and
+    # ``partial_deliverables`` returns the streaming list (oldest-first, the
+    # order they were emitted by the loop).
+    deliverable_rows = await deliverables.list_by_run(run_id, workspace_id)
+    partial_rows: list[Deliverable] = []
+    final_rows: list[Deliverable] = []
+    for row in deliverable_rows:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        if payload.get("kind") == PARTIAL_DELIVERABLE_KIND:
+            partial_rows.append(row)
+        else:
+            final_rows.append(row)
+    # When multiple non-partial Deliverables exist (legacy / future), the
+    # most-recent one wins — matches the prior "latest" semantics for non-partial
+    # rows and keeps the verified terminal nondegenerate.
+    final_row = final_rows[-1] if final_rows else None
+    deliverable_id = final_row.id if final_row is not None else None
+    deliverable_created_at = final_row.created_at if final_row is not None else None
+
+    partial_deliverables = [_partial_deliverable(row) for row in partial_rows]
+
+    # The run's STORY: meaningful activity rows, oldest-first.
+    activities_stmt = (
+        select(ExecutionRunActivity)
+        .where(
+            ExecutionRunActivity.run_id == run_id,
+            ExecutionRunActivity.workspace_id == workspace_id,
+        )
+        .order_by(ExecutionRunActivity.created_at.asc())
+    )
+    activity_rows = list((await session.execute(activities_stmt)).scalars().all())
+    # The run's STORY speaks the workspace's language — localized at the
+    # producer, like every notification sentence. Absent row → "en".
+    language = await load_workspace_language(session, workspace_id)
+    activities, timeline_source = _build_timeline(
+        activity_rows, verification_row, deliverable_id, deliverable_created_at, language
+    )
+
+    # L2 (#9): for a terminal-failed run, surface WHY — the latest history
+    # ``reason`` for the FAILED / CANCELLED transition (the loop's failure
+    # summary / the discard context). The founder sees the cause + a Retry
+    # affordance instead of a blank "nothing to do". None for non-failed runs.
+    failure_reason: str | None = None
+    if run.status in (RunStatus.FAILED, RunStatus.CANCELLED):
+        history_stmt = (
+            select(ExecutionRunHistory)
+            .where(
+                ExecutionRunHistory.run_id == run_id,
+                ExecutionRunHistory.workspace_id == workspace_id,
+                ExecutionRunHistory.to_status.in_((RunStatus.FAILED, RunStatus.CANCELLED)),
+            )
+            .order_by(ExecutionRunHistory.created_at.desc())
+            .limit(1)
+        )
+        history_row = (await session.execute(history_stmt)).scalars().first()
+        failure_reason = history_row.reason if history_row is not None else None
+
+    return RunDetailResponse(
+        id=run.id,
+        workspace_id=run.workspace_id,
+        product_id=run.product_id,
+        status=run.status,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        trigger=_trigger_context(run.payload),
+        decisions=[
+            RunDecision(
+                id=d.id,
+                decision=d.decision,
+                question=_question_text(d),
+                rationale=d.rationale,
+                status=d.status,
+                resolution=d.resolution,
+                created_at=d.created_at,
+            )
+            for d in decision_rows
+        ],
+        verification=(
+            RunVerification(
+                id=verification_row.id,
+                outcome=verification_row.outcome,
+                created_at=verification_row.created_at,
+            )
+            if verification_row is not None
+            else None
+        ),
+        deliverable_id=deliverable_id,
+        partial_deliverables=partial_deliverables,
+        activities=activities,
+        timeline_source=timeline_source,
+        failure_reason=failure_reason,
+    )
+
+
 __all__ = [
     "_activity_label",
+    "build_run_detail",
     "_build_timeline",
     "_intent_of",
     "_partial_deliverable",
