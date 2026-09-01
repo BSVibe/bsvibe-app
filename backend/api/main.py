@@ -108,12 +108,19 @@ def create_app() -> FastAPI:
 
         retract_handler = await get_retract_handler()
 
+        # Writes the report narrative. Same reason as the two above — it resolves
+        # the workspace's model account and calls an LLM.
+        from backend.api.v1.deliverables._narrative_generator import (  # noqa: PLC0415
+            llm_narrative_generator,
+        )
+
         async with mcp_lifespan(
             app,
             session_factory=session_factory,
             delivery_dispatcher=delivery_dispatcher,
             client_sandbox=resolve_client_sandbox,
             retract_handler=retract_handler,
+            narrative_generator=llm_narrative_generator(),
             record_question=record_question,
             record_deliverable=record_deliverable,
             record_progress=record_progress,

@@ -20,9 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.v1._workflow_deps import get_deliverable_repository
 from backend.workflow.domain.repositories import DeliverableRepository
+from backend.workflow.serialization.deliverable_views import (
+    DeliverableResponse,
+    to_response,
+)
 
 from ._helpers import run_is_verified, verified_run_ids
-from ._schemas import DeliverableResponse, to_response
 
 router = APIRouter()
 

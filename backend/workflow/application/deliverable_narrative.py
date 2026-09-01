@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import Any
+from typing import Any, Protocol
 
 import structlog
 from sqlalchemy import select
@@ -20,19 +20,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.workers.db import SettleDrainRow
-from backend.workflow.infrastructure.db import Deliverable, ExecutionRun
-from backend.workflow.infrastructure.delivery.db import (
-    SafeModeQueueItemRow,
-    SafeModeStatus,
-)
-
-from ._references import (
+from backend.workflow.application.deliverable_references import (
     ReferenceOut,
     is_prior_note_reference,
     note_title,
     reference_from_entry,
 )
-from ._schemas import WrittenNote
+from backend.workflow.infrastructure.db import Deliverable, ExecutionRun
+from backend.workflow.infrastructure.delivery.db import (
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
+from backend.workflow.serialization.deliverable_views import WrittenNote
 
 logger = structlog.get_logger(__name__)
 
@@ -178,6 +177,27 @@ async def _workspace_language(session: AsyncSession, workspace_id: uuid.UUID) ->
     return (lang or "en").strip() or "en"
 
 
+class NarrativeGenerator(Protocol):
+    """Writes the plain-language "what this did" sentence for a report.
+
+    The production implementation resolves the workspace's model account and
+    calls an LLM, which reaches ``backend.router`` / ``backend.executors`` —
+    contexts the MCP import contract forbids. So it is handed in rather than
+    imported, and both surfaces run one narrative rule with one cache.
+    """
+
+    async def narrate(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        intent: str | None,
+        summary: str | None,
+        diff: str | None,
+        language: str,
+    ) -> str | None: ...
+
+
 async def report_narrative_for(
     session: AsyncSession,
     row: Deliverable,
@@ -185,6 +205,8 @@ async def report_narrative_for(
     request: str | None,
     verified: bool,
     workspace_id: uuid.UUID,
+    *,
+    generator: NarrativeGenerator | None = None,
 ) -> str | None:
     """The cached / lazily-generated "what this did" narrative for the report, in
     the workspace's output language. The cache is LANGUAGE-AWARE: a narrative
@@ -211,18 +233,21 @@ async def report_narrative_for(
     intent = intent or request
     if not (summary or diff or intent):
         return cached.strip() if isinstance(cached, str) and cached.strip() else None
-    from backend.workers.emit import get_dispatch_redis_client  # noqa: PLC0415 — lazy
-    from backend.workflow.application.report_narrative import (  # noqa: PLC0415 — lazy
-        ReportNarrativeService,
-    )
+    if generator is None:
+        # No generator wired (an MCP server booted without one). A report is a
+        # READ: degrade to whatever is cached rather than refusing — the caller
+        # still gets the deliverable, its verifications and its references, just
+        # without a freshly-worded narrative. (Retract, a write, refuses instead:
+        # there, silence would mean claiming a rollback that never happened.)
+        return cached.strip() if isinstance(cached, str) and cached.strip() else None
 
-    # dispatch redis lets an EXECUTOR-account frame caller reach the worker stream
-    settings = get_settings()
-    service = ReportNarrativeService(
-        session, settings=settings, redis=get_dispatch_redis_client(settings)
-    )
-    narrative = await service.narrate(
-        workspace_id=workspace_id, intent=intent, summary=summary, diff=diff, language=language
+    narrative = await generator.narrate(
+        session,
+        workspace_id=workspace_id,
+        intent=intent,
+        summary=summary,
+        diff=diff,
+        language=language,
     )
     if not narrative:
         # Keep any prior (stale-language) narrative rather than blanking the report.
@@ -240,4 +265,9 @@ async def report_narrative_for(
     return narrative
 
 
-__all__ = ["held_delivery_item_for", "report_narrative_for", "split_knowledge"]
+__all__ = [
+    "NarrativeGenerator",
+    "held_delivery_item_for",
+    "report_narrative_for",
+    "split_knowledge",
+]

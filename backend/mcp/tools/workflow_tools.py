@@ -686,6 +686,39 @@ async def _h_deliverables_retract(args: DeliverablesRetractInput, ctx: ToolConte
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_deliverables_report — the glass-box proof the browser has had
+#
+# The composition lives in ``workflow.application.deliverable_report``; the one
+# piece that cannot is the narrative GENERATOR (it calls an LLM through the
+# workspace's model account, reaching backend.router / .executors), so the
+# composition root installs it into every ToolContext.
+#
+# Unlike retract, a missing generator is NOT a refusal: a report is a read, so
+# it degrades to the cached narrative (or none) and still returns the proof.
+# ---------------------------------------------------------------------------
+class DeliverablesReportInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deliverable_id: uuid.UUID
+
+
+async def _h_deliverables_report(args: DeliverablesReportInput, ctx: ToolContext) -> Any:
+    from backend.workflow.application.deliverable_report import (  # noqa: PLC0415
+        build_deliverable_report,
+    )
+
+    report = await build_deliverable_report(
+        deliverable_id=args.deliverable_id,
+        workspace_id=ctx.principal.workspace_id,
+        session=ctx.session,
+        deliverables=SqlAlchemyDeliverableRepository(ctx.session),
+        narrative_generator=(ctx.extras.get("narrative_generator") if ctx.extras else None),
+    )
+    if report is None:
+        raise ToolError(f"deliverable not found: {args.deliverable_id}")
+    return _Envelope(report.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
 # REST parity — retry / diff
 #
 # Each of these mirrors a REST route the browser has had for a while and the
@@ -959,6 +992,22 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             handler=_h_deliverables_retract,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.deliverables_retract.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_deliverables_report",
+            description=(
+                "The glass-box proof for one deliverable: what was asked, what was "
+                "built, the verification contract BSVibe promised and the result of "
+                "running it, the knowledge it consulted vs. wrote, and a plain-language "
+                "summary. `verified` is true ONLY when a real PASSED verification exists "
+                "— never inferred from the deliverable existing."
+            ),
+            input_schema=DeliverablesReportInput,
+            output_schema=_Envelope,
+            handler=_h_deliverables_report,
+            required_scopes=("mcp:read",),
         )
     )
     registry.register(

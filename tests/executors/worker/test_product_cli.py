@@ -277,7 +277,10 @@ class TestTheFixturesAreNotImagined:
         [
             (PRODUCTS[0], "backend.api.v1.products._schemas:ProductResponse"),
             (RUNS[0], "backend.workflow.serialization.run_views:RunResponse"),
-            (DELIVERABLES[0], "backend.api.v1.deliverables._schemas:DeliverableResponse"),
+            (
+                DELIVERABLES[0],
+                "backend.workflow.serialization.deliverable_views:DeliverableResponse",
+            ),
         ],
     )
     def test_every_fixture_key_exists_on_the_server_model(

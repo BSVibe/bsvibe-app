@@ -37,6 +37,7 @@ async def mcp_lifespan(
     delivery_dispatcher: Any | None = None,
     client_sandbox: Any | None = None,
     retract_handler: Any | None = None,
+    narrative_generator: Any | None = None,
     record_question: Any | None = None,
     record_deliverable: Any | None = None,
     record_progress: Any | None = None,
@@ -70,6 +71,7 @@ async def mcp_lifespan(
         delivery_dispatcher=delivery_dispatcher,
         client_sandbox=client_sandbox,
         retract_handler=retract_handler,
+        narrative_generator=narrative_generator,
     )
     manager = StreamableHTTPSessionManager(
         app=server,

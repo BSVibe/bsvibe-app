@@ -723,3 +723,113 @@ async def test_deliverables_retract_without_an_injected_handler_refuses(
     async with db() as s:
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None and row.retracted_at is None
+
+
+class _StubNarrative:
+    """A narrative generator that never touches an LLM."""
+
+    def __init__(self, text: str | None = "it now exports the thing") -> None:
+        self.text = text
+        self.calls = 0
+
+    async def narrate(self, _session: Any, **_kw: Any) -> str | None:
+        self.calls += 1
+        return self.text
+
+
+async def _seed_reportable(db, workspace_id, run_id) -> uuid.UUID:
+    deliverable_id = uuid.uuid4()
+    async with db() as s:
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                deliverable_type=DeliverableType.CODE,
+                payload={"summary": "added an export"},
+                created_at=datetime.now(UTC),
+            )
+        )
+        await s.commit()
+    return deliverable_id
+
+
+async def test_deliverables_report_composes_the_same_proof_the_browser_gets(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """The tool runs the REST route's composition, not a copy.
+
+    Asserted on ``verified`` — a field the *builder* decides (a real PASSED
+    VerificationResult must exist; it is never inferred from the deliverable
+    existing). A mirrored tool would have to re-derive that, and that is where
+    the two would drift.
+    """
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.SHIPPED)
+    deliverable_id = await _seed_reportable(db, workspace_id, run_id)
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+            extras={"narrative_generator": _StubNarrative()},
+        )
+        out = await registry.call_tool(
+            "bsvibe_deliverables_report", {"deliverable_id": str(deliverable_id)}, ctx
+        )
+
+    assert out["deliverable"]["id"] == str(deliverable_id)
+    # No PASSED verification was recorded → honestly needs-review, not "verified".
+    assert out["verified"] is False
+    assert out["verifications"] == []
+
+
+async def test_deliverables_report_without_a_generator_still_returns_the_proof(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """A report is a READ: no generator wired → degrade, never refuse.
+
+    This is the opposite of retract (a write), where a missing runtime must
+    refuse rather than claim a rollback that never happened. Here the founder
+    still gets the deliverable, its verifications and its references — only the
+    freshly-worded sentence is missing.
+    """
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.SHIPPED)
+    deliverable_id = await _seed_reportable(db, workspace_id, run_id)
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_deliverables_report", {"deliverable_id": str(deliverable_id)}, ctx
+        )
+
+    assert out["deliverable"]["id"] == str(deliverable_id)
+    assert out["narrative"] is None
+
+
+async def test_deliverables_report_other_workspace_is_not_found(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """A cross-workspace id is indistinguishable from an unknown one."""
+    other_ws = uuid.uuid4()
+    async with db() as s:
+        s.add(WorkspaceRow(id=other_ws, name="other-report"))
+        await s.commit()
+    run_id = await _seed_run(db, other_ws, status=RunStatus.SHIPPED)
+    deliverable_id = await _seed_reportable(db, other_ws, run_id)
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        with pytest.raises(ToolError) as err:
+            await registry.call_tool(
+                "bsvibe_deliverables_report", {"deliverable_id": str(deliverable_id)}, ctx
+            )
+    # Pinned to the *deliverable* being unknown — a bare raises() is also
+    # satisfied by "unknown tool", i.e. it would pass before the tool exists.
+    assert str(deliverable_id) in str(err.value)
+    assert "unknown tool" not in str(err.value)

@@ -22,14 +22,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from backend.workflow.application.deliverable_references import ReferenceOut
 from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
     VerificationOutcome,
     VerificationResult,
 )
-
-from ._references import ReferenceOut
 
 # Read cap for artifact content — guards against a multi-MB blob in a JSON body.
 # Beyond it the response carries the first ``MAX_CONTENT_BYTES`` as text with
