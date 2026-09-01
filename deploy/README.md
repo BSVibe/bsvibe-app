@@ -131,6 +131,13 @@ curl -s http://localhost:8700/api/health
 The health route is `GET /api/health` (mounted in `backend/api/main.py` →
 `backend/api/health.py`); it returns `{status, version, git_sha}`.
 
+> ⚠️ **A 200 here is not proof of THIS stack.** Host port 8700 answers for
+> whichever compose project holds it — if another stack (e.g. a prod
+> deployment already running on this machine) got there first, this curl
+> returns 200 even though the stack you just brought up never came up at
+> all. See §9 for how to tell which stack actually answered, and how to
+> relocate the port if it collides.
+
 **Stage B — enable the worker + sandbox (LLM phase).** The work/verification
 sandbox runs as a per-project container spawned **inside a Docker-in-Docker
 sidecar** (`sandbox-dind`, behind the `sandbox` compose profile). The verifier's
@@ -200,7 +207,8 @@ service in compose is scaled to 0 by default for the Vercel path.
 - Persistent volumes: `pgdata` (Postgres), `redisdata` (Redis), `appdata`
   (vault / skills / runs at `/app/var`).
 - Postgres + Redis are **not** published to the host in prod — only the
-  backend (8700) and, if used, the PWA (3700).
+  backend (8700) and, if used, the PWA (3700). Those defaults, and how to
+  move them if they collide with another stack on this machine, are §9.
 - Update: rebuild with a new `GIT_SHA`, `up -d` (the entrypoint re-runs
   `alembic upgrade head` idempotently on the new backend container).
 
@@ -211,3 +219,44 @@ docker compose -f deploy/compose.yaml -f deploy/compose.prod.yaml down
 # Add -v to also drop the volumes (DESTROYS data):
 # docker compose -f deploy/compose.yaml -f deploy/compose.prod.yaml down -v
 ```
+
+## 9. Local port overrides & avoiding stack confusion
+
+`compose.yaml` publishes four host ports for the **base** stack — backend
+`8700`, postgres `5442`, redis `6387`, pwa `3700`. If another compose project
+on this machine (most likely an already-running prod deployment) already
+holds one of these, `docker compose -f deploy/compose.yaml up -d` fails to
+bind, or — worse — appears to succeed while every request you make actually
+lands on the OTHER stack.
+
+Each port is parameterized (`${VAR:-default}`); leaving the var unset keeps
+the pre-existing behavior exactly:
+
+| Port | Env var | Default |
+| --- | --- | --- |
+| backend  | `BSVIBE_LOCAL_BACKEND_PORT` | `8700` |
+| postgres | `BSVIBE_LOCAL_PG_PORT`      | `5442` |
+| redis    | `BSVIBE_LOCAL_REDIS_PORT`   | `6387` |
+| pwa      | `BSVIBE_LOCAL_PWA_PORT`     | `3700` |
+
+```sh
+# Relocate whatever collides, leave the rest at their defaults:
+BSVIBE_LOCAL_BACKEND_PORT=8701 BSVIBE_LOCAL_PWA_PORT=3701 \
+  docker compose -f deploy/compose.yaml up -d
+```
+
+**A 200 from `curl localhost:8700/api/health` does not prove your stack
+answered it** — any process bound to that host port does, including a prod
+stack that was already running before you brought yours up, or one that
+never came up at all. Disambiguate with either:
+
+- **`git_sha`** in the response body — compare it against
+  `git rev-parse --short HEAD` (or whatever `GIT_SHA` you exported for
+  `docker compose ... build`). The base stack's default is `dev`
+  (`GIT_SHA` unset); a real deploy's `git_sha` is whatever it last built.
+- **the compose project** actually holding the port —
+  `docker ps --format '{{.Names}}\t{{.Ports}}'` prints
+  `<project>-<service>-<n>` per container; `docker compose -f
+  deploy/compose.yaml ps` (or `-f ... -f compose.prod.yaml ps` for prod)
+  lists only the containers of the stack YOU are asking about, so an empty
+  or mismatched result means the port belongs to someone else.
