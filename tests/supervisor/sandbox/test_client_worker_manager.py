@@ -461,14 +461,17 @@ async def test_a_timed_out_exec_carries_the_awaiters_observations(
 # be at least the elapsed time it reports.** Any message that fails that invites
 # the overrun misreading again.
 
-_TIMED_OUT_AFTER_RE = re.compile(r"exec timed out after ([\d.]+)s")
-
 
 async def test_a_full_budget_timeout_does_not_read_as_a_budget_overrun(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from backend.executors import dispatch as dispatch_mod
-    from backend.workflow.infrastructure.sandbox.client_worker_manager import _AWAIT_SLACK_S
+    from backend.workflow.infrastructure.sandbox.client_worker_manager import (
+        _AWAIT_SLACK_S,
+        _AWAITER_TIMEOUT_PREFIX,
+    )
+
+    timed_out_after_re = re.compile(rf"{re.escape(_AWAITER_TIMEOUT_PREFIX)}([\d.]+)s")
 
     command_budget_s = 10.0
     # What a healthy awaiter that never hears back actually spends.
@@ -494,7 +497,7 @@ async def test_a_full_budget_timeout_does_not_read_as_a_budget_overrun(
         monkeypatch.setattr(dispatch_mod, "await_completion", _timeout_at_full_budget)
         result = await box.exec("true", timeout_s=command_budget_s, shell=True)
 
-    match = _TIMED_OUT_AFTER_RE.search(result.stderr)
+    match = timed_out_after_re.search(result.stderr)
     assert match is not None, f"no budget stated in {result.stderr!r}"
     stated_budget_s = float(match.group(1))
     assert stated_budget_s >= awaiter_budget_s, (
@@ -503,3 +506,38 @@ async def test_a_full_budget_timeout_does_not_read_as_a_budget_overrun(
         f"{awaiter_budget_s / stated_budget_s:.0f}x overrun: {result.stderr!r}"
     )
     await redis.aclose()
+
+
+# --------------------------------------------------------------------------
+# The producer's timeout wording and the consumer's ``startswith`` check live
+# in different files. Nothing enforces they still agree.
+# --------------------------------------------------------------------------
+#
+# The worker (``backend/executors/worker/main.py::_handle_exec_task``) reports a
+# command timeout with an ``error_message`` built by ``_exec_timeout_error``.
+# ``_map_result`` here recognises a timeout by ``err.startswith("exec timed
+# out")``. If the worker's wording drifts, ``_map_result`` falls through past
+# ``_EXIT_RE`` (no ``"exit N"`` in the message) to ``exit_code = 1`` — an infra
+# timeout silently reads as a gate FAILURE, the exact inversion
+# ``test_exec_no_live_worker_raises`` above says must never happen.
+#
+# This does not retype the worker's literal: it imports the SAME function the
+# worker calls and feeds its OUTPUT straight into ``_map_result``, so a change
+# to either side that breaks the coupling breaks this test too.
+
+
+async def test_map_result_reads_the_workers_actual_timeout_message() -> None:
+    """Feed the worker's OWN timeout message into ``_map_result`` and require
+    ``timed_out=True, exit_code=None`` — the contract, not a copy of the string."""
+    from types import SimpleNamespace
+
+    from backend.executors.worker.main import _exec_timeout_error
+    from backend.workflow.infrastructure.sandbox.client_worker_manager import _map_result
+
+    worker_message = _exec_timeout_error("pytest -q")
+    row = SimpleNamespace(status="failed", error_message=worker_message, output="")
+
+    result = _map_result(row)
+
+    assert result.timed_out is True
+    assert result.exit_code is None
