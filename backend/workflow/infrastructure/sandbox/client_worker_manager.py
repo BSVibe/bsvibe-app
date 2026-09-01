@@ -209,13 +209,21 @@ class ClientWorkerSandboxSession:
                     polls=exc.polls,
                     last_status=exc.last_status,
                     elapsed_s=round(exc.elapsed_s, 1),
+                    awaiter_budget_s=timeout_s + _AWAIT_SLACK_S,
                 )
                 return SandboxResult(
                     exit_code=None,
                     stdout="",
                     stderr=(
-                        f"exec timed out after {timeout_s}s "
-                        f"({exc.polls} polls in {exc.elapsed_s:.1f}s, {seen})"
+                        # State the budget that ACTUALLY ran out. Printing the
+                        # command's own ``timeout_s`` next to ``elapsed_s`` made
+                        # every healthy full-budget timeout read as a 7x overrun
+                        # (the ratio is just ``_AWAIT_SLACK_S``), and that
+                        # reading sent an investigation to "starved CI runner"
+                        # on 2026-09-01. Reproduced on an idle laptop.
+                        f"exec timed out after {timeout_s + _AWAIT_SLACK_S}s "
+                        f"(command budget {timeout_s}s + {_AWAIT_SLACK_S}s report slack; "
+                        f"{exc.polls} polls in {exc.elapsed_s:.1f}s, {seen})"
                     ),
                     timed_out=True,
                 )

@@ -16,6 +16,7 @@ combined stdout/stderr tail, and reports the exit code via ``record_result``.
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -440,4 +441,65 @@ async def test_a_timed_out_exec_carries_the_awaiters_observations(
     assert result.timed_out is True
     assert "3 polls" in result.stderr
     assert "dispatched" in result.stderr
+    await redis.aclose()
+
+
+# --------------------------------------------------------------------------
+# A timeout that used exactly its budget must not READ as an overrun
+# --------------------------------------------------------------------------
+#
+# The awaiter's budget is ``timeout_s + _AWAIT_SLACK_S`` (10 + 60 = 70 for the
+# tests above), but the message printed ``timeout_s`` — so a healthy, full-budget
+# timeout rendered as "after 10.0s (36 polls in 70.0s)". Reproduced 2026-09-01 on
+# an IDLE laptop, byte-identical to the CI string: the apparent "7x budget
+# overrun" is a constant of ``_AWAIT_SLACK_S``, not a load signal. It sent one
+# investigation to "starved CI runner" and the real shape — ``polls`` NEAR
+# ``timeout_s / _AWAIT_POLL_INTERVAL_S`` with ``last_status='dispatched'`` — is
+# the one ``TaskTimeout`` documents as "the worker never reported".
+#
+# The proposition is not a spelling: **the budget the message says ran out must
+# be at least the elapsed time it reports.** Any message that fails that invites
+# the overrun misreading again.
+
+_TIMED_OUT_AFTER_RE = re.compile(r"exec timed out after ([\d.]+)s")
+
+
+async def test_a_full_budget_timeout_does_not_read_as_a_budget_overrun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.executors import dispatch as dispatch_mod
+    from backend.workflow.infrastructure.sandbox.client_worker_manager import _AWAIT_SLACK_S
+
+    command_budget_s = 10.0
+    # What a healthy awaiter that never hears back actually spends.
+    awaiter_budget_s = command_budget_s + _AWAIT_SLACK_S
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with shared_file_sessionmaker() as factory:
+        await _seed_worker(factory, workspace_id=workspace_id)
+        box = _make_session(
+            redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
+        )
+
+        async def _timeout_at_full_budget(*_a: Any, **kw: Any) -> Any:
+            raise dispatch_mod.TaskTimeout(
+                "forced",
+                task_id=kw.get("task_id"),
+                polls=36,
+                last_status="dispatched",
+                elapsed_s=awaiter_budget_s,
+            )
+
+        monkeypatch.setattr(dispatch_mod, "await_completion", _timeout_at_full_budget)
+        result = await box.exec("true", timeout_s=command_budget_s, shell=True)
+
+    match = _TIMED_OUT_AFTER_RE.search(result.stderr)
+    assert match is not None, f"no budget stated in {result.stderr!r}"
+    stated_budget_s = float(match.group(1))
+    assert stated_budget_s >= awaiter_budget_s, (
+        f"the message says it timed out after {stated_budget_s}s but reports "
+        f"{awaiter_budget_s}s elapsed — a full-budget timeout reads as a "
+        f"{awaiter_budget_s / stated_budget_s:.0f}x overrun: {result.stderr!r}"
+    )
     await redis.aclose()
