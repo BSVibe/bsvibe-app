@@ -1,10 +1,12 @@
-"""Plugin-side runtime for B12b retract (Lift §17.9 sub-file).
+"""Plugin-side runtime for B12b retract — the injected half of the retract seam.
 
-Keeps the endpoint module (:mod:`.retract`) under the D35 thin-adapter
-LOC ceiling by hosting the :class:`RetractHandler` protocol + production
-implementation (:class:`PluginRetractHandler`) + dependency factory
-(:func:`get_retract_handler`) here. The endpoint module only orchestrates
-parse → handler dispatch → response.
+Hosts the production :class:`PluginRetractHandler` + its dependency
+factory (:func:`get_retract_handler`). The *rule* — order, idempotency, the
+all-or-nothing flip — lives in
+:mod:`backend.workflow.application.deliverable_retraction`; this module is
+only the runtime that rule calls, kept here because it reaches
+``backend.extensions`` / ``backend.connectors`` / ``backend.router``, which
+the MCP import contract forbids that context. Both surfaces inject it.
 
 Production wiring: loads the plugin registry, resolves the workspace's
 ``connector_account`` row for the named plugin, decrypts its secret, and
@@ -18,7 +20,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import structlog
 from sqlalchemy import select
@@ -29,27 +31,9 @@ from backend.extensions.plugin.base import PluginMeta, PluginRunError
 from backend.extensions.plugin.context import SkillContext
 from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
+from backend.workflow.application.deliverable_retraction import RetractHandler
 
 logger = structlog.get_logger(__name__)
-
-
-class RetractHandler(Protocol):
-    """The runtime hand-off that actually calls a plugin's ``@p.compensate``.
-
-    Stubbed in tests via the :func:`get_retract_handler` dependency override;
-    production wires :class:`PluginRetractHandler` which loads the plugin
-    registry, resolves the workspace's connector account for the named plugin,
-    decrypts its secret, and dispatches through :class:`PluginRunner`.
-    """
-
-    async def compensate(
-        self,
-        *,
-        plugin: str,
-        artifact_type: str,
-        handle: dict[str, Any],
-        workspace_id: uuid.UUID,
-    ) -> dict[str, Any]: ...
 
 
 class _NoLlm:

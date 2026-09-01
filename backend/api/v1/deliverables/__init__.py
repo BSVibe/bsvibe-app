@@ -9,7 +9,9 @@ adapters: parse → app service → serialize):
   ``GET /{id}/artifacts/{ref}``).
 * :mod:`.diff` — the run's captured old↔new ``git diff`` (``GET /{id}/diff``).
 * :mod:`.retract` — the single mutating endpoint (``POST /{id}/retract``)
-  + the :class:`RetractHandler` protocol it dispatches through.
+  + the :class:`RetractHandler` protocol it dispatches through (re-exported
+  from ``backend.workflow.application.deliverable_retraction``, where the
+  retraction rule lives so REST and MCP share one).
 
 Shared response models + payload mappers live in :mod:`._schemas`;
 verified-run lookup helpers live in :mod:`._helpers`.
@@ -29,8 +31,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from backend.workflow.application.deliverable_retraction import RetractHandler
+
 from . import diff, list_get, proof, retract
-from ._retract_handler import PluginRetractHandler, RetractHandler, get_retract_handler
+from ._retract_handler import PluginRetractHandler, get_retract_handler
 from .retract import RetractedCompensationEntry, RetractResponse
 
 # Single aggregator router — each sub-module owns its own APIRouter and the

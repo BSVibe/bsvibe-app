@@ -93,6 +93,12 @@ def create_app() -> FastAPI:
         # T1b — the two LOOP-owned effects behind the run-scoped work tools, injected here:
         # they reach backend.api (the live-event bus), which the MCP import contract forbids
         # the MCP context from importing. Wiring them keeps backend.mcp a transport.
+        # The plugin-compensation runtime behind retract. Same reason as the
+        # dispatcher above — it loads the plugin registry and the credential
+        # cipher, which the MCP import contract forbids that context.
+        from backend.api.v1.deliverables._retract_handler import (  # noqa: PLC0415
+            get_retract_handler,
+        )
         from backend.workflow.application.mcp_work_effects import (  # noqa: PLC0415
             record_deliverable,
             record_progress,
@@ -100,11 +106,14 @@ def create_app() -> FastAPI:
             resolve_client_sandbox,
         )
 
+        retract_handler = await get_retract_handler()
+
         async with mcp_lifespan(
             app,
             session_factory=session_factory,
             delivery_dispatcher=delivery_dispatcher,
             client_sandbox=resolve_client_sandbox,
+            retract_handler=retract_handler,
             record_question=record_question,
             record_deliverable=record_deliverable,
             record_progress=record_progress,
