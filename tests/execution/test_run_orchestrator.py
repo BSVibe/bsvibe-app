@@ -2605,3 +2605,107 @@ def test_could_not_run_clause_reaches_the_phone_notification() -> None:
     )
     assert "3개 확인 통과" in detail
     assert "uv run lint-imports" in detail
+
+
+# --------------------------------------------------------------------------
+# The clause named the WHOLE command, and it lands on the founder's phone
+# --------------------------------------------------------------------------
+#
+# #872 made an `unavailable` gate command visible by NAMING it. Measured on the
+# live `shipped` notification for prod run `81a168ed` (2026-09-02), what the
+# founder actually received was ~700 characters of bash:
+#
+#   검증: 4개 확인 통과. 여기서 못 돌린 검사 2개(도구 없음): bash -c 'set -euo
+#   pipefail; ports=$(docker compose -f deploy/compose.yaml config --format json
+#   | jq -r ".services[].ports[]?.published" | sort -u); for p in $ports; do
+#   grep -q "$p" deploy/README.md || { echo "MISSING base-stack port …
+#
+# Before #872 that line ended at "검증: 4개 확인 통과." — so this is a regression
+# #872 introduced. The deliverable summary can afford it (16 KB cap); the phone
+# notification cannot, and it is the same sentence (`_shipped_detail` lifts it).
+#
+# What identifies a check is its HEAD (`uv run lint-imports`, `docker compose -f
+# …`), not its full shell body. Keep the head, mark the cut.
+
+
+def _long_bash(marker: str) -> str:
+    return (
+        f"bash -c 'set -euo pipefail; ports=$(docker compose -f deploy/{marker}.yaml "
+        'config --format json | jq -r ".services[].ports[]?.published" | sort -u); '
+        f'for p in $ports; do grep -q "$p" deploy/README.md || {{ echo "MISSING {marker}" '
+        ">&2; exit 1; }; done'"
+    )
+
+
+def _verdict_with_long_unavailable() -> dict:
+    return {
+        "gate_applicable": True,
+        "command_results": [],
+        "derived_gate": {
+            "applicable": True,
+            "passed": True,
+            "commands": [
+                {"command": "uv run pytest tests/deploy/", "kind": "test", "status": "passed"},
+                {"command": _long_bash("compose"), "kind": "surface", "status": "unavailable"},
+                {
+                    "command": _long_bash("compose.e2e-live"),
+                    "kind": "surface",
+                    "status": "unavailable",
+                },
+            ],
+        },
+        "judge": {"passed": True},
+    }
+
+
+def test_a_named_unavailable_check_is_bounded_not_the_whole_script() -> None:
+    """The clause must stay readable where it lands. It rides the same line the
+    phone notification lifts, so an unbounded shell one-liner makes the founder's
+    push unreadable — which is what prod actually delivered."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _compose_verified_summary
+    from backend.workflow.domain.verified_deliverable import _shipped_detail
+
+    run = SimpleNamespace(payload={"frame": {"summary_title": "포트 표 추가"}})
+    detail = _shipped_detail(
+        _compose_verified_summary(
+            run,  # type: ignore[arg-type]
+            "narration",
+            ["deploy/README.md"],
+            _verdict_with_long_unavailable(),
+            language="ko",
+        )
+    )
+    verify_line = next(ln for ln in detail.splitlines() if ln.startswith("검증"))
+
+    # The CONTROL: the check must still be IDENTIFIABLE. Bounding it must not
+    # degenerate into dropping the names, which is the silence #872 removed.
+    assert "못 돌린 검사 2개" in verify_line
+    assert "docker compose" in verify_line
+    # The defect: one full shell body is ~250 chars; two of them blow the line.
+    assert len(verify_line) < 300, f"verify line is {len(verify_line)} chars: {verify_line[:200]}"
+
+
+def test_a_short_command_is_named_in_full() -> None:
+    """CONTROL for the truncation itself — bounding long commands must not clip
+    the ordinary ones. `uv run lint-imports` is the whole check; cutting it
+    would lose the identity the clause exists to give."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _verification_sentence
+
+    verdict = {
+        "gate_applicable": True,
+        "derived_gate": {
+            "applicable": True,
+            "passed": True,
+            "commands": [
+                {"command": "uv run pytest", "kind": "test", "status": "passed"},
+                {"command": "uv run lint-imports", "kind": "quality", "status": "unavailable"},
+            ],
+        },
+        "judge": {"passed": True},
+    }
+    _ = SimpleNamespace
+    assert "uv run lint-imports." in _verification_sentence(verdict, "ko")

@@ -74,6 +74,27 @@ def _gate_command_results(result: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+#: How much of an unavailable command's text identifies it. A derived command
+#: can be a whole shell one-liner: prod's ``shipped`` push for run ``81a168ed``
+#: (2026-09-02) carried ~700 characters of ``bash -c 'set -euo pipefail; ports=$(
+#: docker compose … | jq -r … )'`` because this clause named commands verbatim.
+#: Before #872 that line ended at "검증: 4개 확인 통과.", so the unbounded name was
+#: a regression #872 introduced — and it rides the ONE line ``_shipped_detail``
+#: lifts onto the founder's phone, where length is not free.
+#:
+#: What identifies a check is its HEAD (``uv run lint-imports``, ``docker compose
+#: -f deploy/compose.yaml config``), never its full body. Keep the head, mark the
+#: cut — a silent clip would be the same defect ``capped_summary`` exists to avoid.
+_COMMAND_NAME_CAP = 72
+
+
+def _clip_command(command: str) -> str:
+    """The command's identifying head, bounded, with any cut ANNOUNCED."""
+    if len(command) <= _COMMAND_NAME_CAP:
+        return command
+    return command[:_COMMAND_NAME_CAP].rstrip() + "…"
+
+
 def _could_not_run_clause(commands: list[Any], ko: bool) -> str:
     """Name the gate checks that never ran, or "" when they all did.
 
@@ -93,7 +114,7 @@ def _could_not_run_clause(commands: list[Any], ko: bool) -> str:
     ``Verified`` prefix, so a clause on its own line never reaches the phone.
     """
     missing = [str(c.get("command") or "").strip() for c in commands if c.get("unavailable")]
-    missing = [c for c in missing if c]
+    missing = [_clip_command(c) for c in missing if c]
     if not missing:
         return ""
     listed = " · ".join(missing)
