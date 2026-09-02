@@ -94,13 +94,23 @@ async def _worker_then(redis: Any, factory: Any, worker_id: uuid.UUID, request: 
     # sleep(0) yields without adding wall-clock to every test that uses this.
     await asyncio.sleep(0)
     started = asyncio.get_running_loop().time()
+    raised: BaseException | None = None
+    result: Any = None
     try:
         result = await request
-    finally:
-        # The request finished (or raised). Let the worker finish its own task —
-        # it must never be left pending, which would leak into the next test.
-        await worker
-    # The exec side returned. If it gave up (its own timeout) there are exactly
+    except BaseException as exc:  # noqa: BLE001 — re-raised below, after attribution
+        # ``exec`` RETURNS a timed-out result; ``read_file`` / ``list_dir`` RAISE
+        # (``SandboxError: list_dir '.': exit None``). The first version of this
+        # attribution ran only on the return path, so the RAISING calls — which
+        # are the ones CI actually fails on (PR #875, another docs-only change) —
+        # skipped it entirely and the harness's failure went on wearing the
+        # product's face. Catch both, attribute, then re-raise unchanged.
+        raised = exc
+    # Let the worker finish its own task — it must never be left pending, which
+    # would leak into the next test. Its OWN loud failure ("saw no exec task")
+    # wins over everything below: that is a more specific diagnosis.
+    await worker
+    # The exec side is done. If it gave up (its own timeout) there are exactly
     # two shapes left, and until now NOTHING recorded which one it was — both
     # surfaced as the product's "exec timed out … last status 'dispatched'" and
     # then as a bare ``assert None == 0`` (CI 2026-09-02, PR #873, a docs-only
@@ -127,6 +137,8 @@ async def _worker_then(redis: Any, factory: Any, worker_id: uuid.UUID, request: 
             "The harness/runner was too slow — this is NOT the product losing a "
             "recorded result."
         )
+    if raised is not None:
+        raise raised
     return result
 
 
