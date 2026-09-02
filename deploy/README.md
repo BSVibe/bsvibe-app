@@ -245,6 +245,19 @@ BSVIBE_LOCAL_BACKEND_PORT=8701 BSVIBE_LOCAL_PWA_PORT=3701 \
   docker compose -f deploy/compose.yaml up -d
 ```
 
+Two guards cover this, and they cover different things:
+
+| Guard | Runs | Sees |
+| --- | --- | --- |
+| `tests/deploy/test_local_publish_ports_are_pinned.py` | CI (every PR) | the compose **text** — that each mapping is `${VAR:-default}` with the right default |
+| `_infra/scripts/e2e-live-nightly.sh` | nightly, on a host with docker | what `docker compose config` actually **renders**, with defaults AND with overrides |
+
+CI cannot run the second one — the verification sandbox has no docker binary —
+so a change in how compose resolves `${VAR:-default}` is invisible to the text
+guard alone. And the rendering check needs *both* of its directions: reverting
+a mapping to a hardcoded `"8700:8000"` still renders 8700 by default, so only
+the override control notices the parameterization is gone.
+
 **A 200 from `curl localhost:8700/api/health` does not prove your stack
 answered it** — any process bound to that host port does, including a prod
 stack that was already running before you brought yours up, or one that
