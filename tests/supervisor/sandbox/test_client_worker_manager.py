@@ -78,6 +78,37 @@ async def _seed_worker(
 _FAKE_WORKER_BUDGET_S = 60.0
 
 
+def _attribute_a_late_worker(
+    progress: dict[str, float], *, started: float, gave_up_at: float
+) -> None:
+    """Raise a HARNESS-faced failure when the fake worker did not record in time.
+
+    Split out as a pure function ON PURPOSE. This discriminator has been wrong
+    three times — it ran only on the return path (missed the RAISING calls), then
+    it asked "is ``recorded_at`` present" instead of "was it in time" (a late
+    record still lands in ``progress``, because ``_worker_then`` awaits the worker
+    afterwards) — and each version shipped untested, because it could only be
+    exercised through a 70-90 s end-to-end timeout. Now it is a function with a
+    clock as an argument, and the three cases are pinned in microseconds.
+    """
+    recorded_at = progress.get("recorded_at")
+    if recorded_at is not None and recorded_at <= gave_up_at:
+        return  # the worker kept up — whatever failed, it was not this
+    seen_at = progress.get("seen_at")
+    when = (
+        "never"
+        if recorded_at is None
+        else "only at +%.1fs, AFTER the product gave up" % (recorded_at - started)
+    )
+    raise AssertionError(
+        f"the exec side stopped waiting after {gave_up_at - started:.1f}s while the fake "
+        f"worker had not recorded a result in time (recorded: {when}; "
+        f"saw the task: {'yes, +%.1fs' % (seen_at - started) if seen_at else 'never'}). "
+        "The harness/runner was too slow — this is NOT the product losing a "
+        "recorded result."
+    )
+
+
 async def _worker_then(redis: Any, factory: Any, worker_id: uuid.UUID, request: Any) -> Any:
     """Start the fake worker FIRST, let it reach its ``xread``, then issue *request*.
 
@@ -106,6 +137,11 @@ async def _worker_then(redis: Any, factory: Any, worker_id: uuid.UUID, request: 
         # skipped it entirely and the harness's failure went on wearing the
         # product's face. Catch both, attribute, then re-raise unchanged.
         raised = exc
+    # WHEN the product stopped waiting. Everything below compares against this,
+    # not against "eventually": a worker that records AFTER this instant did not
+    # help, and counting it as help is what made this attribution silent on the
+    # occurrence it was built for (PR #877 CI).
+    gave_up_at = asyncio.get_running_loop().time()
     # Let the worker finish its own task — it must never be left pending, which
     # would leak into the next test. Its OWN loud failure ("saw no exec task")
     # wins over everything below: that is a more specific diagnosis.
@@ -117,26 +153,22 @@ async def _worker_then(redis: Any, factory: Any, worker_id: uuid.UUID, request: 
     # change). The discriminator is whether this worker had finished RECORDING
     # by the time the product stopped waiting:
     #
-    #   recorded_at MISSING → the runner was too slow; the product waited
-    #     honestly and there was nothing to see. A HARNESS failure, and it must
-    #     say so in its own voice rather than let the product take the blame.
-    #   recorded_at PRESENT → the result was committed and the awaiter's polls
+    #   recorded_at MISSING **or LATER than ``gave_up_at``** → the runner was too
+    #     slow; the product waited honestly and there was nothing to see YET. A
+    #     HARNESS failure, and it must say so in its own voice rather than let the
+    #     product take the blame. The "or later" half is load-bearing: ``await
+    #     worker`` below lets the worker finish, so a LATE record still lands in
+    #     ``progress`` — asking only "is it there" made this silent on exactly the
+    #     occurrence it was built for (PR #877 CI: ``assert None == 0`` with no
+    #     attribution). Compare TIMES, not presence.
+    #   recorded_at BEFORE the product gave up → the result was committed and the awaiter's polls
     #     still never saw it. That is the product-side gap ``TaskTimeout``'s
     #     docstring located at PR #828 and did not close — and the test's own
     #     assertion is then the RIGHT failure to see.
     #
     # Only the first case is claimed here. The second is deliberately left to
     # fail on the real assertion, because that one IS the product.
-    if "recorded_at" not in progress:
-        elapsed = asyncio.get_running_loop().time() - started
-        seen_at = progress.get("seen_at")
-        raise AssertionError(
-            f"the exec side stopped waiting after {elapsed:.1f}s while the fake worker "
-            f"had not yet recorded a result "
-            f"(saw the task: {'yes, +%.1fs' % (seen_at - started) if seen_at else 'never'}). "
-            "The harness/runner was too slow — this is NOT the product losing a "
-            "recorded result."
-        )
+    _attribute_a_late_worker(progress, started=started, gave_up_at=gave_up_at)
     if raised is not None:
         raise raised
     return result
@@ -593,3 +625,30 @@ async def test_map_result_reads_the_workers_actual_timeout_message() -> None:
 
     assert result.timed_out is True
     assert result.exit_code is None
+
+
+# ---------------------------------------------------------------------------
+# The discriminator itself — pinned, because it was wrong three times untested
+# ---------------------------------------------------------------------------
+
+
+def test_a_worker_that_recorded_in_time_is_not_blamed() -> None:
+    """It kept up — whatever failed, the harness did not. Without this the
+    attribution could degenerate into blaming the harness for everything, which
+    would hide a real product failure behind a harness message."""
+    _attribute_a_late_worker({"seen_at": 1.0, "recorded_at": 2.0}, started=0.0, gave_up_at=70.0)
+
+
+def test_a_worker_that_recorded_too_late_is_named() -> None:
+    """The shape CI actually hits (PR #877): the worker DOES record — just after
+    the product stopped waiting. ``_worker_then`` awaits the worker afterwards, so
+    the late value lands in ``progress`` and a presence-only check stays silent."""
+    with pytest.raises(AssertionError, match="AFTER the product gave up"):
+        _attribute_a_late_worker(
+            {"seen_at": 1.0, "recorded_at": 75.0}, started=0.0, gave_up_at=70.0
+        )
+
+
+def test_a_worker_that_never_recorded_is_named() -> None:
+    with pytest.raises(AssertionError, match="recorded: never"):
+        _attribute_a_late_worker({"seen_at": 1.0}, started=0.0, gave_up_at=70.0)
