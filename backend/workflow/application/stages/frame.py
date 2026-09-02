@@ -203,7 +203,7 @@ def _system_prompt(vocabulary: list[StageTerm]) -> str:
     when there is one."""
     if not vocabulary:
         return _FRAME_SYSTEM_PROMPT
-    lines = [f"- {term.label}: {term.description}" for term in vocabulary]
+    lines = [f"- {term.label}" for term in vocabulary]
     return _FRAME_SYSTEM_PROMPT + _STEPS_INSTRUCTION + "\n".join(lines)
 
 
@@ -281,7 +281,7 @@ def _build_user_prompt(text: str, loader: SkillLoader, vocabulary: list[StageTer
     lines = [f"Request:\n{text or '(empty request)'}", ""]
     if vocabulary:
         lines.append("Stages this workspace distinguishes (a set, not an order):")
-        lines.extend(f"- {term.label}: {term.description}" for term in vocabulary)
+        lines.extend(f"- {term.label}" for term in vocabulary)
         lines.append("")
     lines.append("Skill catalog:")
     skills = list(loader.registry.values())[:_FRAME_MAX_SKILLS]
