@@ -88,25 +88,63 @@ async def _worker_then(redis: Any, factory: Any, worker_id: uuid.UUID, request: 
     time and then did not (CI 2026-08-25). Ordering it explicitly removes the
     question rather than re-tuning a timeout around it.
     """
-    worker = asyncio.create_task(_run_one_exec_task(redis, factory, worker_id))
+    progress: dict[str, float] = {}
+    worker = asyncio.create_task(_run_one_exec_task(redis, factory, worker_id, progress))
     # One event-loop turn is enough to run the worker up to its first await;
     # sleep(0) yields without adding wall-clock to every test that uses this.
     await asyncio.sleep(0)
+    started = asyncio.get_running_loop().time()
     try:
-        return await request
+        result = await request
     finally:
         # The request finished (or raised). Let the worker finish its own task —
         # it must never be left pending, which would leak into the next test.
         await worker
+    # The exec side returned. If it gave up (its own timeout) there are exactly
+    # two shapes left, and until now NOTHING recorded which one it was — both
+    # surfaced as the product's "exec timed out … last status 'dispatched'" and
+    # then as a bare ``assert None == 0`` (CI 2026-09-02, PR #873, a docs-only
+    # change). The discriminator is whether this worker had finished RECORDING
+    # by the time the product stopped waiting:
+    #
+    #   recorded_at MISSING → the runner was too slow; the product waited
+    #     honestly and there was nothing to see. A HARNESS failure, and it must
+    #     say so in its own voice rather than let the product take the blame.
+    #   recorded_at PRESENT → the result was committed and the awaiter's polls
+    #     still never saw it. That is the product-side gap ``TaskTimeout``'s
+    #     docstring located at PR #828 and did not close — and the test's own
+    #     assertion is then the RIGHT failure to see.
+    #
+    # Only the first case is claimed here. The second is deliberately left to
+    # fail on the real assertion, because that one IS the product.
+    if "recorded_at" not in progress:
+        elapsed = asyncio.get_running_loop().time() - started
+        seen_at = progress.get("seen_at")
+        raise AssertionError(
+            f"the exec side stopped waiting after {elapsed:.1f}s while the fake worker "
+            f"had not yet recorded a result "
+            f"(saw the task: {'yes, +%.1fs' % (seen_at - started) if seen_at else 'never'}). "
+            "The harness/runner was too slow — this is NOT the product losing a "
+            "recorded result."
+        )
+    return result
 
 
-async def _run_one_exec_task(redis: Any, factory: Any, worker_id: uuid.UUID) -> None:
+async def _run_one_exec_task(
+    redis: Any, factory: Any, worker_id: uuid.UUID, progress: dict[str, float] | None = None
+) -> None:
     """Simulate A/2's worker for exactly one ``exec`` task on ``worker_id``'s stream.
 
     Blocks (polling the stream) until a task appears, runs it in ``workspace_dir``
     with a combined stdout/stderr tail, and reports the exit code — mirroring
     ``backend/executors/worker/main.py::_handle_exec_task``.
+
+    ``progress`` is stamped as this worker passes each milestone, so
+    :func:`_worker_then` can tell WHICH SIDE was late when the exec times out.
+    Without it the two remaining failure shapes are indistinguishable, and the
+    one that reaches CI wears the product's face either way.
     """
+    marks = progress if progress is not None else {}
     stream = dispatch.worker_stream(worker_id)
     last_id = "0"
     # Poll to a WALL-CLOCK deadline, not a fixed iteration count. 200 iterations
@@ -131,6 +169,7 @@ async def _run_one_exec_task(redis: Any, factory: Any, worker_id: uuid.UUID) -> 
                 if fields.get("action") != "exec":
                     continue
                 seen.append(str(fields.get("action")))
+                marks["seen_at"] = asyncio.get_running_loop().time()
                 task_id = uuid.UUID(fields["task_id"])
                 command = fields["prompt"]
                 cwd = fields.get("workspace_dir") or "."
@@ -152,6 +191,7 @@ async def _run_one_exec_task(redis: Any, factory: Any, worker_id: uuid.UUID) -> 
                         error_message=None if exit_code == 0 else f"exit {exit_code}",
                     )
                     await s.commit()
+                marks["recorded_at"] = asyncio.get_running_loop().time()
                 return
     # The budget elapsed without an ``exec`` task ever arriving. Returning here
     # — which is what this helper used to do — is the WORST possible outcome:
