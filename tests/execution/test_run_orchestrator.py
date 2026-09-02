@@ -2449,3 +2449,159 @@ async def test_a_non_product_run_reports_unknown_not_empty() -> None:
     from backend.workflow.application._verified_summary import _changed_paths_for
 
     assert await _changed_paths_for(SimpleNamespace(product_id=None)) is None  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------
+# A derived-gate check that COULD NOT RUN vanished from the summary
+# --------------------------------------------------------------------------
+#
+# ``derived_gate.passed`` is ``not any(status == "failed")`` — an ``unavailable``
+# command (exit 127, the tool is not on that machine) therefore does NOT fail the
+# gate, and the run reaches PROVED. The summary sentence then counts only the
+# PASSED commands, so a gate of 5 whose 2 could not run reads exactly like a gate
+# of 3 that all passed. Nothing anywhere says two checks were skipped.
+#
+# Measured (2026-09-02) on the shape prod produces: a five-command gate with two
+# ``unavailable`` rendered "검증: 3개 확인 통과." / "Verified: 3 checks passed
+# (tests, lint, types)." — true, and incomplete in the one direction that
+# matters. The founder cannot tell a machine that ran everything from one that
+# was missing half its toolchain, and the run's own retrospective note for
+# `7c1bb4a2` was precisely "this sandbox has no docker binary".
+#
+# The materials were already in the record: every command carries
+# ``status ∈ passed|failed|unavailable``. Only the sentence dropped them.
+
+
+def _unavailable_gate_verdict() -> dict:
+    """A gate as prod produces it: some checks ran and passed, some could not run
+    here at all. ``passed`` is True because nothing FAILED."""
+    return {
+        "gate_applicable": True,
+        "command_results": [],
+        "derived_gate": {
+            "origin": "derived",
+            "applicable": True,
+            "passed": True,
+            "commands": [
+                {"command": "uv run pytest tests/deploy/", "kind": "test", "status": "passed"},
+                {"command": "uv run ruff check deploy/", "kind": "quality", "status": "passed"},
+                {"command": "uv run mypy backend/", "kind": "quality", "status": "passed"},
+                {
+                    "command": "docker compose -f deploy/compose.yaml config",
+                    "kind": "surface",
+                    "status": "unavailable",
+                    "exit_code": 127,
+                },
+                {
+                    "command": "uv run lint-imports",
+                    "kind": "quality",
+                    "status": "unavailable",
+                    "exit_code": 127,
+                },
+            ],
+        },
+        "judge": {"passed": True},
+    }
+
+
+def test_summary_names_the_gate_checks_that_could_not_run_en() -> None:
+    """A check that could not run must not be invisible: the summary says how many
+    could not run, WHICH they were, and why (the tool was missing) — so a reader
+    cannot mistake it for a gate that ran end to end."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"intent_text": "Parameterize the local publish ports."})
+    summary = _compose_verified_summary(
+        run,  # type: ignore[arg-type]
+        "narration",
+        ["deploy/compose.yaml"],
+        _unavailable_gate_verdict(),
+    )
+    assert "Verified: 3 checks passed" in summary  # unavailable is NOT a pass
+    assert "2" in summary
+    assert "could not run" in summary
+    # It must name them — "which ones" is the whole value.
+    assert "uv run lint-imports" in summary
+    assert "docker compose -f deploy/compose.yaml config" in summary
+
+
+def test_summary_names_the_gate_checks_that_could_not_run_ko() -> None:
+    """KO localization of the same proposition, with no English chrome leaking
+    into a Korean workspace's delivered summary."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _compose_verified_summary
+
+    run = SimpleNamespace(payload={"frame": {"summary_title": "로컬 포트 파라미터화"}})
+    summary = _compose_verified_summary(
+        run,  # type: ignore[arg-type]
+        "narration",
+        ["deploy/compose.yaml"],
+        _unavailable_gate_verdict(),
+        language="ko",
+    )
+    assert "검증: 3개 확인 통과" in summary
+    assert "uv run lint-imports" in summary
+    assert "docker compose -f deploy/compose.yaml config" in summary
+    assert "could not run" not in summary
+    assert "Verified" not in summary
+
+
+def test_summary_stays_silent_when_every_gate_check_ran() -> None:
+    """The CONTROL. Without it, an implementation that always appends a
+    "could not run" clause passes both tests above — and would then write a
+    falsehood onto every clean run. A gate whose commands ALL ran must gain
+    nothing."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _compose_verified_summary
+
+    verdict = _unavailable_gate_verdict()
+    for command in verdict["derived_gate"]["commands"]:
+        command["status"] = "passed"
+        command.pop("exit_code", None)
+
+    run = SimpleNamespace(payload={"frame": {"summary_title": "로컬 포트 파라미터화"}})
+    ko = _compose_verified_summary(
+        run,  # type: ignore[arg-type]
+        "narration",
+        ["deploy/compose.yaml"],
+        verdict,
+        language="ko",
+    )
+    en = _compose_verified_summary(
+        run,  # type: ignore[arg-type]
+        "narration",
+        ["deploy/compose.yaml"],
+        verdict,
+    )
+    assert "검증: 5개 확인 통과" in ko
+    assert "못 돌린" not in ko
+    assert "Verified: 5 checks passed" in en
+    assert "could not run" not in en
+
+
+def test_could_not_run_clause_reaches_the_phone_notification() -> None:
+    """``_shipped_detail`` lifts ONE line by its ``검증``/``Verified`` prefix. A
+    clause placed on a line of its own would be dropped there — the founder would
+    read "3개 확인 통과" on their phone and never learn two checks were skipped
+    (the same failure mode lesson #742 records for the weak-evidence sentence)."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application._verified_summary import _compose_verified_summary
+    from backend.workflow.domain.verified_deliverable import _shipped_detail
+
+    run = SimpleNamespace(payload={"frame": {"summary_title": "로컬 포트 파라미터화"}})
+    detail = _shipped_detail(
+        _compose_verified_summary(
+            run,  # type: ignore[arg-type]
+            "narration",
+            ["deploy/compose.yaml"],
+            _unavailable_gate_verdict(),
+            language="ko",
+        )
+    )
+    assert "3개 확인 통과" in detail
+    assert "uv run lint-imports" in detail

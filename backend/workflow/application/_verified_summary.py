@@ -60,16 +60,55 @@ def _gate_command_results(result: Mapping[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(gate, Mapping):
         return []
     return [
-        {"command": c.get("command"), "passed": c.get("status") == "passed"}
+        {
+            "command": c.get("command"),
+            "passed": c.get("status") == "passed",
+            # Carried, not collapsed into ``passed``: "ran and passed" and "was
+            # never able to run" are different claims and the founder is owed
+            # both. The sandbox ``command_results`` shape has no third state, so
+            # this key is simply absent there and reads as False.
+            "unavailable": c.get("status") == "unavailable",
+        }
         for c in gate.get("commands") or ()
         if isinstance(c, Mapping)
     ]
 
 
-def _gate_command_sentence(passed: list[Any], commands: list[Any], ko: bool) -> str:
-    """Single sentence summarising how many gate/declared commands passed."""
+def _could_not_run_clause(commands: list[Any], ko: bool) -> str:
+    """Name the gate checks that never ran, or "" when they all did.
+
+    ``derived_gate["passed"]`` is ``not any(status == "failed")``, so a command
+    whose tool is missing from that machine (exit 127 → ``unavailable``) does not
+    fail the gate and the run reaches PROVED. The count sentence beside this one
+    counts only PASSES, which meant a five-command gate with two unavailable read
+    EXACTLY like a three-command gate that ran end to end — true, and incomplete
+    in the one direction that matters. Measured 2026-09-02 on prod's own shape:
+    "검증: 3개 확인 통과." and not one word about the two that were skipped, while
+    that very run's retrospective note said "this sandbox has no docker binary".
+
+    So say the number, name them, and say WHY — a missing tool is not a failure,
+    and a reader who cannot tell the two apart will read a skipped check as a
+    broken one. Returns a fragment APPENDED to the count sentence rather than a
+    line of its own: ``_shipped_detail`` lifts a single line by its ``검증`` /
+    ``Verified`` prefix, so a clause on its own line never reaches the phone.
+    """
+    missing = [str(c.get("command") or "").strip() for c in commands if c.get("unavailable")]
+    missing = [c for c in missing if c]
+    if not missing:
+        return ""
+    listed = " · ".join(missing)
     if ko:
-        return f"검증: {len(passed)}개 확인 통과."
+        return f" 여기서 못 돌린 검사 {len(missing)}개(도구 없음): {listed}."
+    noun = "check" if len(missing) == 1 else "checks"
+    return f" {len(missing)} {noun} could not run here (tool missing): {listed}."
+
+
+def _gate_command_sentence(passed: list[Any], commands: list[Any], ko: bool) -> str:
+    """Single sentence summarising how many gate/declared commands passed — and,
+    when some could not run at all, which those were (:func:`_could_not_run_clause`)."""
+    could_not_run = _could_not_run_clause(commands, ko)
+    if ko:
+        return f"검증: {len(passed)}개 확인 통과.{could_not_run}"
     labels: list[str] = []
     for cmd in commands:
         text = str(cmd.get("command") or "").lower()
@@ -80,7 +119,7 @@ def _gate_command_sentence(passed: list[Any], commands: list[Any], ko: bool) -> 
     sentence = f"Verified: {len(passed)} {noun} passed"
     if labels:
         sentence += f" ({', '.join(labels)})"
-    return sentence + "."
+    return sentence + "." + could_not_run
 
 
 def _probe_sentence(matched_probes: list[Any], ko: bool) -> str:
