@@ -245,6 +245,39 @@ BSVIBE_LOCAL_BACKEND_PORT=8701 BSVIBE_LOCAL_PWA_PORT=3701 \
   docker compose -f deploy/compose.yaml up -d
 ```
 
+### The `compose.e2e-live.yaml` overlay — a third, disposable set of ports
+
+`deploy/compose.e2e-live.yaml` layers on top of `compose.yaml` for the
+**authenticated** browser E2E suite (`apps/pwa/e2e-live/`), which signs in
+with a real GoTrue account against a real backend. It publishes its own set
+of host ports, distinct from both the base stack above and the prod overlay
+(`compose.prod.yaml`, which does not publish postgres/redis at all — see §7):
+
+| Port | Env var | Default |
+| --- | --- | --- |
+| backend  | `BSVIBE_E2E_APP_PORT`   | `8710` |
+| postgres | `BSVIBE_E2E_PG_PORT`    | `5452` |
+| redis    | `BSVIBE_E2E_REDIS_PORT` | `6397` |
+| pwa      | — (`ports: !reset []`) | not published |
+
+**Why different ports, not the base stack's:** on the founder's Mac, host
+port `8700` is already held by the **production** stack. Since e2e-live logs
+in with a real account, connecting to the wrong stack does not fail loudly —
+**it succeeds**, against production data. The overlay moves every published
+port off the ones prod/local already own so a collision fails to bind
+instead of silently authenticating against the wrong backend. (`pwa` has no
+published port at all: Playwright's own `webServer` builds and serves the
+PWA under test, not the `pwa` compose service.)
+
+**All three stacks side by side** (host ports; `—` = not published):
+
+| Service  | base (`compose.yaml`) | prod (`+ compose.prod.yaml`) | e2e-live (`+ compose.e2e-live.yaml`) |
+| --- | --- | --- | --- |
+| backend  | `8700` | `8700` | `8710` |
+| postgres | `5442` | — | `5452` |
+| redis    | `6387` | — | `6397` |
+| pwa      | `3700` | `3700` | — |
+
 Two guards cover this, and they cover different things:
 
 | Guard | Runs | Sees |
