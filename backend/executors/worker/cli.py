@@ -32,7 +32,9 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
@@ -132,16 +134,137 @@ def _cmd_logout(args: argparse.Namespace) -> int:  # noqa: ARG001
     return 0
 
 
+# ---------------------------------------------------------------------------
+# ``bsvibe status`` — 세션 판정
+#
+# 실측(2026-09-02): status 는 ``expires_at`` 을 **출력만** 하고 지금 시각과
+# 비교하지 않았다. 17시간 전에 죽은 토큰에 "Signed in" + exit 0 이 나왔고, 바로
+# 다음 명령이 HTTP 401(JWKS resolution failed)로 죽었다. 판정은 반드시 시각
+# 비교에서 나온다 — 문구만 바꾸면 같은 거짓말을 더 예쁘게 할 뿐이다.
+#
+# 상태는 네 가지이고 exit code 와 1:1 이다. 스크립트가 ``bsvibe status`` 로
+# 게이트를 걸 수 있어야 하므로 "죽은 세션"이 0 이어서는 안 된다.
+class SessionState(IntEnum):
+    """``bsvibe status`` 의 판정. **값이 곧 exit code** 다 (단일 출처)."""
+
+    #: 아직 유효하다. ``expires_at`` 이 ``None`` 이라 만료를 **증명할 수 없는**
+    #: 경우도 여기다 — 모르는 것과 죽은 것은 다르므로 만료로 단정하지 않고,
+    #: 대신 모른다고 말한다.
+    SIGNED_IN = 0
+    #: 자격증명 자체가 없다. 기존 동작.
+    NOT_SIGNED_IN = 1
+    #: 만료 + ``refresh_token`` 없음 → 사람이 브라우저 앞에 앉는 수밖에 없다.
+    EXPIRED_REAUTH = 2
+    #: 만료 + ``refresh_token`` 있음 → 무인 갱신을 붙일 여지가 있다.
+    #:
+    #: ⚠️ 2 와 3 을 가르는 이유는 자동화다. 다만 오늘 이 저장소에는 **호스트
+    #: 자격증명의 refresh_token 을 실제로 교환하는 명령이 없다**. 그래서 3 의
+    #: 안내도 지금은 ``bsvibe login`` 을 가리킨다 — 없는 자동 갱신을 있다고
+    #: 말하지 않는다. 갱신 명령이 생기면 이 상태의 안내 문구만 바뀐다.
+    EXPIRED_REFRESHABLE = 3
+
+
+@dataclass(frozen=True)
+class SessionStatus:
+    """판정 + 사람이 읽을 줄들. 렌더링과 분리해 두어야 시각 비교를 테스트한다."""
+
+    state: SessionState
+    lines: tuple[str, ...]
+
+    @property
+    def exit_code(self) -> int:
+        return int(self.state)
+
+
+def _humanize(seconds: float) -> str:
+    """``5400`` → ``"1h 30m"``. 초 단위 숫자는 사람이 못 읽는다."""
+    total = int(abs(seconds))
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m {secs}s"
+
+
+def evaluate_session(
+    creds: HostCredentials | None,
+    *,
+    now: float,
+    detail: str | None = None,
+) -> SessionStatus:
+    """``creds`` 를 ``now`` 와 대조해 상태를 판정한다 — 순수 함수.
+
+    ``creds is None`` 은 "자격증명 없음"이고, ``detail`` 은 그 이유(어느 경로를
+    봤는지)를 그대로 실어 주기 위한 것이다.
+    """
+    if creds is None:
+        lines = ["Not signed in." if not detail else f"Not signed in: {detail}"]
+        lines.append("Run `bsvibe login` to sign in.")
+        return SessionStatus(SessionState.NOT_SIGNED_IN, tuple(lines))
+
+    issuer = creds.issuer or "(unknown)"
+
+    if creds.expires_at is None:
+        # 모른다 ≠ 죽었다. 초록불을 주되, 모른다는 사실을 숨기지 않는다.
+        return SessionStatus(
+            SessionState.SIGNED_IN,
+            (
+                f"Signed in. issuer={issuer}",
+                "access token expiry unknown (credentials carry no expires_at) — "
+                "cannot tell how long it is still good for.",
+            ),
+        )
+
+    remaining = creds.expires_at - now
+    if remaining > 0:
+        return SessionStatus(
+            SessionState.SIGNED_IN,
+            (
+                f"Signed in. issuer={issuer}",
+                f"access token valid for {_humanize(remaining)} (expires_at={creds.expires_at})",
+            ),
+        )
+
+    head = (
+        f"Session EXPIRED {_humanize(remaining)} ago "
+        f"(expires_at={creds.expires_at}). issuer={issuer}"
+    )
+    if creds.refresh_token:
+        return SessionStatus(
+            SessionState.EXPIRED_REFRESHABLE,
+            (
+                head,
+                "A refresh token is stored, so the session can be renewed at the "
+                "issuer — but no bsvibe command redeems it yet.",
+                "Run `bsvibe login` again (add --manual or --device on a host with no browser).",
+            ),
+        )
+    return SessionStatus(
+        SessionState.EXPIRED_REAUTH,
+        (
+            head,
+            "No refresh token is stored — this session cannot be renewed.",
+            "Run `bsvibe login` again (add --manual or --device on a host with no browser).",
+        ),
+    )
+
+
 def _cmd_status(args: argparse.Namespace) -> int:  # noqa: ARG001
+    creds: HostCredentials | None
+    detail: str | None
     try:
-        creds = load_host_credentials()
+        creds, detail = load_host_credentials(), None
     except CredentialsNotFound as exc:
-        print(f"Not signed in: {exc}", file=sys.stderr)
-        return 1
-    print(f"Signed in. issuer={creds.issuer or '(unknown)'}", file=sys.stderr)
-    if creds.expires_at:
-        print(f"access token expires_at={creds.expires_at}", file=sys.stderr)
-    return 0
+        creds, detail = None, str(exc)
+    status = evaluate_session(creds, now=time.time(), detail=detail)
+    for line in status.lines:
+        print(line, file=sys.stderr)
+    return status.exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +607,13 @@ def build_bsvibe_parser() -> argparse.ArgumentParser:
     p_logout = sub.add_parser("logout", help="Clear cached credentials.")
     p_logout.set_defaults(func=_cmd_logout)
 
-    p_status = sub.add_parser("status", help="Show sign-in status.")
+    p_status = sub.add_parser(
+        "status",
+        help=(
+            "Show sign-in status. Exit: 0 signed in, 1 not signed in, "
+            "2 expired (re-login required), 3 expired (refresh token present)."
+        ),
+    )
     p_status.set_defaults(func=_cmd_status)
 
     _add_pat_parser(sub)
@@ -838,8 +967,11 @@ def run_bsvibe_worker_cli(argv: Sequence[str] | None = None) -> int:
 
 
 __all__ = [
+    "SessionState",
+    "SessionStatus",
     "build_bsvibe_parser",
     "build_bsvibe_worker_parser",
+    "evaluate_session",
     "run_bsvibe_cli",
     "run_bsvibe_worker_cli",
 ]
