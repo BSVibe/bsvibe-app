@@ -13,6 +13,18 @@ the wrong default passes a count-only check just as easily as the right one.
 purpose. The verification sandbox has no docker binary, so a gate shelling out
 to the daemon fails there for reasons unrelated to the proposition — it would
 be red whether the ports were right or wrong, which is no signal at all.
+
+⚠️ So this guard is HALF of a pair, and it is the half that cannot see what
+compose actually renders: if compose ever changed how it resolves
+``${VAR:-default}``, every assertion here would still pass. The other half runs
+where a docker daemon exists — ``_infra/scripts/e2e-live-nightly.sh``, nightly
+on the Mac Mini — and diffs ``docker compose config`` output in BOTH directions.
+
+Both directions are load-bearing, which is not obvious. Measured 2026-09-02 by
+reverting the parameterization to a hardcoded ``"8700:8000"``: the *default*
+rendering still came out 8700 and passed, and only the OVERRIDE control caught
+it (8700 where 18700 was asked for). A rendering check that only pins defaults
+would go green on a parameterization that had stopped existing.
 """
 
 from __future__ import annotations
