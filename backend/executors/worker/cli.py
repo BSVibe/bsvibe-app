@@ -66,6 +66,7 @@ from backend.executors.worker.login import (
     run_login,
     run_login_device,
     run_login_manual,
+    run_refresh,
 )
 from backend.executors.worker.main import _amain, register
 from backend.executors.worker.service import (
@@ -115,6 +116,33 @@ def _cmd_login(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     _ = result  # keep linters happy — payload is the side-effect (file write)
+    return 0
+
+
+def _cmd_refresh(args: argparse.Namespace) -> int:  # noqa: ARG001
+    """Renew the stored session from its refresh token — no browser, no re-auth.
+
+    Exit codes mirror ``status`` so a script can chain them: 0 renewed, 1 could
+    not. The failure prints the issuer's own reason (already rotated / expired /
+    revoked), because which one it is decides whether `bsvibe login` is next.
+    """
+    try:
+        fresh = run_refresh()
+    except CredentialsNotFound as exc:
+        print(f"not signed in: {exc}", file=sys.stderr)
+        print("Run `bsvibe login` to sign in.", file=sys.stderr)
+        return 1
+    except LoginError as exc:
+        print(f"refresh failed: {exc}", file=sys.stderr)
+        return 1
+    if fresh.expires_at is not None:
+        print(
+            f"Session renewed. access token valid for "
+            f"{_humanize(fresh.expires_at - time.time())} (expires_at={fresh.expires_at})",
+            file=sys.stderr,
+        )
+    else:
+        print("Session renewed (issuer returned no expiry).", file=sys.stderr)
     return 0
 
 
@@ -235,13 +263,28 @@ def evaluate_session(
         f"(expires_at={creds.expires_at}). issuer={issuer}"
     )
     if creds.refresh_token:
+        # 갱신 가능성은 refresh_token 만으로 정해지지 않는다. 이슈어의 토큰
+        # 엔드포인트는 ``client_id`` 를 필수로 받고 부모 토큰의 클라이언트와
+        # 대조하는데, 로그인은 매번 **익명 DCR** 로 새 client_id 를 받는다. 그
+        # 값이 없는 자격증명(= 이 필드를 저장하기 전에 쓰인 파일)은 그랜트를
+        # 만들 수조차 없다. 그러니 `bsvibe refresh` 를 무조건 권하면 안 된다 —
+        # 그건 읽는 사람에게 **실패할 명령**을 시키는 것이고, #871 이 지우려던
+        # 바로 그 종류의 거짓말이다.
+        renew = (
+            "Run `bsvibe refresh` to renew it without signing in again."
+            if creds.client_id
+            else (
+                "These credentials predate `bsvibe refresh` (no client_id stored), so "
+                "the grant cannot be formed here. Run `bsvibe login` once — after that, "
+                "`bsvibe refresh` works."
+            )
+        )
         return SessionStatus(
             SessionState.EXPIRED_REFRESHABLE,
             (
                 head,
-                "A refresh token is stored, so the session can be renewed at the "
-                "issuer — but no bsvibe command redeems it yet.",
-                "Run `bsvibe login` again (add --manual or --device on a host with no browser).",
+                "A refresh token is stored, so the session can be renewed at the issuer.",
+                renew,
             ),
         )
     return SessionStatus(
@@ -603,6 +646,12 @@ def build_bsvibe_parser() -> argparse.ArgumentParser:
         ),
     )
     p_login.set_defaults(func=_cmd_login)
+
+    p_refresh = sub.add_parser(
+        "refresh",
+        help="Renew the stored session from its refresh token (no browser).",
+    )
+    p_refresh.set_defaults(func=_cmd_refresh)
 
     p_logout = sub.add_parser("logout", help="Clear cached credentials.")
     p_logout.set_defaults(func=_cmd_logout)

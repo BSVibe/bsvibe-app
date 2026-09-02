@@ -47,7 +47,11 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import structlog
 
-from backend.executors.worker.credentials import HostCredentials, save_host_credentials
+from backend.executors.worker.credentials import (
+    HostCredentials,
+    load_host_credentials,
+    save_host_credentials,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -248,8 +252,16 @@ def _prepare_login(
     )
 
 
-def _result_from_payload(payload: dict[str, Any], *, issuer: str) -> LoginResult:
-    """Build a :class:`LoginResult` from a token-endpoint payload."""
+def _result_from_payload(
+    payload: dict[str, Any], *, issuer: str, client_id: str | None = None
+) -> LoginResult:
+    """Build a :class:`LoginResult` from a token-endpoint payload.
+
+    ``client_id`` is persisted with the tokens because a refresh grant cannot
+    be formed without it (the token endpoint requires the field and matches it
+    against the parent token's client). It is not a secret — it is the public
+    identifier of the anonymous DCR client this sign-in registered — but it is
+    per-sign-in, so nothing can reconstruct it later."""
     expires_in = int(payload.get("expires_in") or 0)
     expires_at = int(time.time()) + expires_in if expires_in else None
     creds = HostCredentials(
@@ -257,6 +269,7 @@ def _result_from_payload(payload: dict[str, Any], *, issuer: str) -> LoginResult
         refresh_token=payload.get("refresh_token"),
         expires_at=expires_at,
         issuer=issuer,
+        client_id=client_id,
     )
     return LoginResult(credentials=creds)
 
@@ -352,7 +365,7 @@ def perform_login(
         if own_client:
             client.close()
 
-    return _result_from_payload(payload, issuer=issuer)
+    return _result_from_payload(payload, issuer=issuer, client_id=ctx.client_id)
 
 
 def perform_login_manual(
@@ -398,7 +411,80 @@ def perform_login_manual(
         if own_client:
             client.close()
 
-    return _result_from_payload(payload, issuer=issuer)
+    return _result_from_payload(payload, issuer=issuer, client_id=ctx.client_id)
+
+
+def refresh_session(
+    creds: HostCredentials, *, httpx_client: httpx.Client | None = None
+) -> HostCredentials:
+    """Redeem the stored refresh token for a fresh pair — no browser, no re-auth.
+
+    Lives here rather than in its own module because this is the SAME token
+    endpoint ``_exchange_code`` posts to; splitting it would give the one
+    endpoint two clients, two timeouts and two error surfaces (the CLI's
+    ``_api_transport`` docstring records that near-miss on the API side).
+
+    Fails BEFORE any request when the credential cannot form a grant — no
+    ``refresh_token``, or no ``client_id`` (a file written before client_id was
+    persisted). Posting a grant we already know is malformed only buys an opaque
+    400 and hides the real reason from the founder.
+
+    Returns the ROTATED credential; the caller decides whether to persist it.
+    Deliberately does NOT write: a rejected refresh must leave the file exactly
+    as it was, because overwriting on failure turns a recoverable state into a
+    lost one. The server rotates single-use, so the returned ``refresh_token``
+    is a NEW one and the old is spent.
+    """
+    if not creds.refresh_token:
+        raise LoginError(
+            "no refresh token is stored for this session — it cannot be renewed. "
+            "Run `bsvibe login` again."
+        )
+    if not creds.client_id:
+        raise LoginError(
+            "these credentials carry no client_id, so the refresh grant cannot be "
+            "formed (the issuer matches it against the token's own client). This "
+            "file predates `bsvibe refresh`. Run `bsvibe login` once; after that "
+            "refreshing works."
+        )
+    issuer = (creds.issuer or "").rstrip("/")
+    if not issuer:
+        raise LoginError("credentials carry no issuer — cannot tell where to refresh.")
+
+    own = httpx_client is None
+    client = httpx_client if httpx_client is not None else httpx.Client()
+    try:
+        res = client.post(
+            f"{issuer}/api/oauth/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": creds.refresh_token,
+                "client_id": creds.client_id,
+            },
+            timeout=30.0,
+        )
+    finally:
+        if own:
+            client.close()
+
+    if res.status_code >= 400:
+        # The issuer's own words: a refresh can be refused because it was already
+        # rotated (single-use), expired, or its parent was revoked — and which one
+        # decides whether re-login is the answer.
+        raise LoginError(f"refresh rejected: {res.status_code} {res.text}")
+    payload = res.json()
+    if "access_token" not in payload:
+        raise LoginError(f"refresh returned no access_token: {payload}")
+    return _result_from_payload(
+        payload, issuer=creds.issuer or issuer, client_id=creds.client_id
+    ).credentials
+
+
+def run_refresh() -> HostCredentials:
+    """Top-level entry point — refresh the stored session and persist it."""
+    fresh = refresh_session(load_host_credentials())
+    save_host_credentials(fresh)
+    return fresh
 
 
 def run_login(*, issuer: str) -> LoginResult:
@@ -488,7 +574,7 @@ def poll_device_token(
             },
         )
         if resp.status_code == 200:
-            return _result_from_payload(resp.json(), issuer=issuer)
+            return _result_from_payload(resp.json(), issuer=issuer, client_id=DEVICE_CLIENT_ID)
 
         try:
             error = str(resp.json().get("error") or "")
@@ -568,6 +654,8 @@ __all__ = [
     "LoginResult",
     "make_pkce_pair",
     "parse_callback_input",
+    "refresh_session",
+    "run_refresh",
     "perform_login",
     "perform_login_device",
     "perform_login_manual",

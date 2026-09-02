@@ -56,6 +56,14 @@ class HostCredentials:
     refresh_token: str | None
     expires_at: int | None
     issuer: str | None
+    #: The DCR client this session was minted for. REQUIRED to redeem
+    #: ``refresh_token``: the token endpoint takes ``client_id`` as a mandatory
+    #: form field and ``rotate_refresh_token`` refuses the grant when it does
+    #: not match the parent token's client. Login registers an ANONYMOUS client
+    #: per sign-in, so there is no static value to fall back on — an older
+    #: credential file simply has none, and ``bsvibe refresh`` must say so
+    #: rather than post a grant that cannot be granted.
+    client_id: str | None = None
 
 
 def default_credentials_path() -> Path:
@@ -95,6 +103,7 @@ def load_host_credentials(path: Path | None = None) -> HostCredentials:
                 refresh_token=payload.get("refresh_token") or None,
                 expires_at=payload.get("expires_at"),
                 issuer=payload.get("issuer") or None,
+                client_id=payload.get("client_id") or None,
             )
 
     if env_token:
@@ -119,6 +128,8 @@ def save_host_credentials(creds: HostCredentials, path: Path | None = None) -> P
         payload["expires_at"] = creds.expires_at
     if creds.issuer:
         payload["issuer"] = creds.issuer
+    if creds.client_id:
+        payload["client_id"] = creds.client_id
     file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     try:
         file_path.chmod(0o600)
