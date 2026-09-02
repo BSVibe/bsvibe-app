@@ -9,6 +9,7 @@ real browser.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -213,7 +214,15 @@ def test_status_signed_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def test_status_signed_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cred = tmp_path / "creds.json"
     cred.write_text(
-        json.dumps({"access_token": "A", "issuer": "https://auth.test", "expires_at": 1234}),
+        # 만료 시각은 미래여야 한다. 예전 이 테스트는 expires_at=1234(1970년)에
+        # rc == 0 을 걸어, 죽은 토큰에 초록불을 주는 결함을 그대로 고정했다.
+        json.dumps(
+            {
+                "access_token": "A",
+                "issuer": "https://auth.test",
+                "expires_at": int(time.time()) + 3600,
+            }
+        ),
         encoding="utf-8",
     )
     from backend.executors.worker import credentials as cred_mod
@@ -221,6 +230,31 @@ def test_status_signed_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(cred_mod, "default_credentials_path", lambda: cred)
     rc = cli_mod.run_bsvibe_cli(["status"])
     assert rc == 0
+
+
+def test_status_expired_credentials_are_not_signed_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """실측된 결함: 17시간 전에 죽은 토큰이 "Signed in" + exit 0 이었다."""
+    cred = tmp_path / "creds.json"
+    cred.write_text(
+        json.dumps(
+            {
+                "access_token": "A",
+                "issuer": "https://auth.test",
+                "expires_at": int(time.time()) - 3600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    from backend.executors.worker import credentials as cred_mod
+
+    monkeypatch.setattr(cred_mod, "default_credentials_path", lambda: cred)
+    rc = cli_mod.run_bsvibe_cli(["status"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "EXPIRED" in err
+    assert "bsvibe login" in err
 
 
 def test_worker_register_calls_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
