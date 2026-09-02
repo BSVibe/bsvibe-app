@@ -83,23 +83,23 @@ class TestVocabularyComesFromTheFoundersRules:
             _rule(name="default → claude sonnet", conditions=[], is_default=True, priority=100),
         ]
         assert derive_stage_vocabulary(rules) == [
-            StageTerm(label="design", description="design stage → claude opus"),
-            StageTerm(label="impl", description="impl stage → claude sonnet"),
+            StageTerm(label="design"),
+            StageTerm(label="impl"),
         ]
 
-    def test_the_founders_own_words_describe_the_stage(self) -> None:
-        """``source_text`` 가 있으면 그게 설명이다 — 프레이머가 읽는 것은
-        컴파일된 조건이 아니라 형님이 쓴 문장이다."""
+    def test_no_rule_prose_enters_the_vocabulary(self) -> None:
+        """룰의 산문은 어휘에 안 들어간다 — ``name`` 도, ``source_text`` 도.
+        둘 다 라우팅 **타겟**을 나르기 때문이다(`source_text` 는 조건이 컴파일돼
+        나온 원문이므로 필연적으로 모델을 지목한다). 형님이 그 단계를 부르는 말은
+        라벨 그 자체다."""
         rules = [
             _rule(
-                name="rule-1",
+                name="설계 단계는 opus로",
                 conditions=[{"field": "stage", "operator": "eq", "value": "design"}],
-                source_text="설계처럼 깊이 생각해야 하는 작업",
+                source_text="설계 단계는 opus 로 보내라",
             )
         ]
-        assert derive_stage_vocabulary(rules) == [
-            StageTerm(label="design", description="설계처럼 깊이 생각해야 하는 작업")
-        ]
+        assert derive_stage_vocabulary(rules) == [StageTerm(label="design")]
 
     def test_priority_order_is_preserved_and_duplicates_collapse(self) -> None:
         rules = [

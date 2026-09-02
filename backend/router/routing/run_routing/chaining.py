@@ -46,16 +46,30 @@ _NAMING_OPERATORS = frozenset({"eq", "in"})
 class StageTerm:
     """One stage the founder's rules distinguish.
 
-    ``label`` is the exact value a rule matches on (what a run's payload must
-    carry for that rule to fire). ``description`` is what the framer reads to
-    decide which work belongs here — the founder's own condition phrase
-    (``source_text``) when the rule was authored in natural language, else the
-    rule's name. Never a system-invented gloss: the point is that the founder's
-    words, not ours, define the split.
+    ``label`` is the exact value a rule matches on — what a run's payload must
+    carry for that rule to fire, AND the founder's own word for the stage. That
+    is the whole term: nothing else about a routing rule describes the WORK.
+
+    This used to carry a ``description`` (``source_text or name``) that the
+    framer read to decide which work belongs here. Measured in prod 2026-09-02,
+    what it actually delivered was the MODEL:
+
+        - design: 설계 단계는 opus로
+        - implement: 구현 단계는 sonnet으로
+
+    Both rules have ``source_text`` NULL — the compile→apply path never persists
+    it — so the description fell back to the rule NAME, and a rule exists to pick
+    a model, so its name names one. That put model-selection language into the
+    one prompt whose job is work DECOMPOSITION, and said nothing about the work.
+
+    ``source_text`` would not have rescued it: it is the text the CONDITIONS are
+    compiled from, so it names the target too. There is no clean work
+    description anywhere in a routing rule — only the label, which is the
+    founder's own. Rendering anything else is exactly the system-invented gloss
+    this module exists to avoid.
     """
 
     label: str
-    description: str
 
 
 def _labels(condition: dict[str, Any]) -> list[str]:
@@ -94,12 +108,11 @@ def derive_stage_vocabulary(rules: list[RunRoutingRuleRow]) -> list[StageTerm]:
         if not rule.is_active:
             continue
         conditions = rule.conditions if isinstance(rule.conditions, list) else []
-        description = (rule.source_text or "").strip() or rule.name
         for condition in conditions:
             if not isinstance(condition, dict):
                 continue
             for label in _labels(condition):
-                terms.setdefault(label, StageTerm(label=label, description=description))
+                terms.setdefault(label, StageTerm(label=label))
     return list(terms.values())
 
 
