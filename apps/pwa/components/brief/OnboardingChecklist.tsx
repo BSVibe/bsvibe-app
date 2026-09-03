@@ -16,7 +16,9 @@ export default function OnboardingChecklist({
   hasLiveWorker,
 }: {
   hasProducts: boolean;
-  hasLiveWorker: boolean;
+  /** `null` = the /workers read failed; the step stays un-ticked (it is work
+   *  still to do) rather than claiming a worker we never saw. */
+  hasLiveWorker: boolean | null;
 }) {
   const t = useTranslations("brief.onboarding");
 
@@ -40,7 +42,7 @@ export default function OnboardingChecklist({
           </Link>
         </>
       ),
-      done: hasLiveWorker,
+      done: hasLiveWorker === true,
     },
     {
       key: "request",

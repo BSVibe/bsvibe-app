@@ -288,4 +288,55 @@ describe("getBrief (merged Work-Home composition)", () => {
 
     await expect(getBrief()).rejects.toMatchObject({ status: 401 });
   });
+  /* A read FAILURE and a measured "no live worker" are different facts, and the
+   * Brief acts on this one twice — it revives the onboarding checklist and it
+   * flips every active run to "waiting for a worker". Folding a `/workers` blip
+   * into `false` makes the UI assert, on a blip, two things it did not measure.
+   * Measured 2026-09-03: a 500 on /workers alone put a producing workspace back
+   * on the onboarding checklist, telling a founder to "connect a worker" they
+   * already had. So the read failure surfaces as `null` — unknown. */
+  it("reports the worker signal as UNKNOWN (null) when /workers fails — not a measured false", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [],
+      "/api/v1/deliverables": [],
+      "/api/v1/safemode/queue": [],
+      "/api/v1/checkpoints": [],
+      // /api/v1/workers is deliberately unmocked → 404 → the surface's own blip.
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.hasLiveWorker).toBeNull();
+    // ...and the blip must NOT be laundered into the whole-Brief read error.
+    expect(view.placeholder).toBe(false);
+    expect(view.hasProducts).toBe(true);
+  });
+
+  it("control: a /workers read that ANSWERS with no fresh heartbeat is a measured false", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [],
+      "/api/v1/deliverables": [],
+      "/api/v1/safemode/queue": [],
+      "/api/v1/checkpoints": [],
+      "/api/v1/workers": [{ id: "w1", name: "mac", status: "online", heartbeat_fresh: false }],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.hasLiveWorker).toBe(false);
+  });
+
+  it("control: a fresh heartbeat is a measured true", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [],
+      "/api/v1/deliverables": [],
+      "/api/v1/safemode/queue": [],
+      "/api/v1/checkpoints": [],
+      "/api/v1/workers": [{ id: "w1", name: "mac", status: "online", heartbeat_fresh: true }],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.hasLiveWorker).toBe(true);
+  });
 });

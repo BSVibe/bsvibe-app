@@ -29,8 +29,9 @@ export default function WorkingNow({
 }: {
   items: ActiveWork[];
   /** When false, no worker can pick up an active run — show an honest "waiting
-   *  for a worker" state instead of the ever-climbing "Working" timer. */
-  hasLiveWorker?: boolean;
+   *  for a worker" state instead of the ever-climbing "Working" timer.
+   *  `null` = the /workers read failed: unknown, so make no claim either way. */
+  hasLiveWorker?: boolean | null;
 }) {
   const t = useTranslations("brief");
 
@@ -45,7 +46,9 @@ export default function WorkingNow({
             // No live worker → the run is queued, not being worked. Present it
             // honestly (calm "waiting for a worker" pill + a one-line reason)
             // rather than a pulsing "Working" that climbs forever.
-            const waiting = !hasLiveWorker;
+            // `=== false` on purpose: `null` is an unknown (the /workers read
+            // failed), and a blip must not relabel a live run as queued.
+            const waiting = hasLiveWorker === false;
             const tone = waiting ? "neutral" : STATUS_TONE[w.status];
             return (
               <li key={w.runId} className="working__card">

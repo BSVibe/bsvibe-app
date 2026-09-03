@@ -59,9 +59,18 @@ export default function BriefContent({
   // `OnboardingChecklist`'s own contract — "the whole block hides once the
   // workspace can actually produce" — and left a new founder stranded one step
   // short of first value, which is the blocker this screen exists to close.
+  //
+  // ⚠️ `hasLiveWorker` is tri-state: `null` = the /workers read FAILED. A blip
+  // must not be spoken as "you have no worker" — measured 2026-09-03, a single
+  // 500 on /workers put a producing workspace back on this checklist and told
+  // the founder to connect a worker they already had. So the block appears only
+  // when the workspace DEMONSTRABLY cannot produce: no product (in which case
+  // the worker answer cannot change the verdict), or a worker we actually
+  // asked about and did not find.
+  const cannotProduce = !view.hasProducts || view.hasLiveWorker === false;
   const firstRun =
     !view.placeholder &&
-    !(view.hasProducts && view.hasLiveWorker) &&
+    cannotProduce &&
     view.working.length === 0 &&
     view.stream.length === 0 &&
     view.needsYou.length === 0;

@@ -1294,8 +1294,15 @@ export interface BriefView {
   /** Whether the workspace has ≥1 live executor worker (a worker with a fresh
    *  heartbeat — the authoritative "can take work right now" signal). When
    *  false, active runs have nothing to pick them up, so the Brief shows an
-   *  honest "waiting for a worker" state instead of an ever-climbing timer. */
-  hasLiveWorker: boolean;
+   *  honest "waiting for a worker" state instead of an ever-climbing timer.
+   *
+   *  ⚠️ `null` = UNKNOWN: the /workers read itself failed, so nothing was
+   *  measured. It is deliberately NOT folded into `false`, because two
+   *  founder-visible claims are keyed off this field — the onboarding
+   *  checklist ("you cannot produce yet") and the waiting-for-a-worker pill
+   *  ("nothing can pick this run up") — and one blip would otherwise assert
+   *  both. Consumers must test `=== false` / `=== true`, never truthiness. */
+  hasLiveWorker: boolean | null;
   /** Whether the workspace has ≥1 product. When false (a brand-new workspace)
    *  the Brief surfaces the first-run onboarding checklist. */
   hasProducts: boolean;
