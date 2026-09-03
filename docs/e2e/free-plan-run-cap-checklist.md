@@ -112,10 +112,19 @@ docker run -d --name bsvibe-migrate-probe \
   -e POSTGRES_USER=bsvibe -e POSTGRES_PASSWORD=bsvibe -e POSTGRES_DB=bsvibe \
   -p 15452:5432 pgvector/pgvector:pg16
 export BSVIBE_MIGRATION_DATABASE_URL="postgresql+asyncpg://bsvibe:bsvibe@localhost:15452/bsvibe"
-export BSVIBE_DATABASE_URL="$BSVIBE_MIGRATION_DATABASE_URL"
+export BSVIBE_APP_DB_PASSWORD=probeprobe
+uv run alembic upgrade head            # 이게 least-privilege bsvibe_app 롤을 만든다
+# ⚠ 런타임 DSN 은 owner 가 아니라 bsvibe_app 이어야 한다 — owner 로 두면
+#   test_rls_is_active_layer3_for_the_runtime_role 이 "RLS 는 superuser 에게 무력"
+#   이라며 정당하게 빨개진다 (실측 2026-09-03).
+export BSVIBE_DATABASE_URL="postgresql+asyncpg://bsvibe_app:probeprobe@localhost:15452/bsvibe"
 uv run pytest tests/test_alembic_fresh.py -q
 docker rm -f bsvibe-migrate-probe      # ⚠ 끝나면 반드시
 ```
+
+⚠️ **PG 없이 돌린 게이트는 `43 skipped` 로 초록이었고 이 마이그레이션이 그 안에
+있었다.** 스키마를 건드리는 PR 은 게이트 요약의 **skip 개수를 먼저 읽어라** — PG 를
+켜면 43 → 1 로 떨어진다.
 
 ⚠️ **15442 는 쓰지 마라** — `devcontainer-postgres-1` 이 3주째 잡고 있고, 이
 스위트는 `DROP SCHEMA` 로 시작한다. 목적지가 **비어 있는지 먼저 확인**하라
