@@ -147,8 +147,10 @@ export async function getBrief(): Promise<BriefView> {
       listRuns(_RUN_WINDOW),
       listDeliverables(_RUN_WINDOW).catch(emptyOnApiError<Deliverable>),
       listPendingDecisions().catch(emptyOnApiError<PendingDecision>),
-      // Onboarding signal — degrades to [] on its own blip (never blanks the Brief).
-      listWorkers().catch(emptyOnApiError<Worker>),
+      // Onboarding + waiting-pill signal. Degrades on its own blip (never
+      // blanks the Brief) — but to `null` (UNKNOWN), not []: an empty list is
+      // the answer "nothing is live", and the Brief acts on that answer twice.
+      listWorkers().catch(unknownOnApiError<Worker>),
     ]);
 
     return {
@@ -157,7 +159,8 @@ export async function getBrief(): Promise<BriefView> {
       stream: workStreamFrom(runs, deliverables, products),
       placeholder: false,
       // `heartbeat_fresh` is the authoritative "can take work now" signal (status can lie).
-      hasLiveWorker: workers.some((w) => w.heartbeat_fresh),
+      // A failed read stays `null` — unknown is not the same fact as "none live".
+      hasLiveWorker: workers === null ? null : workers.some((w) => w.heartbeat_fresh),
       hasProducts: products.length > 0,
     };
   } catch (error) {
@@ -170,7 +173,7 @@ export async function getBrief(): Promise<BriefView> {
       working: [],
       stream: [],
       placeholder: true,
-      hasLiveWorker: false,
+      hasLiveWorker: null,
       hasProducts: false,
     };
   }
@@ -180,5 +183,14 @@ export async function getBrief(): Promise<BriefView> {
  *  surface (deliverables) failing does not blank it. */
 function emptyOnApiError<T>(error: unknown): T[] {
   if (error instanceof ApiError || error instanceof TypeError) return [];
+  throw error;
+}
+
+/** Same degradation, but to `null` (UNKNOWN) instead of []. For a surface whose
+ *  EMPTINESS is itself a claim the UI acts on — `/workers`, where [] means
+ *  "nothing can pick your work up" — [] would launder a read failure into a
+ *  measurement. Non-API errors still propagate, exactly as above. */
+function unknownOnApiError<T>(error: unknown): T[] | null {
+  if (error instanceof ApiError || error instanceof TypeError) return null;
   throw error;
 }

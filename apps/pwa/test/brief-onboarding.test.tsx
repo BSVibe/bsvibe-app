@@ -2,7 +2,7 @@ import BriefContent from "@/components/brief/BriefContent";
 import OnboardingChecklist from "@/components/brief/OnboardingChecklist";
 import WorkingNow from "@/components/brief/WorkingNow";
 import type { ActiveWork, BriefView } from "@/lib/api/types";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 function view(over: Partial<BriefView> = {}): BriefView {
@@ -91,5 +91,40 @@ describe("Brief onboarding + honest worker status", () => {
     expect(screen.queryByText(/waiting for a worker/i)).not.toBeInTheDocument();
     // The status pill (exact "Working"), not the "Working on now" heading.
     expect(screen.getByText("Working")).toBeInTheDocument();
+  });
+  /* ── A `/workers` blip must not be spoken as a measurement ────────────────
+   * `getBrief` degrades a failed /workers read to `[]`, which used to reach the
+   * Brief as `hasLiveWorker: false` — indistinguishable from "we asked and
+   * nothing is live". Two founder-visible claims are keyed off it, so one blip
+   * asserted two things nobody measured. `null` = unknown; neither claim may be
+   * made from it. Both tests go through BriefContent, not the leaf components,
+   * because the leaf can be handed prop combinations the parent never passes. */
+
+  it("does NOT revive onboarding when a product exists and the worker read FAILED (unknown)", () => {
+    render(<BriefContent view={view({ hasProducts: true, hasLiveWorker: null })} />);
+    // "You cannot produce yet" is a claim; an unknown worker cannot support it.
+    expect(screen.queryByText(/create your first product/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/connect a worker/i)).not.toBeInTheDocument();
+  });
+
+  it("still shows onboarding on a brand-new workspace even when the worker read FAILED", () => {
+    // Here the unknown does not matter: with no product the workspace cannot
+    // produce whatever the worker answer would have been. Suppressing the block
+    // on any unknown would strand the founder this screen exists to onboard.
+    render(<BriefContent view={view({ hasProducts: false, hasLiveWorker: null })} />);
+    expect(screen.getByText(/create your first product/i)).toBeInTheDocument();
+  });
+
+  it("does NOT call active runs 'waiting for a worker' when the worker read FAILED", () => {
+    render(<BriefContent view={view({ hasLiveWorker: null, working: [activeRun] })} />);
+    // Scoped to the hero section — the filter chip row also says "Working".
+    const hero = within(screen.getByRole("region", { name: /working on now/i }));
+    expect(hero.queryByText(/waiting for a worker/i)).not.toBeInTheDocument();
+    expect(hero.getByText("Working")).toBeInTheDocument();
+  });
+
+  it("control: a MEASURED absence of a live worker still says 'waiting for a worker'", () => {
+    render(<BriefContent view={view({ hasLiveWorker: false, working: [activeRun] })} />);
+    expect(screen.getByText(/waiting for a worker/i)).toBeInTheDocument();
   });
 });

@@ -5,12 +5,26 @@ a managed worker — GUIDE the user to connect their OWN self-hosted worker (lik
 GitHub Actions runner) and show honest status while none is connected.
 
 ## Behavior (unit-verified — Vitest/RTL)
-- [x] `getBrief()` folds `listWorkers()` → `hasLiveWorker` (`heartbeat_fresh`) + `hasProducts` into `BriefView`; degrades to `[]`/false on a workers blip (never blanks the Brief).
+- [x] `getBrief()` folds `listWorkers()` → `hasLiveWorker` (`heartbeat_fresh`) + `hasProducts` into `BriefView`; a workers blip degrades to **`null` = UNKNOWN** (never blanks the Brief, and never becomes a measurement).
+      ⚠️ **이 줄은 원래 *"degrades to `[]`/false"* 라고 적혀 있었고, 그게 결함이었다.**
+      `[]` 는 *"살아 있는 워커가 없다"* 는 **대답**이고 Brief 는 그 대답으로 두 가지
+      주장을 한다 — 온보딩(*"아직 생산할 수 없다"*)과 waiting 필(*"이 런을 집어갈 게
+      없다"*). 읽기 실패를 `[]` 로 접으면 **blip 한 번이 안 잰 것 둘을 단언한다.**
+      실측(2026-09-03): `/workers` 만 500 을 내니 제품·워커가 다 있는 워크스페이스가
+      온보딩 체크리스트로 되돌아가 **이미 가진 워커를 연결하라고** 말했다.
+- [x] `null`(읽기 실패)은 두 표면 **어느 쪽에서도 주장이 되지 않는다** — 소비자는
+      truthiness 가 아니라 `=== false` / `=== true` 로 묻는다.
+- [x] 그러나 **모르는 것이 판정을 못 바꾸는 자리에서는 안내가 그대로 뜬다**: 제품이
+      0개면 워커 답이 무엇이든 생산할 수 없으므로 신규 워크스페이스는 blip 중에도
+      온보딩을 받는다 (unknown 을 통째로 억제했으면 이 화면이 존재하는 이유인
+      **첫 사용자를 오히려 버렸을 것**이다).
+- [x] 대조군: **재서** 나온 `false`(워커가 응답했고 fresh 가 없음)는 여전히 온보딩과
+      waiting 필을 둘 다 띄운다 — 고침이 기능을 지운 게 아니다.
 - [x] Brief shows the 3-step OnboardingChecklist on a first-run workspace (0 products, 0 runs); hides once the workspace has products + a live worker.
 - [x] Checklist marks a step done from the live signal (worker step ✓ when `hasLiveWorker`).
 - [x] WorkingNow: an active run with NO live worker shows a calm "Waiting for a worker" pill + hint instead of the ever-climbing "Working" timer.
 - [x] Request FAB: a 400 (zero-product workspace) shows the localized "Create a product first…" hint, not the generic send error (and NOT the raw English backend detail — keeps English off a KO surface).
-- [x] Full PWA suite (710) green; tsc --noEmit clean; biome clean; ko/en at key parity.
+- [x] Full PWA suite (769) green; tsc --noEmit clean; biome clean; ko/en at key parity.
 
 ## Live E2E (staging/prod PWA, a fresh workspace)
 
@@ -57,6 +71,23 @@ GitHub Actions runner) and show honest status while none is connected.
       **안 걸었다.** 호스트에 네 번째 워커 데몬을 설치해야 하고(일회용 스택을 향한
       데몬은 스택과 함께 죽는다), 런 완료까지 보려면 로그인된 코딩 에이전트 CLI 가
       필요하다. 별도 세션의 일이다.
+
+      ⭐ **다만 이 항목이 남겨둔 명제는 처음 적힌 것보다 훨씬 작다.** `hasLiveWorker`
+      는 서버 필드가 아니라 **PWA 가 파생한다**(`lib/api/brief.ts` —
+      `workers.some(w => w.heartbeat_fresh)`). 그래서 사슬의 앞쪽 —
+      *데몬 → 하트비트 → `/api/v1/workers` 의 `heartbeat_fresh`* — 은 **브라우저 없이
+      prod 에서 읽힌다**: 읽기 전용 MCP `bsvibe_workers_list` 가 PWA 가 파생에 쓰는
+      바로 그 필드를 그대로 준다. prod 실측 (2026-09-03 재확인):
+
+      | 워커 | status | heartbeat_fresh | 마지막 하트비트 |
+      |---|---|---|---|
+      | mac-mini-e2e | online | **true** | 방금 |
+      | dogfood-mac | **online** | **false** | 2026-07-20 (6주 전) |
+
+      ⇒ 사슬의 앞쪽은 **prod 에서 돈다**. 남은 고유 명제는 오직
+      *"PWA 가 그 값으로 화면을 뒤집는가"* 뿐이고 그것만 형님 자격증명이 필요하다.
+      두 번째 행은 덤이다 — `status` 가 거짓말하고 `heartbeat_fresh` 가 참을 말하는
+      상태를 **라이브 데이터로** 봤다(`ExecutorWorkers.tsx` 가 stale 로 처리한다).
 - [x] KO 로케일이 해요체 문구를 보여주고 영어 크롬이 안 샌다
       (`locale: "ko-KR"` — 로케일은 Accept-Language 로 정해진다)
 
@@ -78,3 +109,12 @@ GitHub Actions runner) and show honest status while none is connected.
 
 vitest **757 passed** (112 files) · `tsc --noEmit` clean · biome clean ·
 live E2E **12 passed** (fresh stack)
+
+**재게이트 (2026-09-03, `hasLiveWorker` unknown 축 추가 후)**: vitest **769 passed**
+(113 files) · `tsc --noEmit` clean · biome clean. 전선 절단 셋 — `brief.ts` 의
+degrade-to-`null`, `BriefContent` 의 `cannotProduce`, `WorkingNow` 의 `=== false`
+— 을 각각 되돌렸더니 **각자 자기 명제 하나만** 빨개졌다(대조군은 초록 유지).
+
+⚠️ 절단 하나는 **처음에 무효였다**: 치환이 쉘 이스케이프 때문에 백슬래시를 남겨
+**문법 오류**를 만들었고, 그러면 그 파일은 아예 수집되지 않아 테스트가 13개만 돌았다.
+초록/빨강이 아니라 **돌아간 테스트 개수**가 그걸 잡았다 — 컴파일 에러는 전선 절단이 아니다.
