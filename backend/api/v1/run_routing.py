@@ -665,6 +665,15 @@ class ApplyProposal(BaseModel):
     condition: ConditionPayload | None = None
     intent_name: str | None = Field(default=None, max_length=120)
     intent_examples: list[str] | None = None
+    #: The founder's own clause this proposal came from. Persisted verbatim so a
+    #: rule created here is not born LEGACY: the settings screen renders
+    #: ``source_text`` as the rule's CONDITION column and seeds the edit form
+    #: from it. Before this the wire shape had no such key and ``extra="forbid"``
+    #: made it unpassable, so EVERY rule created through compile→apply carried
+    #: ``source_text = NULL`` — measured in prod 2026-09-02 on the founder's own
+    #: two rules, which their settings screen showed as ``stage = design`` /
+    #: ``stage = implement`` instead of the sentence they typed.
+    source_text: str | None = Field(default=None, max_length=500)
 
     @field_validator("caller_id")
     @classmethod
@@ -782,6 +791,7 @@ async def apply_proposals(
                 id=uuid.uuid4(),
                 workspace_id=workspace_id,
                 name=proposal.name,
+                source_text=proposal.source_text,
                 caller_id=proposal.caller_id,
                 priority=proposal.priority,
                 is_default=False,

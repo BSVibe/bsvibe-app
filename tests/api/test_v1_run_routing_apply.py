@@ -427,3 +427,67 @@ async def test_apply_endpoint_unknown_target_422(maker, workspace_id, account_id
             json={"proposals": [{"name": "bad", "target": "ghost", "is_default": True}]},
         )
     assert r.status_code == 422, r.text
+
+
+# ---------------------------------------------------------------------------
+# The founder's own sentence must survive the PERSIST, not just the wire
+# ---------------------------------------------------------------------------
+#
+# `source_text` is rendered by the settings screen as a rule's CONDITION column
+# ("the verbatim NL `source_text` when set, else the human matchLabel for a
+# LEGACY structured rule") and seeds the edit form. `apply_proposals` built the
+# row WITHOUT it, so every rule created through compile→apply was born LEGACY —
+# measured in prod 2026-09-02 on the founder's own two rules.
+#
+# This asserts the LAST hop specifically. The compiler-side tests
+# (`test_nl_compile.py`) pass even when this line is deleted again: they stop at
+# `ApplyProposal`, one step before the row.
+
+
+async def test_apply_persists_the_founders_own_clause(
+    maker, workspace_id, account_id, seeded
+) -> None:
+    """The clause reaches ``run_routing_rules.source_text`` — the column the
+    settings screen actually reads."""
+    proposal = ApplyProposal(
+        name="설계 단계는 opus로",
+        target="sonnet",
+        condition={"field": "stage", "operator": "eq", "value": "design"},
+        source_text="설계 단계는 opus로 보내라",
+    )
+    async with maker() as s:
+        created = await apply_proposals(
+            s, workspace_id=workspace_id, account_id=account_id, proposals=[proposal]
+        )
+    assert [r.source_text for r in created] == ["설계 단계는 opus로 보내라"]
+
+    async with maker() as s:
+        rows = (
+            (
+                await s.execute(
+                    select(RunRoutingRuleRow).where(RunRoutingRuleRow.workspace_id == workspace_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert [r.source_text for r in rows] == ["설계 단계는 opus로 보내라"]
+
+
+async def test_apply_without_a_clause_still_creates_the_rule(
+    maker, workspace_id, account_id, seeded
+) -> None:
+    """CONTROL — a proposal the model gave no clause for must still persist,
+    with ``source_text`` NULL (the LEGACY rendering the screen already handles).
+    Without this, "require source_text" would silently drop rules."""
+    proposal = ApplyProposal(
+        name="복잡한 건 sonnet",
+        target="sonnet",
+        condition={"field": "estimated_tokens", "operator": "gt", "value": 5000},
+    )
+    async with maker() as s:
+        created = await apply_proposals(
+            s, workspace_id=workspace_id, account_id=account_id, proposals=[proposal]
+        )
+    assert len(created) == 1
+    assert created[0].source_text is None
