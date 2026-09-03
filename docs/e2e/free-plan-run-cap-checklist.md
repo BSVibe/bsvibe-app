@@ -69,9 +69,25 @@
 
 ## D. 배포 후 prod 실측
 
+### 배포 전에 이미 한 것 (2026-09-03)
+
+`qazasa123's workspace`(형님 본인 계정 — git author 동일)가 `review_ready` **73건**을
+들고 있어 배포 즉시 잠길 참이었다. 형님 판정: **"정리하고 3으로"**.
+
+- [x] 제품의 `discard_run` 으로 **73건 전부 정리** — 생 SQL 상태 변경이 **아니다**.
+      결정·Safe Mode 항목을 해소하고 워크트리를 반환하며, **외부로 실제 배달된
+      deliverable 7건은 일부러 회수하지 않고** 별도로 보고한다(`need_compensation=7`).
+      결과: `discarded=73 · retracted=111 · need_compensation=7 · safe_mode_resolved=14`
+- [x] 되돌릴 수 없는 작업이라 **1건 먼저** 돌려 결과 모양을 확인하고 나머지를 진행했다
+- [x] 부수 효과: `/app/var/runs` **25GB/103디렉터리 → 1.3GB/30디렉터리** (~24GB 회수)
+- [x] 정리 후 보유량: `qazasa123's` **0** · `bencharney234's` **0** · `admin's` 30(무제한 예정)
+
+### 배포 후에 할 것
+
 - [ ] `admin's workspace` 의 `max_concurrent_runs` 가 `NULL` 이다
 - [ ] `qazasa123` / `bencharney234` 워크스페이스가 `3` 이다
-- [ ] 형님이 요청을 보낼 수 있다 (면제가 실제로 먹었다는 유일한 증거)
+- [ ] 형님이 **두 계정 모두에서** 요청을 보낼 수 있다 — 면제가 먹었다는(admin), 그리고
+      정리가 충분했다는(qazasa123) 유일한 증거
 
 ```sql
 SELECT w.name, w.max_concurrent_runs,
