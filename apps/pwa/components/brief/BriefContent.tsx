@@ -47,12 +47,21 @@ export default function BriefContent({
   const shipped = useMemo(() => view.stream.filter((s) => s.status === "shipped"), [view.stream]);
   const needsCount = view.needsYou.length;
 
-  // First-run = a brand-new workspace with nothing yet: guide the founder to
-  // first value (create a product → connect a worker → send a request) instead
-  // of an all-empty page. `placeholder` (a read error) is NOT onboarding.
+  // First-run = a workspace that cannot produce yet: guide the founder to first
+  // value (create a product → connect a worker → send a request) instead of an
+  // all-empty page. `placeholder` (a read error) is NOT onboarding.
+  //
+  // ⚠️ "Cannot produce yet" needs BOTH a product and a worker — not a product
+  // alone. Hiding on `hasProducts` by itself dropped the whole block the moment
+  // the founder finished step 1, which took the two steps they had NOT done
+  // with it, and made the product step's ✓ a state production could never
+  // reach (measured on a fresh stack, 2026-09-03). That contradicted
+  // `OnboardingChecklist`'s own contract — "the whole block hides once the
+  // workspace can actually produce" — and left a new founder stranded one step
+  // short of first value, which is the blocker this screen exists to close.
   const firstRun =
     !view.placeholder &&
-    !view.hasProducts &&
+    !(view.hasProducts && view.hasLiveWorker) &&
     view.working.length === 0 &&
     view.stream.length === 0 &&
     view.needsYou.length === 0;
