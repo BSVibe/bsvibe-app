@@ -114,7 +114,13 @@ export default function BriefContent({
       {firstRun && filter === "all" && (
         <OnboardingChecklist hasProducts={view.hasProducts} hasLiveWorker={view.hasLiveWorker} />
       )}
-      {showNeedsYou && <NeedsYou items={view.needsYou} onResolved={onNeedsYouResolved} />}
+      {showNeedsYou && (
+        <NeedsYou
+          items={view.needsYou}
+          incomplete={view.needsYouIncomplete}
+          onResolved={onNeedsYouResolved}
+        />
+      )}
       {showWorking && <WorkingNow items={view.working} hasLiveWorker={view.hasLiveWorker} />}
       {showShipped && <ShippedSection items={shipped} forceExpanded={filter === "shipped"} />}
     </div>

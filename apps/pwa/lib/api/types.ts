@@ -672,6 +672,15 @@ export interface PendingProposal {
  *  kinds the founder must judge. */
 export type PendingDecision = PendingDelivery | PendingCheckpoint | PendingProposal;
 
+/** The result of reading the three pending queues. `incomplete` is true when at
+ *  least one QUEUE could not be read, so `items` is a floor rather than the
+ *  whole list. It is carried separately because an empty needs-you list is an
+ *  answer the founder acts on — see `listPendingDecisions`. */
+export interface PendingRead {
+  items: PendingDecision[];
+  incomplete: boolean;
+}
+
 /** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
 export interface SafeModeItem {
   id: string;
@@ -1288,6 +1297,11 @@ export interface BriefView {
   /** Pending items the founder must judge, resolved inline in the Brief
    *  (deliveries + checkpoints). Empty when nothing needs a call. */
   needsYou: PendingDecision[];
+  /** True when at least one pending QUEUE could not be read, so `needsYou` is a
+   *  floor and not the whole list. The Brief must not present an unread queue
+   *  as "nothing is waiting on you" — `NeedsYou` keeps its section and says so,
+   *  even when `needsYou` is empty. */
+  needsYouIncomplete: boolean;
   working: ActiveWork[];
   stream: WorkStreamItem[];
   placeholder: boolean;
