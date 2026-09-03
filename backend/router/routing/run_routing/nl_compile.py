@@ -106,6 +106,20 @@ class CompiledProposal:
     condition: dict[str, Any] | None = None
     intent_name: str | None = None
     intent_examples: list[str] | None = None
+    #: The founder's OWN clause this rule came from, when the model returned it.
+    #: Persisted as ``run_routing_rules.source_text`` and rendered by the settings
+    #: screen as the rule's CONDITION column ("the verbatim NL ``source_text`` when
+    #: set, else the human matchLabel for a LEGACY structured rule"), and used to
+    #: seed the edit form. Without it a rule created through compile→apply shows
+    #: as LEGACY on the founder's own screen — measured in prod 2026-09-02, where
+    #: BOTH of the founder's rules read ``stage = design`` / ``stage = implement``
+    #: instead of the sentence they typed.
+    #:
+    #: The CLAUSE, not the whole input: one description compiles to several rules
+    #: and each rule's column should show its own half. ``None`` when the model
+    #: omits it — a missing clause degrades to today's LEGACY rendering and must
+    #: never drop the rule.
+    source_text: str | None = None
 
 
 # Keep the proposal count bounded so a runaway model can't flood the preview.
@@ -122,6 +136,11 @@ _SYSTEM_PROMPT = (
     "— do NOT force everything into categories. Respond with ONE JSON array (no "
     "prose, no code fences) of objects with these keys:\n"
     '  "name": a short human label for the rule,\n'
+    '  "source_text": the founder\'s OWN words for THIS rule — the clause of their '
+    "input that produced it, copied VERBATIM and never rewritten, translated or "
+    "summarised. One description yields several rules; give each the clause it "
+    "came from, not the whole input. Their settings screen shows this as the "
+    "rule's condition, so it must read like something they wrote,\n"
     '  "target": the EXACT model id from the "Models" catalog to route to,\n'
     '  "is_default": true ONLY for the single catch-all rule ("the rest" / '
     "'나머지' / '기본' / 'everything else'); false otherwise,\n"
@@ -272,6 +291,10 @@ def _coerce_proposal(  # noqa: PLR0911 — one return per dimension shape reads 
         return None
     clean_name = name.strip()[:120]
     priority = _coerce_priority(item.get("priority", 10))
+    raw_source = item.get("source_text")
+    source_text = (
+        raw_source.strip()[:500] if isinstance(raw_source, str) and raw_source.strip() else None
+    )
 
     # (1) Default catch-all — no dimension keys.
     if bool(item.get("is_default")):
@@ -281,6 +304,7 @@ def _coerce_proposal(  # noqa: PLR0911 — one return per dimension shape reads 
             target=target,
             priority=priority,
             is_default=True,
+            source_text=source_text,
         )
 
     # (2) Category — an intent_name signals the domain dimension.
@@ -298,6 +322,7 @@ def _coerce_proposal(  # noqa: PLR0911 — one return per dimension shape reads 
             target=target,
             priority=priority,
             is_default=False,
+            source_text=source_text,
         )
 
     # (4) Condition (complexity / language / artifact / etc.).
@@ -310,6 +335,7 @@ def _coerce_proposal(  # noqa: PLR0911 — one return per dimension shape reads 
             priority=priority,
             is_default=False,
             condition=condition,
+            source_text=source_text,
         )
 
     # A non-default proposal with no usable dimension can never match — drop.
@@ -567,6 +593,7 @@ def as_dicts(proposals: Iterable[CompiledProposal]) -> list[dict[str, Any]]:
             "condition": p.condition,
             "intent_name": p.intent_name,
             "intent_examples": p.intent_examples,
+            "source_text": p.source_text,
         }
         for p in proposals
     ]

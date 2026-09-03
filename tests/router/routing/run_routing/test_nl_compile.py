@@ -88,6 +88,7 @@ async def test_caller_dimension_compiles() -> None:
             "condition": None,
             "intent_name": None,
             "intent_examples": None,
+            "source_text": None,
         },
         {
             "name": "default → haiku",
@@ -98,6 +99,7 @@ async def test_caller_dimension_compiles() -> None:
             "condition": None,
             "intent_name": None,
             "intent_examples": None,
+            "source_text": None,
         },
     ]
 
@@ -469,6 +471,7 @@ async def test_as_dicts_matches_wire_shape() -> None:
             "condition": {"field": "classified_intent", "operator": "eq", "value": "marketing"},
             "intent_name": "marketing",
             "intent_examples": ["write a marketing email"],
+            "source_text": None,
         }
     ]
 
@@ -529,3 +532,93 @@ async def test_compile_for_workspace_uses_active_accounts_as_targets() -> None:
     }
     assert proposals[1]["is_default"] is True
     assert proposals[1]["target"] == "haiku"
+
+
+# ---------------------------------------------------------------------------
+# compile → apply threw away the founder's own sentence
+# ---------------------------------------------------------------------------
+#
+# A rule authored in natural language stores what the founder wrote in
+# ``source_text``. The settings screen renders it as the rule's CONDITION column
+# (`RunRoutingRules.tsx`: "the verbatim NL `source_text` when set, else the human
+# matchLabel for a LEGACY structured rule"), and the edit form seeds from it.
+#
+# The single-rule create path persists it. ``compile → apply`` — the path that
+# turns one plain-language description into SEVERAL rules — never did: the wire
+# shape (`as_dicts` → `ApplyProposal`) had no such key at all, and
+# `ApplyProposal` is `extra="forbid"`, so it could not even be passed.
+#
+# Measured in prod 2026-09-02: both of the founder's rules carry
+# ``source_text = NULL``, so their own settings screen shows them as LEGACY —
+# `stage = design` instead of the sentence they typed — and editing one cannot
+# pre-fill what they wrote.
+#
+# The proposal must therefore carry the CLAUSE it came from, not the whole input:
+# one description compiles to several rules, and each rule's condition column
+# should show its own half.
+
+
+@pytest.mark.asyncio
+async def test_a_proposal_carries_the_clause_it_came_from() -> None:
+    """The compiled proposal keeps the founder's own words for THIS rule."""
+    rules = await _compile(
+        json.dumps(
+            [
+                {
+                    "name": "설계 단계는 opus로",
+                    "target": "opus",
+                    "condition": {"field": "stage", "operator": "eq", "value": "design"},
+                    "source_text": "설계 단계는 opus로",
+                }
+            ]
+        )
+    )
+    assert [r.source_text for r in rules] == ["설계 단계는 opus로"]
+
+
+@pytest.mark.asyncio
+async def test_the_clause_reaches_the_apply_wire_shape() -> None:
+    """``as_dicts`` is documented as ``ApplyProposal`` 1:1 — if the clause stops
+    here it can never be persisted, which is exactly what happened."""
+    rules = await _compile(
+        json.dumps(
+            [
+                {
+                    "name": "구현 단계는 sonnet으로",
+                    "target": "sonnet",
+                    "condition": {"field": "stage", "operator": "eq", "value": "implement"},
+                    "source_text": "구현 단계는 sonnet으로",
+                }
+            ]
+        )
+    )
+    wire = as_dicts(rules)
+    assert wire[0]["source_text"] == "구현 단계는 sonnet으로"
+
+    from backend.api.v1.run_routing import ApplyProposal
+
+    # ``extra="forbid"`` — this raises today, which is the whole defect.
+    assert ApplyProposal(**wire[0]).source_text == "구현 단계는 sonnet으로"
+
+
+@pytest.mark.asyncio
+async def test_a_proposal_without_a_clause_is_still_valid() -> None:
+    """CONTROL. The model may omit it. A missing clause must degrade to ``None``
+    (today's behaviour, which the settings screen already renders as LEGACY) —
+    never drop the whole rule, which would silently lose one the founder asked
+    for. Without this, "require source_text" passes the two tests above and
+    quietly deletes rules."""
+    rules = await _compile(
+        json.dumps(
+            [
+                {
+                    "name": "복잡한 건 opus",
+                    "target": "opus",
+                    "condition": {"field": "estimated_tokens", "operator": "gt", "value": 5000},
+                }
+            ]
+        )
+    )
+    assert len(rules) == 1
+    assert rules[0].source_text is None
+    assert as_dicts(rules)[0]["source_text"] is None
