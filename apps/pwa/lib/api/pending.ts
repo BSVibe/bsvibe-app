@@ -29,6 +29,7 @@ import type {
   Checkpoint,
   Deliverable,
   PendingDecision,
+  PendingRead,
   Product,
   Proposal,
   Run,
@@ -41,6 +42,14 @@ const _RUN_WINDOW = 50;
  *  failing queue does not blank the whole "Needs you" surface. */
 function emptyOnApiError<T>(error: unknown): T[] {
   if (error instanceof ApiError || error instanceof TypeError) return [];
+  throw error;
+}
+
+/** Same degradation, but to `null` (UNREAD) instead of []. For a queue whose
+ *  EMPTINESS the founder acts on — "nothing is waiting on me" — [] would
+ *  launder a read failure into that answer. Non-API errors still propagate. */
+function unreadOnApiError<T>(error: unknown): T[] | null {
+  if (error instanceof ApiError || error instanceof TypeError) return null;
   throw error;
 }
 
@@ -106,14 +115,26 @@ export function toPendingDecisions(
   return items.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
-/** Read all three queues in parallel and return the merged Pending list. A
- *  single optional queue failing degrades to empty rather than blanking the
- *  surface. */
-export async function listPendingDecisions(): Promise<PendingDecision[]> {
+/** Read all three queues in parallel and return the merged Pending list plus
+ *  whether the read was COMPLETE.
+ *
+ *  A single queue failing still degrades to empty rather than blanking the
+ *  surface — but it reports `incomplete`, because an empty needs-you list is
+ *  not a neutral value: the founder reads it as "nothing is waiting on me" and
+ *  `NeedsYou` removes the section entirely. Measured 2026-09-03 with
+ *  `/safemode/queue` at 500 and a checkpoint present: the section rendered, the
+ *  chip said "1", and a held delivery awaiting approval was invisible with no
+ *  trace at all.
+ *
+ *  ⚠️ Only the three QUEUES set the flag. The review-context reads below omit
+ *  no item — they supply the task title + product beside the bare question — so
+ *  raising it for them would fire the notice on a degradation the founder
+ *  cannot act on, and it would stop meaning "something is missing". */
+export async function listPendingDecisions(): Promise<PendingRead> {
   const [deliveries, checkpoints, proposals, runs, deliverables, products] = await Promise.all([
-    listSafeModeQueue().catch(emptyOnApiError<SafeModeItem>),
-    listCheckpoints().catch(emptyOnApiError<Checkpoint>),
-    listPendingProposals().catch(emptyOnApiError<Proposal>),
+    listSafeModeQueue().catch(unreadOnApiError<SafeModeItem>),
+    listCheckpoints().catch(unreadOnApiError<Checkpoint>),
+    listPendingProposals().catch(unreadOnApiError<Proposal>),
     // The review-context join — same three reads the Brief already does. Each
     // degrades to empty so a blip just falls back to the bare question.
     listRuns(_RUN_WINDOW).catch(emptyOnApiError<Run>),
@@ -121,5 +142,8 @@ export async function listPendingDecisions(): Promise<PendingDecision[]> {
     listProducts().catch(emptyOnApiError<Product>),
   ]);
   const lookup = buildReviewLookup(runs, deliverables, products);
-  return toPendingDecisions(deliveries, checkpoints, proposals, lookup);
+  return {
+    items: toPendingDecisions(deliveries ?? [], checkpoints ?? [], proposals ?? [], lookup),
+    incomplete: deliveries === null || checkpoints === null || proposals === null,
+  };
 }

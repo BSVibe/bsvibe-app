@@ -358,6 +358,7 @@
     "loadingNote": "작업을 불러오는 중…",
     "filtersLabel": "작업 필터",
     "needsYou": "확인 필요",
+    "needsYouIncomplete": "일부 항목을 불러오지 못해서, 이 목록이 전부가 아닐 수 있어요.",
     "shipped": "완료됨",
     "shippedCount": "총 {total}건",
     "shippedCountWithWeek": "총 {total}건 · 이번 주 {week}건",

@@ -24,7 +24,8 @@
  * surface shows calm empty states instead of an error wall. A 401 propagates so
  * the global auth handler can redirect to /login. needsYou degrades to empty on
  * its own blip (listPendingDecisions already swallows per-queue failures) so it
- * never blanks the rest of the Brief.
+ * never blanks the rest of the Brief — and it carries `needsYouIncomplete`, so
+ * an unread queue is not presented as the answer "nothing is waiting on you".
  *
  * Status LABELS are intentionally NOT composed here — the components translate
  * `status` via i18n (the data layer stays locale-free). Titles are user/LLM
@@ -45,6 +46,7 @@ import type {
   Deliverable,
   DeliverableType,
   PendingDecision,
+  PendingRead,
   Product,
   Run,
   WorkStreamItem,
@@ -141,12 +143,15 @@ export async function getBrief(): Promise<BriefView> {
     // Core surfaces (products / runs) bubble a 4xx to the fallback; the optional
     // deliverables surface degrades to empty on its own ApiError so it failing
     // never blanks the whole surface. The needsYou aggregation already swallows
-    // each pending queue's per-surface failure, so it degrades to [] on a blip.
+    // each pending queue's per-surface failure — but it now REPORTS that, so an
+    // unread queue is never spoken as "nothing is waiting on you".
     const [products, runs, deliverables, pending, workers] = await Promise.all([
       listProducts(),
       listRuns(_RUN_WINDOW),
       listDeliverables(_RUN_WINDOW).catch(emptyOnApiError<Deliverable>),
-      listPendingDecisions().catch(emptyOnApiError<PendingDecision>),
+      // A hard failure of the whole aggregation is UNREAD, not "nothing
+      // pending" — same reason each queue inside it reports itself.
+      listPendingDecisions().catch(unreadPending),
       // Onboarding + waiting-pill signal. Degrades on its own blip (never
       // blanks the Brief) — but to `null` (UNKNOWN), not []: an empty list is
       // the answer "nothing is live", and the Brief acts on that answer twice.
@@ -154,7 +159,8 @@ export async function getBrief(): Promise<BriefView> {
     ]);
 
     return {
-      needsYou: inlineNeedsYou(pending),
+      needsYou: inlineNeedsYou(pending.items),
+      needsYouIncomplete: pending.incomplete,
       working: activeWorkFrom(runs, products),
       stream: workStreamFrom(runs, deliverables, products),
       placeholder: false,
@@ -170,6 +176,7 @@ export async function getBrief(): Promise<BriefView> {
     if (!(error instanceof ApiError) && !(error instanceof TypeError)) throw error;
     return {
       needsYou: [],
+      needsYouIncomplete: true,
       working: [],
       stream: [],
       placeholder: true,
@@ -183,6 +190,15 @@ export async function getBrief(): Promise<BriefView> {
  *  surface (deliverables) failing does not blank it. */
 function emptyOnApiError<T>(error: unknown): T[] {
   if (error instanceof ApiError || error instanceof TypeError) return [];
+  throw error;
+}
+
+/** The pending aggregation dying outright is the same fact its individual
+ *  queues report: the list could not be read, so it is a floor, not an answer. */
+function unreadPending(error: unknown): PendingRead {
+  if (error instanceof ApiError || error instanceof TypeError) {
+    return { items: [], incomplete: true };
+  }
   throw error;
 }
 

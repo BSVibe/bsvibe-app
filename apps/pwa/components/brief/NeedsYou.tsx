@@ -25,17 +25,24 @@ import ProposalCard from "./ProposalCard";
  */
 export default function NeedsYou({
   items,
+  incomplete = false,
   onResolved,
 }: {
   items: PendingDecision[];
+  /** True when at least one pending queue could not be read, so `items` is a
+   *  floor. The section then stays on screen EVEN WHEN EMPTY and says so —
+   *  vanishing would present an unread queue as "nothing needs you", which is
+   *  the one thing a founder cannot recover from on their own. */
+  incomplete?: boolean;
   onResolved: () => void;
 }) {
   const t = useTranslations("brief");
-  if (items.length === 0) return null;
+  if (items.length === 0 && !incomplete) return null;
 
   return (
     <section className="needs-you" aria-label={t("needsYou")}>
       <h2 className="section-label section-label--amber">{t("needsYou")}</h2>
+      {incomplete && <p className="needs-you__incomplete">{t("needsYouIncomplete")}</p>}
       <ul className="needs-list" aria-label={t("needsYou")}>
         {items.map((item) =>
           item.kind === "delivery" ? (

@@ -213,6 +213,9 @@ describe("getBrief (merged Work-Home composition)", () => {
     const view = await getBrief();
     expect(view.needsYou).toEqual([]);
     expect(view.placeholder).toBe(false);
+    // ...but "empty" here is NOT the answer "nothing needs you" — every queue
+    // failed, so the Brief must say the list could not be read in full.
+    expect(view.needsYouIncomplete).toBe(true);
   });
 
   it("joins a stream row to its deliverable (concise title + report link)", async () => {
@@ -338,5 +341,103 @@ describe("getBrief (merged Work-Home composition)", () => {
 
     const view = await getBrief();
     expect(view.hasLiveWorker).toBe(true);
+  });
+  /* ── needsYou completeness ────────────────────────────────────────────────
+   * `listPendingDecisions` degrades each of its three queues to [] on a blip.
+   * That keeps the Brief alive, but an EMPTY needs-you list is itself an answer
+   * the founder acts on ("nothing is waiting on me") and the "Needs you"
+   * section hides entirely when the list is empty. Measured 2026-09-03: with
+   * /safemode/queue at 500 and a checkpoint present, the section rendered, the
+   * chip said 1, and a held delivery awaiting approval was invisible with no
+   * trace at all. So the read carries whether it was COMPLETE. */
+
+  it("flags the needs-you list INCOMPLETE when one queue blips — and keeps what it did read", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [{ ...run("r1", "p1", "running", "raw"), summary_title: "Export endpoint" }],
+      "/api/v1/deliverables": [],
+      "/api/v1/checkpoints": [
+        {
+          id: "cp-1",
+          run_id: "r1",
+          question: "Ship to prod or staging?",
+          options: ["prod", "staging"],
+          actions: null,
+          decision: "ask_user_question",
+          rationale: null,
+          prior_decisions: [],
+          created_at: NOW,
+        },
+      ],
+      "/api/v1/decisions": [],
+      // /api/v1/safemode/queue deliberately unmocked → 404 → its queue is lost.
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.needsYouIncomplete).toBe(true);
+    // The item that WAS read is not suppressed — an unknown is not a reason to
+    // hide what we actually measured.
+    expect(view.needsYou.map((n) => n.kind)).toEqual(["decision"]);
+  });
+
+  it("control: every queue answering makes the list COMPLETE", async () => {
+    global.fetch = mockFetch({
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [],
+      "/api/v1/deliverables": [],
+      "/api/v1/safemode/queue": [],
+      "/api/v1/checkpoints": [],
+      "/api/v1/decisions": [],
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.needsYouIncomplete).toBe(false);
+    expect(view.needsYou).toEqual([]);
+  });
+
+  it("boundary: a failed review-CONTEXT read is not an incomplete list", async () => {
+    // runs / deliverables / products only DECORATE a pending item (they supply
+    // the task title + product beside the bare question). Losing them omits no
+    // item, so it must not raise the incompleteness flag — otherwise the notice
+    // fires on a degradation the founder cannot act on and stops meaning
+    // "something is missing".
+    global.fetch = mockFetch({
+      "/api/v1/safemode/queue": [],
+      "/api/v1/checkpoints": [],
+      "/api/v1/decisions": [],
+      "/api/v1/workers": [],
+      // products / runs are core reads; deliverables is the optional context one.
+      "/api/v1/products": [product("p1", "alpha", "alpha")],
+      "/api/v1/runs": [],
+      // /api/v1/deliverables unmocked → 404 → context lost, no item lost.
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.needsYouIncomplete).toBe(false);
+  });
+
+  it("a hard failure of the whole aggregation is also INCOMPLETE, not 'nothing pending'", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      // Core reads succeed so the Brief does not fall to `placeholder`; only the
+      // pending aggregation dies outright.
+      if (url.includes("/api/v1/products")) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/runs")) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("nope", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    const view = await getBrief();
+    expect(view.placeholder).toBe(false);
+    expect(view.needsYouIncomplete).toBe(true);
   });
 });

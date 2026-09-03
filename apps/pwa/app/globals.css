@@ -788,6 +788,16 @@ main.login {
   color: var(--amber-ink);
 }
 
+/* A read that could not finish. Deliberately quiet (ink-3, same weight as the
+   other section hints) — it reports a transient gap in OUR read, not something
+   the founder must act on. The section keeps its amber label because the point
+   is that items may be MISSING from it. */
+.needs-you__incomplete {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
 .needs-list {
   list-style: none;
   margin: 0;

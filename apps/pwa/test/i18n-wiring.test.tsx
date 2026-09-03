@@ -22,6 +22,7 @@ import { describe, expect, it } from "vitest";
 
 const EMPTY_BRIEF: BriefView = {
   needsYou: [],
+  needsYouIncomplete: false,
   working: [],
   stream: [],
   placeholder: true,

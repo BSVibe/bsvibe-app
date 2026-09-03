@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 function view(over: Partial<BriefView> = {}): BriefView {
   return {
     needsYou: [],
+    needsYouIncomplete: false,
     working: [],
     stream: [],
     placeholder: false,

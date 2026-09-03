@@ -358,6 +358,7 @@
     "loadingNote": "Loading your work…",
     "filtersLabel": "Filter your work",
     "needsYou": "Needs you",
+    "needsYouIncomplete": "Some items couldn't be loaded, so this list may be incomplete.",
     "shipped": "Shipped",
     "shippedCount": "{total} total",
     "shippedCountWithWeek": "{total} total · {week} this week",
