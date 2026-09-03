@@ -4,7 +4,7 @@ import { ApiError } from "@/lib/api/client";
 import { askMessage, submitMessage } from "@/lib/api/messages";
 import { listProducts } from "@/lib/api/products";
 import type { Product } from "@/lib/api/types";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { usePathname } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -61,11 +61,17 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
   const [text, setText] = useState("");
   const [state, setState] = useState<SubmitState>("idle");
   const [error, setError] = useState<string | null>(null);
+  // The plan's run budget, when THIS submit was refused for exceeding it. Held
+  // apart from `error` because it renders with a link, and because the number
+  // must come from the response — a workspace off the free plan has a
+  // different one, and a hardcoded 3 would state it wrongly.
+  const [capLimit, setCapLimit] = useState<number | null>(null);
   const [productId, setProductId] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   // L10 — the inline answer when the founder asked a question (not a work request).
   const [answer, setAnswer] = useState<string | null>(null);
   const t = useTranslations("direct");
+  const locale = useLocale();
   const pathname = usePathname();
   const currentSlug = _currentProductSlug(pathname);
 
@@ -131,6 +137,7 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
     if (!canSubmit) return;
     setState("submitting");
     setError(null);
+    setCapLimit(null);
     setAnswer(null);
     try {
       // L10 — a QUESTION is answered inline (no run, no executor); only a WORK
@@ -152,11 +159,20 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
     } catch (err) {
       setState("error");
       if (err instanceof ApiError) {
-        // A 400 on a zero-product workspace means "create a product first" — show
-        // that actionable (localized) hint instead of the generic send error, so
-        // the FAB doesn't dead-end a new founder. (Localized, not the raw backend
-        // detail string, to keep an English message off a KO surface.)
-        setError(err.status === 400 ? t("errorNoProduct") : t("errorSend"));
+        // Branch on the REASON the backend gave, not on the status code. This
+        // endpoint refuses for two unrelated things, and the 400 branch below
+        // used to catch every one of them — a founder over their plan's run
+        // budget would have been told to create a product they already have.
+        if (err.reason?.code === "run_cap_reached") {
+          setCapLimit(typeof err.reason.limit === "number" ? err.reason.limit : null);
+          setError(null);
+        } else {
+          // A 400 on a zero-product workspace means "create a product first" — show
+          // that actionable (localized) hint instead of the generic send error, so
+          // the FAB doesn't dead-end a new founder. (Localized, not the raw backend
+          // detail string, to keep an English message off a KO surface.)
+          setError(err.status === 400 ? t("errorNoProduct") : t("errorSend"));
+        }
       } else {
         setError(t("errorNetwork"));
       }
@@ -204,7 +220,15 @@ export function DirectOverlay({ open, onClose }: { open: boolean; onClose: () =>
             <span className="direct-overlay__status" aria-live="polite">
               {state === "submitting" && t("sending")}
               {state === "success" && t("sent")}
-              {state === "error" && <span className="direct-overlay__error">{error}</span>}
+              {state === "error" && capLimit !== null && (
+                <span className="direct-overlay__error">
+                  {t("errorRunCap", { limit: capLimit })}{" "}
+                  <a href={`https://bsvibe.dev/${locale}/pricing`} target="_blank" rel="noreferrer">
+                    {t("errorRunCapLink")}
+                  </a>
+                </span>
+              )}
+              {state === "error" && error && <span className="direct-overlay__error">{error}</span>}
             </span>
             <button type="submit" className="direct-overlay__submit" disabled={!canSubmit}>
               {state === "submitting" ? t("sending") : t("label")}

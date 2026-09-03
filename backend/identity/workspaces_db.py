@@ -43,6 +43,12 @@ if TYPE_CHECKING:
 # the same :class:`backend.data.Base` the rest of the schema uses.
 WorkspacesBase = Base
 
+#: The free plan's ceiling on runs a workspace may hold at once — the default
+#: for ``workspaces.max_concurrent_runs``. Declared here, beside the column, so
+#: the Python default and the DDL ``server_default`` have one source; the rule
+#: that reads it lives in ``backend.workflow.application.run_caps``.
+DEFAULT_MAX_CONCURRENT_RUNS = 3
+
 # GDPR L1 — Art. 6 legal-basis marker. v1 carries only the two bases that
 # describe BSVibe's own model: ``contract`` (the workspace founder operating
 # under our service contract) and ``consent`` (an end-user-driven workspace
@@ -138,6 +144,32 @@ class WorkspaceRow(WorkspacesBase):
     # (see ``backend.workflow.infrastructure.verify_slots``).
     verify_stack_slots: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
+    )
+    # How many runs this workspace may HOLD at once — the free plan's price
+    # lever. It sits beside ``verify_stack_slots`` for the same reason that one
+    # does: a plan tier belongs to the workspace, not to a server constant.
+    #
+    # What it counts is the whole point. ``review_ready`` counts, because a run
+    # waiting on the founder's review is a run holding a workspace (that is
+    # exactly why the reaper leaves it alone). Prod measured 103 non-terminal
+    # runs across two workspaces and every single one was ``review_ready`` —
+    # a cap over ``open``/``running`` would have been a no-op on the only state
+    # that actually accumulates.
+    #
+    # ``NULL`` = uncapped, which is how a workspace comes OFF the free plan
+    # (the operator's own workspace, and later any paying one). The default is
+    # a number rather than ``NULL`` so a workspace nobody configured is priced
+    # — a fail-open default would quietly sell the paid tier for free.
+    # ⚠ The default is DDL-side, so an INSERT can never say "uncapped".
+    # SQLAlchemy omits a ``None``-valued column from the INSERT when it carries
+    # a ``server_default``, so ``WorkspaceRow(max_concurrent_runs=None)`` comes
+    # back as 3, not NULL (measured, 2026-09-03 — this comment previously
+    # claimed the opposite). Taking a workspace off the plan is therefore an
+    # UPDATE, which is what the migration does for the operator's workspace and
+    # what any future upgrade path must do. That asymmetry is the right way
+    # round for a price lever: new workspaces cannot be born uncapped.
+    max_concurrent_runs: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, server_default=str(DEFAULT_MAX_CONCURRENT_RUNS)
     )
     # Lift E1 — workspace-default ModelAccount fallback for the new
     # :class:`backend.dispatch.resolver.ModelAccountResolver`. The founder

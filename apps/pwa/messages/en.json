@@ -111,7 +111,9 @@
     "errorSend": "Couldn’t send that. Please try again.",
     "errorNetwork": "Network hiccup. Please try again.",
     "answerLabel": "Answer",
-    "errorNoProduct": "Create a product first, then send your request."
+    "errorNoProduct": "Create a product first, then send your request.",
+    "errorRunCap": "You already have {limit} requests in progress. Send or clear one that's waiting for your review, then try again.",
+    "errorRunCapLink": "See plans"
   },
   "products": {
     "back": "‹ Brief",
