@@ -33,7 +33,9 @@ export default function OnboardingChecklist({
       body: (
         <>
           {t("step2Body")}{" "}
-          <Link href="/settings" className="onboarding__link">
+          {/* The Models tab, not `/settings` — that redirects to General, one
+              tab away from the executor-worker surface this step needs. */}
+          <Link href="/settings/models" className="onboarding__link">
             {t("step2Link")}
           </Link>
         </>

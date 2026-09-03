@@ -39,6 +39,39 @@ describe("Brief onboarding + honest worker status", () => {
     expect(screen.queryByText(/create your first product/i)).not.toBeInTheDocument();
   });
 
+  // Measured live on a fresh stack (2026-09-03): creating a product made the
+  // WHOLE block vanish, so the product step's ✓ — which `OnboardingChecklist`
+  // renders and `docs/e2e/pwa-onboarding-checklist.md` promises — was a state
+  // production could never reach. The parent hid on `hasProducts` alone while
+  // the component's own contract is "hide once the workspace can actually
+  // produce", and producing needs a worker.
+  //
+  // ⚠️ This goes through `BriefContent`, not `OnboardingChecklist` directly.
+  // The direct-render test below can show any prop combination it likes,
+  // including ones the parent never passes — which is exactly why the unit
+  // suite was green while the founder-visible behaviour was broken.
+  it("keeps the checklist (product step ✓) when a product exists but no worker is connected", () => {
+    render(<BriefContent view={view({ hasProducts: true, hasLiveWorker: false })} />);
+
+    const productStep = screen.getByText(/create your first product/i).closest("li");
+    expect(productStep?.className).toMatch(/done/);
+    // The steps the founder still has to do must survive — losing them is how
+    // a new founder gets stranded one step short of first value.
+    expect(screen.getByText(/connect a worker/i)).toBeInTheDocument();
+  });
+
+  // The checklist doc promises this step "deep-links to Settings → Models →
+  // Executor workers (the register/service install surface)". `/settings` is a
+  // redirect to the GENERAL tab, so linking there drops the founder one tab
+  // away from the only screen that can finish the step — measured live
+  // 2026-09-03, the click landed on `/settings/general`.
+  it("worker step deep-links to the Models tab, where the executor-worker surface lives", () => {
+    render(<OnboardingChecklist hasProducts={false} hasLiveWorker={false} />);
+
+    const link = screen.getByRole("link", { name: /set up a worker/i });
+    expect(link).toHaveAttribute("href", "/settings/models");
+  });
+
   it("checklist marks the worker step done when a live worker is connected", () => {
     render(<OnboardingChecklist hasProducts={false} hasLiveWorker={true} />);
     // step 2 (connect a worker) is checked off
