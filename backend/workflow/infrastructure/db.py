@@ -40,6 +40,21 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+#: The statuses in which a run is FINISHED — it holds no workspace, no disk,
+#: and no budget. Everything else (``open``, ``running``, ``review_ready``) is
+#: a run the founder still owns; ``review_ready`` most of all, since it is the
+#: one waiting on *them*.
+#:
+#: Declared here, beside the enum, because three call sites needed it and two
+#: had already made private copies that could drift apart. Consumers should ask
+#: "is this terminal?" rather than list the live statuses — a status added to
+#: the enum later is then counted as live by default, which is the safe way for
+#: a quota to be wrong.
+TERMINAL_RUN_STATUSES: frozenset[RunStatus] = frozenset(
+    {RunStatus.SHIPPED, RunStatus.FAILED, RunStatus.CANCELLED}
+)
+
+
 class RunAttemptPhase(StrEnum):
     PLANNING = "planning"
     WORKING = "working"

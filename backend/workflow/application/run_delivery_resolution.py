@@ -57,6 +57,7 @@ import structlog
 from sqlalchemy import select
 
 from backend.workflow.infrastructure.db import (
+    TERMINAL_RUN_STATUSES,
     DecisionStatus,
     Deliverable,
     ExecutionRun,
@@ -99,9 +100,7 @@ _REVIEW_DECISION_KINDS: frozenset[str] = frozenset({"human_review_required", "ve
 
 #: Run statuses that are already terminal — the auto-resolution is a no-op for
 #: them (idempotent: a second delivery of an already-shipped run does nothing).
-_TERMINAL_RUN_STATUSES: frozenset[RunStatus] = frozenset(
-    {RunStatus.SHIPPED, RunStatus.CANCELLED, RunStatus.FAILED}
-)
+_TERMINAL_RUN_STATUSES: frozenset[RunStatus] = TERMINAL_RUN_STATUSES
 
 
 async def auto_resolve_run_on_delivery(

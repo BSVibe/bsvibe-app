@@ -111,7 +111,9 @@
     "errorSend": "전송하지 못했어요. 다시 시도해 주세요.",
     "errorNetwork": "네트워크 오류. 다시 시도해 주세요.",
     "answerLabel": "답변",
-    "errorNoProduct": "먼저 제품을 만든 뒤 요청을 보내주세요."
+    "errorNoProduct": "먼저 제품을 만든 뒤 요청을 보내주세요.",
+    "errorRunCap": "이미 {limit}개의 요청이 진행 중이에요. 검토를 기다리는 결과물을 보내거나 정리한 뒤 다시 시도해 주세요.",
+    "errorRunCapLink": "플랜 보기"
   },
   "products": {
     "back": "‹ 요약",

@@ -43,6 +43,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.infrastructure.db import (
+    TERMINAL_RUN_STATUSES,
     DecisionStatus,
     ExecutionRun,
     ExecutionRunHistory,
@@ -59,9 +60,9 @@ from backend.workflow.infrastructure.repositories import (
 logger = structlog.get_logger(__name__)
 
 #: A run in one of these states is finished — nothing to cancel / discard.
-_TERMINAL: frozenset[RunStatus] = frozenset(
-    {RunStatus.SHIPPED, RunStatus.FAILED, RunStatus.CANCELLED}
-)
+#: Aliases the canonical set beside the enum so this module and the quota can
+#: never disagree about what "finished" means.
+_TERMINAL: frozenset[RunStatus] = TERMINAL_RUN_STATUSES
 #: Only an in-flight run can be *cancelled* (mirrors the REST /cancel guard).
 _CANCELLABLE: frozenset[RunStatus] = frozenset({RunStatus.OPEN, RunStatus.RUNNING})
 

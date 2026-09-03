@@ -23,6 +23,7 @@ from backend.workers.emit import (
     get_emit_redis_client,
 )
 from backend.workflow.application.intake.direct import DirectTrigger
+from backend.workflow.application.run_caps import RunCapReached, enforce_run_cap
 
 logger = structlog.get_logger(__name__)
 
@@ -58,6 +59,17 @@ async def _resolve_product_id(ctx: ToolContext, slug_or_id: str | None) -> uuid.
 
 async def _h_direct(args: DirectInput, ctx: ToolContext) -> Any:
     product_id = await _resolve_product_id(ctx, args.product_slug_or_id)
+
+    # 동시 실행 상한 규칙은 :mod:`backend.workflow.application.run_caps` 가
+    # 소유한다 — 여기서는 MCP 의 오류 표면만 얹는다. REST 문만 막으면 에이전트
+    # 클라이언트가 그대로 우회한다.
+    try:
+        await enforce_run_cap(ctx.session, workspace_id=ctx.principal.workspace_id)
+    except RunCapReached as exc:
+        raise ToolError(
+            f"workspace already holds {exc.held} concurrent runs (limit {exc.limit}) — "
+            "ship or discard a run that is waiting for review, then submit again"
+        ) from exc
 
     trigger = DirectTrigger(ctx.session)
     outcome = await trigger.submit(

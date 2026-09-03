@@ -125,9 +125,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "flatten_notification_matrix", (
-        f"expected head flatten_notification_matrix, got {stamped}"
-    )
+    assert stamped == "workspace_run_cap", f"expected head workspace_run_cap, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -135,7 +133,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "flatten_notification_matrix"
+    assert stamped == "workspace_run_cap"
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
@@ -685,3 +683,88 @@ def test_oauth_device_codes_table_round_trips():
 
     _alembic(["upgrade", "head"], env_extra=env_extra)
     assert {"device_code_hash", "user_code"} <= asyncio.run(_columns())
+
+
+def test_run_cap_backfill_prices_everyone_but_the_operator():
+    """The free plan's cap lands on existing workspaces — except the operator's.
+
+    ⚠ This test exists because the interesting half of that migration is a
+    branch that a fresh database never enters. ``test_fresh_pg_upgrade_round_trip``
+    runs the grandfathering UPDATE against zero rows and proves only that the
+    statement parses. Here the rows are seeded FIRST, so the branch actually
+    executes: an ordinary workspace is backfilled to the free default, and the
+    workspace belonging to ``admin@bsvibe.dev`` is taken off the plan.
+
+    Without it, prod would have priced the operator's own workspace — which was
+    measured holding 30 runs awaiting review — and locked it out of submitting
+    the moment this deployed.
+    """
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    # Stop one revision short: the column does not exist yet, so the rows below
+    # are exactly the pre-existing workspaces a real deploy would meet.
+    _alembic(["upgrade", "flatten_notification_matrix"], env_extra=env_extra)
+
+    operator_ws = "11111111-1111-1111-1111-111111111111"
+    ordinary_ws = "22222222-2222-2222-2222-222222222222"
+
+    async def _seed() -> None:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                for ws, name in ((operator_ws, "operator"), (ordinary_ws, "ordinary")):
+                    await conn.execute(
+                        text(
+                            "INSERT INTO workspaces (id, name, created_at, updated_at) "
+                            "VALUES (:id, :name, now(), now())"
+                        ),
+                        {"id": ws, "name": name},
+                    )
+                await conn.execute(
+                    text(
+                        "INSERT INTO users (id, supabase_user_id, email, created_at) "
+                        "VALUES (:id, :sub, :email, now())"
+                    ),
+                    {
+                        "id": "33333333-3333-3333-3333-333333333333",
+                        "sub": "operator-sub",
+                        "email": "admin@bsvibe.dev",
+                    },
+                )
+                await conn.execute(
+                    text(
+                        "INSERT INTO memberships (id, user_id, workspace_id, role, joined_at) "
+                        "VALUES (:id, :uid, :ws, 'owner', now())"
+                    ),
+                    {
+                        "id": "44444444-4444-4444-4444-444444444444",
+                        "uid": "33333333-3333-3333-3333-333333333333",
+                        "ws": operator_ws,
+                    },
+                )
+        finally:
+            await engine.dispose()
+
+    async def _caps() -> dict[str, int | None]:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(text("SELECT id::text, max_concurrent_runs FROM workspaces"))
+                ).all()
+                return {row[0]: row[1] for row in rows}
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed())
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    caps = asyncio.run(_caps())
+    assert caps[ordinary_ws] == 3, (
+        f"an existing workspace should be priced, got {caps[ordinary_ws]}"
+    )
+    assert caps[operator_ws] is None, (
+        f"the operator's workspace must come off the plan, got {caps[operator_ws]}"
+    )

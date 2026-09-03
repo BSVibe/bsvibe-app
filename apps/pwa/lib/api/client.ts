@@ -28,31 +28,51 @@ export function backendBaseUrl(): string {
   return process.env.NEXT_PUBLIC_BACKEND_URL || "https://api.bsvibe.dev";
 }
 
+/** A FastAPI `detail` that is an object rather than a sentence. The backend
+ *  sends one when the caller has to *react* to the reason (not just show it):
+ *  `code` names the reason so the UI can branch on it instead of guessing from
+ *  the status, and the remaining fields carry whatever numbers the localized
+ *  message needs. A status code alone is too coarse — `/messages` already
+ *  refuses for two unrelated reasons. */
+export type ApiErrorDetail = { code: string; [key: string]: unknown };
+
 export class ApiError extends Error {
   readonly status: number;
   /** The backend's parsed `detail` (FastAPI error body), when present. Lets a
    *  caller surface a human hint (e.g. the 422 rephrase message for an
    *  uninterpretable routing condition) instead of the generic status message. */
   readonly detail?: string;
+  /** The parsed `detail` when the backend sent a structured one. */
+  readonly reason?: ApiErrorDetail;
 
-  constructor(status: number, message: string, detail?: string) {
+  constructor(status: number, message: string, detail?: string, reason?: ApiErrorDetail) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.reason = reason;
   }
 }
 
 /** Best-effort read of a FastAPI `{detail}` error body. Clones the response so
  *  the caller keeps its stream, and never throws (a non-JSON body → undefined). */
-async function readErrorDetail(response: Response): Promise<string | undefined> {
+async function readErrorDetail(
+  response: Response,
+): Promise<{ detail?: string; reason?: ApiErrorDetail }> {
   try {
     const body = (await response.clone().json()) as { detail?: unknown };
-    if (typeof body.detail === "string") return body.detail;
+    if (typeof body.detail === "string") return { detail: body.detail };
+    if (
+      body.detail !== null &&
+      typeof body.detail === "object" &&
+      typeof (body.detail as { code?: unknown }).code === "string"
+    ) {
+      return { reason: body.detail as ApiErrorDetail };
+    }
   } catch {
     // Non-JSON / empty body — fall through to no detail.
   }
-  return undefined;
+  return {};
 }
 
 /**
@@ -171,11 +191,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     if (response.status === 401) {
       handleUnauthorized(path);
     }
-    const detail = await readErrorDetail(response);
+    const { detail, reason } = await readErrorDetail(response);
     throw new ApiError(
       response.status,
       `${init.method ?? "GET"} ${path} → ${response.status}`,
       detail,
+      reason,
     );
   }
   if (response.status === 204) {

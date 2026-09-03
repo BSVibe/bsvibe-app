@@ -31,6 +31,7 @@ from backend.workers.emit import (
 )
 from backend.workflow.application.direct_answer import DirectAnswerService
 from backend.workflow.application.intake.direct import DirectTrigger
+from backend.workflow.application.run_caps import RunCapReached, enforce_run_cap
 
 router = APIRouter()
 
@@ -122,6 +123,21 @@ async def submit_message(
     product_id = await _resolve_product_id(
         workspace_id=workspace_id, requested=body.product_id, session=session
     )
+
+    # The free plan's concurrent-run cap. 429 (not 400) because the PWA reads
+    # a 400 here as "this workspace has no products" — the one thing this
+    # endpoint refused before — and would have shown a founder who has plenty
+    # of products a hint telling them to make one.
+    try:
+        await enforce_run_cap(session, workspace_id=workspace_id)
+    except RunCapReached as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            # A structured detail, not a sentence: the PWA writes its own
+            # localized copy (an English string would land verbatim on a KO
+            # surface) and needs the real limit, which differs per workspace.
+            detail={"code": "run_cap_reached", "limit": exc.limit, "held": exc.held},
+        ) from exc
 
     trigger = DirectTrigger(session)
     outcome = await trigger.submit(
