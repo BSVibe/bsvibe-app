@@ -27,6 +27,8 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.config import get_settings
+from backend.storage.product_workspace import run_worktree_path
 from backend.workflow.application.run_delivery_resolution import (
     AUTO_RESOLVED_DELIVERABLE_SHIPPED,
     SYSTEM_AUTO_RESOLVE_ACTOR_ID,
@@ -57,6 +59,36 @@ pytestmark = pytest.mark.asyncio
 async def sf():
     async with db_engine(ExecutionBase) as (engine, _is_pg):
         yield async_sessionmaker(engine, expire_on_commit=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_run_root(tmp_path, monkeypatch):
+    """Github-bound-ship tests provision a run worktree on disk — isolate it
+    from the real run-workspace root (mirrors ``tests/glue/test_auto_ship_gate.py``)."""
+    monkeypatch.setattr(get_settings(), "run_workspace_root", str(tmp_path / "runs"), raising=False)
+
+
+async def _seed_github_binding(sf_: async_sessionmaker, workspace_id: uuid.UUID) -> None:
+    """Seed an active github ``ConnectorAccountRow`` so
+    ``delivers_via_local_product_repo`` resolves ``False`` for the workspace
+    (mirrors ``tests/glue/test_auto_ship_gate.py``)."""
+    from backend.connectors.db import ConnectorAccountRow
+    from backend.router.accounts.crypto import CredentialCipher
+
+    cipher = CredentialCipher(b"0" * 32)
+    async with sf_() as s:
+        s.add(
+            ConnectorAccountRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                connector="github",
+                webhook_token=uuid.uuid4().hex,
+                signing_secret_ciphertext=cipher.encrypt("ghp_test_token"),
+                delivery_config={"repo": "owner/name"},
+                is_active=True,
+            )
+        )
+        await s.commit()
 
 
 class _RecordingDispatcher:
@@ -104,6 +136,7 @@ async def _seed_paused_run(
     run_status: RunStatus = RunStatus.RUNNING,
     decision_kind: str | None = "human_review_required",
     decision_status: DecisionStatus = DecisionStatus.PENDING,
+    product_id: uuid.UUID | None = None,
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID | None]:
     """Seed a run + WorkStep + Deliverable (+ optional Decision).
 
@@ -119,7 +152,7 @@ async def _seed_paused_run(
             ExecutionRun(
                 id=run_id,
                 workspace_id=workspace_id,
-                product_id=None,
+                product_id=product_id,
                 status=run_status,
                 payload={},
                 created_at=datetime.now(tz=UTC),
@@ -279,6 +312,133 @@ async def test_verified_run_without_pending_decision_is_untouched(sf) -> None:
             (await s.execute(select(Decision).where(Decision.run_id == run_id))).scalars().all()
         )
         assert decisions == []
+
+
+def _provision_worktree(run_id: uuid.UUID) -> None:
+    """A minimal on-disk worktree with a directory ``.git`` — enough for
+    ``delivers_via_local_product_repo`` to proceed past its "was a workspace
+    provisioned at all" filesystem check."""
+    path = run_worktree_path(run_id)
+    path.mkdir(parents=True)
+    (path / ".git").mkdir()
+
+
+async def test_github_bound_run_with_no_pending_decision_ships_on_delivery(sf) -> None:
+    """The prod shape this fix closes (live run ``10e8b5f1``): github-bound
+    product run, verification PASSED, zero pending Decisions, Safe Mode
+    approved → dispatch succeeds (PR opened) → the run must reach a
+    terminal status, not sit at REVIEW_READY forever."""
+    product_id = uuid.uuid4()
+    workspace_id, run_id, deliverable_id, _ = await _seed_paused_run(
+        sf,
+        run_status=RunStatus.REVIEW_READY,
+        decision_kind=None,
+        product_id=product_id,
+    )
+    await _seed_github_binding(sf, workspace_id)
+    _provision_worktree(run_id)
+    dispatcher = _RecordingDispatcher(_success_result(workspace_id, deliverable_id))
+
+    await dispatch_delivery(
+        dispatcher,
+        workspace_id=workspace_id,
+        deliverable_id=deliverable_id,
+        artifact_type="pr",
+        session_factory=sf,
+    )
+
+    assert dispatcher.calls == 1
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        assert run.status is RunStatus.SHIPPED
+        hops = (
+            (
+                await s.execute(
+                    select(ExecutionRunHistory)
+                    .where(ExecutionRunHistory.run_id == run_id)
+                    .order_by(ExecutionRunHistory.created_at.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # Already at REVIEW_READY — only the final hop fires (no illegal jump).
+        edges = [(h.from_status, h.to_status) for h in hops]
+        assert (RunStatus.REVIEW_READY, RunStatus.SHIPPED) in edges
+        assert (RunStatus.RUNNING, RunStatus.REVIEW_READY) not in edges
+
+
+async def test_github_bound_failed_dispatch_does_not_ship_run(sf) -> None:
+    """Negative control 1: a failed dispatch for a github-bound run with no
+    pending Decision must NOT ship the run either."""
+    product_id = uuid.uuid4()
+    workspace_id, run_id, deliverable_id, _ = await _seed_paused_run(
+        sf,
+        run_status=RunStatus.REVIEW_READY,
+        decision_kind=None,
+        product_id=product_id,
+    )
+    await _seed_github_binding(sf, workspace_id)
+    _provision_worktree(run_id)
+
+    await dispatch_delivery(
+        _RecordingDispatcher(_failed_result(workspace_id, deliverable_id)),
+        workspace_id=workspace_id,
+        deliverable_id=deliverable_id,
+        artifact_type="pr",
+        session_factory=sf,
+    )
+
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        assert run.status is RunStatus.REVIEW_READY  # unchanged, not shipped
+
+
+async def test_local_product_run_is_untouched_by_this_fix(sf) -> None:
+    """Negative control 2: a local product run (no github binding — its OWN
+    ``_auto_ship_product_run`` owns getting it to SHIPPED) must NOT be shipped
+    by this helper, even with delivery success and zero pending Decisions."""
+    product_id = uuid.uuid4()
+    workspace_id, run_id, deliverable_id, _ = await _seed_paused_run(
+        sf,
+        run_status=RunStatus.REVIEW_READY,
+        decision_kind=None,
+        product_id=product_id,
+    )
+    _provision_worktree(run_id)  # no github binding seeded
+
+    resolved = await _run_helper(sf, deliverable_id)
+
+    assert resolved is False
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        assert run.status is RunStatus.REVIEW_READY  # untouched
+
+
+async def test_github_bound_second_delivery_after_ship_is_noop(sf) -> None:
+    """Idempotent: a second delivery of the same already-shipped github-bound
+    run does nothing."""
+    product_id = uuid.uuid4()
+    workspace_id, run_id, deliverable_id, _ = await _seed_paused_run(
+        sf,
+        run_status=RunStatus.REVIEW_READY,
+        decision_kind=None,
+        product_id=product_id,
+    )
+    await _seed_github_binding(sf, workspace_id)
+    _provision_worktree(run_id)
+
+    first = await _run_helper(sf, deliverable_id)
+    second = await _run_helper(sf, deliverable_id)
+
+    assert first is True
+    assert second is False
+    async with sf() as s:
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None and run.status is RunStatus.SHIPPED
 
 
 async def test_missing_deliverable_is_noop(sf) -> None:

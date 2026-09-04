@@ -19,6 +19,42 @@ moot) and transition the run to the terminal ``SHIPPED`` state — WITHOUT
 re-delivering (already delivered) and WITHOUT minting a duplicate Deliverable
 (one already exists).
 
+Second gap, same shape, no pending Decision involved (found live 2026-09-04,
+run ``10e8b5f1``): a github-bound product run has NO in-process path to
+``SHIPPED`` at all. ``AgentRunner.transition``'s REVIEW_READY branch only calls
+``_auto_ship_product_run`` (the local ``merge_to_main`` fast-forward) when
+:func:`~backend.workflow.application.agent_runner.delivers_via_local_product_repo`
+is ``True`` — and it is explicitly ``False`` for a github-bound run (the local
+fast-forward would only fail there, issue #362). So a clean run (verification
+passed, zero pending Decisions) sits at ``REVIEW_READY`` forever: there is no
+worker, no tick, nothing else that ever moves it past that status. Approving it
+in Safe Mode opens (and can merge) the PR, but the run itself never learns.
+This module is reused for that case too — see the ``product_id is not None and
+not delivers_via_local_product_repo(...)`` branch below — because it is
+already the single seam every delivery-success path (worker / REST / MCP /
+Telegram) funnels through, and because "the deliverable shipped" is exactly
+the same terminal-worthy fact whether or not a review Decision happened to be
+pending. **Layer choice:** this was NOT put in ``dispatch_delivery`` as a
+parallel seam, and NOT left to ``merge_watch_worker`` (PR-merge time), on
+purpose:
+
+* A parallel seam in ``dispatch_delivery`` would duplicate the exact
+  terminal/idempotency guards this function already has (terminal-status
+  check, flush-only transaction discipline) for what is really the same
+  decision ("this Deliverable just shipped — does the run need moving to
+  SHIPPED right now, and how").
+* ``merge_watch_worker`` answers a DIFFERENT question — "has the PR been
+  merged" — for the auto-merge feature, and is not present/wired for every
+  delivery. Gating run-terminal on it would mean a run with auto-merge off
+  (or one whose PR the founder merges by hand, or merges with unrelated CI
+  still pending) never reaches SHIPPED either. **Delivery success (the PR
+  successfully opened) is the product-meaning boundary "shipped" already uses
+  elsewhere in this file** — the sibling pending-Decision branch above ships
+  the run the moment the PR opens too, not when it merges — so this is the
+  one place a single run-status invariant ("a delivered run is terminal") can
+  be enforced without inventing a second, later definition of "shipped" that
+  would only apply to github-bound runs.
+
 The transition takes the SAME two valid state-machine hops the checkpoint
 ``ship`` handler uses (``RUNNING → REVIEW_READY → SHIPPED``) and marks the
 latest WorkStep VERIFIED / PROVED exactly like
@@ -117,14 +153,21 @@ async def auto_resolve_run_on_delivery(
     * the run is missing or already terminal (SHIPPED / CANCELLED / FAILED) —
       so a repeat delivery of an already-shipped run does nothing;
     * the run has NO pending ``human_review_required`` / ``verification_failed``
-      Decision — so a run that took the normal verified → REVIEW_READY →
-      SHIPPED path is never touched.
+      Decision AND it has (or could have) an in-process path off REVIEW_READY —
+      i.e. it is not product-bound, or it delivers via the local product repo
+      (:func:`~backend.workflow.application.agent_runner.delivers_via_local_product_repo`
+      is ``True``, so ``AgentRunner._auto_ship_product_run`` owns getting it to
+      SHIPPED). Left alone either way: a normal verified run finishes its OWN
+      path, and a local-repo run's ship depends on an actual git merge this
+      module must never fake.
 
-    On the happy path it: marks each such pending Decision ``RESOLVED`` with the
-    :data:`AUTO_RESOLVED_DELIVERABLE_SHIPPED` marker (``resolved_at`` /
-    ``resolved_by`` stamped), marks the latest WorkStep VERIFIED / PROVED, and
-    transitions the run ``RUNNING → REVIEW_READY → SHIPPED`` via the same valid
-    two-hop path :func:`_ship_decision_run` uses. It NEVER re-delivers and NEVER
+    Otherwise — a pending review Decision, OR a product-bound run with no
+    local-repo auto-ship path (github-bound) — it: marks each pending Decision
+    (if any) ``RESOLVED`` with the :data:`AUTO_RESOLVED_DELIVERABLE_SHIPPED`
+    marker (``resolved_at`` / ``resolved_by`` stamped), marks the latest
+    WorkStep VERIFIED / PROVED, and transitions the run ``RUNNING`` (or
+    ``REVIEW_READY``) ``→ REVIEW_READY → SHIPPED`` via the same valid two-hop
+    path :func:`_ship_run_via_review_ready` uses. It NEVER re-delivers and NEVER
     mints a Deliverable — one already exists (it is the one that just shipped).
 
     Flush-only: the caller owns the transaction boundary.
@@ -147,8 +190,10 @@ async def auto_resolve_run_on_delivery(
         for d in all_for_run
         if d.status is DecisionStatus.PENDING and d.decision in _REVIEW_DECISION_KINDS
     ]
-    if not pending_review:
-        # Normal verified path (no pending review gate) — leave the run alone.
+    if not pending_review and not await _stranded_without_local_auto_ship(session, run):
+        # Normal verified path (no pending review gate), or a product-bound
+        # run whose OWN in-process auto-ship at REVIEW_READY owns getting it
+        # to SHIPPED (local merge_to_main) — leave the run alone either way.
         return False
 
     now = datetime.now(tz=UTC)
@@ -178,10 +223,15 @@ async def auto_resolve_run_on_delivery(
         work_step.proof_state = ProofState.PROVED
 
     # Two valid state-machine hops to the terminal SHIPPED state, always PASSING
-    # THROUGH REVIEW_READY (never a RUNNING → SHIPPED illegal jump). A run paused
-    # on a review Decision rests at RUNNING; the defensive REVIEW_READY branch
-    # covers the rare case the run already advanced.
-    reason = f"auto-resolved: deliverable {deliverable_id} shipped (review moot)"
+    # THROUGH REVIEW_READY (never a RUNNING → SHIPPED illegal jump). A run
+    # paused on a review Decision rests at RUNNING (both hops fire); a
+    # github-bound run stranded with no pending Decision already sits at
+    # REVIEW_READY (only the final hop fires — see ``_ship_run_via_review_ready``).
+    reason = (
+        f"auto-resolved: deliverable {deliverable_id} shipped (review moot)"
+        if pending_review
+        else f"auto-resolved: deliverable {deliverable_id} shipped (no local auto-ship path)"
+    )
     _ship_run_via_review_ready(session, run, reason=reason)
 
     await session.flush()
@@ -201,6 +251,44 @@ async def auto_resolve_run_on_delivery(
         resolved_decisions=len(pending_review),
     )
     return True
+
+
+async def _stranded_without_local_auto_ship(session: AsyncSession, run: ExecutionRun) -> bool:
+    """True iff ``run`` has NO in-process path off ``REVIEW_READY`` at all, so a
+    delivery-success event is the ONLY remaining signal it can ever ship.
+
+    Scoped to ``run.product_id is not None`` — a non-product run keeps the
+    pre-existing "leave it at REVIEW_READY" invariant (matches
+    ``AgentRunner.transition``'s own doc: "Non-product runs ... transition to
+    REVIEW_READY and stay there unchanged"), since this module has no basis to
+    invent a different one for it.
+
+    For a product-bound run, delegates the ownership question to the SAME
+    predicate ``AgentRunner.transition`` gates its own auto-ship call on
+    (:func:`~backend.workflow.application.agent_runner.delivers_via_local_product_repo`)
+    so the two can never disagree about which runs own their own ship. When
+    that predicate is ``True`` (local repo — incl. a run mid-retry after a
+    busy lock / merge failure) this returns ``False``: that run's ship depends
+    on an actual ``merge_to_main``, which only ``_auto_ship_product_run`` may
+    run — faking it here would ship a run whose work was never actually
+    merged.
+
+    Imported lazily (function-local, not at module import time) for the same
+    reason the module docstring gives for not importing :class:`AgentRunner`
+    outright: this helper is reached from the inbound webhook layer, which the
+    R2c contract keeps light. ``delivers_via_local_product_repo`` is a plain
+    function (not a method), so importing it alone does not drag the engine
+    graph — but it lazy-imports the connector/DB lookups it needs, and keeping
+    the import here (rather than at module scope) keeps that cost off every
+    other caller of this module.
+    """
+    if run.product_id is None:
+        return False
+    from backend.workflow.application.agent_runner import (  # noqa: PLC0415
+        delivers_via_local_product_repo,
+    )
+
+    return not await delivers_via_local_product_repo(session, run)
 
 
 def _ship_run_via_review_ready(
