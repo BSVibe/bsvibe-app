@@ -319,7 +319,9 @@ async def write_verified_deliverable(
     # GitHub-style red/green. Best-effort + product-run only; a missing diff
     # leaves the payload as before and the viewer falls back to additions.
     payload: dict[str, Any] = {"artifact_refs": artifact_refs, "summary": summary}
-    diff, diff_truncated, diff_truncated_detail = await _capture_product_run_diff(run, artifact_refs)
+    diff, diff_truncated, diff_truncated_detail = await _capture_product_run_diff(
+        run, artifact_refs
+    )
     if diff is not None:
         payload["diff"] = diff
         if diff_truncated:
