@@ -21,7 +21,9 @@ native loop's stream emission is gated on its own redis client). It ``add``s +
 
 from __future__ import annotations
 
+import re
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -106,29 +108,163 @@ def _shipped_detail(summary: str) -> str:
 
 # Cap for the captured unified diff stored on the deliverable payload. A typical
 # deliverable diff is a few KB; this guards a runaway diff (a large generated/
-# vendored file) from bloating the row. Past it, the leading bytes are kept and
-# ``diff_truncated`` is flagged so the viewer shows a calm "showing the first
-# part" note rather than persisting an unbounded blob.
+# vendored file) from bloating the row. Past it, truncation PREFERS the files
+# the run actually claims as its artifacts (see
+# ``_truncate_diff_preserving_artifacts`` below) rather than blindly keeping
+# the leading bytes -- a blind head-cut silently drops the founder's real
+# artifact whenever an earlier vendored/generated file sorts first in the diff.
 _MAX_DIFF_CHARS = 256 * 1024
 
+_DIFF_SECTION_HEADER_RE = re.compile(r"^diff --git ", re.MULTILINE)
+_DIFF_SECTION_PATHS_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")
 
-async def _capture_product_run_diff(run: ExecutionRun) -> tuple[str | None, bool]:
-    """The run's own changes as a (possibly truncated) unified diff, or ``(None,
-    False)``. Product runs only — a non-product (Direct) run has no worktree and
-    no 'before' state, so there is nothing to diff. Best-effort: any failure
-    degrades to no diff, never breaks the verified terminal."""
+
+@dataclass(frozen=True)
+class _DiffSection:
+    """One 'diff --git ...' section, byte-exact, plus the paths it touches.
+
+    ``paths`` holds both the a/ and b/ sides (they differ on a rename) so a
+    match against either side counts as touching the artifact. ``display_path``
+    is None when the section has no parseable header (the "no header at all"
+    whole-diff case) -- there is no path to report.
+    """
+
+    text: str
+    paths: frozenset[str]
+    display_path: str | None
+
+
+def _split_diff_sections(diff: str) -> list[_DiffSection]:
+    """Split ``diff`` into its 'diff --git' sections, preserving every byte.
+
+    No header at all (a diff produced without --git style headers) yields a
+    single section covering the whole text with no known path.
+    """
+    matches = list(_DIFF_SECTION_HEADER_RE.finditer(diff))
+    if not matches:
+        return [_DiffSection(text=diff, paths=frozenset(), display_path=None)]
+    sections: list[_DiffSection] = []
+    for i, match in enumerate(matches):
+        start = match.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(diff)
+        text = diff[start:end]
+        header_line = text.splitlines()[0] if text else ""
+        path_match = _DIFF_SECTION_PATHS_RE.match(header_line)
+        if path_match:
+            a_path, b_path = path_match.group(1), path_match.group(2)
+            paths = frozenset({a_path, b_path})
+            display_path = b_path if b_path != "/dev/null" else a_path
+        else:
+            paths = frozenset()
+            display_path = None
+        sections.append(_DiffSection(text=text, paths=paths, display_path=display_path))
+    return sections
+
+
+def _truncate_diff_preserving_artifacts(
+    diff: str, artifact_refs: list[str], max_chars: int
+) -> tuple[str, bool, list[dict[str, Any]] | None]:
+    """Truncate ``diff`` to ``max_chars``, keeping the founder's artifacts alive.
+
+    Returns ``(diff, truncated, detail)``:
+
+    - fits already -> ``(diff, False, None)``, the ORIGINAL string untouched
+      (byte-identical -- this is the negative-control path).
+    - artifact sections alone exceed the budget -> only artifact sections are
+      kept, in their ORIGINAL DOCUMENT ORDER (a deliberate choice: a reviewer
+      reads a diff top-to-bottom expecting it to match the real patch order,
+      and promoting artifact files to the front would make an already-cut diff
+      harder to reconstruct mentally, not easier -- see
+      TestSectionOrderIsPreserved). Each artifact section gets as much of the
+      shrinking budget as is left, INCLUDING ``kept_chars: 0`` for ones the
+      budget ran out before reaching -- a file that received nothing must
+      still be named, or it silently vanishes from the report the founder
+      reads (the whole reason this function exists).
+    - artifact sections fit -> they are kept whole, and the remaining budget is
+      handed to non-artifact sections whole-or-nothing (never a partial
+      non-artifact file) in original order; ``detail`` is ``None`` here since
+      nothing was partially cut.
+    - the above ever produces an EMPTY result (e.g. ``max_chars`` smaller than
+      even the first section) -> fall back to a leading slice of the first
+      section so the diff is never empty, and say so via ``detail``.
+    """
+    if len(diff) <= max_chars:
+        return diff, False, None
+
+    sections = _split_diff_sections(diff)
+    artifact_set = set(artifact_refs)
+    priority_flags = [bool(section.paths & artifact_set) for section in sections]
+    priority_total = sum(
+        len(section.text) for section, flag in zip(sections, priority_flags, strict=True) if flag
+    )
+
+    detail: list[dict[str, Any]] | None
+    if priority_total > max_chars:
+        kept_parts: list[str] = []
+        detail = []
+        budget = max_chars
+        for section, flag in zip(sections, priority_flags, strict=True):
+            if not flag:
+                continue
+            kept = min(len(section.text), budget) if budget > 0 else 0
+            if kept:
+                kept_parts.append(section.text[:kept])
+            detail.append(
+                {
+                    "path": section.display_path,
+                    "kept_chars": kept,
+                    "total_chars": len(section.text),
+                }
+            )
+            budget -= kept
+        result = "".join(kept_parts)
+    else:
+        remaining = max_chars - priority_total
+        keep_flags = list(priority_flags)
+        for idx, section in enumerate(sections):
+            if priority_flags[idx]:
+                continue
+            if len(section.text) <= remaining:
+                keep_flags[idx] = True
+                remaining -= len(section.text)
+        result = "".join(
+            section.text for section, keep in zip(sections, keep_flags, strict=True) if keep
+        )
+        detail = None
+
+    if not result:
+        first = sections[0]
+        fallback_len = min(len(first.text), max_chars)
+        result = first.text[:fallback_len]
+        detail = [
+            {
+                "path": first.display_path,
+                "kept_chars": fallback_len,
+                "total_chars": len(first.text),
+            }
+        ]
+
+    return result, True, detail
+
+
+async def _capture_product_run_diff(
+    run: ExecutionRun, artifact_refs: list[str]
+) -> tuple[str | None, bool, list[dict[str, Any]] | None]:
+    """The run's own changes as a (possibly truncated) unified diff, or
+    ``(None, False, None)``. Product runs only — a non-product (Direct) run
+    has no worktree and no 'before' state, so there is nothing to diff.
+    Best-effort: any failure degrades to no diff, never breaks the verified
+    terminal."""
     if run.product_id is None:
-        return None, False
+        return None, False, None
     from backend.storage.product_workspace import (
         capture_run_diff,  # noqa: PLC0415 — lazy, cross-layer
     )
 
     diff = await capture_run_diff(run.product_id, run.id)
     if diff is None:
-        return None, False
-    if len(diff) > _MAX_DIFF_CHARS:
-        return diff[:_MAX_DIFF_CHARS], True
-    return diff, False
+        return None, False, None
+    return _truncate_diff_preserving_artifacts(diff, artifact_refs, _MAX_DIFF_CHARS)
 
 
 async def settle_run_context(session: AsyncSession, run: ExecutionRun) -> dict[str, Any]:
@@ -183,11 +319,15 @@ async def write_verified_deliverable(
     # GitHub-style red/green. Best-effort + product-run only; a missing diff
     # leaves the payload as before and the viewer falls back to additions.
     payload: dict[str, Any] = {"artifact_refs": artifact_refs, "summary": summary}
-    diff, diff_truncated = await _capture_product_run_diff(run)
+    diff, diff_truncated, diff_truncated_detail = await _capture_product_run_diff(
+        run, artifact_refs
+    )
     if diff is not None:
         payload["diff"] = diff
         if diff_truncated:
             payload["diff_truncated"] = True
+            if diff_truncated_detail is not None:
+                payload["diff_truncated_detail"] = diff_truncated_detail
 
     deliverable = Deliverable(
         id=uuid.uuid4(),
