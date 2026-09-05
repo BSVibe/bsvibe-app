@@ -186,7 +186,9 @@ async def auto_resolve_run_on_delivery(
         if not _should_ship_review_ready_without_local_auto_ship(run):
             return False
         reason = f"auto-resolved: deliverable {deliverable_id} shipped (no local auto-ship path)"
-        _record_hop(session, run, to_status=RunStatus.SHIPPED, reason=reason, at=datetime.now(tz=UTC))
+        _record_hop(
+            session, run, to_status=RunStatus.SHIPPED, reason=reason, at=datetime.now(tz=UTC)
+        )
         await session.flush()
         logger.info(
             "run_auto_resolved_on_delivery_no_local_ship",
