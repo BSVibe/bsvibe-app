@@ -10,6 +10,19 @@ founder APPROVES the Safe Mode item the deliverable ships (e.g. a GitHub PR
 opens) — but the run's ``human_review_required`` Decision stays ``pending``
 forever, so the run sits ``RUNNING`` "reviewing" work that ALREADY shipped.
 
+"Delivery success" is deliberately the ships-a-PR boundary, NOT the
+PR-gets-merged boundary. That distinction matters because
+:class:`~backend.workflow.infrastructure.workers.merge_watch_worker.MergeWatchWorker`
+is not a passive observer here: once a watched PR's checks go green it
+actually calls ``merge_pr(owner, repo, number, method="squash")`` under a
+per-repo advisory lock, so for a PR it is watching the merge is real, not
+just detected. Gating this module's run-termination on THAT merge anyway
+would strand every run whose delivery is not wired into the merge-watch
+queue, whose repo has GitHub auto-merge disabled, or whose PR a human merges
+by hand — none of those ever produce a merge event this module could key
+off. Delivery success (the PR opening) is the boundary every delivery path
+reaches; a squash merge is not.
+
 The two founder-gates (the run's review Decision + the Safe-Mode delivery
 approval) were DECOUPLED. This module closes the gap (founder choice "B"): when
 a run's Deliverable is DELIVERED (delivery success — covers the
