@@ -325,10 +325,33 @@ class AgentRunner:
         # actually have a git worktree on disk. Glue tests that bypass
         # the workspace provisioner (no worktree) skip auto-ship and
         # leave the run at REVIEW_READY — exactly the pre-W2 invariant.
-        if to_status is RunStatus.REVIEW_READY and await delivers_via_local_product_repo(
-            self._session, run
-        ):
-            await self._auto_ship_product_run(run)
+        #
+        # #886-redo: record the SAME verdict onto ``run.payload`` under the
+        # predicate's own name. A github-bound run answers False here (no
+        # local auto-ship path — it delivers via push+PR, issue #362) and
+        # stays at REVIEW_READY; ``run_delivery_resolution.auto_resolve_run_on_delivery``
+        # reads this recorded answer (never recomputes it) to know it must
+        # complete THAT run's SHIPPED transition once its Deliverable
+        # actually lands. ``run_delivery_resolution`` must not import
+        # ``delivers_via_local_product_repo`` (or anything that reaches it)
+        # itself — that predicate transitively imports
+        # ``delivery.connector_dispatch``, which reaches
+        # ``backend.extensions`` / ``backend.router.accounts.crypto``, and
+        # ``run_delivery_resolution`` is reached from the inbound webhook /
+        # MCP layer that import-linter's "MCP context depends only on
+        # Identity + Workflow + Knowledge + common" contract keeps free of
+        # those (confirmed red with `uv run lint-imports` before this fix —
+        # see that module's docstring). The predicate itself stays computed
+        # in exactly ONE place: here.
+        if to_status is RunStatus.REVIEW_READY:
+            local_auto_ship = await delivers_via_local_product_repo(self._session, run)
+            existing_payload = run.payload if isinstance(run.payload, dict) else {}
+            run.payload = {
+                **existing_payload,
+                "delivers_via_local_product_repo": local_auto_ship,
+            }
+            if local_auto_ship:
+                await self._auto_ship_product_run(run)
 
         # Step handoff — when a step of a split request reaches its verified
         # terminal, spawn the next one (seeded with this run's id + produced

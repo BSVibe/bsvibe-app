@@ -39,6 +39,34 @@ engine's REVIEW_READY side effects (``_auto_ship_product_run``'s ``merge_to_main
 git op, ``_maybe_spawn_impl_run``) — the work already shipped via the connector,
 so we only reflect that by moving the run to its terminal SHIPPED state.
 
+#886-redo — a github-bound product run reaches REVIEW_READY WITHOUT any
+pending review Decision (the normal verified path) and WITHOUT auto-shipping
+locally (``AgentRunner.transition``'s ``delivers_via_local_product_repo`` gate
+skips the local ``merge_to_main`` for it — issue #362, it delivers via
+push+PR instead). Nothing used to ever move that run past REVIEW_READY: this
+module's ``if not pending_review: return False`` early-return treated it
+exactly like an already-locally-shipped run, so once its Deliverable's PR
+actually opened, the run sat REVIEW_READY forever (prod: runs ``10e8b5f1``,
+``96edde43``). :func:`auto_resolve_run_on_delivery` now also completes THAT
+run's SHIPPED transition on delivery success — but it does so by READING the
+verdict ``AgentRunner.transition`` already recorded on
+``run.payload["delivers_via_local_product_repo"]``, never by recomputing the
+predicate itself (that predicate transitively imports
+``delivery.connector_dispatch``, which reaches ``backend.extensions`` /
+``backend.router.accounts.crypto`` — modules import-linter's "MCP context
+depends only on Identity + Workflow + Knowledge + common" contract forbids
+reaching from this module's callers; a lazy/function-local import does NOT
+avoid this, `import-linter` walks function-local imports into its static
+graph too — confirmed red with ``uv run lint-imports`` on a trial import
+before this fix). A run that reached REVIEW_READY before this payload key
+existed (or any non-product run, whose recorded verdict is always False
+too — see the ``run.product_id is not None`` guard below) has no recorded
+answer or an inapplicable one; ``_should_ship_review_ready_without_local_auto_ship``
+FAILS CLOSED for both, matching the founder's explicit call: shipping a run
+with no evidence risks terminating one whose product repo never actually got
+merged, and a stuck pre-fix run is cheap for a human to ``discard`` — only
+NEW runs are guaranteed not to get stuck by this fix.
+
 The helper is transaction-agnostic — it ``flush``es but never ``commit``s
 (mirrors :mod:`backend.workflow.application.checkpoint_resolution`). The single
 delivery-success seam (:func:`~backend.workflow.infrastructure.workers.delivery_worker.dispatch_delivery`)
@@ -148,8 +176,26 @@ async def auto_resolve_run_on_delivery(
         if d.status is DecisionStatus.PENDING and d.decision in _REVIEW_DECISION_KINDS
     ]
     if not pending_review:
-        # Normal verified path (no pending review gate) — leave the run alone.
-        return False
+        # No paused review gate. Either (a) the normal verified path on a run
+        # that auto-ships LOCALLY — already SHIPPED by
+        # ``AgentRunner._auto_ship_product_run``, filtered out by the
+        # terminal-status guard above — or (b) a github-bound run that
+        # reached REVIEW_READY with NO local auto-ship path (#886-redo, see
+        # module docstring). Complete (b) here; (a) and every other shape are
+        # a no-op.
+        if not _should_ship_review_ready_without_local_auto_ship(run):
+            return False
+        reason = f"auto-resolved: deliverable {deliverable_id} shipped (no local auto-ship path)"
+        _record_hop(
+            session, run, to_status=RunStatus.SHIPPED, reason=reason, at=datetime.now(tz=UTC)
+        )
+        await session.flush()
+        logger.info(
+            "run_auto_resolved_on_delivery_no_local_ship",
+            run_id=str(run_id),
+            deliverable_id=str(deliverable_id),
+        )
+        return True
 
     now = datetime.now(tz=UTC)
     for decision in pending_review:
@@ -201,6 +247,47 @@ async def auto_resolve_run_on_delivery(
         resolved_decisions=len(pending_review),
     )
     return True
+
+
+def _recorded_local_auto_ship(run: ExecutionRun) -> bool | None:
+    """The ``delivers_via_local_product_repo`` verdict ``AgentRunner.transition``
+    recorded on ``run.payload`` when this run reached REVIEW_READY, or
+    ``None`` if it was never recorded (a run that reached REVIEW_READY before
+    this payload key existed).
+
+    Reads ONLY the payload — never recomputes the predicate (see module
+    docstring for why importing it here is off-limits).
+    """
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    value = payload.get("delivers_via_local_product_repo")
+    return value if isinstance(value, bool) else None
+
+
+def _should_ship_review_ready_without_local_auto_ship(run: ExecutionRun) -> bool:
+    """True iff THIS run is the #886-redo case: REVIEW_READY, product-bound,
+    and recorded (at its REVIEW_READY transition) as having NO local
+    auto-ship path — so a successful delivery is the only remaining signal
+    that can complete its SHIPPED transition.
+
+    False for every other shape, each deliberately fail-closed / hands-off:
+
+    * not REVIEW_READY (still RUNNING, paused on a non-review Decision such
+      as ``ask_user_question``) — nothing to complete yet.
+    * ``run.product_id is None`` — a non-product run never had a local
+      auto-ship path to skip in the first place; its pre-#886-redo invariant
+      (REVIEW_READY is not touched here) is unchanged.
+    * recorded verdict is ``True`` — local auto-ship owns this run's SHIPPED
+      transition (already done, or its own retry path will do it); touching
+      it here would race that path.
+    * recorded verdict is ``None`` (missing) — a pre-fix run. FAIL CLOSED:
+      there is no way to tell whether it already shipped locally, and a
+      human ``discard`` is the safe way to clear a stuck one.
+    """
+    if run.status is not RunStatus.REVIEW_READY:
+        return False
+    if run.product_id is None:
+        return False
+    return _recorded_local_auto_ship(run) is False
 
 
 def _ship_run_via_review_ready(
