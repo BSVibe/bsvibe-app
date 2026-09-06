@@ -41,7 +41,7 @@ def round_budget_stats(orch: RunOrchestrator, registry: Any, cycles_used: int) -
 def round_budget_cap(orch: RunOrchestrator, registry: Any) -> int:
     """This run's EFFECTIVE round cap for the current cycle — re-evaluated every
     iteration, since a re-declaration can change it mid-run."""
-    declared = getattr(registry, "declared_round_budget", None)
+    declared: int | None = getattr(registry, "declared_round_budget", None)
     if declared is None:
         return orch._max_cycles
     return min(declared, orch._max_cycles)
