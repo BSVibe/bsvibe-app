@@ -200,6 +200,7 @@ async def land_verified_artifacts(
     redis_client: Any,
     settings: Settings,
     knowledge: RememberableKnowledge | None = None,
+    round_budget: dict[str, int] | None = None,
 ) -> Deliverable:
     """Land the run's finished work where the FOUNDER can reach it.
 
@@ -243,6 +244,7 @@ async def land_verified_artifacts(
         ),
         # v2 — the agent's own retrospective knowledge declaration (or None).
         knowledge=knowledge,
+        round_budget=round_budget,
     )
 
     # Wake the delivery + settle consumers (worker_mode="redis_streams"
@@ -294,6 +296,7 @@ async def finish_verified(
     redis_client: Any,
     settings: Settings,
     knowledge: RememberableKnowledge | None = None,
+    round_budget: dict[str, int] | None = None,
 ) -> LoopResult:
     """Land the verified terminal — the sandbox path's PROVED terminal.
 
@@ -323,6 +326,7 @@ async def finish_verified(
         redis_client=redis_client,
         settings=settings,
         knowledge=knowledge,
+        round_budget=round_budget,
     )
 
     logger.info(

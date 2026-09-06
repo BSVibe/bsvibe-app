@@ -300,6 +300,7 @@ async def write_verified_deliverable(
     artifact_refs: list[str],
     summary: str,
     knowledge: RememberableKnowledge | None = None,
+    round_budget: dict[str, int] | None = None,
 ) -> Deliverable:
     """Write the verified-terminal artifacts for ``run`` and return the Deliverable.
 
@@ -381,6 +382,11 @@ async def write_verified_deliverable(
             "topic": knowledge.topic,
             "insight": knowledge.insight,
         }
+    # SYSTEM-recorded numbers — never LLM prose. How many rounds this step was
+    # declared to need vs. how many it actually took, settled where a FUTURE run's
+    # estimate can search for it ("how long does this kind of step usually take").
+    if round_budget is not None:
+        settle_payload["round_budget"] = dict(round_budget)
     session.add(
         ExecutionRunActivity(
             id=uuid.uuid4(),

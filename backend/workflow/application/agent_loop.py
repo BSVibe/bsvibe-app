@@ -456,6 +456,7 @@ class RunOrchestrator:
         final_text: str,
         verdict: VerificationResult,
         knowledge: RememberableKnowledge | None = None,
+        round_budget: dict[str, int] | None = None,
     ) -> LoopResult:
         return await finish_verified(
             self._session,
@@ -468,6 +469,7 @@ class RunOrchestrator:
             redis_client=self._redis_client,
             settings=self._settings,
             knowledge=knowledge,
+            round_budget=round_budget,
         )
 
     async def _create_decision(

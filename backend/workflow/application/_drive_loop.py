@@ -34,6 +34,11 @@ from backend.workflow.application.audit_events import (
     VerifyRun,
 )
 from backend.workflow.application.inplace_gate import capture_inplace_baseline
+from backend.workflow.application.round_budget import (
+    RoundBudgetTracker,
+    round_budget_cap,
+    round_budget_stats,
+)
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
     MAX_NO_WORK_NUDGES,
@@ -219,13 +224,24 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     run_baseline = await capture_inplace_baseline(box)
     inplace_baseline = run_baseline if getattr(box, "runs_in_place", False) else None
 
-    for _cycle in range(orch._max_cycles):
+    # ``round_budget_cap`` is re-evaluated every iteration (see ``round_budget.py``):
+    # the agent's declared round_budget can change MID-RUN, so a plain
+    # ``for _cycle in range(orch._max_cycles)`` would have baked in the ceiling before
+    # its first declare_verification call ever ran.
+    _cycle = 0
+    round_budget_tracker = RoundBudgetTracker()
+
+    while _cycle < round_budget_cap(orch, registry):
+        this_cycle = _cycle
+        _cycle += 1
         # Cooperative cancel — stop at the turn boundary if the run was cancelled
         # mid-flight, instead of dispatching another (expensive) LLM/executor
         # turn and burning the round budget. The transition-time guard alone let
         # a cancelled run keep turning to exhaustion (dogfood dd2bd3a3).
         if await orch._run_cancelled(run):
-            await orch._audit(run, attempt, LoopTerminal, {"outcome": "cancelled", "cycle": _cycle})
+            await orch._audit(
+                run, attempt, LoopTerminal, {"outcome": "cancelled", "cycle": this_cycle}
+            )
             return orch._cancelled_result(run, work_step, attempt, written_paths, final_text)
         # Drive-session-release (B) — release the pooled DB connection for the
         # duration of the (up to 30-minute) executor turn. Committing at the turn
@@ -257,6 +273,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             written_paths,
             state=await _remote_work_state(orch, run),
         )
+        await round_budget_tracker.sync(orch, run, attempt, registry)
         await orch._record(
             run,
             attempt,
@@ -268,7 +285,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             attempt,
             LlmTurn,
             {
-                "cycle": _cycle,
+                "cycle": this_cycle,
                 "tool_calls": [c.name for c in turn.tool_calls],
                 "content_len": len(turn.content or ""),
             },
@@ -366,6 +383,8 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 )
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
 
+            await round_budget_tracker.sync(orch, run, attempt, registry)
+
             # The model called tools, so it is not done — keep looping.
             #
             # T3 — there is no longer a SYNTHETIC executor tool call to special-case here.
@@ -389,7 +408,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 box=box,
                 messages=messages,
                 baseline=inplace_baseline,
-                cycle=_cycle,
+                cycle=this_cycle,
                 final_text=final_text,
             )
             if settled is None:
@@ -499,6 +518,9 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 final_text,
                 verdict,
                 registry.declared_knowledge,
+                # Reusable knowledge for a FUTURE run's estimate, settled where it can be
+                # searched (see ``write_verified_deliverable``'s settle payload).
+                round_budget=round_budget_stats(orch, registry, _cycle),
             )
             await orch._audit(
                 run,
@@ -526,13 +548,24 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             }
         )
 
-    # Cycle cap reached without a passing verdict → stuck → Decision (§6).
+    # Cycle cap reached without a passing verdict → stuck → Decision (§6). ``_cycle`` at
+    # exhaustion equals the effective cap: the loop only falls through here when the
+    # while condition above finally failed.
+    stats = round_budget_stats(orch, registry, _cycle)
     decision = await orch._create_decision(
         run,
         work_step,
         kind="verification_failed",
-        payload={"reason": "round_cap_reached", "written_paths": written_paths},
-        rationale="agent loop exhausted its round budget without a passing verification",
+        payload={
+            "reason": "round_cap_reached",
+            "written_paths": written_paths,
+            "round_budget_declared": stats["declared"],
+            "round_budget_used": stats["used"],
+        },
+        rationale=(
+            f"agent loop exhausted its round budget (declared {stats['declared']}, "
+            f"used {stats['used']}) without a passing verification"
+        ),
     )
     await orch._audit(
         run,
@@ -542,6 +575,8 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             "kind": "verification_failed",
             "decision_id": str(decision.id),
             "reason": "round_cap_reached",
+            "round_budget_declared": stats["declared"],
+            "round_budget_used": stats["used"],
         },
     )
     await orch._audit(
