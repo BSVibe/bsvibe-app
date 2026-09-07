@@ -107,7 +107,9 @@ def test_brief_and_push_state_the_same_round_counts() -> None:
         "round_budget_declared": declared,
         "round_budget_used": used,
     }
-    question = _question_text(SimpleNamespace(decision="verification_failed", payload=payload), "en")
+    question = _question_text(
+        SimpleNamespace(decision="verification_failed", payload=payload), "en"
+    )
     body = needs_you_reason_body("round_cap_reached", "en", payload)
 
     assert str(declared) in question

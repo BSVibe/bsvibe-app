@@ -143,6 +143,7 @@ _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
     },
 }
 
+
 def _round_cap_reached_body(payload: Mapping[str, object] | None, lang: str) -> str | None:
     """The push body for a ``round_cap_reached`` ``needs_you`` notification.
 
