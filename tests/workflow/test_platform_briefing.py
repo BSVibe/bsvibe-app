@@ -160,3 +160,69 @@ def test_the_briefing_warns_that_redeclaring_replaces_the_contract() -> None:
     text = _SYSTEM_PROMPT.lower()
     assert "repeating your same checks" in text
     assert "replaces" in text
+
+
+# --------------------------------------------------------------------------
+# The briefing must announce round_budget — in the SAME breath as the
+# MUST-call-declare_verification / REFUSED sentence, not a sentence bolted on
+# after it (the strongest sentence in the briefing wins attention; a fact
+# appended later gets buried, as the prior run that declared round_budget=2
+# and never learned it could raise it found out).
+# --------------------------------------------------------------------------
+
+
+def test_the_briefing_announces_round_budget_in_the_same_sentence_as_must_declare() -> None:
+    """round_budget must not be a separate, easy-to-miss sentence: it rides in the
+    SAME sentence as the strongest directive in the briefing (MUST / REFUSED), which
+    is what actually gets an agent's attention."""
+    text = _SYSTEM_PROMPT.lower()
+    assert "round_budget" in text
+    must_at = text.index("you must call declare_verification")
+    refused_at = text.index("refused until you do")
+    assert refused_at > must_at
+    # The sentence containing MUST/REFUSED runs to the next ". " after them —
+    # round_budget must appear before that sentence ends.
+    sentence_end = text.index(". ", refused_at)
+    assert must_at < text.index("round_budget", refused_at) < sentence_end, (
+        "round_budget is not in the same sentence as the MUST/REFUSED directive"
+    )
+
+
+def test_the_briefing_says_round_budget_is_clamped_to_the_run_ceiling() -> None:
+    """A declared round_budget only ever NARROWS the run's own ceiling — it must say
+    so, or an agent could believe a big number buys it more rounds than the run allows."""
+    text = _SYSTEM_PROMPT.lower()
+    assert "ceiling" in text
+    assert "clamp" in text
+
+
+def test_the_briefing_says_a_bigger_number_is_not_the_safe_choice() -> None:
+    """The goal is an honest estimate, not a padded one — the briefing must not read
+    as \"when in doubt, declare high\"."""
+    text = _SYSTEM_PROMPT.lower()
+    assert "honestly" in text
+    assert "safety" in text or "safe" in text
+
+
+def test_the_briefing_says_round_budget_can_be_raised_by_redeclaring() -> None:
+    """The exact fact the prior run lacked: declaring a NEW round_budget mid-run raises
+    the cap (recorded, per the earlier redeclare-replaces-the-contract assertion) — a
+    run that guesses low is not stuck, it can ask for more."""
+    text = _SYSTEM_PROMPT.lower()
+    assert "raise" in text
+    assert "declare_verification again" in text
+
+
+def test_the_round_budget_guidance_does_not_weaken_the_verify_first_gate() -> None:
+    """Negative control — adding round_budget guidance must not soften or remove the
+    checks-are-mandatory language it now shares a sentence with."""
+    assert "You MUST call" in _SYSTEM_PROMPT
+    assert "REFUSED until you do" in _SYSTEM_PROMPT
+
+
+def test_the_round_budget_guidance_does_not_remove_the_knowledge_block_instructions() -> None:
+    """Negative control — the retrospective `knowledge` block guidance (and the
+    re-declaration REPLACES the contract warning) must survive untouched."""
+    text = _SYSTEM_PROMPT.lower()
+    assert "knowledge` block" in text
+    assert "a re-declaration replaces the" in text

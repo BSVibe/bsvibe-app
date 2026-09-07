@@ -1281,6 +1281,136 @@ async def test_a_higher_redeclared_round_budget_is_recorded(tmp_path: Path) -> N
 
 
 # --------------------------------------------------------------------------
+# PR #889 regression — a retry after round_cap_reached must not restore the
+# SAME spent round_budget (ToolRegistry.restore_state).
+# --------------------------------------------------------------------------
+
+
+async def test_retry_after_round_cap_exhaustion_is_not_capped_at_the_spent_budget(
+    tmp_path: Path,
+) -> None:
+    """prod run ``0093fce6``: an executor-driven run declared round_budget=2, ran out,
+    and a founder retry died at the identical cycle — because the spent number was
+    persisted onto ``run.payload`` (the MCP transport's per-run state) and a fresh
+    registry on the new RunAttempt restored it right back.
+
+    Simulated here the same way the codebase's OWN executor tests do (see
+    ``test_executor_work_reaches_the_deliverable_via_the_runs_tool_state``): seed
+    ``WORK_TOOL_STATE_KEY`` on ``run.payload`` directly, since that key is written ONLY by
+    the MCP transport (``backend/mcp/tools/work_registry.py::persist_tool_state``) — a
+    native ScriptedLlm turn never touches it on its own.
+    """
+    from backend.workflow.application.tool_registry import WORK_TOOL_STATE_KEY
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        run.payload = {**(run.payload or {}), WORK_TOOL_STATE_KEY: {"declared_round_budget": 2}}
+        await session.commit()
+
+        # Attempt 1: an always-failing check burns exactly the seeded budget of 2.
+        first_llm = ScriptedLlm(
+            [
+                _tc_turn(
+                    _tc("declare_verification", checks=[{"kind": "command", "command": "false"}])
+                ),
+                LoopTurn(content="still working", tool_calls=()),
+            ]
+        )
+        orch1 = RunOrchestrator(
+            session=session, llm=first_llm, sandbox_manager=NoopSandboxManager(), max_cycles=6
+        )
+        result1 = await orch1.run(run=run, workspace_dir=tmp_path)
+        assert result1.outcome != "verified"
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        assert len(decisions) == 1
+        assert decisions[0].payload.get("reason") == "round_cap_reached"
+        assert decisions[0].payload.get("round_budget_declared") == 2
+        assert decisions[0].payload.get("round_budget_used") == 2
+
+        # Retry: a NEW RunAttempt on the SAME run, needing 4 rounds this time — more than
+        # the exhausted 2, so it can only succeed if the retry runs UNCAPPED (at the 6
+        # ceiling), not stuck back at 2.
+        retry_llm = ScriptedLlm(
+            [
+                _tc_turn(
+                    _tc("declare_verification", checks=[{"kind": "command", "command": "false"}])
+                ),
+                LoopTurn(content="still working", tool_calls=()),
+                _tc_turn(
+                    _tc("declare_verification", checks=[{"kind": "command", "command": "true"}])
+                ),
+                LoopTurn(content="now it passes", tool_calls=()),
+            ]
+        )
+        orch2 = RunOrchestrator(
+            session=session, llm=retry_llm, sandbox_manager=NoopSandboxManager(), max_cycles=6
+        )
+        result2 = await orch2.run(run=run, workspace_dir=tmp_path)
+
+        assert result2.outcome == "verified", (
+            "the retry must not die at the same spent cycle=2 cap again"
+        )
+        # Still exactly the one Decision from attempt 1 — the retry did not create a
+        # second round_cap_reached.
+        decisions_after = (await session.execute(select(Decision))).scalars().all()
+        assert len(decisions_after) == 1
+
+
+async def test_retry_after_round_cap_exhaustion_still_respects_the_ceiling(
+    tmp_path: Path,
+) -> None:
+    """Negative control for the fix above — clearing the SPENT budget on retry must not
+    let the retried attempt run past the run's ceiling. It falls back to the ceiling
+    (today's undeclared-budget behaviour), it does not become unbounded."""
+    from backend.workflow.application.tool_registry import WORK_TOOL_STATE_KEY
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        run.payload = {**(run.payload or {}), WORK_TOOL_STATE_KEY: {"declared_round_budget": 2}}
+        await session.commit()
+
+        first_llm = ScriptedLlm(
+            [
+                _tc_turn(
+                    _tc("declare_verification", checks=[{"kind": "command", "command": "false"}])
+                ),
+                LoopTurn(content="still working", tool_calls=()),
+            ]
+        )
+        orch1 = RunOrchestrator(
+            session=session, llm=first_llm, sandbox_manager=NoopSandboxManager(), max_cycles=4
+        )
+        await orch1.run(run=run, workspace_dir=tmp_path)
+
+        # Retry: never redeclares a round_budget and never passes — it must stop
+        # EXACTLY at the ceiling (4), not run forever and not stop at 2 again.
+        retry_llm = ScriptedLlm(
+            [
+                _tc_turn(
+                    _tc("declare_verification", checks=[{"kind": "command", "command": "false"}])
+                ),
+                LoopTurn(content="still working", tool_calls=()),
+                LoopTurn(content="still working", tool_calls=()),
+                LoopTurn(content="still working", tool_calls=()),
+            ]
+        )
+        orch2 = RunOrchestrator(
+            session=session, llm=retry_llm, sandbox_manager=NoopSandboxManager(), max_cycles=4
+        )
+        result2 = await orch2.run(run=run, workspace_dir=tmp_path)
+
+        assert result2.outcome != "verified"
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        assert len(decisions) == 2, "both attempt 1 and the retry hit round_cap_reached"
+        retry_decision = decisions[1]
+        assert retry_decision.payload.get("reason") == "round_cap_reached"
+        # Not explicitly re-declared this attempt → falls back to the ceiling, exactly
+        # like a run that never called declare_verification(round_budget=...) at all.
+        assert retry_decision.payload.get("round_budget_declared") == 4
+        assert retry_decision.payload.get("round_budget_used") == 4
+
+
+# --------------------------------------------------------------------------
 # system_error path
 # --------------------------------------------------------------------------
 
