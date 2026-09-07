@@ -232,6 +232,12 @@ def _merge_work_tool_state(*, current: dict[str, Any], incoming: dict[str, Any])
         "declared_knowledge": (
             incoming.get("declared_knowledge") or current.get("declared_knowledge")
         ),
+        # Same "incoming wins if it has one, else keep current" rule as the contract /
+        # knowledge fields above — a stale concurrent call that never saw the declare must
+        # not erase a round_budget another call already committed to the run.
+        "declared_round_budget": (
+            incoming.get("declared_round_budget") or current.get("declared_round_budget")
+        ),
         "grounded_paths": sorted(
             set(_union(current.get("grounded_paths"), incoming.get("grounded_paths")))
         ),

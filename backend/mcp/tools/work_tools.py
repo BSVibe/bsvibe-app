@@ -176,6 +176,17 @@ class DeclareVerificationInput(_WorkInput):
             "{topic, insight}. Prose, in the workspace's language."
         ),
     )
+    round_budget: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "OPTIONAL — how many plan/act/verify rounds you expect this specific "
+            "step to need. Omit to use the run's default ceiling. A value above the "
+            "ceiling is CLAMPED to it (the ceiling exists precisely so a bad guess "
+            "cannot run away). You may raise it in a later declare_verification call "
+            "if the step turns out bigger than expected."
+        ),
+    )
 
 
 class KnowledgeSearchInput(_WorkInput):
@@ -267,7 +278,9 @@ _FORWARDING_PRESENTATION: dict[str, tuple[type[BaseModel], str, bool]] = {
             "Declare HOW this work will be verified, as a list of `checks` — REQUIRED "
             "before you may write any file. A 'command' check is a shell command whose "
             "exit code is the verdict, run through the project runner and scoped to the "
-            "files you change (e.g. `uv run pytest tests/test_x.py`). Call this FIRST."
+            "files you change (e.g. `uv run pytest tests/test_x.py`). Call this FIRST. "
+            "Optionally set `round_budget` to how many rounds you expect this step to "
+            "take — the run stops at that count instead of the platform default."
         ),
         True,
     ),

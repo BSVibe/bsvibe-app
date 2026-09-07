@@ -1051,6 +1051,163 @@ async def test_no_contract_declared_but_the_tree_changed_does_not_pass(tmp_path:
 
 
 # --------------------------------------------------------------------------
+# round budget declaration
+# --------------------------------------------------------------------------
+
+
+def _tc_turn(call: LoopToolCall) -> LoopTurn:
+    return LoopTurn(content="", tool_calls=(call,))
+
+
+async def test_declared_round_budget_stops_the_loop_at_that_count(tmp_path: Path) -> None:
+    """``declare_verification(round_budget=3)`` ends the run at 3 rounds, not the ceiling."""
+    llm = ScriptedLlm(
+        [
+            _tc_turn(
+                _tc(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "false"}],
+                    round_budget=3,
+                )
+            ),
+            LoopTurn(content="still working", tool_calls=()),
+            LoopTurn(content="still working", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            max_cycles=48,  # the ceiling — the declared budget must end it first
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome != "verified"
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        assert len(decisions) == 1
+        decision = decisions[0]
+        assert decision.payload.get("reason") == "round_cap_reached"
+        assert decision.payload.get("round_budget_declared") == 3
+        assert decision.payload.get("round_budget_used") == 3
+        assert "declared 3" in decision.rationale
+        assert "used 3" in decision.rationale
+
+
+async def test_no_declared_round_budget_keeps_the_default_ceiling(tmp_path: Path) -> None:
+    """Negative control — an agent that never sets ``round_budget`` behaves exactly as
+    before: the run's ceiling (here an explicit ``max_cycles`` override, in prod the
+    ``execution_work_round_budget`` default) applies unchanged."""
+    llm = ScriptedLlm(
+        [
+            _tc_turn(_tc("declare_verification", checks=[{"kind": "command", "command": "false"}])),
+            LoopTurn(content="still working", tool_calls=()),
+            LoopTurn(content="still working", tool_calls=()),
+            LoopTurn(content="still working", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), max_cycles=4
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome != "verified"
+        decision = (await session.execute(select(Decision))).scalars().one()
+        assert decision.payload.get("reason") == "round_cap_reached"
+        assert decision.payload.get("round_budget_declared") == 4
+        assert decision.payload.get("round_budget_used") == 4
+
+
+async def test_a_round_budget_above_the_ceiling_is_clamped_to_it(tmp_path: Path) -> None:
+    """Negative control — declaring MORE rounds than the ceiling allows must not let the
+    run outlive the ceiling; it is clamped, not honoured verbatim."""
+    llm = ScriptedLlm(
+        [
+            _tc_turn(
+                _tc(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "false"}],
+                    round_budget=100,
+                )
+            ),
+            LoopTurn(content="still working", tool_calls=()),
+            LoopTurn(content="still working", tool_calls=()),
+            LoopTurn(content="still working", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), max_cycles=4
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome != "verified"
+        decision = (await session.execute(select(Decision))).scalars().one()
+        assert decision.payload.get("reason") == "round_cap_reached"
+        # The RAW declared value is reported honestly...
+        assert decision.payload.get("round_budget_declared") == 100
+        # ...but the run never ran past the ceiling.
+        assert decision.payload.get("round_budget_used") == 4
+
+
+async def test_a_higher_redeclared_round_budget_is_recorded(tmp_path: Path) -> None:
+    """Raising the round budget mid-run (a second ``declare_verification`` call) both
+    takes effect AND leaves an observable trail — not a silent state change."""
+    llm = ScriptedLlm(
+        [
+            _tc_turn(
+                _tc(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "false"}],
+                    round_budget=2,
+                )
+            ),
+            _tc_turn(
+                _tc(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "false"}],
+                    round_budget=5,
+                )
+            ),
+            LoopTurn(content="still working", tool_calls=()),
+            LoopTurn(content="still working", tool_calls=()),
+            LoopTurn(content="still working", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), max_cycles=8
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome != "verified"
+        decision = (await session.execute(select(Decision))).scalars().one()
+        assert decision.payload.get("round_budget_declared") == 5
+        assert decision.payload.get("round_budget_used") == 5
+
+        rows = (
+            (
+                await session.execute(
+                    select(ExecutionRunActivity).where(
+                        ExecutionRunActivity.run_id == run.id,
+                        ExecutionRunActivity.activity_type == "round_budget_declared",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        declared_seq = [row.payload.get("declared") for row in rows]
+        assert declared_seq == [2, 5], "both the initial declare AND the raise must be recorded"
+        assert rows[1].payload.get("previous") == 2, "the raise must name what it raised FROM"
+
+
+# --------------------------------------------------------------------------
 # system_error path
 # --------------------------------------------------------------------------
 

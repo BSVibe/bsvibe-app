@@ -208,6 +208,14 @@ class ToolRegistry:
         #: ``_grounded_paths`` 로도 답할 수 없다: 그건 ``file_read``/``file_write``
         #: 만 채우므로 grep·find 로만 조사한 런이 여전히 0 이 된다.
         self.succeeded_tool_calls: int = 0
+        # The round budget the agent declared for THIS step, via the optional
+        # ``round_budget`` arg of ``declare_verification`` — raw, UNCLAMPED (the loop
+        # applies the run's ceiling; this registry has no opinion on what it is). ``None``
+        # means the agent never declared one, so the run's default ceiling applies
+        # unchanged (today's behaviour). Sticky across re-declares that omit it: a
+        # re-declaration REPLACES the check list, but round_budget is a separate signal
+        # the agent may raise later without repeating it on every intermediate declare.
+        self.declared_round_budget: int | None = None
         self._register_defaults()
 
     @property
@@ -252,6 +260,7 @@ class ToolRegistry:
             # 사라지고 **prod 에서 잰다는 전제가 성립하지 않는다.** 관측할 수 없는
             # 관측 모드는 관측 모드가 아니다.
             "declaration_patterns": list(self.declaration_patterns),
+            "declared_round_budget": self.declared_round_budget,
         }
 
     def restore_state(self, state: dict[str, Any] | None) -> None:
@@ -272,6 +281,9 @@ class ToolRegistry:
         patterns = state.get("declaration_patterns")
         if patterns:
             self.declaration_patterns = [str(p) for p in patterns]
+        round_budget = state.get("declared_round_budget")
+        if isinstance(round_budget, int) and round_budget > 0:
+            self.declared_round_budget = round_budget
         knowledge = state.get("declared_knowledge")
         if knowledge and self.declared_knowledge is None:
             from backend.knowledge.extraction.worth_remembering import (  # noqa: PLC0415
@@ -534,6 +546,18 @@ class ToolRegistry:
                             "required": ["kind"],
                         },
                     },
+                    "round_budget": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": (
+                            "OPTIONAL — how many plan/act/verify rounds you expect this "
+                            "step to need. The run stops at that count instead of the "
+                            "platform default. A value above the run's ceiling is "
+                            "CLAMPED to it. You may raise it in a later "
+                            "declare_verification call without repeating the checks' "
+                            "round_budget if the step turns out bigger than expected."
+                        ),
+                    },
                     "knowledge": {
                         "type": "object",
                         "description": (
@@ -737,6 +761,17 @@ class ToolRegistry:
                 "non-empty 'command'; a 'judge' check needs a non-empty 'criteria' list."
             )
         self.declared_contract = contract.to_dict()
+        # Sticky, unlike the contract: a re-declare that only repeats the checks must not
+        # silently drop an earlier round_budget the agent already committed to.
+        round_budget = args.get("round_budget")
+        if round_budget is not None:
+            if (
+                not isinstance(round_budget, int)
+                or isinstance(round_budget, bool)
+                or round_budget < 1
+            ):
+                raise ToolError("declare_verification: 'round_budget' must be a positive integer")
+            self.declared_round_budget = round_budget
         # v2 — capture the agent's retrospective knowledge declaration (if any).
         # ``parse_declared_knowledge`` reads ``args["knowledge"]`` and is biased
         # to None (no block / blank → routine work leaves no note). A re-declared

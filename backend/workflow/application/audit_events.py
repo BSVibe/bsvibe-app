@@ -67,6 +67,16 @@ class DecisionResolved(AuditEventBase):
     DEFAULT_EVENT_TYPE: ClassVar[str] = "execution.decision.resolved"
 
 
+class RoundBudgetDeclared(AuditEventBase):
+    """The agent declared (or re-declared) a per-run round budget via
+    ``declare_verification``'s optional ``round_budget`` arg. Payload carries the raw
+    declared value, the run's ceiling, the resulting effective (clamped) budget, and
+    whether the ceiling actually bit — so an upward re-declaration is an OBSERVABLE
+    event, not a silent state change (see ``backend.config.execution_work_round_budget``)."""
+
+    DEFAULT_EVENT_TYPE: ClassVar[str] = "execution.round_budget.declared"
+
+
 class LoopTerminal(AuditEventBase):
     """The loop reached a terminal outcome — ``verified`` / ``needs_decision``
     / ``system_error``. One per run-attempt; the founder-facing closing event."""
@@ -79,6 +89,7 @@ __all__ = [
     "DecisionResolved",
     "LlmTurn",
     "LoopTerminal",
+    "RoundBudgetDeclared",
     "RunStarted",
     "ToolCall",
     "VerifyRun",
