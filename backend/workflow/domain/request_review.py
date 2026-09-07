@@ -81,6 +81,43 @@ def _budget_exhausted_message(limit: int) -> str:
     )
 
 
+#: Appended to the drive loop's own "Fix the problem and try again" failure message —
+#: NOT a replacement for it (that sentence is still the right default on a first
+#: failure, usually a typo). This module's own docstring named the loop's failure
+#: message as the exact gap ("nothing in it prompts the agent to change APPROACH") but
+#: the fix landed here instead of in the message the agent actually reads on a stuck
+#: turn — see :func:`stuck_review_hint`, which the drive loop calls to close that gap
+#: at its actual source.
+STUCK_REVIEW_HINT = (
+    " This is the SAME verification failing again — if your last fix did not work, "
+    f"repeating it will not either. Consider calling {REQUEST_REVIEW_NAME} for a "
+    "second opinion before trying the same fix a third time."
+)
+
+
+def stuck_review_hint(*, count: int, run: ExecutionRun) -> str:
+    """The extra sentence for a REPEATED verification failure, or "" if neither applies.
+
+    ``count`` is the number of consecutive verification failures THIS loop has seen so
+    far (1 on the first failure, 2 on the second, ...). Two guards, both load-bearing:
+
+    * ``count < 2`` — the FIRST failure in a run is usually a typo, and retry is the
+      right move; pointing at a review tool there would drown the common case in advice
+      meant for the rare one (prod runs 010bbdd8 / 40c14a10 / 0093fce6, cited in this
+      module's docstring, all needed several failures before the SAME approach was
+      visibly stuck — not one).
+    * the per-run call budget already spent (``MAX_STUCK_REVIEWS_PER_RUN``) — pointing
+      the agent at a tool call that can only refuse would burn a turn on a refusal
+      instead of on fixing the bug.
+    """
+    if count < 2:
+        return ""
+    used = int((run.payload or {}).get(STUCK_REVIEW_STATE_KEY, 0))
+    if used >= MAX_STUCK_REVIEWS_PER_RUN:
+        return ""
+    return STUCK_REVIEW_HINT
+
+
 _REVIEWER_SYSTEM_PROMPT = (
     "You are reviewing a CODING AGENT that is stuck: across this run it has attempted "
     "verification more than once and keeps failing. You have not tried anything yourself "
@@ -224,8 +261,10 @@ __all__ = [
     "MAX_STUCK_REVIEWS_PER_RUN",
     "REQUEST_REVIEW_NAME",
     "REQUEST_REVIEW_TOOL",
+    "STUCK_REVIEW_HINT",
     "STUCK_REVIEW_STATE_KEY",
     "format_attempt_history",
     "handle_request_review",
     "handle_review_call",
+    "stuck_review_hint",
 ]

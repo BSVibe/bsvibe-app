@@ -207,6 +207,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     written_paths: list[str] = []
     final_text = ""
     no_work_nudges = 0
+    fail_streak = 0
     # #692 — a client_attach run works in the founder's own directory on the worker
     # (through BSVibe's tools, backed by ``ClientWorkerSandboxSession``), so the
     # server holds no copy of the source and settles on the in-place gate rather
@@ -535,13 +536,14 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         # entirely its own passing commands. It read "FAILED: [everything
         # passed]" and repeated the identical failure 16 times.
         vresult = verdict.result if isinstance(verdict.result, dict) else {}
+        hint = _review.stuck_review_hint(count=(fail_streak := fail_streak + 1), run=run)
         messages.append(
             {
                 "role": "user",
                 "content": (
                     "Verification FAILED. Details:\n"
                     f"{render_verification_failure(vresult)}\n"
-                    "Fix the problem and try again, then send your summary."
+                    "Fix the problem and try again, then send your summary." + hint
                 ),
             }
         )
