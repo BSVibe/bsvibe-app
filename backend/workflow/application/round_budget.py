@@ -153,9 +153,16 @@ async def should_continue_round(
 ) -> bool:
     """``drive_loop``'s own while-condition. Bounded by construction, not by a counter:
     a lift only ever raises the declared budget up to the ceiling (never past it, see
-    ``attempt_round_budget_lift``), and each lift spends one of ``request_review``'s own
-    per-run call slots — so this cannot cycle forever even if the agent keeps
-    re-declaring a low budget after every lift.
+    ``attempt_round_budget_lift``), and ``_cycle`` in the caller's own loop keeps counting
+    against that SAME ceiling regardless of how many lifts happen — once ``_cycle`` reaches
+    it, ``round_budget_cap`` returns that ceiling too, so a further lift is a no-op
+    (``declared >= ceiling`` short-circuits ``attempt_round_budget_lift`` to False) and the
+    loop falls through to the ``round_cap_reached`` Decision. This is NOT because every
+    lift spends one of ``request_review``'s own per-run call slots: a lift on a run with NO
+    verification history yet costs no slot at all — ``handle_request_review`` returns its
+    ``_NO_HISTORY_MESSAGE`` and returns BEFORE incrementing ``STUCK_REVIEW_STATE_KEY`` (see
+    ``backend.workflow.domain.request_review``) — so an early, history-less lift is free.
+    The real, always-true bound is the ceiling on ``_cycle`` itself.
     """
     if cycle < round_budget_cap(orch, registry):
         return True
