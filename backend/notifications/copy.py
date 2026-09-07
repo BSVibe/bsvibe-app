@@ -23,6 +23,7 @@ producer.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 _DEFAULT_LANGUAGE = "en"
@@ -142,6 +143,34 @@ _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
     },
 }
 
+
+def _round_cap_reached_body(payload: Mapping[str, object] | None, lang: str) -> str | None:
+    """The push body for a ``round_cap_reached`` ``needs_you`` notification.
+
+    Mirrors ``_round_cap_reached_question`` in
+    ``backend.workflow.application._checkpoint_shared`` -- see that function's docstring
+    for why this reads ``round_budget_declared`` / ``round_budget_used`` off the Decision
+    payload instead of using a fixed string, and why it does NOT claim a review count. The
+    phone and the Brief must say the SAME thing about the same Decision (existing rule for
+    this table, see ``_NEEDS_YOU_REASON_BODY`` below): both read the identical two payload
+    keys, so they can never drift into stating different numbers for the same run. Returns
+    ``None`` (caller falls back to the generic ``needs_you`` body) if either number is
+    missing or malformed.
+    """
+    if not isinstance(payload, Mapping):
+        return None
+    declared = payload.get("round_budget_declared")
+    used = payload.get("round_budget_used")
+    if not isinstance(declared, int) or not isinstance(used, int):
+        return None
+    if lang == "ko":
+        return (
+            f"BSVibe가 예산으로 잡은 {declared}번의 시도를 다 쓰도록(실제 {used}번 시도) "
+            "이 작업을 검증하지 못했어요."
+        )
+    return f"BSVibe used all {declared} of its planned rounds ({used} attempts) and still couldn't verify this."
+
+
 #: Localized CTA framing for the trailing deep-link line of a push. ``needs_you``
 #: asks the founder to ANSWER; ``shipped`` points at its deliverable REPORT; every
 #: other event asks them to REVIEW the Brief. The absolute URL is appended after
@@ -208,7 +237,9 @@ def _render_body(event: str, lang: str, params: dict[str, object]) -> str:
     return detail or _FALLBACK_BODY[event][lang]
 
 
-def needs_you_reason_body(reason: str, language: str | None) -> str:
+def needs_you_reason_body(
+    reason: str, language: str | None, payload: Mapping[str, object] | None = None
+) -> str:
     """Localized ``needs_you`` body for a SYSTEM-minted Decision (no founder question).
 
     A ``human_review_required`` / verify-gate Decision has no founder question, so
@@ -217,8 +248,17 @@ def needs_you_reason_body(reason: str, language: str | None) -> str:
     copy; any UNKNOWN reason resolves to the generic ``needs_you`` fallback body —
     so no raw English verifier jargon ever reaches the founder. An unknown /
     missing ``language`` falls back to English.
+
+    ``payload`` is OPTIONAL and only consulted for ``reason == "round_cap_reached"``,
+    whose body must state the run's actual round counts (see
+    :func:`_round_cap_reached_body`) — every other reason is a fixed string and ignores
+    it, so existing 2-arg call sites are unaffected.
     """
     lang = _resolve_language(language)
+    if reason == "round_cap_reached":
+        line = _round_cap_reached_body(payload, lang)
+        if line is not None:
+            return line
     mapping = _NEEDS_YOU_REASON_BODY.get(reason or "")
     if mapping is not None:
         return mapping[lang]

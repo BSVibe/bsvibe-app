@@ -143,7 +143,9 @@ async def _emit_needs_you(session: AsyncSession, run: ExecutionRun, decision: De
     # A founder question rides through verbatim; a system-minted Decision (no
     # question) maps its machine ``reason`` to friendly localized copy instead of
     # leaking the English ``decision.rationale``.
-    detail = question or needs_you_reason_body(str(payload_in.get("reason") or ""), language)
+    detail = question or needs_you_reason_body(
+        str(payload_in.get("reason") or ""), language, payload_in
+    )
     copy = notification_copy("needs_you", language, detail=detail)
     await emit_notification(
         session,
