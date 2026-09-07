@@ -52,6 +52,7 @@ from backend.workflow.application.tool_registry import (
 from backend.workflow.application.undeclared_verification import (
     settle_undeclared_verification,
 )
+from backend.workflow.domain import request_review as _review
 from backend.workflow.domain.emit_deliverable import (
     EMIT_DELIVERABLE_NAME,
     EMIT_DELIVERABLE_TOOL,
@@ -173,6 +174,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         # B12a — mid-loop Deliver events: one per external artifact emitted
         # DURING the run, BEFORE the verified terminal.
         EMIT_DELIVERABLE_TOOL,
+        _review.REQUEST_REVIEW_TOOL,  # a second opinion on this run's OWN failure history
     ]
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt_for(run)},
@@ -364,6 +366,9 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                     )
                     messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
                     continue
+                if call.name == _review.REQUEST_REVIEW_NAME:  # loop-owned, like emit_deliverable
+                    messages.append(await _review.handle_review_call(orch, run, attempt, call))
+                    continue
                 output, ok, writes = await _invoke_tool_safely(registry, call.name, call.arguments)
                 if ok:
                     for path in writes:
@@ -417,20 +422,13 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         if (
             not written_paths
             and registry.declared_contract is None
-            # 파일을 안 고친 것과 **일을 안 한 것**은 다르다. 형님이 "조사만 하고
-            # 보고해라 — 파일은 하나도 쓰지 마라" 로 스코프한 런은 파일을 안 고치는
-            # 것이 정답이고, 그때 이 nudge 는 제대로 조사한 에이전트를 다그친다.
-            # prod 실측(2026-08-24 · 08-25 · 08-31 ×2): 그 런들의 ``writes`` 는 전부
-            # 비어 있었고, 에이전트는 정확한 답을 냈으며, 한 번은 결국 형님께 질문을
-            # 올려 런이 멈췄다.
-            #
-            # 형님 판정 2026-08-20 — *"정말 검증할게 없어서 아무것도 안한거는 통과야"*
-            # — 은 ``settle_undeclared_verification`` 에 이미 적용돼 있다. 여기가
-            # 그 판정을 못 받은 두 번째 지점이었다.
-            #
-            # 그래도 막아야 할 것은 그대로 막힌다: 도구를 **한 번도** 안 쓰고 산문만
-            # 뱉는 것. 거부당한 호출(B7 게이트·denylist)은 세지 않으므로, 선언 없이
-            # 쓰려다 막힌 에이전트가 자기 실패로 면제를 사지 못한다.
+            # 파일을 안 고친 것과 **일을 안 한 것**은 다르다 — 조사 전용 런은 파일을
+            # 안 고치는 게 정답인데, prod(2026-08-24·08-25·08-31×2)에서 이 nudge가
+            # 그런 런을 다그쳤다(``writes`` 는 비었지만 답은 정확했음). 형님 판정
+            # 2026-08-20("검증할 게 없으면 통과")은 ``settle_undeclared_verification``
+            # 에 이미 적용돼 있고, 여기가 그 판정을 못 받은 두 번째 지점. 그래도 도구를
+            # **한 번도** 안 쓰고 산문만 뱉는 건 막는다 — 거부된 호출은 안 세므로 B7
+            # 게이트에 막힌 에이전트가 실패로 면제를 사지 못한다.
             and registry.succeeded_tool_calls == 0
             and no_work_nudges < MAX_NO_WORK_NUDGES
         ):
