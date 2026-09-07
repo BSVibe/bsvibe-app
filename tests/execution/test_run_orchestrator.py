@@ -1410,7 +1410,10 @@ async def test_a_higher_redeclared_round_budget_is_recorded(tmp_path: Path) -> N
         orch = RunOrchestrator(
             # == the second declared value: a ceiling exhaustion, not a lift (this test's
             # subject is the OBSERVABILITY of the redeclare, not the lift mechanism).
-            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), max_cycles=5
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            max_cycles=5,
         )
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
@@ -1475,7 +1478,10 @@ async def test_retry_after_round_cap_exhaustion_is_not_capped_at_the_spent_budge
         orch1 = RunOrchestrator(
             # == the seeded declared budget of 2: a ceiling exhaustion, not a lift (this
             # test's subject is PR #889's retry-not-recapped regression, not the lift).
-            session=session, llm=first_llm, sandbox_manager=NoopSandboxManager(), max_cycles=2
+            session=session,
+            llm=first_llm,
+            sandbox_manager=NoopSandboxManager(),
+            max_cycles=2,
         )
         result1 = await orch1.run(run=run, workspace_dir=tmp_path)
         assert result1.outcome != "verified"
@@ -1538,7 +1544,10 @@ async def test_retry_after_round_cap_exhaustion_still_respects_the_ceiling(
         orch1 = RunOrchestrator(
             # == the seeded declared budget of 2: a ceiling exhaustion, not a lift (this
             # test's subject is the retry's OWN ceiling, not the lift mechanism).
-            session=session, llm=first_llm, sandbox_manager=NoopSandboxManager(), max_cycles=2
+            session=session,
+            llm=first_llm,
+            sandbox_manager=NoopSandboxManager(),
+            max_cycles=2,
         )
         await orch1.run(run=run, workspace_dir=tmp_path)
 
