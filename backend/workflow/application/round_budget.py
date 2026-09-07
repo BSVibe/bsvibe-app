@@ -89,6 +89,79 @@ async def announce_round_budget_change(
     await orch._audit(run, attempt, RoundBudgetDeclared, payload)
 
 
+async def attempt_round_budget_lift(
+    orch: RunOrchestrator,
+    run: ExecutionRun,
+    attempt: RunAttempt,
+    registry: Any,
+    tracker: RoundBudgetTracker,
+    messages: list[dict[str, Any]],
+) -> bool:
+    """A declared (< ceiling) round_budget just ran out — the loop's OWN recovery, not a
+    founder Decision (founder ruling 2026-09-07: a round-cap exhaustion is an INTERNAL
+    failure, not a bad request, so it must not page the founder while the run still has
+    ceiling left to spend). Gets one review of the run's failure history from
+    ``request_review``'s existing handler — the loop calls it directly, bypassing the
+    tool-call plumbing entirely, because the same prod run that proved this ruling also
+    proved the agent will NOT call the tool itself even with it on the menu and even
+    having just edited that tool's own code — then raises the declared budget straight
+    to the ceiling so the cycle keeps going.
+
+    Returns False, telling the caller to fall through to the existing
+    ``round_cap_reached`` Decision, in exactly two cases: the declared budget already IS
+    the (clamped) ceiling — a genuine ceiling exhaustion, unrelated to this feature — or
+    this run's ``request_review`` call budget (``MAX_STUCK_REVIEWS_PER_RUN``) is already
+    spent. The second case escalates rather than raising the budget UNREVIEWED: an
+    unreviewed raise cannot be told apart from a silent unbounded extension, so once a
+    real second opinion is no longer available the founder is the right next stop — the
+    same place the tool's own hint sends an agent whose budget is spent.
+    """
+    from backend.workflow.domain import request_review as _review  # noqa: PLC0415
+
+    ceiling = orch._max_cycles
+    declared = getattr(registry, "declared_round_budget", None)
+    if declared is None or declared >= ceiling:
+        return False
+    used = int((run.payload or {}).get(_review.STUCK_REVIEW_STATE_KEY, 0))
+    if used >= _review.MAX_STUCK_REVIEWS_PER_RUN:
+        return False
+    feedback = await _review.handle_request_review(orch._session, run, orch._llm, {})
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"Your declared round_budget ({declared}) was reached before "
+                f"verification passed. Raising it to this run's ceiling ({ceiling}) "
+                "instead of stopping here — a reviewer with no attachment to your prior "
+                f"attempts read the full failure history first:\n\n{feedback}"
+            ),
+        }
+    )
+    registry.declared_round_budget = ceiling
+    await tracker.sync(orch, run, attempt, registry)
+    return True
+
+
+async def should_continue_round(
+    orch: RunOrchestrator,
+    run: ExecutionRun,
+    attempt: RunAttempt,
+    registry: Any,
+    tracker: RoundBudgetTracker,
+    messages: list[dict[str, Any]],
+    cycle: int,
+) -> bool:
+    """``drive_loop``'s own while-condition. Bounded by construction, not by a counter:
+    a lift only ever raises the declared budget up to the ceiling (never past it, see
+    ``attempt_round_budget_lift``), and each lift spends one of ``request_review``'s own
+    per-run call slots — so this cannot cycle forever even if the agent keeps
+    re-declaring a low budget after every lift.
+    """
+    if cycle < round_budget_cap(orch, registry):
+        return True
+    return await attempt_round_budget_lift(orch, run, attempt, registry, tracker, messages)
+
+
 class RoundBudgetTracker:
     """Fires :func:`announce_round_budget_change` exactly once per VALUE the agent
     declares this run — whether learned from the native path's own tool call or synced
@@ -113,6 +186,8 @@ class RoundBudgetTracker:
 __all__ = [
     "RoundBudgetTracker",
     "announce_round_budget_change",
+    "attempt_round_budget_lift",
     "round_budget_cap",
     "round_budget_stats",
+    "should_continue_round",
 ]

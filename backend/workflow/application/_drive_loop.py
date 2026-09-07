@@ -36,8 +36,8 @@ from backend.workflow.application.audit_events import (
 from backend.workflow.application.inplace_gate import capture_inplace_baseline
 from backend.workflow.application.round_budget import (
     RoundBudgetTracker,
-    round_budget_cap,
     round_budget_stats,
+    should_continue_round,
 )
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
@@ -232,9 +232,9 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     # ``for _cycle in range(orch._max_cycles)`` would have baked in the ceiling before
     # its first declare_verification call ever ran.
     _cycle = 0
-    round_budget_tracker = RoundBudgetTracker()
+    tracker = RoundBudgetTracker()
 
-    while _cycle < round_budget_cap(orch, registry):
+    while await should_continue_round(orch, run, attempt, registry, tracker, messages, _cycle):
         this_cycle = _cycle
         _cycle += 1
         # Cooperative cancel — stop at the turn boundary if the run was cancelled
@@ -276,7 +276,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             written_paths,
             state=await _remote_work_state(orch, run),
         )
-        await round_budget_tracker.sync(orch, run, attempt, registry)
+        await tracker.sync(orch, run, attempt, registry)
         await orch._record(
             run,
             attempt,
@@ -389,7 +389,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 )
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
 
-            await round_budget_tracker.sync(orch, run, attempt, registry)
+            await tracker.sync(orch, run, attempt, registry)
 
             # The model called tools, so it is not done — keep looping.
             #
