@@ -171,7 +171,10 @@ async def test_reviewer_sees_every_attempt_not_just_the_last(tmp_path: Path) -> 
             # turn0 — declares a check that will FAIL, and writes the artifact.
             LoopTurn(
                 content="",
-                tool_calls=(_declare_command("false"), _tc("file_write", path="marker", content="x")),
+                tool_calls=(
+                    _declare_command("false"),
+                    _tc("file_write", path="marker", content="x"),
+                ),
             ),
             # turn1 — no tool calls → the loop verifies → FAILED attempt #1.
             LoopTurn(content="", tool_calls=()),
@@ -186,7 +189,9 @@ async def test_reviewer_sees_every_attempt_not_just_the_last(tmp_path: Path) -> 
                 tool_calls=(_tc(REQUEST_REVIEW_NAME, context="two failures so far"),),
             ),
             # the REVIEWER's own completion, popped by handle_request_review mid-turn.
-            LoopTurn(content="You keep declaring `false` itself — declare a real check.", tool_calls=()),
+            LoopTurn(
+                content="You keep declaring `false` itself — declare a real check.", tool_calls=()
+            ),
             # turn4 — takes the advice: declares a passing check.
             LoopTurn(content="", tool_calls=(_declare_command("test -f marker"),)),
             # turn5 — no tool calls → verifies → PASSED.
