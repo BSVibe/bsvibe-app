@@ -552,6 +552,15 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     # exhaustion equals the effective cap: the loop only falls through here when the
     # while condition above finally failed.
     stats = round_budget_stats(orch, registry, _cycle)
+    # PR #889 fix: persist EXHAUSTED so a retry's fresh registry does not restore this
+    # spent budget and die at the same cycle again (``ToolRegistry.mark_round_budget_exhausted``).
+    registry.mark_round_budget_exhausted()
+    work_state = (run.payload or {}).get(WORK_TOOL_STATE_KEY) or {}
+    run.payload = {
+        **(run.payload or {}),
+        WORK_TOOL_STATE_KEY: {**work_state, "round_budget_exhausted": True},
+    }
+    await orch._session.flush()
     decision = await orch._create_decision(
         run,
         work_step,

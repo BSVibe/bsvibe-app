@@ -238,6 +238,16 @@ def _merge_work_tool_state(*, current: dict[str, Any], incoming: dict[str, Any])
         "declared_round_budget": (
             incoming.get("declared_round_budget") or current.get("declared_round_budget")
         ),
+        # PR #889 regression fix — sticky like the fields above, but NOT an "or": False is a
+        # legitimate value (a live declare_verification just cleared it) and must not fall
+        # back to a stale True. ``incoming`` always carries the true current state (a
+        # registry's own ``restore_state`` already folded in whatever ``current`` held before
+        # this call ran), so trust it whenever it is present at all.
+        "round_budget_exhausted": (
+            incoming["round_budget_exhausted"]
+            if "round_budget_exhausted" in incoming
+            else current.get("round_budget_exhausted", False)
+        ),
         "grounded_paths": sorted(
             set(_union(current.get("grounded_paths"), incoming.get("grounded_paths")))
         ),

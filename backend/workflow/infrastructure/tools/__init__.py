@@ -216,6 +216,17 @@ class ToolRegistry:
         # re-declaration REPLACES the check list, but round_budget is a separate signal
         # the agent may raise later without repeating it on every intermediate declare.
         self.declared_round_budget: int | None = None
+        # PR #889 regression, fixed here: whether the round_budget above (or the one this
+        # registry last restored) has already run its cycles all the way out and produced a
+        # round_cap_reached Decision (see ``mark_round_budget_exhausted``). "One instance per
+        # RunAttempt" (this class's own docstring) does not hold for the number itself: an
+        # executor-driven run persists ``declared_round_budget`` onto ``run.payload`` so a
+        # RECONNECTING registry (a new MCP call, same attempt) can see it, and ``restore_state``
+        # cannot tell that reconnect apart from a genuinely NEW attempt (a retry) without this
+        # flag riding along in the same persisted state. Once set, a restore that sees it
+        # refuses to re-adopt the spent number — a fresh ``declare_verification`` call is the
+        # only thing that clears it (see the handler below).
+        self._round_budget_exhausted: bool = False
         self._register_defaults()
 
     @property
@@ -261,6 +272,10 @@ class ToolRegistry:
             # 관측 모드는 관측 모드가 아니다.
             "declaration_patterns": list(self.declaration_patterns),
             "declared_round_budget": self.declared_round_budget,
+            # See "_round_budget_exhausted"'s docstring in __init__: rides alongside
+            # declared_round_budget so a restore elsewhere can tell "still live" apart
+            # from "already spent, do not re-impose".
+            "round_budget_exhausted": self._round_budget_exhausted,
         }
 
     def restore_state(self, state: dict[str, Any] | None) -> None:
@@ -281,9 +296,20 @@ class ToolRegistry:
         patterns = state.get("declaration_patterns")
         if patterns:
             self.declaration_patterns = [str(p) for p in patterns]
-        round_budget = state.get("declared_round_budget")
-        if isinstance(round_budget, int) and round_budget > 0:
-            self.declared_round_budget = round_budget
+        # PR #889 regression (fixed here): an EXHAUSTED round_budget must not be restored
+        # onto a fresh registry. Without this guard, an executor-driven run's spent budget
+        # (persisted onto ``run.payload`` by the MCP transport) rides right back in on a
+        # retry's brand-new ``ToolRegistry``, the loop caps itself at the SAME number, and
+        # dies at the SAME cycle again — the checkpoint's only offered action (retry) becomes
+        # structurally useless. The run's ceiling (``orch._max_cycles``) is untouched by any
+        # of this: it lives outside this registry and this only ever narrows below it, never
+        # widens past it. A live re-declaration (the handler below) is the only way back in.
+        if state.get("round_budget_exhausted"):
+            self._round_budget_exhausted = True
+        else:
+            round_budget = state.get("declared_round_budget")
+            if isinstance(round_budget, int) and round_budget > 0:
+                self.declared_round_budget = round_budget
         knowledge = state.get("declared_knowledge")
         if knowledge and self.declared_knowledge is None:
             from backend.knowledge.extraction.worth_remembering import (  # noqa: PLC0415
@@ -295,6 +321,20 @@ class ToolRegistry:
                 self.declared_knowledge = RememberableKnowledge(
                     topic=str(topic), insight=str(insight)
                 )
+
+    def mark_round_budget_exhausted(self) -> None:
+        """Call this the moment a declared round_budget's cycles run out — the
+        round_cap_reached Decision path in ``_drive_loop``.
+
+        Clears ``declared_round_budget`` (the agent's estimate is now PROVEN wrong for
+        this attempt, so a retry should not restart under it) and sets the flag
+        ``export_state``/``restore_state`` use to keep a future restore from re-adopting the
+        same spent number (see ``restore_state``'s comment). Only this registry's own
+        ``declared_round_budget`` is touched — the run's ceiling is a caller-side concern
+        this class has no reference to.
+        """
+        self.declared_round_budget = None
+        self._round_budget_exhausted = True
 
     @property
     def sandbox(self) -> SandboxSession | None:
@@ -772,6 +812,9 @@ class ToolRegistry:
             ):
                 raise ToolError("declare_verification: 'round_budget' must be a positive integer")
             self.declared_round_budget = round_budget
+            # A live declaration is a fresh estimate for THIS attempt — it overrides
+            # whatever a restore may have marked exhausted moments earlier.
+            self._round_budget_exhausted = False
         # v2 — capture the agent's retrospective knowledge declaration (if any).
         # ``parse_declared_knowledge`` reads ``args["knowledge"]`` and is biased
         # to None (no block / blank → routine work leaves no note). A re-declared
