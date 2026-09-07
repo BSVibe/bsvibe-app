@@ -1132,8 +1132,17 @@ def _tc_turn(call: LoopToolCall) -> LoopTurn:
     return LoopTurn(content="", tool_calls=(call,))
 
 
-async def test_declared_round_budget_stops_the_loop_at_that_count(tmp_path: Path) -> None:
-    """``declare_verification(round_budget=3)`` ends the run at 3 rounds, not the ceiling."""
+async def test_declared_round_budget_equal_to_ceiling_still_creates_decision(
+    tmp_path: Path,
+) -> None:
+    """Negative control — a declared budget that EQUALS the run's ceiling is a genuine
+    ceiling exhaustion (not a below-ceiling one), so the founder Decision still fires
+    exactly as before this feature: no review call, no lift, nothing new to script.
+
+    Founder ruling 2026-09-07 only changes what happens when the declared budget is
+    BELOW the ceiling (see the below-ceiling tests further down) — a round_cap_reached
+    Decision at the ceiling itself is untouched.
+    """
     llm = ScriptedLlm(
         [
             _tc_turn(
@@ -1153,7 +1162,7 @@ async def test_declared_round_budget_stops_the_loop_at_that_count(tmp_path: Path
             session=session,
             llm=llm,
             sandbox_manager=NoopSandboxManager(),
-            max_cycles=48,  # the ceiling — the declared budget must end it first
+            max_cycles=3,  # == the declared budget: a ceiling exhaustion, not a lift
         )
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
@@ -1166,6 +1175,151 @@ async def test_declared_round_budget_stops_the_loop_at_that_count(tmp_path: Path
         assert decision.payload.get("round_budget_used") == 3
         assert "declared 3" in decision.rationale
         assert "used 3" in decision.rationale
+
+
+async def test_declared_round_budget_below_ceiling_lifts_and_continues(tmp_path: Path) -> None:
+    """Founder ruling 2026-09-07 primary contract: exhausting a declared budget BELOW
+    the ceiling does not create a ``verification_failed`` Decision — the loop calls
+    ``request_review``'s own handler on the agent's behalf, raises the budget to the
+    ceiling, and keeps going far enough to actually reach a passing verdict.
+
+    ⭐ Also the negative control for "raising the budget alone is not enough": the
+    reviewer's own feedback text must show up in a message the agent's NEXT turn
+    actually receives, not just silently widen the cap.
+    """
+    llm = ScriptedLlm(
+        [
+            _tc_turn(
+                _tc(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "false"}],
+                    round_budget=2,
+                )
+            ),
+            LoopTurn(content="still working", tool_calls=()),  # → verify FAILED, exhausts 2
+            LoopTurn(
+                content="Stop declaring `false` itself — declare a real check.",
+                tool_calls=(),
+            ),  # the reviewer's OWN completion, called directly by the loop
+            _tc_turn(_tc("declare_verification", checks=[{"kind": "command", "command": "true"}])),
+            LoopTurn(content="done", tool_calls=()),  # → verify PASSED
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), max_cycles=5
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "verified", (
+            "the loop must actually keep running past the exhausted declared budget"
+        )
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        assert decisions == [], "a below-ceiling exhaustion must never page the founder"
+
+        rows = (
+            (
+                await session.execute(
+                    select(ExecutionRunActivity).where(
+                        ExecutionRunActivity.run_id == run.id,
+                        ExecutionRunActivity.activity_type == "round_budget_declared",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        declared_seq = [row.payload.get("declared") for row in rows]
+        assert declared_seq == [2, 5], "the exhausted 2 must be raised to the ceiling (5), once"
+
+    post_lift_call = llm.calls[3]
+    texts = [str(m.get("content") or "") for m in post_lift_call["messages"]]
+    assert any("Stop declaring `false` itself" in t for t in texts), (
+        "the reviewer's own opinion must reach the agent's next turn, not just the budget"
+    )
+    assert any("ceiling" in t.lower() for t in texts)
+
+
+async def test_round_budget_lift_never_exceeds_the_ceiling_or_repeats_forever(
+    tmp_path: Path,
+) -> None:
+    """⭐ Negative control: a lift can happen at most ``MAX_STUCK_REVIEWS_PER_RUN`` times
+    (it SPENDS the same ``request_review`` call budget the tool itself is capped by),
+    every recorded declaration stays <= the ceiling, and once that budget is spent a
+    further below-ceiling exhaustion escalates to the founder exactly like today — it
+    does not lift a third time and it does not loop forever.
+    """
+    from backend.workflow.domain.request_review import (
+        MAX_STUCK_REVIEWS_PER_RUN,
+        STUCK_REVIEW_STATE_KEY,
+    )
+
+    assert MAX_STUCK_REVIEWS_PER_RUN == 2, "test wiring assumes exactly 2 review calls fit"
+    ceiling = 6
+    llm = ScriptedLlm(
+        [
+            _tc_turn(
+                _tc(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "false"}],
+                    round_budget=2,
+                )
+            ),
+            LoopTurn(content="still working", tool_calls=()),  # → FAILED #1, exhausts 2
+            LoopTurn(content="reviewer feedback #1", tool_calls=()),  # LIFT #1 (review 1/2)
+            _tc_turn(
+                _tc(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "false"}],
+                    round_budget=1,
+                )
+            ),  # re-declares low again, right after being lifted
+            LoopTurn(content="reviewer feedback #2", tool_calls=()),  # LIFT #2 (review 2/2)
+            _tc_turn(
+                _tc(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "false"}],
+                    round_budget=1,
+                )
+            ),  # a THIRD low re-declare — the review budget is now spent
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), max_cycles=ceiling
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome != "verified"
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        assert len(decisions) == 1, "the THIRD exhaustion must escalate, not lift again"
+        decision = decisions[0]
+        assert decision.payload.get("reason") == "round_cap_reached"
+        assert decision.payload.get("round_budget_declared") == 1
+        assert decision.payload.get("round_budget_used") == 4
+
+        rows = (
+            (
+                await session.execute(
+                    select(ExecutionRunActivity).where(
+                        ExecutionRunActivity.run_id == run.id,
+                        ExecutionRunActivity.activity_type == "round_budget_declared",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        declared_seq = [row.payload.get("declared") for row in rows]
+        assert declared_seq == [2, 6, 1, 6, 1], "exactly two lifts, both capped at the ceiling"
+        assert all(v <= ceiling for v in declared_seq), "a lift must never exceed the ceiling"
+
+        await session.refresh(run)
+        assert (run.payload or {}).get(STUCK_REVIEW_STATE_KEY) == MAX_STUCK_REVIEWS_PER_RUN
+
+    assert len(llm.calls) == 6, "no extra completion was spent past the two paid-for lifts"
 
 
 async def test_no_declared_round_budget_keeps_the_default_ceiling(tmp_path: Path) -> None:
@@ -1254,7 +1408,12 @@ async def test_a_higher_redeclared_round_budget_is_recorded(tmp_path: Path) -> N
     async with memory_session() as session:
         run = await _make_run(session)
         orch = RunOrchestrator(
-            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), max_cycles=8
+            # == the second declared value: a ceiling exhaustion, not a lift (this test's
+            # subject is the OBSERVABILITY of the redeclare, not the lift mechanism).
+            session=session,
+            llm=llm,
+            sandbox_manager=NoopSandboxManager(),
+            max_cycles=5,
         )
         result = await orch.run(run=run, workspace_dir=tmp_path)
 
@@ -1317,7 +1476,12 @@ async def test_retry_after_round_cap_exhaustion_is_not_capped_at_the_spent_budge
             ]
         )
         orch1 = RunOrchestrator(
-            session=session, llm=first_llm, sandbox_manager=NoopSandboxManager(), max_cycles=6
+            # == the seeded declared budget of 2: a ceiling exhaustion, not a lift (this
+            # test's subject is PR #889's retry-not-recapped regression, not the lift).
+            session=session,
+            llm=first_llm,
+            sandbox_manager=NoopSandboxManager(),
+            max_cycles=2,
         )
         result1 = await orch1.run(run=run, workspace_dir=tmp_path)
         assert result1.outcome != "verified"
@@ -1378,7 +1542,12 @@ async def test_retry_after_round_cap_exhaustion_still_respects_the_ceiling(
             ]
         )
         orch1 = RunOrchestrator(
-            session=session, llm=first_llm, sandbox_manager=NoopSandboxManager(), max_cycles=4
+            # == the seeded declared budget of 2: a ceiling exhaustion, not a lift (this
+            # test's subject is the retry's OWN ceiling, not the lift mechanism).
+            session=session,
+            llm=first_llm,
+            sandbox_manager=NoopSandboxManager(),
+            max_cycles=2,
         )
         await orch1.run(run=run, workspace_dir=tmp_path)
 

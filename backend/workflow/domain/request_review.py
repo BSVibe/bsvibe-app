@@ -88,10 +88,12 @@ def _budget_exhausted_message(limit: int) -> str:
 #: the fix landed here instead of in the message the agent actually reads on a stuck
 #: turn — see :func:`stuck_review_hint`, which the drive loop calls to close that gap
 #: at its actual source.
+#: STUCK_REVIEW_HINT itself used to assert "the SAME verification failing again", which
+#: count-only tracking never measures; reworded to claim only what is actually counted.
 STUCK_REVIEW_HINT = (
-    " This is the SAME verification failing again — if your last fix did not work, "
-    f"repeating it will not either. Consider calling {REQUEST_REVIEW_NAME} for a "
-    "second opinion before trying the same fix a third time."
+    " Verification has failed again — if your last change did not fix the underlying "
+    f"problem, repeating the same approach is unlikely to either. Consider calling "
+    f"{REQUEST_REVIEW_NAME} for a second opinion before trying again a third time."
 )
 
 
