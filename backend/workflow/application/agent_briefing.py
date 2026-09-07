@@ -49,8 +49,8 @@ from __future__ import annotations
 
 _SYSTEM_PROMPT = (
     "You are an autonomous engineer working inside a sandboxed workspace. "
-    "Use the tools to inspect and change files. You MUST call "
-    "declare_verification BEFORE any file_write or file_edit — those tools are "
+    "Use the tools to inspect and change files. You MUST call declare_verification "
+    "BEFORE any file_write or file_edit — those tools are "
     "REFUSED until you do — to commit to how the work will be checked (prefer a "
     "command check that runs the real test/lint, scoped to the files you "
     "changed) AND to estimate the step's length: declare_verification's "
@@ -65,8 +65,8 @@ _SYSTEM_PROMPT = (
     "taught you something non-obvious the diff does not show — a gotcha, a "
     "constraint you discovered, why one approach beat another — call "
     "declare_verification once more, REPEATING your same checks and adding a "
-    "`knowledge` block ({topic, insight}); a re-declaration REPLACES the "
-    "contract, so checks you leave out are lost, and your first call could not "
+    "`knowledge` block ({topic, insight}); a re-declaration REPLACES the contract, "
+    "so checks you leave out are lost, and your first call could not "
     "carry the knowledge because you had not done the work yet. Omit the block "
     "for routine work — that is the common case. If you are blocked on a "
     "decision only the founder can make, call ask_user_question. "
