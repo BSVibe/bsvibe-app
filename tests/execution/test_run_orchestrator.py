@@ -717,6 +717,79 @@ async def test_settle_payload_degrades_without_product(tmp_path: Path) -> None:
         assert payload["intent_text"] == "harden the cache"
 
 
+async def test_settle_round_budget_marks_undeclared_runs_as_no_estimate(
+    tmp_path: Path,
+) -> None:
+    """An agent that never calls ``declare_verification(round_budget=...)`` still runs
+    at the ceiling, but the settle record must not read as if that ceiling were an
+    estimate the agent actually made."""
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _declare_command("test -f marker"),
+                    _tc("file_write", path="marker", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), max_cycles=4
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+        assert result.outcome == "verified"
+
+        activities = (await session.execute(select(ExecutionRunActivity))).scalars().all()
+        payload = _settle_payload(activities)
+        rb = payload["round_budget"]
+        assert rb["declared"] == 4, "unchanged fallback-to-ceiling behaviour"
+        assert rb["declared_explicitly"] is False, "no round_budget call was ever made"
+
+
+async def test_settle_round_budget_marks_explicit_ceiling_declaration_as_an_estimate(
+    tmp_path: Path,
+) -> None:
+    """Negative control — an agent that explicitly declares the SAME number as the
+    ceiling must still be recorded as having made a real estimate, distinct from a run
+    that never declared one at all."""
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="",
+                tool_calls=(
+                    _tc(
+                        "declare_verification",
+                        checks=[{"kind": "command", "command": "test -f marker"}],
+                        round_budget=4,
+                    ),
+                    _tc("file_write", path="marker", content="x"),
+                ),
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), max_cycles=4
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+        assert result.outcome == "verified"
+
+        activities = (await session.execute(select(ExecutionRunActivity))).scalars().all()
+        payload = _settle_payload(activities)
+        rb = payload["round_budget"]
+        assert rb["declared"] == 4
+        assert rb["declared_explicitly"] is True, (
+            "declaring the ceiling's own value is still a real estimate, "
+            "and must not collapse into the undeclared case"
+        )
+
+
 def _no_artifact_probes() -> LoopTurn:
     """The blind artifact planner's empty plan (C1). A run that writes a
     non-code file now reaches the I2 artifact planner before the judge, so a

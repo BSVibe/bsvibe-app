@@ -27,12 +27,24 @@ def round_budget_stats(orch: RunOrchestrator, registry: Any, cycles_used: int) -
     ``declared`` falls back to the ceiling when the agent never called
     ``declare_verification`` with a ``round_budget``: the run then always ran at the
     ceiling, so reporting the ceiling as what was "declared" describes what actually
-    happened, not a null. Shared by the round-cap Decision and the verified settle
-    payload so the two never disagree about what these numbers mean.
+    happened, not a null. This fallback is load-bearing for the round-cap Decision
+    rationale, which reads ONLY ``stats["declared"]``/``stats["used"]`` and must keep
+    reading the same numbers it always has — do not change it.
+
+    ``declared_explicitly`` is the separate bit the settle record's *estimation* use
+    needs, and is the reason this function exists: True only when the agent actually
+    called ``declare_verification`` with a ``round_budget`` this run. Without it, a
+    never-declared run (fallback to ceiling) and a run that explicitly declared the
+    ceiling's exact value are indistinguishable in the settle payload, so a future
+    "how many rounds does this kind of work usually take" query would silently average
+    in guesses nobody made. Same rule as ``capture_run_changed_paths``'s ``None`` (missing
+    value) vs ``[]`` (an answer) split — keep "no estimate" and "estimated the ceiling"
+    apart here too.
     """
     declared = getattr(registry, "declared_round_budget", None)
     return {
         "declared": declared if declared is not None else orch._max_cycles,
+        "declared_explicitly": declared is not None,
         "used": cycles_used,
         "ceiling": orch._max_cycles,
     }
