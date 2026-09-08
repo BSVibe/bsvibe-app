@@ -78,7 +78,6 @@ from backend.workflow.application.stages.frame import (
     FrameLlm,
     FrameModelUnresolvedError,
     FrameStage,
-    FrameUnclassifiedError,
 )
 from backend.workflow.channels import REQUESTS
 from backend.workflow.infrastructure.db import (
@@ -96,6 +95,37 @@ logger = structlog.get_logger(__name__)
 #: ``verification_failed`` (the work ran and did not hold up) — here the work
 #: never got a chance to run at all.
 DRIVE_FAILED_KIND = "run_drive_failed"
+
+# The CONSECUTIVE-failed-drive count, kept ON THE RUN.
+#
+# It lived in a per-worker dict until 2026-09-08, which was correct only by
+# accident: prod happens to run exactly one AgentWorker. Runs are claimed with
+# ``FOR UPDATE SKIP LOCKED`` precisely so several workers can run, and with two,
+# each process counts only the failures it personally saw — neither reaches the
+# bound, nobody is ever told, and the run retries for as long as the deployment
+# lives. That is the exact failure the counter exists to end, re-created by the
+# counter. A fact about one run belongs on that run.
+DRIVE_FAILURES_KEY = "drive_failures"
+
+
+def _drive_failures_of(run: ExecutionRun) -> int:
+    """The run's recorded consecutive-failure count, or 0.
+
+    Tolerant on read: a payload written by an older deploy has no such key, and
+    anything that is not a positive int is not a count."""
+    value = (run.payload or {}).get(DRIVE_FAILURES_KEY)
+    return value if isinstance(value, int) and value > 0 else 0
+
+
+def _reset_drive_failures(run: ExecutionRun) -> None:
+    """Drop the count from ``run.payload`` (caller commits).
+
+    Re-binds ``payload`` rather than mutating it: the column is a plain ``JSON``,
+    so an in-place edit is not seen as dirty and never reaches the database."""
+    payload = run.payload or {}
+    if DRIVE_FAILURES_KEY in payload:
+        run.payload = {k: v for k, v in payload.items() if k != DRIVE_FAILURES_KEY}
+
 
 #: Minimum wall-clock between terminal-workspace reaps (see
 #: :meth:`AgentWorker._reap_terminal_run_workspaces`). 5 min keeps ``var/runs``
@@ -226,11 +256,6 @@ class AgentWorker(BaseWorker):
         # a listdir + one query + a few rmtrees is cheap, but there's no reason to
         # do it hundreds of times a minute. ``-inf`` forces the first tick to run.
         self._last_workspace_reap_monotonic = float("-inf")
-        # CONSECUTIVE crashed drives per run — the bound that turns an endless
-        # silent retry into one founder Decision. In-process on purpose: it is a
-        # property of THIS worker's attempts, and a restart legitimately starts
-        # the count over (a fresh process may well succeed where the last died).
-        self._drive_failures: dict[uuid.UUID, int] = {}
 
     @property
     def _stale_claim_lease_s(self) -> float:
@@ -309,7 +334,9 @@ class AgentWorker(BaseWorker):
                 # ``drive_once`` re-picks it (the scan is on OPEN). Do NOT fail
                 # it (no partial failed / decision state); do NOT count it (a
                 # yielded run was not driven).
-                await self._release_claim_to_open(run_id)
+                await self._release_claim_to_open(
+                    run_id, reason="yielded back on executor capacity saturation"
+                )
                 logger.info("agent_worker_yielded_on_capacity", run_id=str(run_id))
                 continue
             except Exception as exc:  # noqa: BLE001 — one run's crash is not the batch's
@@ -326,7 +353,6 @@ class AgentWorker(BaseWorker):
             # way the drive is done: clear the claim (a paused run keeps
             # ``claimed_at`` NULL + a pending Decision, so the reaper never
             # touches it and the OPEN scan never re-picks it).
-            self._drive_failures.pop(run_id, None)
             await self._clear_claim(run_id)
             count += 1
         return count
@@ -338,8 +364,7 @@ class AgentWorker(BaseWorker):
         The count is CONSECUTIVE — a drive that works clears it — so a run that
         recovers does not carry unrelated hiccups toward an escalation.
         """
-        failures = self._drive_failures.get(run_id, 0) + 1
-        self._drive_failures[run_id] = failures
+        failures = await self._record_drive_failure(run_id)
         logger.warning(
             "agent_worker_drive_failed",
             run_id=str(run_id),
@@ -352,12 +377,30 @@ class AgentWorker(BaseWorker):
             # Decision (RUNNING + claimed_at NULL + pending Decision), which is
             # the one state both the OPEN scan and the stale reaper skip. Giving
             # the claim back first would let the next tick re-pick it.
+            # The escalation clears the count itself, in the same transaction
+            # that writes the Decision.
             await self._escalate_drive_failure(
                 run_id, failures=failures, error=f"{type(exc).__name__}: {exc}"
             )
-            self._drive_failures.pop(run_id, None)
             return
-        await self._release_claim_to_open(run_id)
+        await self._release_claim_to_open(
+            run_id, reason=f"retrying after a failed drive ({failures}): {type(exc).__name__}"
+        )
+
+    async def _record_drive_failure(self, run_id: uuid.UUID) -> int:
+        """Add one to the run's consecutive-failure count and return the total.
+
+        Its own short transaction: the drive's session was rolled back by the
+        crash, so there is nothing to write into. A run that vanished under us
+        counts as 0 — there is no longer anything to escalate about."""
+        async with self._session_factory() as session:
+            run = await session.get(ExecutionRun, run_id)
+            if run is None:
+                return 0
+            failures = _drive_failures_of(run) + 1
+            run.payload = {**(run.payload or {}), DRIVE_FAILURES_KEY: failures}
+            await session.commit()
+            return failures
 
     async def _escalate_drive_failure(
         self, run_id: uuid.UUID, *, failures: int, error: str
@@ -393,6 +436,8 @@ class AgentWorker(BaseWorker):
             run.status = RunStatus.RUNNING
             run.claimed_at = None
             run.claimed_by = None
+            # The founder now owns this run; a resumed one starts its count over.
+            _reset_drive_failures(run)
             await create_decision(
                 session,
                 run,
@@ -521,33 +566,45 @@ class AgentWorker(BaseWorker):
             await session.commit()
 
     async def _clear_claim(self, run_id: uuid.UUID) -> None:
-        """Clear ``claimed_at`` / ``claimed_by`` without touching status.
+        """Clear ``claimed_at`` / ``claimed_by`` — and the consecutive-failure
+        count — without touching status.
 
         Called on every NON-saturation drive exit (terminal or pause-on-decision).
         A paused run stays RUNNING with ``claimed_at`` NULL + a pending Decision,
-        so the reaper never reaps it and the OPEN scan never re-picks it."""
+        so the reaper never reaps it and the OPEN scan never re-picks it.
+
+        Every drive that gets here WORKED, which is what makes this the place the
+        count is cleared: it counts CONSECUTIVE failures, so a run that recovered
+        must not carry old hiccups toward an escalation."""
         async with self._session_factory() as session:
-            await session.execute(
-                update(ExecutionRun)
-                .where(ExecutionRun.id == run_id)
-                .values(claimed_at=None, claimed_by=None)
-            )
+            run = await session.get(ExecutionRun, run_id)
+            if run is not None:
+                run.claimed_at = None
+                run.claimed_by = None
+                _reset_drive_failures(run)
             await session.commit()
 
-    async def _release_claim_to_open(self, run_id: uuid.UUID) -> None:
-        """Saturation yield-back: reset a claimed RUNNING run to OPEN + clear the
-        claim so the next ``drive_once`` re-picks it (the scan is on OPEN).
+    async def _release_claim_to_open(self, run_id: uuid.UUID, *, reason: str) -> None:
+        """Reset a claimed RUNNING run to OPEN + clear the claim so the next
+        ``drive_once`` re-picks it (the scan is on OPEN).
 
         Only resets a run still in RUNNING (defensive — a mid-drive terminal /
         pause would have moved it, and we must not clobber that). Uses
-        :class:`AgentRunner.transition` so a history row records the yield-back."""
+        :class:`AgentRunner.transition` so a history row records why it went back.
+
+        ``reason`` is REQUIRED, not defaulted: there are two callers with two
+        different truths — the capacity yield-back and a crashed drive below the
+        escalation bound — and this used to hard-code the saturation sentence for
+        both, so every retried crash wrote "yielded back on executor capacity
+        saturation" into the run's own history. A default would just re-create
+        that (규율 137: code goes red when it is wrong, prose stays green)."""
         async with self._session_factory() as session:
             run = await session.get(ExecutionRun, run_id)
             if run is not None and run.status is RunStatus.RUNNING:
                 await AgentRunner(session).transition(
                     run_id=run_id,
                     to_status=RunStatus.OPEN,
-                    reason="yielded back on executor capacity saturation",
+                    reason=reason,
                 )
             await session.execute(
                 update(ExecutionRun)
@@ -618,22 +675,22 @@ class AgentWorker(BaseWorker):
                         reason="paused on decision: no frame model to classify the request",
                     )
                     return
-                except FrameUnclassifiedError as exc:
-                    # A frame model answered, but not with a verdict on ASK vs
-                    # PRODUCE → the run's KIND is unknown, and both guesses are
-                    # destructive: driving the loop hands a question to a coding
-                    # executor (which edits whatever it finds — prod run ff1615e8),
-                    # while answering silently never builds. Fail the run so the
-                    # founder sees WHY (no-implicit-routing).
-                    logger.warning(
-                        "agent_worker_frame_unclassified", run_id=str(run.id), reason=str(exc)
-                    )
-                    await AgentRunner(session).transition(
-                        run_id=run.id,
-                        to_status=RunStatus.FAILED,
-                        reason=f"frame could not classify the request: {exc}",
-                    )
-                    return
+                # NOTE: a plain ``FrameUnclassifiedError`` is deliberately NOT
+                # caught here. It leaves through ``_frame_and_drive_run`` into
+                # ``drive_once``'s per-run handler, which counts it and — past
+                # the bound — raises the ``run_drive_failed`` Decision. Why:
+                # framing is ONE cheap-LLM call with no retry under it, and it is
+                # the platform's single most common terminal failure (21 of the
+                # 24 ``failed`` notifications prod has ever sent read "frame could
+                # not classify the request"). Failing the run here made every one
+                # of those a dead end — terminal, so no checkpoint item, no
+                # ``Try again``, nothing re-driving it — carrying a body written
+                # for engineers ("the frame model call failed"). Prod 2026-09-07:
+                # a hand ``runs_retry`` put the SAME prompt through the SAME code
+                # and it framed first try. An undecidable frame still never
+                # guesses the route (no-implicit-routing holds — the stage raises
+                # and nothing downstream runs); it is simply a drive that did not
+                # start, which ``_on_drive_failed`` already handles correctly.
                 # Record the FULL framing (B9a): skill match + artifact-type hint
                 # (for delivery routing) + the refined intent + the path
                 # classification (recorded for B9b, which acts on knowledge_only).

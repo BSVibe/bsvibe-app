@@ -215,8 +215,15 @@ class FrameUnclassifiedError(RuntimeError):
     question to a coding executor, which has nothing to build and edits whatever
     it finds (prod run ff1615e8 — "현 프로젝트 상황 설명해줘" shipped an unrelated
     diff). Guessing ``knowledge_only`` silently answers instead of building. Per
-    no-implicit-routing, an undecidable route is an explicit error — the caller
-    fails the run and the founder sees why.
+    no-implicit-routing, an undecidable route is an explicit error.
+
+    What the caller does with it is NOT "fail the run", which this docstring
+    claimed until 2026-09-08. The worker lets it out of the framing block
+    entirely, so it lands in the same bounded retry every other crashed drive
+    gets: this is one cheap-LLM call with no retry under it, and a re-frame of
+    the same prompt has been measured to succeed. Past the bound the founder
+    gets the ``run_drive_failed`` Decision — a checkpoint item with ``Try
+    again`` / ``Discard``, in their own language.
     """
 
 
