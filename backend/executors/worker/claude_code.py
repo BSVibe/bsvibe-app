@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sys
+import tempfile
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -178,9 +180,22 @@ _NATIVE_TOOLS: str = " ".join(
 )
 
 
+def _write_mcp_config(mcp_config: str) -> str:
+    """Stage the run's MCP config on disk, readable only by this user.
+
+    ``mkstemp`` creates at 0600 — the mode is asserted by the tests, because moving a
+    secret off argv into a world-readable file would be a lateral move, not a fix. The
+    caller removes it when the task ends (``execute``'s ``finally``).
+    """
+    fd, path = tempfile.mkstemp(prefix="bsvibe-mcp-", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(mcp_config)
+    return path
+
+
 def _unsanctioned_abort(
     event: dict[str, Any],
-    mcp_config: str,
+    mcp_config_path: str,
     allowed_tools: list[str] | None,
 ) -> ExecutionChunk | None:
     """Terminal chunk when the CLI's exposed tool set is not EXACTLY the one we sanctioned.
@@ -200,7 +215,7 @@ def _unsanctioned_abort(
     execution model acts through BSVibe's tools alone, and the machine those tools run on is
     the sandbox's business (``ClientWorkerSandboxSession``).
     """
-    if not mcp_config:
+    if not mcp_config_path:
         return None
     problem = _exposed_tools_are_ours(event, allowed_tools or [])
     if not problem:
@@ -289,6 +304,35 @@ class ClaudeCodeExecutor:
         # names we sanction. Absent → the pre-redesign agentic shape.
         mcp_config = str(context.get("mcp_config") or "")
         allowed_tools = [str(t) for t in (context.get("allowed_tools") or [])]
+        # The config carries the run-scoped bearer token, so it reaches the CLI as a
+        # 0600 FILE rather than on argv, where ``ps`` shows it to anything running as
+        # this user for the whole task. Written once (not per retry) and removed in the
+        # ``finally`` below: the worker is a long-lived daemon, so process exit is NOT
+        # the cleanup.
+        mcp_config_path = _write_mcp_config(mcp_config) if mcp_config else ""
+        try:
+            async for chunk in self._execute_with_config(
+                prompt, workspace, system, model, agentic, mcp_config_path, allowed_tools
+            ):
+                yield chunk
+        finally:
+            if mcp_config_path:
+                try:
+                    os.unlink(mcp_config_path)
+                except OSError:  # pragma: no cover — best-effort cleanup
+                    logger.warning("claude_code_mcp_config_unlink_failed", exc_info=True)
+
+    async def _execute_with_config(
+        self,
+        prompt: str,
+        workspace: str,
+        system: str,
+        model: str | None,
+        agentic: bool,
+        mcp_config_path: str,
+        allowed_tools: list[str],
+    ) -> AsyncIterator[ExecutionChunk]:
+        """The retry loop, with the run's MCP config already staged on disk."""
         attempts_remaining = self._rate_limit_retries
         deadline = asyncio.get_event_loop().time() + self._total_timeout
         while True:
@@ -304,7 +348,7 @@ class ClaudeCodeExecutor:
                     stderr_buf,
                     model,
                     agentic,
-                    mcp_config,
+                    mcp_config_path,
                     allowed_tools,
                 ):
                     if chunk.delta:
@@ -348,7 +392,7 @@ class ClaudeCodeExecutor:
         system: str,
         model: str | None,
         agentic: bool = True,
-        mcp_config: str = "",
+        mcp_config_path: str = "",
         allowed_tools: list[str] | None = None,
     ) -> list[str]:
         # An AGENT RUN inherits the host operator's harness (CLAUDE.md / skills /
@@ -371,15 +415,21 @@ class ClaudeCodeExecutor:
             "stream-json",
             "--verbose",
         ]
-        if agentic and mcp_config:
+        if agentic and mcp_config_path:
             # T2b-4 — the agent acts ONLY through BSVibe's tools: the run's server-side
             # worktree and sandbox, reached over MCP with a run-scoped token. Its own local
             # tools are taken away, so there is no temp dir to invent code in, nothing for the
             # worker to scrape back, and no way to reach the founder's filesystem.
             cmd_args += [
                 "--strict-mcp-config",
+                # A PATH, never the JSON itself: that config carries the run's bearer
+                # token and argv is readable by anything running as this user (``ps``)
+                # for as long as the task does — minutes, for an agent run. The CLI
+                # accepts either ("Load MCP servers from JSON files or strings"), so
+                # this costs one 0600 temp file. Staged and removed by :meth:`execute`;
+                # the same shape ``codex.py`` uses for its system prompt.
                 "--mcp-config",
-                mcp_config,
+                mcp_config_path,
                 "--allowedTools",
                 " ".join(allowed_tools or ()),
                 "--disallowedTools",
@@ -417,10 +467,10 @@ class ClaudeCodeExecutor:
         stderr_buf: list[str],
         model: str | None = None,
         agentic: bool = True,
-        mcp_config: str = "",
+        mcp_config_path: str = "",
         allowed_tools: list[str] | None = None,
     ) -> AsyncIterator[ExecutionChunk]:
-        cmd_args = self._build_cmd(system, model, agentic, mcp_config, allowed_tools)
+        cmd_args = self._build_cmd(system, model, agentic, mcp_config_path, allowed_tools)
         # Inject a worker-managed OAuth bearer so a launchd-spawned claude (which
         # can't read the Keychain) authenticates instead of falling back to a
         # stale on-disk token → 401. Soft-fail + off the event loop (the helper
@@ -462,7 +512,7 @@ class ClaudeCodeExecutor:
                     # exposed. A tool we did not sanction means the agent has hands we never
                     # gave it (a new built-in in a CLI upgrade, say) and could reach the
                     # user's filesystem. Stop it, do not merely report it.
-                    abort = _unsanctioned_abort(parsed, mcp_config, allowed_tools)
+                    abort = _unsanctioned_abort(parsed, mcp_config_path, allowed_tools)
                     if abort is not None:
                         _kill_process_group(process)
                         yield abort
