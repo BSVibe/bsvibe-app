@@ -27,7 +27,9 @@ _ROUND_CAP_QUESTION_EN = (
     "BSVibe kept trying but couldn't finish this the way you described — "
     "what would you like to happen with it?"
 )
-_ROUND_CAP_QUESTION_KO = "BSVibe가 계속 해봤지만 요청하신 대로 마무리하지 못했어요 — 어떻게 하면 좋을까요?"
+_ROUND_CAP_QUESTION_KO = (
+    "BSVibe가 계속 해봤지만 요청하신 대로 마무리하지 못했어요 — 어떻게 하면 좋을까요?"
+)
 
 # The exact banned vocabulary this reason must never surface again (en/ko).
 _BANNED_EN = ("budget", "round", "attempt", "approach", "verif", "ceiling", "reviewer")
@@ -138,7 +140,9 @@ def test_brief_and_push_state_the_same_sentence() -> None:
         "round_budget_declared": 9,
         "round_budget_used": 7,
     }
-    question = _question_text(SimpleNamespace(decision="verification_failed", payload=payload), "en")
+    question = _question_text(
+        SimpleNamespace(decision="verification_failed", payload=payload), "en"
+    )
     body = needs_you_reason_body("round_cap_reached", "en", payload)
 
     assert question == body

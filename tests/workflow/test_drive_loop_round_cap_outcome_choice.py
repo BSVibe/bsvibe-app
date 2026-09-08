@@ -254,8 +254,10 @@ async def test_no_measurable_signal_falls_back_and_does_not_crash(tmp_path: Path
         assert decision.payload.get("options") is None
 
         rows = (
-            await session.execute(select(Decision).where(Decision.run_id == run.id))
-        ).scalars().all()
+            (await session.execute(select(Decision).where(Decision.run_id == run.id)))
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1, "the round cap is the terminal, not a founder park mid-loop"
 
         question = _question_text(decision, "en")

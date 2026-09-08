@@ -567,7 +567,12 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     # asking the founder to diagnose an internal fact — see
     # ``finalize_round_cap_decision``'s own docstring.
     decision = await finalize_round_cap_decision(
-        orch, run=run, work_step=work_step, attempt=attempt, written_paths=written_paths, stats=stats
+        orch,
+        run=run,
+        work_step=work_step,
+        attempt=attempt,
+        written_paths=written_paths,
+        stats=stats,
     )
     await orch._audit(
         run,

@@ -49,9 +49,7 @@ def _failing_signature(result: Mapping[str, Any]) -> frozenset[str] | None:
     gate = result.get("derived_gate")
     if isinstance(gate, Mapping):
         for cmd in gate.get("commands") or []:
-            if isinstance(cmd, Mapping) and (
-                cmd.get("status") == "failed" or cmd.get("timed_out")
-            ):
+            if isinstance(cmd, Mapping) and (cmd.get("status") == "failed" or cmd.get("timed_out")):
                 names.add(str(cmd.get("command") or "gate"))
     for cmd in result.get("command_results") or []:
         if isinstance(cmd, Mapping) and (cmd.get("passed") is False or cmd.get("timed_out")):
