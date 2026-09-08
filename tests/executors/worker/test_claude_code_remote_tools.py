@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -32,7 +33,19 @@ from tests.executors.worker._drain import drain
 
 pytestmark = pytest.mark.asyncio
 
-_MCP = {"mcpServers": {"bsvibe": {"type": "http", "url": "https://api.bsvibe.dev/mcp"}}}
+#: The run-scoped token really does ride in this config — that is the whole point of it
+#: (``build_work_tool_dispatch``). A fixture without a secret in it cannot tell whether the
+#: secret leaks, so this one has one.
+_TOKEN = "eyJhbGciOiJFUzI1NiJ9.a-run-scoped-secret.signature"
+_MCP = {
+    "mcpServers": {
+        "bsvibe": {
+            "type": "http",
+            "url": "https://api.bsvibe.dev/mcp",
+            "headers": {"Authorization": f"Bearer {_TOKEN}"},
+        }
+    }
+}
 _TOOLS = ["mcp__bsvibe__bsvibe_work_file_read", "mcp__bsvibe__bsvibe_work_file_write"]
 
 
@@ -92,11 +105,24 @@ class _Writer:
     def close(self) -> None: ...
 
 
+#: What the launch stub saw at the moment of exec, for the file the CLI is told to read.
+#: Captured there and not after, because that file is deleted when the task ends.
+_seen_config: dict[str, Any] = {}
+
+
 def _patch(monkeypatch: pytest.MonkeyPatch, proc: _Proc) -> list[list[str]]:
     calls: list[list[str]] = []
+    _seen_config.clear()
 
     async def _exec(*args: Any, **_kw: Any) -> _Proc:
-        calls.append([str(a) for a in args])
+        argv = [str(a) for a in args]
+        calls.append(argv)
+        if "--mcp-config" in argv:
+            path = Path(argv[argv.index("--mcp-config") + 1])
+            if path.exists():
+                _seen_config["path"] = path
+                _seen_config["text"] = path.read_text(encoding="utf-8")
+                _seen_config["mode"] = path.stat().st_mode & 0o777
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _exec)
@@ -114,8 +140,9 @@ async def test_the_cli_is_given_bsvibes_tools_and_stripped_of_its_own(
     await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
 
     argv = calls[0]
-    # BSVibe's tools, over MCP, with a run-scoped token in the config.
-    assert argv[argv.index("--mcp-config") + 1] == json.dumps(_MCP)
+    # BSVibe's tools, over MCP. The config reaches the CLI by PATH — see
+    # ``test_the_run_scoped_token_never_reaches_the_command_line`` for why.
+    assert _seen_config["text"] == json.dumps(_MCP)
     assert "--strict-mcp-config" in argv
     assert argv[argv.index("--allowedTools") + 1] == " ".join(_TOOLS)
     # Its own hands, taken away. The wildcard is unusable here — it kills MCP tools too — so
@@ -248,3 +275,53 @@ async def test_exclusive_shape_is_unchanged_when_the_flag_is_absent(
     await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
 
     assert "--disallowedTools" in calls[0]
+
+
+# ── the token is a secret, and argv is not a secret ─────────────────────────
+
+
+async def test_the_run_scoped_token_never_reaches_the_command_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--mcp-config`` carries the run's bearer token, and argv is world-readable.
+
+    Anything running as this user on the worker host can read it out of ``ps`` for as long
+    as the task runs — and an agent task is minutes, not milliseconds. The token is
+    run-scoped with a 90-minute TTL, which bounds the blast radius but does not make it
+    zero: within that window it is ``mcp:write`` on the run.
+
+    The CLI takes ``--mcp-config`` as a FILE or a string (measured against the installed
+    binary: *"Load MCP servers from JSON files or strings"*), so the fix costs nothing but
+    a temp file — the same shape ``codex.py`` already uses for its system prompt."""
+    calls = _patch(monkeypatch, _Proc([_init_line(_TOOLS), _assistant_line("done")]))
+
+    await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
+
+    argv = calls[0]
+    assert _TOKEN not in " ".join(argv), "the run-scoped token is visible in ps"
+    assert not any("Bearer" in a for a in argv), f"an Authorization header on argv: {argv!r}"
+    # And it really did get there — otherwise this test passes by the CLI losing its tools.
+    assert _TOKEN in _seen_config["text"], "the config the CLI reads must still carry the token"
+
+
+async def test_the_config_file_is_readable_only_by_this_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Moving a secret from argv to a file is only a fix if the file is not world-readable."""
+    _patch(monkeypatch, _Proc([_init_line(_TOOLS), _assistant_line("done")]))
+
+    await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
+
+    assert _seen_config["mode"] == 0o600, f"config file mode {_seen_config['mode']:o}"
+
+
+async def test_the_config_file_is_gone_when_the_task_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token left on disk after the run outlives the run. The worker hosts long-lived
+    daemons, so "the process exits" is not the cleanup."""
+    _patch(monkeypatch, _Proc([_init_line(_TOOLS), _assistant_line("done")]))
+
+    await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
+
+    assert not _seen_config["path"].exists(), "the config file outlived the task"
