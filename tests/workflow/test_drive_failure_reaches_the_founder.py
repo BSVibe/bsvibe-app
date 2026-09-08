@@ -22,32 +22,65 @@ visible from outside.
 So: contain the failure to its own run, give the claim back, count, and when the
 count says this is not going to fix itself, tell the founder — the same shape
 #746 gave the merge-watch terminals.
+
+The count itself lived in a per-process dict until 2026-09-08. That worked only
+because prod happens to run exactly ONE AgentWorker: runs are claimed with
+``FOR UPDATE SKIP LOCKED`` precisely so several workers can, and with two, each
+process counts only the failures it personally saw. Neither ever reaches the
+bound, nobody is ever told, and the run retries forever — which is the exact
+failure this counter was built to end, re-created by the counter. So these tests
+now drive real workers against a real database, and one of them runs TWO worker
+instances over the same rows.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+import pytest_asyncio
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+import backend.notifications.db  # noqa: F401 — register the table on the shared Base
+from backend.workflow.infrastructure.db import (
+    Decision,
+    ExecutionRun,
+    ExecutionRunHistory,
+    RunStatus,
+)
+from backend.workflow.infrastructure.workers.agent_worker import (
+    DRIVE_FAILED_KIND,
+    DRIVE_FAILURES_KEY,
+)
+
+from .._support import db_engine
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture
+async def sf():
+    async with db_engine() as (engine, _is_pg):
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 class _Boom(RuntimeError):
     """Whatever a drive can raise — a timed-out turn, a dead worker, a bug."""
 
 
-async def test_one_runs_failure_does_not_kill_the_rest_of_the_batch() -> None:
+async def test_one_runs_failure_does_not_kill_the_rest_of_the_batch(sf) -> None:
     """The batch loop must not be an all-or-nothing. A single bad run took every
     other run claimed in the same pass down with it, and those runs then had to
     wait out the stale lease before anyone looked at them again."""
     from backend.workflow.infrastructure.workers.agent_worker import AgentWorker
 
-    ids = [uuid.uuid4() for _ in range(3)]
+    ids = [await _seed_run(sf) for _ in range(3)]
     driven: list[uuid.UUID] = []
 
-    worker = _worker()
+    worker = _worker(sf)
     worker._claim_runs_for_drive = _returns(ids)  # type: ignore[method-assign]
 
     async def _drive(run_id: uuid.UUID, _execution: Any) -> None:
@@ -64,49 +97,80 @@ async def test_one_runs_failure_does_not_kill_the_rest_of_the_batch() -> None:
     assert isinstance(worker, AgentWorker)
 
 
-async def test_a_failed_drive_gives_its_claim_back() -> None:
+async def test_a_failed_drive_gives_its_claim_back(sf) -> None:
     """Holding a claim it is not using is what makes the run invisible for the
     length of the stale lease. It has already stopped — say so now."""
-    run_id = uuid.uuid4()
-    worker = _worker()
+    run_id = await _seed_run(sf)
+    worker = _worker(sf)
     worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
     worker._frame_and_drive_run = _raises(_Boom("dead worker"))  # type: ignore[method-assign]
 
     await worker.drive_once()
 
-    assert worker.released == [run_id], "a crashed drive must release its claim"
+    async with sf() as session:
+        run = await session.get(ExecutionRun, run_id)
+        assert run is not None
+        assert run.claimed_at is None, "a crashed drive must release its claim"
+        assert run.status is RunStatus.OPEN, "and hand the run back to the OPEN scan"
+
     # The history row must say what happened. Both callers of
     # ``_release_claim_to_open`` used to share one hard-coded sentence, so every
     # retried crash logged "yielded back on executor capacity saturation" into
     # its own run history — a false statement about a run nothing was saturating.
-    reason = worker.release_reasons[0]  # type: ignore[attr-defined]
+    reason = await _last_history_reason(sf, run_id)
     assert "saturation" not in reason, f"a crashed drive is not a capacity yield: {reason!r}"
     assert "_Boom" in reason, f"the history row must name what crashed: {reason!r}"
 
 
-async def test_repeated_failures_reach_the_founder_and_stop_retrying() -> None:
+async def test_repeated_failures_reach_the_founder_and_stop_retrying(sf) -> None:
     """The bound. A run that has failed to drive this many times is not going to
     fix itself on the next tick, and re-driving it forever is how the platform
     burns a machine while saying nothing."""
-    run_id = uuid.uuid4()
-    worker = _worker(max_drive_failures=2)
+    run_id = await _seed_run(sf)
+    worker = _worker(sf, max_drive_failures=2)
     worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
     worker._frame_and_drive_run = _raises(_Boom("turn timed out"))  # type: ignore[method-assign]
 
     await worker.drive_once()
-    assert worker.escalated == [], "one failure is not a pattern"
+    assert await _decision_kinds(sf, run_id) == [], "one failure is not a pattern"
 
     await worker.drive_once()
 
-    assert worker.escalated == [run_id], "the founder is told once the bound is hit"
+    assert await _decision_kinds(sf, run_id) == [DRIVE_FAILED_KIND], (
+        "the founder is told once the bound is hit"
+    )
 
 
-async def test_a_drive_that_works_clears_the_count() -> None:
+async def test_two_workers_share_one_bound(sf) -> None:
+    """The reason the count is on the run and not in a dict.
+
+    Two AgentWorker INSTANCES are two processes as far as this counter is
+    concerned — they share nothing but the database, which is exactly the
+    arrangement ``FOR UPDATE SKIP LOCKED`` exists to support. Alternating the
+    same failing run between them must still reach the bound. With a per-process
+    count each worker sits at 1 forever, the bound is never crossed, and the run
+    retries in silence for as long as the deployment lives."""
+    run_id = await _seed_run(sf)
+    one = _worker(sf, max_drive_failures=2)
+    two = _worker(sf, max_drive_failures=2)
+    for worker in (one, two):
+        worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
+        worker._frame_and_drive_run = _raises(_Boom("turn timed out"))  # type: ignore[method-assign]
+
+    await one.drive_once()
+    await two.drive_once()
+
+    assert await _decision_kinds(sf, run_id) == [DRIVE_FAILED_KIND], (
+        "the second worker must see the first worker's failure"
+    )
+
+
+async def test_a_drive_that_works_clears_the_count(sf) -> None:
     """The counter is about CONSECUTIVE failures. A run that recovers must not
     carry a grudge into its next hiccup — otherwise a long-lived run accumulates
     unrelated failures and escalates for no reason."""
-    run_id = uuid.uuid4()
-    worker = _worker(max_drive_failures=2)
+    run_id = await _seed_run(sf)
+    worker = _worker(sf, max_drive_failures=2)
     worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
 
     worker._frame_and_drive_run = _raises(_Boom("blip"))  # type: ignore[method-assign]
@@ -118,17 +182,21 @@ async def test_a_drive_that_works_clears_the_count() -> None:
     worker._frame_and_drive_run = _raises(_Boom("blip"))  # type: ignore[method-assign]
     await worker.drive_once()
 
-    assert worker.escalated == [], "the successful drive reset the count"
+    # Read the count itself, not just its absence of consequences: "no Decision"
+    # is also what a counter that never increments at all would produce, and the
+    # proposition here is specifically that the successful drive zeroed it.
+    assert await _persisted_failures(sf, run_id) == 1, "the failure count restarted at 1"
+    assert await _decision_kinds(sf, run_id) == [], "the successful drive reset the count"
 
 
-async def test_the_capacity_yield_is_not_a_failure() -> None:
+async def test_the_capacity_yield_is_not_a_failure(sf) -> None:
     """Saturation is the platform working as designed — every worker busy. It
     already has its own yield-back and must not count toward the bound, or a
     busy afternoon escalates healthy runs to the founder."""
     from backend.dispatch.adapter import ExecutorCapacitySaturated
 
-    run_id = uuid.uuid4()
-    worker = _worker(max_drive_failures=2)
+    run_id = await _seed_run(sf)
+    worker = _worker(sf, max_drive_failures=2)
     worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
     worker._frame_and_drive_run = _raises(ExecutorCapacitySaturated("all busy"))  # type: ignore[method-assign]
 
@@ -136,8 +204,7 @@ async def test_the_capacity_yield_is_not_a_failure() -> None:
     await worker.drive_once()
     await worker.drive_once()
 
-    assert worker.escalated == []
-    assert worker._drive_failures.get(run_id, 0) == 0
+    assert await _decision_kinds(sf, run_id) == []
 
 
 # ── the minimum of the worker these tests drive ──────────────────────────────
@@ -163,8 +230,52 @@ async def _noop(*_a: Any, **_k: Any) -> None:
     return None
 
 
-def _worker(*, max_drive_failures: int = 3) -> Any:
-    """An AgentWorker with its DB edges replaced by in-memory recorders."""
+async def _seed_run(sf: Any) -> uuid.UUID:
+    """A claimed RUNNING run — what ``drive_once`` hands to ``_frame_and_drive_run``."""
+    async with sf() as session:
+        run = ExecutionRun(
+            id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            product_id=None,
+            request_id=None,
+            status=RunStatus.RUNNING,
+            payload={},
+            claimed_at=datetime.now(tz=UTC),
+            claimed_by=uuid.uuid4(),
+        )
+        session.add(run)
+        await session.commit()
+        return run.id
+
+
+async def _decision_kinds(sf: Any, run_id: uuid.UUID) -> list[str]:
+    async with sf() as session:
+        rows = await session.execute(select(Decision).where(Decision.run_id == run_id))
+        return [d.decision for d in rows.scalars().all()]
+
+
+async def _persisted_failures(sf: Any, run_id: uuid.UUID) -> int:
+    """The consecutive-failure count as it actually sits on the run row."""
+    async with sf() as session:
+        run = await session.get(ExecutionRun, run_id)
+        assert run is not None
+        return (run.payload or {}).get(DRIVE_FAILURES_KEY, 0)
+
+
+async def _last_history_reason(sf: Any, run_id: uuid.UUID) -> str:
+    async with sf() as session:
+        rows = await session.execute(
+            select(ExecutionRunHistory)
+            .where(ExecutionRunHistory.run_id == run_id)
+            .order_by(ExecutionRunHistory.created_at)
+        )
+        history = list(rows.scalars().all())
+        return history[-1].reason or "" if history else ""
+
+
+def _worker(sf: Any, *, max_drive_failures: int = 3) -> Any:
+    """A real AgentWorker over a real database, with only the two edges these
+    tests are not about — claiming and driving — replaced."""
     from backend.config import get_settings
     from backend.workflow.infrastructure.workers.agent_worker import (
         AgentWorker,
@@ -173,33 +284,17 @@ def _worker(*, max_drive_failures: int = 3) -> Any:
 
     settings = get_settings().model_copy(update={"agent_max_drive_failures": max_drive_failures})
     worker = AgentWorker(
-        session_factory=None,  # type: ignore[arg-type]
+        session_factory=sf,
         config=AgentWorkerConfig(poll_interval_s=30.0),
         settings=settings,
     )
     worker._execution = _EXECUTION
-    worker.released = []  # type: ignore[attr-defined]
-    worker.escalated = []  # type: ignore[attr-defined]
-    worker.release_reasons = []  # type: ignore[attr-defined]
-
-    async def _release(run_id: uuid.UUID, *, reason: str) -> None:
-        worker.released.append(run_id)  # type: ignore[attr-defined]
-        worker.release_reasons.append(reason)  # type: ignore[attr-defined]
-
-    async def _clear(_run_id: uuid.UUID) -> None:
-        return None
 
     async def _reap(*_a: Any, **_k: Any) -> int:
         return 0
 
-    async def _escalate(run_id: uuid.UUID, *, failures: int, error: str) -> None:
-        worker.escalated.append(run_id)  # type: ignore[attr-defined]
-
-    worker._release_claim_to_open = _release  # type: ignore[method-assign]
-    worker._clear_claim = _clear  # type: ignore[method-assign]
     worker._reap_stale_claims = _reap  # type: ignore[method-assign]
     worker._reap_terminal_run_workspaces = _reap  # type: ignore[method-assign]
-    worker._escalate_drive_failure = _escalate  # type: ignore[method-assign]
     return worker
 
 
