@@ -28,8 +28,22 @@ This module asserts the invariants in two ways:
 The row-claim sites (delivery / settle / relay) also have behavioural
 PG-only race tests — ``SKIP LOCKED`` is a PG primitive; SQLite ignores
 the hint at the dialect level, so a behavioural race test there would
-be measuring the wrong substrate. The compile-time guard plus the PG
-race tests cover both layers.
+be measuring the wrong substrate.
+
+Those two layers were claimed to cover each other, and until 2026-09-08
+they did not. Measured by mutation: dropping ``skip_locked=True`` while
+keeping ``FOR UPDATE`` left BOTH behavioural race tests green and only
+the compile-time guards red. The reason is that the two primitives do
+not differ in the OUTCOME these tests were checking — with a plain
+``FOR UPDATE`` the sibling simply BLOCKS until the first worker commits,
+then reads rows that are already gone, and still dispatches nothing
+twice. What ``SKIP LOCKED`` buys is that the sibling comes back at all
+while the lock is held, and nothing was measuring that.
+
+So each race test now holds the first worker inside its transaction
+(``_Hold``, an event handshake rather than a sleep — see #899 for what a
+sleep-bought window is actually worth) and asserts the sibling returned
+while that lock was held. The same mutation now fails both layers.
 """
 
 from __future__ import annotations
@@ -178,17 +192,53 @@ async def test_workspace_promote_lock_disjoint_workspaces_independent() -> None:
 # ----------------------------------------------------------------------
 
 
-class _CaptureDispatcher:
+#: How long the holding worker waits for its sibling before giving up on it.
+#: This is a LIVENESS bound, not a race window — with ``SKIP LOCKED`` the
+#: sibling comes back in milliseconds, and without it the sibling is blocked on
+#: a lock that is not going to be released until this worker commits. Generous
+#: on purpose: a slow runner must not turn "the lock works" into a failure.
+_SIBLING_DEADLINE_S = 15.0
+
+
+class _Hold:
+    """A deterministic "worker A is mid-batch, holding its lock" state.
+
+    Replaces ``asyncio.sleep(0.02)``. A sleep only *probably* overlaps the
+    sibling's claim, and measured on real PG the margin such a window leaves is
+    a few milliseconds — see #899, where exactly that shape made
+    ``test_two_concurrent_claims_no_double_claim_pg`` flake on a loaded runner
+    and abandoned PR #892.
+    """
+
     def __init__(self) -> None:
+        self.holding = asyncio.Event()
+        self.sibling_done = asyncio.Event()
+        self.sibling_blocked = False
+
+    async def hold(self) -> None:
+        """Called from inside worker A's open transaction."""
+        self.holding.set()
+        try:
+            await asyncio.wait_for(self.sibling_done.wait(), timeout=_SIBLING_DEADLINE_S)
+        except TimeoutError:
+            # The sibling never came back. It is blocked on OUR lock — which is
+            # precisely what ``SKIP LOCKED`` exists to prevent. Record it and
+            # commit anyway, so the sibling unblocks and the test reports the
+            # real reason instead of hanging.
+            self.sibling_blocked = True
+
+
+class _CaptureDispatcher:
+    def __init__(self, hold: _Hold | None = None) -> None:
         self.calls: list[uuid.UUID] = []
+        self._hold = hold
 
     async def dispatch(self, **kwargs: object) -> DeliveryResult:
         did = kwargs["deliverable_id"]
         assert isinstance(did, uuid.UUID)
         self.calls.append(did)
-        # Tiny sleep widens the race window so worker_b's drain query
-        # actually overlaps worker_a's lock.
-        await asyncio.sleep(0.02)
+        if self._hold is not None:
+            await self._hold.hold()
         return DeliveryResult(
             workspace_id=kwargs["workspace_id"],  # type: ignore[arg-type]
             deliverable_id=did,
@@ -204,7 +254,18 @@ class _CaptureDispatcher:
 )
 @pytest.mark.asyncio
 async def test_two_delivery_workers_race_no_double_dispatch_pg() -> None:
-    """Two DeliveryWorker instances on real PG → each row dispatched exactly once."""
+    """Two DeliveryWorker instances on real PG → each row dispatched exactly once,
+    and the second one is never made to WAIT for the first.
+
+    The second half is the part ``SKIP LOCKED`` actually buys, and until
+    2026-09-08 nothing measured it. Measured then, by mutation: dropping
+    ``skip_locked=True`` (keeping ``FOR UPDATE``) left this test GREEN — the
+    sibling simply blocked until the first worker committed, found the rows
+    deleted, and no row was dispatched twice. Only the compile-time SQL guard
+    went red. So the module docstring's claim that the two layers are both
+    covered was false, and the difference between the primitives is not in the
+    OUTCOME at all — it is whether the sibling comes back while the lock is
+    held. That is what ``_Hold`` asserts."""
     async with db_engine(DeliveryBase, ExecutionBase) as (engine, _is_pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         ws = uuid.uuid4()
@@ -223,34 +284,56 @@ async def test_two_delivery_workers_race_no_double_dispatch_pg() -> None:
                 )
             await s.commit()
 
-        dispatcher = _CaptureDispatcher()
-        cfg = DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01)
-        worker_a = DeliveryWorker(session_factory=sf, dispatcher=dispatcher, config=cfg)
-        worker_b = DeliveryWorker(session_factory=sf, dispatcher=dispatcher, config=cfg)
+        # HALF the rows each, so there is something left for the sibling to
+        # claim while the first worker is still holding its own batch. With
+        # batch_size >= the row count the first worker takes everything and the
+        # sibling has nothing to prove.
+        hold = _Hold()
+        dispatcher_a = _CaptureDispatcher(hold)
+        dispatcher_b = _CaptureDispatcher()
+        cfg = DeliveryWorkerConfig(batch_size=3, poll_interval_s=0.01)
+        worker_a = DeliveryWorker(session_factory=sf, dispatcher=dispatcher_a, config=cfg)
+        worker_b = DeliveryWorker(session_factory=sf, dispatcher=dispatcher_b, config=cfg)
 
-        results = await asyncio.gather(
-            worker_a.drain_once(),
-            worker_b.drain_once(),
-            return_exceptions=True,
-        )
+        async def _sibling() -> int:
+            # Start only once worker A is provably inside its transaction with
+            # rows locked — no sleep, no window to lose on a slow runner.
+            await asyncio.wait_for(hold.holding.wait(), timeout=_SIBLING_DEADLINE_S)
+            try:
+                return await worker_b.drain_once()
+            finally:
+                hold.sibling_done.set()
+
+        results = await asyncio.gather(worker_a.drain_once(), _sibling(), return_exceptions=True)
         for r in results:
             assert not isinstance(r, BaseException), f"worker raised: {r!r}"
 
-        called = sorted(str(d) for d in dispatcher.calls)
+        assert not hold.sibling_blocked, (
+            "the sibling waited out the first worker's lock instead of skipping it — "
+            "SKIP LOCKED is not in effect on the delivery claim"
+        )
+        assert dispatcher_b.calls, "the sibling must have claimed the rows A did not"
+        assert not set(dispatcher_a.calls) & set(dispatcher_b.calls), (
+            f"double dispatch: {dispatcher_a.calls!r} & {dispatcher_b.calls!r}"
+        )
+        called = sorted(str(d) for d in [*dispatcher_a.calls, *dispatcher_b.calls])
         assert len(called) == len(set(called)), f"double dispatch: {called!r}"
+        assert called == sorted(str(d) for d in deliv_ids), "every row delivered exactly once"
         async with sf() as s:
             remaining = (await s.execute(select(DeliveryEventRow))).scalars().all()
             assert remaining == []
 
 
 class _CaptureRelay:
-    def __init__(self) -> None:
+    def __init__(self, hold: _Hold | None = None) -> None:
         self.seen: list[int] = []
+        self._hold = hold
 
     async def send(self, records):  # type: ignore[no-untyped-def]
         ids = [r.id for r in records]
         self.seen.extend(ids)
-        await asyncio.sleep(0.02)
+        if self._hold is not None:
+            await self._hold.hold()
         return ids
 
 
@@ -260,7 +343,14 @@ class _CaptureRelay:
 )
 @pytest.mark.asyncio
 async def test_two_relay_workers_race_no_double_relay_pg() -> None:
-    """Two RelayWorker instances on real PG → each outbox id sent exactly once."""
+    """Two RelayWorker instances on real PG → each outbox id sent exactly once,
+    and the second one is never made to WAIT for the first.
+
+    Same measurement as the delivery race above: dropping ``skip_locked=True``
+    from the outbox claim left the old version of this test green, because the
+    sibling blocked, then read rows the first worker had already marked
+    delivered. Nothing was relayed twice either way — the primitives differ in
+    whether the sibling comes back, not in the outcome."""
     async with db_engine(AuditOutboxBase) as (engine, _is_pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         async with sf() as s:
@@ -275,24 +365,33 @@ async def test_two_relay_workers_race_no_double_relay_pg() -> None:
                 )
             await s.commit()
 
-        relay = _CaptureRelay()
-        worker_a = RelayWorker(
-            session_factory=sf,
-            relay=relay,
-            config=RelayConfig(batch_size=10, poll_interval_s=0.01),
-        )
-        worker_b = RelayWorker(
-            session_factory=sf,
-            relay=relay,
-            config=RelayConfig(batch_size=10, poll_interval_s=0.01),
-        )
+        # Half the batch each, so the sibling has rows left to claim while the
+        # first worker still holds its own (see the delivery race above).
+        hold = _Hold()
+        relay_a = _CaptureRelay(hold)
+        relay_b = _CaptureRelay()
+        cfg = RelayConfig(batch_size=3, poll_interval_s=0.01)
+        worker_a = RelayWorker(session_factory=sf, relay=relay_a, config=cfg)
+        worker_b = RelayWorker(session_factory=sf, relay=relay_b, config=cfg)
 
-        results = await asyncio.gather(
-            worker_a.drain_once(),
-            worker_b.drain_once(),
-            return_exceptions=True,
-        )
+        async def _sibling() -> int:
+            await asyncio.wait_for(hold.holding.wait(), timeout=_SIBLING_DEADLINE_S)
+            try:
+                return await worker_b.drain_once()
+            finally:
+                hold.sibling_done.set()
+
+        results = await asyncio.gather(worker_a.drain_once(), _sibling(), return_exceptions=True)
         for r in results:
             assert not isinstance(r, BaseException), f"worker raised: {r!r}"
 
-        assert len(relay.seen) == len(set(relay.seen)), f"double relay: {relay.seen!r}"
+        assert not hold.sibling_blocked, (
+            "the sibling waited out the first worker's lock instead of skipping it — "
+            "SKIP LOCKED is not in effect on the audit-outbox claim"
+        )
+        assert relay_b.seen, "the sibling must have claimed the rows A did not"
+        assert not set(relay_a.seen) & set(relay_b.seen), (
+            f"double relay: {relay_a.seen!r} & {relay_b.seen!r}"
+        )
+        seen = [*relay_a.seen, *relay_b.seen]
+        assert len(seen) == len(set(seen)), f"double relay: {seen!r}"
