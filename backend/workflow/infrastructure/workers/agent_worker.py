@@ -78,7 +78,6 @@ from backend.workflow.application.stages.frame import (
     FrameLlm,
     FrameModelUnresolvedError,
     FrameStage,
-    FrameUnclassifiedError,
 )
 from backend.workflow.channels import REQUESTS
 from backend.workflow.infrastructure.db import (
@@ -309,7 +308,9 @@ class AgentWorker(BaseWorker):
                 # ``drive_once`` re-picks it (the scan is on OPEN). Do NOT fail
                 # it (no partial failed / decision state); do NOT count it (a
                 # yielded run was not driven).
-                await self._release_claim_to_open(run_id)
+                await self._release_claim_to_open(
+                    run_id, reason="yielded back on executor capacity saturation"
+                )
                 logger.info("agent_worker_yielded_on_capacity", run_id=str(run_id))
                 continue
             except Exception as exc:  # noqa: BLE001 — one run's crash is not the batch's
@@ -357,7 +358,9 @@ class AgentWorker(BaseWorker):
             )
             self._drive_failures.pop(run_id, None)
             return
-        await self._release_claim_to_open(run_id)
+        await self._release_claim_to_open(
+            run_id, reason=f"retrying after a failed drive ({failures}): {type(exc).__name__}"
+        )
 
     async def _escalate_drive_failure(
         self, run_id: uuid.UUID, *, failures: int, error: str
@@ -534,20 +537,27 @@ class AgentWorker(BaseWorker):
             )
             await session.commit()
 
-    async def _release_claim_to_open(self, run_id: uuid.UUID) -> None:
-        """Saturation yield-back: reset a claimed RUNNING run to OPEN + clear the
-        claim so the next ``drive_once`` re-picks it (the scan is on OPEN).
+    async def _release_claim_to_open(self, run_id: uuid.UUID, *, reason: str) -> None:
+        """Reset a claimed RUNNING run to OPEN + clear the claim so the next
+        ``drive_once`` re-picks it (the scan is on OPEN).
 
         Only resets a run still in RUNNING (defensive — a mid-drive terminal /
         pause would have moved it, and we must not clobber that). Uses
-        :class:`AgentRunner.transition` so a history row records the yield-back."""
+        :class:`AgentRunner.transition` so a history row records why it went back.
+
+        ``reason`` is REQUIRED, not defaulted: there are two callers with two
+        different truths — the capacity yield-back and a crashed drive below the
+        escalation bound — and this used to hard-code the saturation sentence for
+        both, so every retried crash wrote "yielded back on executor capacity
+        saturation" into the run's own history. A default would just re-create
+        that (규율 137: code goes red when it is wrong, prose stays green)."""
         async with self._session_factory() as session:
             run = await session.get(ExecutionRun, run_id)
             if run is not None and run.status is RunStatus.RUNNING:
                 await AgentRunner(session).transition(
                     run_id=run_id,
                     to_status=RunStatus.OPEN,
-                    reason="yielded back on executor capacity saturation",
+                    reason=reason,
                 )
             await session.execute(
                 update(ExecutionRun)
@@ -618,22 +628,22 @@ class AgentWorker(BaseWorker):
                         reason="paused on decision: no frame model to classify the request",
                     )
                     return
-                except FrameUnclassifiedError as exc:
-                    # A frame model answered, but not with a verdict on ASK vs
-                    # PRODUCE → the run's KIND is unknown, and both guesses are
-                    # destructive: driving the loop hands a question to a coding
-                    # executor (which edits whatever it finds — prod run ff1615e8),
-                    # while answering silently never builds. Fail the run so the
-                    # founder sees WHY (no-implicit-routing).
-                    logger.warning(
-                        "agent_worker_frame_unclassified", run_id=str(run.id), reason=str(exc)
-                    )
-                    await AgentRunner(session).transition(
-                        run_id=run.id,
-                        to_status=RunStatus.FAILED,
-                        reason=f"frame could not classify the request: {exc}",
-                    )
-                    return
+                # NOTE: a plain ``FrameUnclassifiedError`` is deliberately NOT
+                # caught here. It leaves through ``_frame_and_drive_run`` into
+                # ``drive_once``'s per-run handler, which counts it and — past
+                # the bound — raises the ``run_drive_failed`` Decision. Why:
+                # framing is ONE cheap-LLM call with no retry under it, and it is
+                # the platform's single most common terminal failure (21 of the
+                # 24 ``failed`` notifications prod has ever sent read "frame could
+                # not classify the request"). Failing the run here made every one
+                # of those a dead end — terminal, so no checkpoint item, no
+                # ``Try again``, nothing re-driving it — carrying a body written
+                # for engineers ("the frame model call failed"). Prod 2026-09-07:
+                # a hand ``runs_retry`` put the SAME prompt through the SAME code
+                # and it framed first try. An undecidable frame still never
+                # guesses the route (no-implicit-routing holds — the stage raises
+                # and nothing downstream runs); it is simply a drive that did not
+                # start, which ``_on_drive_failed`` already handles correctly.
                 # Record the FULL framing (B9a): skill match + artifact-type hint
                 # (for delivery routing) + the refined intent + the path
                 # classification (recorded for B9b, which acts on knowledge_only).

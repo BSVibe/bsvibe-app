@@ -75,6 +75,13 @@ async def test_a_failed_drive_gives_its_claim_back() -> None:
     await worker.drive_once()
 
     assert worker.released == [run_id], "a crashed drive must release its claim"
+    # The history row must say what happened. Both callers of
+    # ``_release_claim_to_open`` used to share one hard-coded sentence, so every
+    # retried crash logged "yielded back on executor capacity saturation" into
+    # its own run history — a false statement about a run nothing was saturating.
+    reason = worker.release_reasons[0]  # type: ignore[attr-defined]
+    assert "saturation" not in reason, f"a crashed drive is not a capacity yield: {reason!r}"
+    assert "_Boom" in reason, f"the history row must name what crashed: {reason!r}"
 
 
 async def test_repeated_failures_reach_the_founder_and_stop_retrying() -> None:
@@ -173,9 +180,11 @@ def _worker(*, max_drive_failures: int = 3) -> Any:
     worker._execution = _EXECUTION
     worker.released = []  # type: ignore[attr-defined]
     worker.escalated = []  # type: ignore[attr-defined]
+    worker.release_reasons = []  # type: ignore[attr-defined]
 
-    async def _release(run_id: uuid.UUID) -> None:
+    async def _release(run_id: uuid.UUID, *, reason: str) -> None:
         worker.released.append(run_id)  # type: ignore[attr-defined]
+        worker.release_reasons.append(reason)  # type: ignore[attr-defined]
 
     async def _clear(_run_id: uuid.UUID) -> None:
         return None
