@@ -108,6 +108,7 @@ class GithubMergeWatchRepository:
         next_poll_at: datetime | None = None,
         last_error: str | None = None,
         increment_attempt: bool = False,
+        ci_red_head_sha: str | None = None,
         conflict_dispatched: bool | None = None,
         conflict_head_sha: str | None = None,
         conflict_attempts: int | None = None,
@@ -129,6 +130,8 @@ class GithubMergeWatchRepository:
             values["next_poll_at"] = next_poll_at
         if last_error is not None:
             values["last_error"] = last_error
+        if ci_red_head_sha is not None:
+            values["ci_red_head_sha"] = ci_red_head_sha
         if conflict_dispatched is not None:
             values["conflict_dispatched"] = conflict_dispatched
         if conflict_head_sha is not None:

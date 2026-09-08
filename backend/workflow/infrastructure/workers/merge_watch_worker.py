@@ -282,6 +282,7 @@ class _WatchSnapshot:
     base_branch: str
     attempts: int
     deadline_at: datetime
+    ci_red_head_sha: str | None
     conflict_dispatched: bool
     conflict_head_sha: str | None
     conflict_attempts: int
@@ -300,6 +301,7 @@ class _WatchSnapshot:
             base_branch=row.base_branch,
             attempts=row.attempts,
             deadline_at=_aware(row.deadline_at),
+            ci_red_head_sha=row.ci_red_head_sha,
             conflict_dispatched=row.conflict_dispatched,
             conflict_head_sha=row.conflict_head_sha,
             conflict_attempts=row.conflict_attempts,
@@ -510,6 +512,37 @@ class MergeWatchWorker(BaseWorker):
             # later. Late, and about the wrong thing — a red test and a hung CI
             # ask different things of the person reading it.
             if head_sha and await self._checks_failed(client, owner, name, head_sha):
+                if snap.ci_red_head_sha != head_sha:
+                    # FIRST red on this head. Red is decided about this ATTEMPT,
+                    # not about the commit — a re-run replaces the check's
+                    # conclusion, and the endpoint answers with the latest one,
+                    # so the very next poll sees green and the PR merges through
+                    # the ordinary ``clean`` path. Record which head was red and
+                    # keep the row CLAIMABLE: going terminal here is precisely
+                    # what left PR #892's re-run (green 25 minutes later)
+                    # unwatched and its PR open. Nothing is said to the founder
+                    # yet — a check that is about to be re-run is not their
+                    # problem.
+                    await repo.mark_status(
+                        snap.id,
+                        MergeWatchStatus.PENDING_CI,
+                        next_poll_at=self._backoff(snap.attempts, now),
+                        last_error="ci_red_once",
+                        ci_red_head_sha=head_sha,
+                        increment_attempt=True,
+                    )
+                    await session.commit()
+                    logger.info(
+                        "merge_watch_ci_red_first_look",
+                        repo=snap.repo,
+                        pr_number=snap.pr_number,
+                        head_sha=head_sha,
+                    )
+                    return
+                # Red AGAIN on the same head: nobody re-ran it, or the re-run
+                # was red too. Now it is the founder's, and it is reported as a
+                # failure rather than as a deadline (#754) — one poll interval
+                # later than before, not the 63 minutes that fix was about.
                 await self._gave_up(snap, "ci_failed")
                 await repo.mark_status(snap.id, MergeWatchStatus.FAILED, last_error="ci_failed")
                 await session.commit()
