@@ -36,6 +36,7 @@ from backend.workflow.application.audit_events import (
 from backend.workflow.application.inplace_gate import capture_inplace_baseline
 from backend.workflow.application.round_budget import (
     RoundBudgetTracker,
+    finalize_round_cap_decision,
     round_budget_stats,
     should_continue_round,
 )
@@ -561,32 +562,12 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         WORK_TOOL_STATE_KEY: {**work_state, "round_budget_exhausted": True},
     }
     await orch._session.flush()
-    decision = await orch._create_decision(
-        run,
-        work_step,
-        kind="verification_failed",
-        payload={
-            "reason": "round_cap_reached",
-            "written_paths": written_paths,
-            "round_budget_declared": stats["declared"],
-            "round_budget_used": stats["used"],
-        },
-        rationale=(
-            f"agent loop exhausted its round budget (declared {stats['declared']}, "
-            f"used {stats['used']}) without a passing verification"
-        ),
-    )
-    await orch._audit(
-        run,
-        attempt,
-        DecisionPending,
-        {
-            "kind": "verification_failed",
-            "decision_id": str(decision.id),
-            "reason": "round_cap_reached",
-            "round_budget_declared": stats["declared"],
-            "round_budget_used": stats["used"],
-        },
+
+    # Founder ruling 2026-09-08: prefers a grounded DELIVERABLE choice over always
+    # asking the founder to diagnose an internal fact — see
+    # ``finalize_round_cap_decision``'s own docstring.
+    decision = await finalize_round_cap_decision(
+        orch, run=run, work_step=work_step, attempt=attempt, written_paths=written_paths, stats=stats
     )
     await orch._audit(
         run,

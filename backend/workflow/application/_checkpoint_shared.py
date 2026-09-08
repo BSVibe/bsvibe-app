@@ -75,40 +75,34 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
 }
 
 
-def _round_cap_reached_question(payload: dict[str, object], language: str) -> str | None:
+def _round_cap_reached_question(payload: dict[str, object], language: str) -> str:
     """The Brief line for a ``round_cap_reached`` ``verification_failed`` Decision.
 
-    Founder ruling 2026-09-07: reaching the round cap after exhausting every internal
-    recovery (the loop's own retries, the ``request_review`` second opinion where one was
-    available) is not the same as a first verification failure -- it may mean the request
-    itself cannot be done as scoped, so the line asks that, not "review it?" like the
-    generic ``verification_failed`` line above.
+    This is now the FALLBACK-ONLY line: ``_drive_loop.py`` raises an
+    ``ask_user_question`` Decision with a grounded deliverable choice whenever the
+    run's own history supports one (see
+    ``backend.workflow.domain.round_cap_outcome.round_cap_outcome_choice``) --
+    that Decision's ``payload.question`` rides through ``_question_text`` verbatim
+    and never reaches this function. This line only fires when NOTHING measurable
+    supported a choice, so the Decision stayed ``verification_failed``.
 
-    Reads ``round_budget_declared`` / ``round_budget_used`` straight off the Decision
-    payload (``_drive_loop.py`` always sets both when it raises this reason -- see
-    ``round_budget_stats``) rather than using a fixed string, because "tried N of M
-    rounds" is a per-run fact a static sentence cannot state truthfully. Deliberately does
-    NOT claim a review count: that count lives on ``ExecutionRun.payload``
-    (``STUCK_REVIEW_STATE_KEY``), which this function -- given only the Decision -- cannot
-    read, and ``needs_you_reason_body`` below is in the same position (it receives the
-    Decision payload, not the run). Stating a number neither side can verify would violate
-    the "never say what wasn't measured" rule this reason exists to uphold. Returns
-    ``None`` (caller falls back to the generic line) if either number is missing or
-    malformed, rather than printing an unmeasured claim.
+    Founder ruling 2026-09-08: the previous text here ("BSVibe used all {declared}
+    of its planned rounds ({used} attempts)... is what you're asking for possible as
+    scoped, or does the approach need to change?") asked the founder to diagnose
+    internal facts they never chose or observed -- a round budget they never
+    declared, an "approach" they never saw BSVibe pick. Diagnosing a stuck run is
+    BSVibe's job, not the founder's. This line no longer states any internal count
+    and no longer asks the founder to judge WHY it failed -- only what to do about
+    the outcome, in words a founder would actually use. ``payload`` is accepted
+    (unused) for call-site symmetry with
+    :func:`backend.notifications.copy._round_cap_reached_body`, which mirrors this
+    exact sentence so the phone and the Brief never disagree.
     """
-    declared = payload.get("round_budget_declared")
-    used = payload.get("round_budget_used")
-    if not isinstance(declared, int) or not isinstance(used, int):
-        return None
     if language == "ko":
-        return (
-            f"BSVibe가 예산으로 잡은 {declared}번의 시도를 다 쓰도록(실제 {used}번 시도) 이 작업을 "
-            "검증하지 못했어요 — 지금 요청하신 게 이 범위대로 가능한 일인가요, 아니면 접근을 바꿔야 할까요?"
-        )
+        return "BSVibe가 계속 해봤지만 요청하신 대로 마무리하지 못했어요 — 어떻게 하면 좋을까요?"
     return (
-        f"BSVibe used all {declared} of its planned rounds ({used} attempts) and still "
-        "couldn't verify this — is what you're asking for possible as scoped, or does the "
-        "approach need to change?"
+        "BSVibe kept trying but couldn't finish this the way you described — "
+        "what would you like to happen with it?"
     )
 
 
@@ -222,9 +216,7 @@ def _question_text(decision: Decision, language: str = "en") -> str:
             return value
         reason = str(payload.get("reason") or "")
         if reason == "round_cap_reached":
-            line = _round_cap_reached_question(payload, language)
-            if line is not None:
-                return line
+            return _round_cap_reached_question(payload, language)
     # A reason-specific line wins over the kind's generic one, for a kind with
     # several distinct ways to arrive (``merge_watch_stalled``): the founder
     # reads what actually happened instead of a catch-all.

@@ -147,28 +147,30 @@ _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
 def _round_cap_reached_body(payload: Mapping[str, object] | None, lang: str) -> str | None:
     """The push body for a ``round_cap_reached`` ``needs_you`` notification.
 
-    Mirrors ``_round_cap_reached_question`` in
-    ``backend.workflow.application._checkpoint_shared`` -- see that function's docstring
-    for why this reads ``round_budget_declared`` / ``round_budget_used`` off the Decision
-    payload instead of using a fixed string, and why it does NOT claim a review count. The
-    phone and the Brief must say the SAME thing about the same Decision (existing rule for
-    this table, see ``_NEEDS_YOU_REASON_BODY`` below): both read the identical two payload
-    keys, so they can never drift into stating different numbers for the same run. Returns
-    ``None`` (caller falls back to the generic ``needs_you`` body) if either number is
-    missing or malformed.
+    This is now the FALLBACK-ONLY body: ``_drive_loop.py`` raises an
+    ``ask_user_question`` Decision with a grounded deliverable choice whenever the
+    run's own history supports one (see
+    ``backend.workflow.domain.round_cap_outcome.round_cap_outcome_choice``), and
+    that Decision's own ``payload.question`` rides through ``_emit_needs_you``
+    verbatim as the push ``detail`` -- this function is never consulted then. It
+    only fires when NOTHING measurable supported a choice, so the Decision stayed
+    ``verification_failed`` with no ``question`` of its own.
+
+    Founder ruling 2026-09-08: mirrors ``_round_cap_reached_question`` in
+    ``backend.workflow.application._checkpoint_shared`` -- see that function's
+    docstring for why this no longer states any internal round count and no longer
+    asks the founder to judge WHY it failed. The phone and the Brief must say the
+    SAME thing about the same Decision (existing rule for this table, see
+    ``_NEEDS_YOU_REASON_BODY`` below), so this returns the EXACT sentence that
+    function does, regardless of ``payload``'s shape (it states no number, so it
+    needs none).
     """
-    if not isinstance(payload, Mapping):
-        return None
-    declared = payload.get("round_budget_declared")
-    used = payload.get("round_budget_used")
-    if not isinstance(declared, int) or not isinstance(used, int):
-        return None
     if lang == "ko":
-        return (
-            f"BSVibe가 예산으로 잡은 {declared}번의 시도를 다 쓰도록(실제 {used}번 시도) "
-            "이 작업을 검증하지 못했어요."
-        )
-    return f"BSVibe used all {declared} of its planned rounds ({used} attempts) and still couldn't verify this."
+        return "BSVibe가 계속 해봤지만 요청하신 대로 마무리하지 못했어요 — 어떻게 하면 좋을까요?"
+    return (
+        "BSVibe kept trying but couldn't finish this the way you described — "
+        "what would you like to happen with it?"
+    )
 
 
 #: Localized CTA framing for the trailing deep-link line of a push. ``needs_you``
@@ -249,10 +251,10 @@ def needs_you_reason_body(
     so no raw English verifier jargon ever reaches the founder. An unknown /
     missing ``language`` falls back to English.
 
-    ``payload`` is OPTIONAL and only consulted for ``reason == "round_cap_reached"``,
-    whose body must state the run's actual round counts (see
-    :func:`_round_cap_reached_body`) — every other reason is a fixed string and ignores
-    it, so existing 2-arg call sites are unaffected.
+    ``payload`` is OPTIONAL and accepted only for signature symmetry with
+    :func:`_round_cap_reached_body` (``reason == "round_cap_reached"``) — every reason,
+    that one included, now resolves to a fixed string that ignores it, so existing
+    2-arg call sites are unaffected.
     """
     lang = _resolve_language(language)
     if reason == "round_cap_reached":
