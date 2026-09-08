@@ -215,18 +215,43 @@ async def test_two_concurrent_claims_no_double_claim_pg() -> None:
 
         now = datetime.now(tz=UTC)
 
-        async def _claim_and_hold() -> list[uuid.UUID]:
+        # The overlap is arranged with events, not a clock. ``claim_due`` writes
+        # NOTHING to the rows it claims — the lock is the whole mechanism — so
+        # this test only means anything while the first claimer's transaction is
+        # still open. The old version bought that window with
+        # ``asyncio.sleep(0.05)``, and measured on real PG the margin it actually
+        # left was ~5ms: the first claimer takes the pool's warm connection and
+        # SELECTs at ~2ms, the sibling opens a COLD asyncpg connection and
+        # SELECTs at ~49ms, and the hold expires at ~54ms. On a loaded runner the
+        # handshake wins that race, the sibling SELECTs after the COMMIT, finds
+        # no locks and re-claims all six rows — complete overlap, which is the
+        # signature CI showed on PR #892 (2026-09-07). Nothing about the product
+        # was wrong; the window was.
+        holding = asyncio.Event()
+        sibling_done = asyncio.Event()
+
+        async def _first() -> list[uuid.UUID]:
             async with sf() as session:
                 repo = GithubMergeWatchRepository(session)
                 claimed = await repo.claim_due(now=now, batch_size=10)
                 ids = [r.id for r in claimed]
-                # Hold the FOR UPDATE lock so the sibling coroutine's claim
-                # overlaps and must SKIP the rows we locked.
-                await asyncio.sleep(0.05)
+                holding.set()
+                # Hold the FOR UPDATE lock until the sibling has actually run its
+                # claim, however long its connection took to come up.
+                await asyncio.wait_for(sibling_done.wait(), timeout=30)
                 await session.commit()
                 return ids
 
-        first, second = await asyncio.gather(_claim_and_hold(), _claim_and_hold())
+        async def _sibling() -> list[uuid.UUID]:
+            await asyncio.wait_for(holding.wait(), timeout=30)
+            async with sf() as session:
+                repo = GithubMergeWatchRepository(session)
+                claimed = await repo.claim_due(now=now, batch_size=10)
+                sibling_done.set()
+                return [r.id for r in claimed]
+
+        first, second = await asyncio.gather(_first(), _sibling())
+        assert first, "the first claimer must hold the lock this test is about"
         assert not (set(first) & set(second)), f"double claim: {first!r} & {second!r}"
         assert sorted(str(i) for i in [*first, *second]) == sorted(str(r.id) for r in rows)
 
