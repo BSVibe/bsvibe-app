@@ -97,6 +97,16 @@ class GithubMergeWatchRow(GithubMergeWatchBase):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_poll_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: The PR head SHA a FAILING check-run was last observed on. A red check is
+    #: decided about that ATTEMPT, not about the commit: GitHub re-runs replace
+    #: the check's conclusion, and PR #892 went red at 07:00, green on a re-run
+    #: of the same commit at 07:25, and was never merged because the watch had
+    #: already gone terminal. So the first red on a head only RECORDS itself
+    #: here and keeps polling; a second red on the SAME head is what calls the
+    #: founder. Nullable — set only once a red has been seen. Comparing against
+    #: the live head is what makes an agent re-push start the grace over, the
+    #: same way ``conflict_head_sha`` invalidates a stale conflict.
+    ci_red_head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     conflict_dispatched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     #: Conflict-robustness — how many times THIS conflict head has been
     #: re-dispatched to the agent. Reset to 1 on a fresh conflict (a first
