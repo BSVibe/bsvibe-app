@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from backend.workflow.application.audit_events import RoundBudgetDeclared
-from backend.workflow.infrastructure.db import ExecutionRun, RunAttempt
+from backend.identity.workspaces_db import load_workspace_language
+from backend.workflow.application.audit_events import DecisionPending, RoundBudgetDeclared
+from backend.workflow.domain.round_cap_outcome import round_cap_outcome_choice
+from backend.workflow.infrastructure.db import Decision, ExecutionRun, RunAttempt, WorkStep
 
 if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import RunOrchestrator
@@ -169,6 +171,69 @@ async def should_continue_round(
     return await attempt_round_budget_lift(orch, run, attempt, registry, tracker, messages)
 
 
+async def finalize_round_cap_decision(
+    orch: RunOrchestrator,
+    *,
+    run: ExecutionRun,
+    work_step: WorkStep,
+    attempt: RunAttempt,
+    written_paths: list[str],
+    stats: dict[str, int],
+) -> Decision:
+    """The Decision ``drive_loop`` raises once the round cap is reached with no
+    passing verdict — the founder ruling 2026-09-08 half of this feature.
+
+    Prefers an ``ask_user_question`` Decision carrying a grounded DELIVERABLE choice
+    (built by :func:`~backend.workflow.domain.round_cap_outcome.round_cap_outcome_choice`
+    from the run's own ``VerificationResult`` history) over the plain
+    ``verification_failed`` Decision this used to always raise — the founder is asked
+    what to build, never why it failed. Falls back to the plain Decision, reworded but
+    otherwise unchanged, only when nothing measurable supports a choice.
+    """
+    rationale = (
+        f"agent loop exhausted its round budget (declared {stats['declared']}, "
+        f"used {stats['used']}) without a passing verification"
+    )
+    base_payload: dict[str, Any] = {
+        "reason": "round_cap_reached",
+        "written_paths": written_paths,
+        "round_budget_declared": stats["declared"],
+        "round_budget_used": stats["used"],
+    }
+    language = await load_workspace_language(orch._session, run.workspace_id)
+    choice = await round_cap_outcome_choice(
+        orch._session, run, written_paths=written_paths, language=language
+    )
+    if choice is not None:
+        question, options = choice
+        decision = await orch._create_decision(
+            run,
+            work_step,
+            kind="ask_user_question",
+            payload={**base_payload, "question": question, "options": options},
+            rationale=rationale,
+        )
+        audit_kind = "ask_user_question"
+    else:
+        decision = await orch._create_decision(
+            run, work_step, kind="verification_failed", payload=base_payload, rationale=rationale
+        )
+        audit_kind = "verification_failed"
+    await orch._audit(
+        run,
+        attempt,
+        DecisionPending,
+        {
+            "kind": audit_kind,
+            "decision_id": str(decision.id),
+            "reason": "round_cap_reached",
+            "round_budget_declared": stats["declared"],
+            "round_budget_used": stats["used"],
+        },
+    )
+    return decision  # type: ignore[no-any-return]
+
+
 class RoundBudgetTracker:
     """Fires :func:`announce_round_budget_change` exactly once per VALUE the agent
     declares this run — whether learned from the native path's own tool call or synced
@@ -194,6 +259,7 @@ __all__ = [
     "RoundBudgetTracker",
     "announce_round_budget_change",
     "attempt_round_budget_lift",
+    "finalize_round_cap_decision",
     "round_budget_cap",
     "round_budget_stats",
     "should_continue_round",

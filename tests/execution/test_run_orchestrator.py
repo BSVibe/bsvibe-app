@@ -34,6 +34,7 @@ from backend.workflow.application.agent_loop import (
 from backend.workflow.infrastructure.connector_actions import ConnectorActionTool
 from backend.workflow.infrastructure.db import (
     Decision,
+    DecisionStatus,
     Deliverable,
     ExecutionRun,
     ExecutionRunActivity,
@@ -1490,6 +1491,14 @@ async def test_retry_after_round_cap_exhaustion_is_not_capped_at_the_spent_budge
         assert decisions[0].payload.get("reason") == "round_cap_reached"
         assert decisions[0].payload.get("round_budget_declared") == 2
         assert decisions[0].payload.get("round_budget_used") == 2
+        # A real retry only ever happens after the founder resolves the Decision
+        # (``resolve_checkpoint`` marks it RESOLVED before re-opening the run) —
+        # this Decision may now be an ``ask_user_question`` kind (a grounded
+        # deliverable choice, see ``round_cap_outcome_choice``), and the loop's own
+        # ``_pending_question`` out-of-band check would otherwise mistake a STILL
+        # PENDING one for a fresh founder question and halt the retry immediately.
+        decisions[0].status = DecisionStatus.RESOLVED
+        await session.flush()
 
         # Retry: a NEW RunAttempt on the SAME run, needing 4 rounds this time — more than
         # the exhausted 2, so it can only succeed if the retry runs UNCAPPED (at the 6
@@ -1550,6 +1559,13 @@ async def test_retry_after_round_cap_exhaustion_still_respects_the_ceiling(
             max_cycles=2,
         )
         await orch1.run(run=run, workspace_dir=tmp_path)
+        # A real retry only happens after the founder resolves the Decision — this one
+        # may now be an ``ask_user_question`` kind (a grounded deliverable choice), and
+        # a still-PENDING one would make the retry's own ``_pending_question`` check
+        # mistake it for a fresh founder question and halt immediately.
+        first_decision = (await session.execute(select(Decision))).scalars().one()
+        first_decision.status = DecisionStatus.RESOLVED
+        await session.flush()
 
         # Retry: never redeclares a round_budget and never passes — it must stop
         # EXACTLY at the ceiling (4), not run forever and not stop at 2 again.
@@ -1569,7 +1585,11 @@ async def test_retry_after_round_cap_exhaustion_still_respects_the_ceiling(
         result2 = await orch2.run(run=run, workspace_dir=tmp_path)
 
         assert result2.outcome != "verified"
-        decisions = (await session.execute(select(Decision))).scalars().all()
+        decisions = (
+            (await session.execute(select(Decision).order_by(Decision.created_at.asc())))
+            .scalars()
+            .all()
+        )
         assert len(decisions) == 2, "both attempt 1 and the retry hit round_cap_reached"
         retry_decision = decisions[1]
         assert retry_decision.payload.get("reason") == "round_cap_reached"
