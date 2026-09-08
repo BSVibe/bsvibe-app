@@ -4,8 +4,15 @@ Runs the full migration chain against a live Postgres + pgvector
 instance:
 
 1. ``alembic upgrade head`` — every revision applies on a clean DB.
-2. The expected head revision (``oauth_anonymous_dcr``) is stamped
-   in ``alembic_version``.
+2. ``alembic_version`` is stamped with THE head — read from the script
+   directory, never spelled out here. A literal head id in a test is a pin
+   that rots: it was written as ``oauth_anonymous_dcr`` in this very
+   docstring while the code asserted ``workspace_run_cap``, and every
+   migration since has had to remember to come edit it (#898 forgot, and
+   found out from CI because this suite is PG-gated and skips locally).
+   Reading it also buys a STRONGER proposition than any literal could:
+   exactly one head, so a migration branched off a stale base — two heads,
+   which ``upgrade head`` then refuses — fails right here.
 3. ``alembic downgrade base`` then ``alembic upgrade head`` — verifies
    downgrade paths are reversible (production safety: bad deploy →
    rollback works).
@@ -34,6 +41,9 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.config import get_settings
 
+#: The checkout root — ``alembic.ini`` and the ``_alembic`` subprocess's cwd.
+_REPO_ROOT = Path(__file__).parent.parent
+
 
 def _pg_url() -> str:
     # This suite DROPs + recreates the schema and runs alembic — OWNER-role work
@@ -44,6 +54,22 @@ def _pg_url() -> str:
         "BSVIBE_FRESH_PG_URL",
         os.environ.get("BSVIBE_MIGRATION_DATABASE_URL", get_settings().migration_url()),
     )
+
+
+def _expected_head() -> str:
+    """THE single head revision, per the migration scripts themselves.
+
+    Asserting there is exactly one is the point: a PR whose migration names a
+    stale ``down_revision`` produces two heads, and alembic will not upgrade
+    past an ambiguous head.
+    """
+    from alembic.config import Config  # noqa: PLC0415 — test-only dependency
+    from alembic.script import ScriptDirectory  # noqa: PLC0415
+
+    script = ScriptDirectory.from_config(Config(str(_REPO_ROOT / "alembic.ini")))
+    heads = script.get_heads()
+    assert len(heads) == 1, f"the migration chain must have ONE head, found {heads}"
+    return heads[0]
 
 
 async def _pg_reachable(url: str) -> bool:
@@ -67,7 +93,7 @@ def _skip_if_no_pg() -> str:
 
 def _alembic(args: list[str], *, env_extra: dict[str, str] | None = None) -> str:
     """Run alembic CLI; return stdout. Raises ``AssertionError`` on non-zero."""
-    repo = Path(__file__).parent.parent
+    repo = _REPO_ROOT
     env = os.environ.copy()
     if env_extra:
         env.update(env_extra)
@@ -124,8 +150,9 @@ def test_fresh_pg_upgrade_round_trip():
 
     # Phase 1 — fresh upgrade.
     _alembic(["upgrade", "head"], env_extra=env_extra)
+    expected = _expected_head()
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "workspace_run_cap", f"expected head workspace_run_cap, got {stamped}"
+    assert stamped == expected, f"expected head {expected}, got {stamped}"
 
     # Phase 2 — full downgrade. Verifies every revision's downgrade path.
     _alembic(["downgrade", "base"], env_extra=env_extra)
@@ -133,7 +160,7 @@ def test_fresh_pg_upgrade_round_trip():
     # Phase 3 — re-upgrade. Verifies the chain is idempotent.
     _alembic(["upgrade", "head"], env_extra=env_extra)
     stamped = asyncio.run(_stamped_head(url))
-    assert stamped == "workspace_run_cap"
+    assert stamped == expected
 
 
 def test_notification_channel_keys_renames_email_to_email_sender():
