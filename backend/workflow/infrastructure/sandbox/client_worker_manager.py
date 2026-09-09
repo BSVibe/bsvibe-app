@@ -78,6 +78,26 @@ def _map_result(row: Any) -> SandboxResult:
     return SandboxResult(exit_code=exit_code, stdout=output, stderr="", timed_out=False)
 
 
+def _failure_detail(res: SandboxResult) -> str:
+    """What a RAISING file op must carry beyond ``exit_code``.
+
+    ``exec`` builds a real diagnosis into ``stderr`` on timeout — the budget that
+    ran out, the poll count, the elapsed time and ``last_status`` — which is what
+    :class:`~backend.executors.dispatch.TaskTimeout`'s docstring says is needed to
+    tell the failure shapes apart. The ops that RETURN their result carry it for
+    free; the ops that RAISE built their message from ``exit_code`` alone and
+    threw all four numbers away, so CI printed a bare ``exit None`` for five
+    months (2026-08-25 · PR #875 · PR #877 · 2026-09-02 · PR #903) and no
+    occurrence could be attributed. The sibling worktree-provision path in this
+    same file already does this; the lesson never travelled the ~120 lines.
+
+    Empty for an ordinary non-zero exit (nothing to add) so a plain failure —
+    a missing file — still reads as its exit code and nothing more.
+    """
+    detail = "\n".join(o for o in (res.stdout, res.stderr) if o).strip()
+    return f" — {detail[-500:]}" if detail else ""
+
+
 class ClientWorkerSandboxSession:
     """A ``SandboxSession`` rooted at the founder's own workspace on the worker."""
 
@@ -245,7 +265,9 @@ class ClientWorkerSandboxSession:
         cmd = f"head -c {int(max_bytes)} -- {shlex.quote(rel_path)}"
         res = await self.exec(cmd, timeout_s=_FILE_OP_TIMEOUT_S, shell=True)
         if res.timed_out or res.exit_code != 0:
-            raise SandboxError(f"read_file {rel_path!r}: exit {res.exit_code}")
+            raise SandboxError(
+                f"read_file {rel_path!r}: exit {res.exit_code}{_failure_detail(res)}"
+            )
         return res.stdout.encode("utf-8", errors="replace")[:max_bytes]
 
     async def write_file(self, rel_path: str, content: bytes) -> None:
@@ -263,7 +285,7 @@ class ClientWorkerSandboxSession:
         cmd = f"ls -1Ap -- {shlex.quote(rel_path)}"
         res = await self.exec(cmd, timeout_s=_FILE_OP_TIMEOUT_S, shell=True)
         if res.timed_out or res.exit_code != 0:
-            raise SandboxError(f"list_dir {rel_path!r}: exit {res.exit_code}")
+            raise SandboxError(f"list_dir {rel_path!r}: exit {res.exit_code}{_failure_detail(res)}")
         return sorted(line for line in res.stdout.splitlines() if line)
 
 

@@ -652,3 +652,114 @@ def test_a_worker_that_recorded_too_late_is_named() -> None:
 def test_a_worker_that_never_recorded_is_named() -> None:
     with pytest.raises(AssertionError, match="recorded: never"):
         _attribute_a_late_worker({"seen_at": 1.0}, started=0.0, gave_up_at=70.0)
+
+
+# --------------------------------------------------------------------------
+# The raising file ops throw the awaiter's observations away.
+# --------------------------------------------------------------------------
+#
+# ``exec`` builds a real diagnosis into its ``stderr``: the budget that ran out,
+# the poll count, the elapsed time, and ``last_status`` — the four numbers
+# ``TaskTimeout``'s docstring says are needed to tell the remaining failure
+# shapes apart ("the worker never reported" vs "the row is not visible" vs "this
+# loop never ticked" vs the alarming "the row was done and every read missed it").
+#
+# ``read_file`` / ``list_dir`` RAISE instead of returning, and their message is
+# built from ``exit_code`` alone — so every one of those numbers is discarded at
+# the last hop:
+#
+#     SandboxError: list_dir '.': exit None
+#
+# That string is what CI has printed for five months (2026-08-25, PR #875,
+# PR #877, 2026-09-02 PR #873, 2026-09-09 PR #903) — every time on a PR that
+# touched none of this. Each round hardened the TEST harness; the product's own
+# failure message stayed blind, so no occurrence could be attributed and the gap
+# ``TaskTimeout`` located at PR #828 was never closed.
+#
+# The sibling raising path in this same file already does it right (~120 lines
+# away): worktree provisioning joins ``stdout``/``stderr`` into a ``detail`` and
+# carries it into the error. The lesson simply never travelled to these two.
+#
+# The proposition is NOT a spelling: **a timeout that reaches the caller as an
+# exception must still carry what the awaiter observed.** A message that names
+# only ``exit None`` cannot distinguish the four shapes, which is the whole
+# reason the instrument exists.
+
+
+async def _timing_out_box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, redis: Any) -> Any:
+    """A session whose ``await_completion`` always times out with KNOWN numbers."""
+    from backend.executors import dispatch as dispatch_mod
+
+    workspace_id = uuid.uuid4()
+    factory_cm = shared_file_sessionmaker()
+    factory = await factory_cm.__aenter__()
+    await _seed_worker(factory, workspace_id=workspace_id)
+    box = _make_session(
+        redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
+    )
+
+    async def _always_timeout(*_a: Any, **kw: Any) -> Any:
+        raise dispatch_mod.TaskTimeout(
+            "forced",
+            task_id=kw.get("task_id"),
+            polls=17,
+            last_status="dispatched",
+            elapsed_s=33.0,
+        )
+
+    monkeypatch.setattr(dispatch_mod, "await_completion", _always_timeout)
+    return box, factory_cm
+
+
+@pytest.mark.parametrize("op", ["list_dir", "read_file"])
+async def test_a_raising_file_op_carries_the_awaiters_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, op: str
+) -> None:
+    redis = await _make_redis()
+    box, factory_cm = await _timing_out_box(tmp_path, monkeypatch, redis)
+    try:
+        with pytest.raises(SandboxError) as caught:
+            if op == "list_dir":
+                await box.list_dir(".")
+            else:
+                await box.read_file("a.py", 8192)
+    finally:
+        await factory_cm.__aexit__(None, None, None)
+        await redis.aclose()
+
+    message = str(caught.value)
+    # The poll count and the last status are the two that tell the shapes apart.
+    assert "17 polls" in message, (
+        f"{op} dropped the awaiter's poll count — the message cannot tell "
+        f"'the worker never reported' from 'this loop never ticked': {message!r}"
+    )
+    assert "dispatched" in message, (
+        f"{op} dropped ``last_status`` — the message cannot tell 'the worker "
+        f"never reported' from the alarming 'the row was done and every read "
+        f"missed it': {message!r}"
+    )
+
+
+async def test_a_non_timeout_failure_still_names_its_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """대조군 — 진짜 non-zero exit 은 그대로 exit 코드로 읽혀야 한다.
+
+    타임아웃 진단을 실어 나르느라 평범한 실패(없는 파일 등)의 메시지가 흐려지면
+    안 된다. 이쪽은 ``stderr`` 가 비어 있으므로 덧붙일 것도 없다.
+    """
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with shared_file_sessionmaker() as factory:
+        wid = await _seed_worker(factory, workspace_id=workspace_id)
+        box = _make_session(
+            redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
+        )
+        with pytest.raises(SandboxError) as caught:
+            await _worker_then(redis, factory, wid, box.read_file("nope.toml", 8192))
+    await redis.aclose()
+
+    message = str(caught.value)
+    assert "nope.toml" in message
+    assert "exit" in message
+    assert "polls" not in message, f"타임아웃도 아닌데 폴 수를 실었다: {message!r}"
