@@ -285,7 +285,7 @@ async def resolve_checkpoint(
             session, runner, run=run, decision=decision, deliverables=deliverables
         )
     elif action_key == ACTION_DISCARD:
-        await _discard_decision_run(runner, run=run, decision=decision)
+        await _discard_decision_run(runner, session, run=run, decision=decision)
     elif action_key == ACTION_ACKNOWLEDGE:
         # A report, not a fork in the work (``merge_watch_stalled``): the founder
         # has seen it. The Decision is RESOLVED above; the run is deliberately
@@ -592,6 +592,7 @@ async def _ship_decision_run(
 
 async def _discard_decision_run(
     runner: AgentRunner,
+    session: AsyncSession,
     *,
     run: ExecutionRun,
     decision: Decision,
@@ -605,6 +606,15 @@ async def _discard_decision_run(
     W2 — when the run is bound to a product workspace, also clean up the
     worktree + branch so the founder doesn't see a "ghost" branch in
     ``git branch`` later.
+
+    폐기는 두 문으로 들어오고, 오래 **한쪽만** 정리했다. ``runs_discard``
+    (:func:`~backend.workflow.application.run_cleanup.cancel_run`) 는 런의 pending
+    Safe Mode 항목을 같이 닫는데 — 그 독스트링이 결함 이름까지 적어놨다,
+    *"cancelling the run alone leaves its Summary 확인 필요 card up forever
+    (orphaned-half)"* — 이 경로는 런만 죽였다. prod 2026-09-07: 런 ``0093fce6`` 을
+    여기서 폐기했더니 항목 ``91081d3d`` 가 pending 으로 남았고 형님이 **2분 27초 뒤
+    손으로** 지웠다. 결정 경로로 폐기된 런 3건 중 정리할 항목이 있던 1건이
+    그대로 고아가 됐다 — 기회 1회 중 1회.
     """
     # RunStatus enum has no ABANDONED — CANCELLED is the discard terminal.
     await runner.transition(
@@ -612,6 +622,16 @@ async def _discard_decision_run(
         to_status=RunStatus.CANCELLED,
         reason=f"founder discard via decision {decision.id}",
     )
+
+    # 폐기된 런의 딜리버러블은 절대 배달되지 않는다 — 승인 카드가 큐에 남으면
+    # 형님이 손으로 치워야 한다. ``cancel_run`` 이 쓰는 바로 그 헬퍼를 재사용한다
+    # (새 기제가 아니라 끊긴 링크 하나). 행을 직접 쓰므로 ``SafeModeQueue.deny`` 를
+    # 타지 않고, 따라서 자동 정리가 negative knowledge 가 되지 않는다 — PR #902.
+    from backend.workflow.application.run_cleanup import (  # noqa: PLC0415
+        resolve_pending_safe_mode_items,
+    )
+
+    await resolve_pending_safe_mode_items(session, run)
 
     if run.product_id is not None:
         from backend.storage.product_workspace import (  # noqa: PLC0415

@@ -490,14 +490,24 @@ async def _resolve_pending_decisions(
     return resolved
 
 
-async def _resolve_pending_safe_mode_items(session: AsyncSession, run: ExecutionRun) -> list[str]:
+async def resolve_pending_safe_mode_items(session: AsyncSession, run: ExecutionRun) -> list[str]:
     """Deny a run's PENDING safe-mode approval items.
 
     A cancelled run's deliverables will never be delivered, so their approval
     cards must drop off the Decisions queue — the same orphaned-half fix as
     :func:`_resolve_pending_decisions`, for the ``safe_mode_queue_items`` surface
     (``GET /api/v1/checkpoints`` → ``list_pending_by_workspace``). Terminal deny,
-    no downstream dispatch (an un-delivered pending item has nothing to undo)."""
+    no downstream dispatch (an un-delivered pending item has nothing to undo).
+
+    Public because the Decision path's ``discard`` needs the SAME cleanup:
+    ``checkpoint_resolution._discard_decision_run`` cancelled the run alone and
+    left its approval cards pending forever (prod 2026-09-07, run ``0093fce6`` —
+    the founder cleared it by hand 2m27s later). Two doors into the same
+    terminal state must do the same cleanup.
+
+    Deliberately NOT routed through ``SafeModeQueue.deny``: this writes the row
+    directly, so an automatic sweep never becomes negative knowledge. Same rule
+    as ``DenyKind`` (PR #902) — only a founder's judgement teaches."""
     queue = SqlAlchemySafeModeQueueRepository(session)
     now = datetime.now(tz=UTC)
     resolved: list[str] = []
@@ -629,7 +639,7 @@ async def cancel_run(
         return CancelOutcome(found=True, cancelled=False, status=run.status.value)
     await _cancel(session, run, reason=reason)
     resolved = await _resolve_pending_decisions(session, run, reason=reason, actor_id=actor_id)
-    sm_resolved = await _resolve_pending_safe_mode_items(session, run)
+    sm_resolved = await resolve_pending_safe_mode_items(session, run)
     # Cancel leaves the run's worktree on disk (unlike discard, which removes it
     # entirely). If the run was cancelled while a verify-time ``merge main`` was
     # mid-flight, the worktree carries ``<<<<<<<`` markers + MERGE_HEAD — abort
@@ -669,7 +679,7 @@ async def discard_run(
     decisions_resolved = await _resolve_pending_decisions(
         session, run, reason=reason, actor_id=actor_id
     )
-    safe_mode_resolved = await _resolve_pending_safe_mode_items(session, run)
+    safe_mode_resolved = await resolve_pending_safe_mode_items(session, run)
 
     deliverables = SqlAlchemyDeliverableRepository(session)
     now = datetime.now(tz=UTC)
@@ -733,7 +743,7 @@ async def cancel_product_runs(
         if await _cancel(session, run, reason=reason):
             cancelled += 1
         await _resolve_pending_decisions(session, run, reason=reason, actor_id=actor_id)
-        await _resolve_pending_safe_mode_items(session, run)
+        await resolve_pending_safe_mode_items(session, run)
     return cancelled
 
 
@@ -787,5 +797,6 @@ __all__ = [
     "cancel_product_runs",
     "cancel_run",
     "discard_run",
+    "resolve_pending_safe_mode_items",
     "retry_run",
 ]
