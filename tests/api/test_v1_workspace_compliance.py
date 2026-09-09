@@ -230,3 +230,100 @@ async def test_processing_record_returns_art30_doc(client_with_ws) -> None:
     # The sub-processor list must include the obvious ones.
     names = [sp["name"].lower() for sp in body["sub_processors"]]
     assert any("supabase" in n for n in names)
+
+
+#: The window the "founder set a retention window" test PATCHes in. Deliberately
+#: NOT 30 — the ``workspaces`` retention sentence already says "retained 30 days
+#: then hard-purged", so asserting "30" against the whole record passes without
+#: the audit sentence ever having been rewritten.
+_PATCHED_RETENTION_DAYS = 17
+
+
+async def test_processing_record_retention_names_the_trail_that_exists(
+    client_with_ws,
+) -> None:
+    """Art. 30 retention must describe the audit trail the system actually keeps.
+
+    ``audit_events`` is producer-less: nothing constructs the ORM row, nothing
+    selects it, nothing deletes it. Prod measured 0 rows on 2026-08-16 and again
+    on 2026-09-09 — 0 inserts in the same stats window that took 687 into
+    ``audit_outbox`` (5,494 live). Naming it here asserted a retention control
+    over a table that has never held a byte.
+
+    The "1 year" window was a bare string too. Retention is the per-workspace
+    ``audit_retention_days`` knob swept daily against ``audit_outbox``; its
+    documented default is NULL = forever, and prod runs 3/3 workspaces on NULL.
+    ``365`` appears nowhere in the retention path. So the record promised a
+    deletion the system does not perform.
+
+    This is the THIRD defect of that shape in this one record — ``region``
+    echoed a column that never steered anything, and ``_build_export`` read
+    ``canonical_anchors`` ("producer-less: nothing writes it"). Both got rich
+    assertions once found. ``retention`` survived because the Art. 30 test above
+    only asserts the key is PRESENT and never opens it.
+    """
+    c, _workspace_id, _, _vault = client_with_ws
+    r = await c.get("/api/v1/workspace/processing-record")
+    assert r.status_code == 200, r.text
+    retention = r.json()["retention"]
+
+    # Negative control — a producer-less table must not be the subject of a
+    # retention promise anywhere in the record.
+    assert "audit_events" not in " ".join(f"{k} {v}" for k, v in retention.items()), (
+        "Art. 30 retention names ``audit_events``, a table nothing writes"
+    )
+    # The trail that does exist has to be the one named. Assert on THIS entry
+    # rather than the whole record: the sibling sentences talk about retention
+    # windows too, and would satisfy a record-wide match on their own.
+    assert "audit_outbox" in retention, (
+        f"Art. 30 retention does not cover ``audit_outbox``, the table that "
+        f"holds the audit trail — keys: {sorted(retention)}"
+    )
+    audit_sentence = retention["audit_outbox"]
+    assert "audit_retention_days" in audit_sentence, (
+        "Art. 30 states a window no code enforces instead of the "
+        "``audit_retention_days`` knob that does"
+    )
+    assert "forever" in audit_sentence.lower(), (
+        "Art. 30 omits the NULL = forever default this workspace runs on, so it "
+        "promises a deletion the system does not perform"
+    )
+
+
+async def test_processing_record_retention_states_the_window_in_force(
+    client_with_ws,
+) -> None:
+    """Setting a window must move the Art. 30 record, not just the sweep.
+
+    The default branch above is what prod runs (3/3 workspaces NULL), so it is
+    the one a record drifts on unnoticed. This walks the other branch: a founder
+    PATCHes ``audit_retention_days`` — the same column the daily sweep selects
+    on — and the record must state the window now in force and stop saying rows
+    are kept forever.
+
+    Echoing this column is the opposite of the ``region`` defect this record
+    already carries a comment about: ``region`` steered nothing, whereas
+    :mod:`plugin.audit.retention_sweep` reads exactly this value.
+    """
+    c, _workspace_id, _, _vault = client_with_ws
+
+    patched = await c.patch(
+        "/api/v1/workspace",
+        json={"audit_retention_days": _PATCHED_RETENTION_DAYS},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["audit_retention_days"] == _PATCHED_RETENTION_DAYS
+
+    r = await c.get("/api/v1/workspace/processing-record")
+    assert r.status_code == 200, r.text
+    audit_sentence = r.json()["retention"]["audit_outbox"]
+
+    assert str(_PATCHED_RETENTION_DAYS) in audit_sentence, (
+        f"Art. 30 does not state the {_PATCHED_RETENTION_DAYS}-day window the "
+        f"founder set, so it describes a control other than the one in force: "
+        f"{audit_sentence!r}"
+    )
+    assert "forever" not in audit_sentence.lower(), (
+        "Art. 30 still claims rows are kept forever after a window was set — "
+        "the record is not reading the column the sweep reads"
+    )
