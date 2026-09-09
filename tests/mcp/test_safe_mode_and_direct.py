@@ -271,7 +271,7 @@ async def test_safe_mode_deny_flips_state(db, workspace_id, user_id, registry, s
         )
         out = await registry.call_tool(
             "bsvibe_safe_mode_deny",
-            {"item_id": str(seeded), "reason": "wrong target"},
+            {"item_id": str(seeded), "reason": "wrong target", "kind": "rejected_approach"},
             ctx,
         )
     assert out["status"] == "denied"
@@ -301,7 +301,9 @@ async def test_safe_mode_deny_run_settles_every_item(db, workspace_id, user_id, 
             session=s,
         )
         out = await registry.call_tool(
-            "bsvibe_safe_mode_deny_run", {"run_id": str(run_id), "reason": ""}, ctx
+            "bsvibe_safe_mode_deny_run",
+            {"run_id": str(run_id), "reason": "", "kind": "rejected_approach"},
+            ctx,
         )
         assert out["denied_count"] == 3
         listed = await registry.call_tool(

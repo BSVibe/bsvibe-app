@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.workflow.application.safe_mode_queue import (
     INITIAL_TTL_DAYS,
     MAX_EXTENSIONS,
+    DenyKind,
     SafeModeQueue,
 )
 from backend.workflow.infrastructure.delivery.db import (
@@ -90,7 +91,11 @@ async def test_deny_flips_to_denied(session: AsyncSession) -> None:
     ws = uuid.uuid4()
     item_id = await q.enqueue(workspace_id=ws, deliverable_id=uuid.uuid4())
     ok = await q.deny(
-        workspace_id=ws, item_id=item_id, actor_id=uuid.uuid4(), reason="not relevant"
+        workspace_id=ws,
+        item_id=item_id,
+        actor_id=uuid.uuid4(),
+        reason="not relevant",
+        kind=DenyKind.REJECTED_APPROACH,
     )
     assert ok is True
     await session.commit()

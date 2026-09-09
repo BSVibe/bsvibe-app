@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -32,6 +33,28 @@ logger = structlog.get_logger(__name__)
 INITIAL_TTL_DAYS = 90
 EXTENSION_TTL_DAYS = 30
 MAX_EXTENSIONS = 2
+
+
+class DenyKind(StrEnum):
+    """거절이 **어떤 행위**인가. 하나만 다음 런을 가르친다.
+
+    ``deny`` 는 동사 하나로 서로 다른 두 행위를 처리했고, 사유 텍스트가 비어 있지
+    않기만 하면 둘 다 지식이 됐다. prod 실측(2026-09-08): vault 의 negative pattern
+    25건 중 11건이 큐 정리 문장이었고, 판사 계약 10건이 그것을 기준으로 실었다 —
+    2건은 형님이 쓴 **"내용 문제 아님"** 이라는 문장 자체를 기준으로 실었다.
+
+    커넥터는 이미 같은 이유로 사유를 지어내지 않는다(``approval_callback``: 폰의
+    거절 탭은 ``reason=""``). 그 교훈이 형님이 직접 타이핑한 사유에는 옮겨가지
+    않았고, 이 축이 그것을 잇는다.
+    """
+
+    #: *"답변이 코드 근거 없는 추론이다"* — 판단이다. 가르치고, 런을 재개한다.
+    REJECTED_APPROACH = "rejected_approach"
+
+    #: *"같은 런의 중간 스냅샷 — 내용 문제 아님"* — 배송할 것이 없어 치우는 것뿐.
+    #: 감사 흔적(``deny_reason``)은 남기되 가르치지도 재개하지도 않는다.
+    QUEUE_CLEANUP = "queue_cleanup"
+
 
 #: A run that already ENDED has nowhere to resume to — reopening it would re-run
 #: finished work, including its approval + delivery. Kept local for the same
@@ -144,8 +167,15 @@ class SafeModeQueue:
         item_id: uuid.UUID,
         actor_id: uuid.UUID,
         reason: str,
+        kind: DenyKind,
     ) -> bool:
         """Flip ``pending → denied``. Returns False if not found / not pending.
+
+        ``kind`` is REQUIRED — a default would be silently wrong in one
+        direction or the other (:class:`DenyKind`): ``QUEUE_CLEANUP`` as the
+        default loses a real rejection's teaching, ``REJECTED_APPROACH``
+        keeps poisoning the ratchet with housekeeping text. Both fail
+        silently, so the caller has to name the act.
 
         The caller is responsible for any downstream notification — the
         deny is purely a state transition. (D3b's auto-compensation wiring
@@ -173,7 +203,10 @@ class SafeModeQueue:
             # later reader cannot mistake emptiness for a recorded judgment.
             reason=reason_text,
         )
-        if flipped and reason_text:
+        # 큐 정리는 판단이 아니다 — 사유는 행에 남지만(감사) 지식도 재개도 아니다.
+        # prod 재개 6건이 전부 이 경우였고, 큐 정리 문장이 *"Approve delivering this
+        # run's result?"* 의 형님 답변인 척 에이전트 맥락에 접혀 들어갔다.
+        if flipped and reason_text and kind is DenyKind.REJECTED_APPROACH:
             await self._record_rejection_knowledge(
                 workspace_id=workspace_id, item_id=item_id, actor_id=actor_id, reason=reason_text
             )
@@ -465,6 +498,7 @@ class SafeModeQueue:
 
 
 __all__ = [
+    "DenyKind",
     "EXTENSION_TTL_DAYS",
     "INITIAL_TTL_DAYS",
     "MAX_EXTENSIONS",

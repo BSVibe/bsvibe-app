@@ -68,7 +68,10 @@ async def test_deny_run_settles_every_pending_item(client, db, workspace_id) -> 
         ]
         await s.commit()
 
-    r = await client.post(f"/api/v1/safemode/runs/{run_id}/deny", json={"reason": "방향이 다르다"})
+    r = await client.post(
+        f"/api/v1/safemode/runs/{run_id}/deny",
+        json={"reason": "방향이 다르다", "kind": "rejected_approach"},
+    )
     assert r.status_code == 200, r.text
     assert r.json()["denied_count"] == 3
 
@@ -84,5 +87,8 @@ async def test_deny_run_settles_every_pending_item(client, db, workspace_id) -> 
 
 
 async def test_deny_run_with_nothing_pending_is_404(client, workspace_id) -> None:
-    r = await client.post(f"/api/v1/safemode/runs/{uuid.uuid4()}/deny", json={"reason": ""})
+    r = await client.post(
+        f"/api/v1/safemode/runs/{uuid.uuid4()}/deny",
+        json={"reason": "", "kind": "rejected_approach"},
+    )
     assert r.status_code == 404

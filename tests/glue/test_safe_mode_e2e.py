@@ -253,7 +253,10 @@ async def test_safe_mode_deny_does_not_dispatch(
     resp = await client.get("/api/v1/safemode/queue")
     item_id = resp.json()[0]["id"]
 
-    deny = await client.post(f"/api/v1/safemode/{item_id}/deny", json={"reason": "off-brand"})
+    deny = await client.post(
+        f"/api/v1/safemode/{item_id}/deny",
+        json={"reason": "off-brand", "kind": "rejected_approach"},
+    )
     assert deny.status_code == 200, deny.text
     assert deny.json() == {"item_id": item_id, "status": "denied", "dispatched": False}
 
@@ -275,7 +278,9 @@ async def test_approve_unknown_item_404(
 async def test_deny_unknown_item_404(
     client: httpx.AsyncClient,
 ) -> None:
-    resp = await client.post(f"/api/v1/safemode/{uuid.uuid4()}/deny", json={"reason": "x"})
+    resp = await client.post(
+        f"/api/v1/safemode/{uuid.uuid4()}/deny", json={"reason": "x", "kind": "rejected_approach"}
+    )
     assert resp.status_code == 404
 
 

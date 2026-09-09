@@ -50,7 +50,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.workflow.application.safe_mode_expiry import SafeModeExpirySweepRunner
-from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.application.safe_mode_queue import DenyKind, SafeModeQueue
 from backend.workflow.infrastructure.delivery.db import (
     DeliveryBase,
     SafeModeQueueItemRow,
@@ -166,6 +166,7 @@ async def test_deny_does_not_fire_compensation(
             item_id=item_id,
             actor_id=uuid.uuid4(),
             reason="lift0b — no compensation should fire",
+            kind=DenyKind.REJECTED_APPROACH,
         )
         await s.commit()
 

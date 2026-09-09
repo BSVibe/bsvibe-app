@@ -146,6 +146,7 @@ async def deny_run(
             item_id=item.id,
             actor_id=user.id,
             reason=body.reason,
+            kind=body.kind,
         ):
             denied += 1
     await session.commit()
@@ -163,7 +164,11 @@ async def deny_item(
     """Flip ``pending → denied`` — no dispatch."""
     queue = SafeModeQueue(session)
     ok = await queue.deny(
-        workspace_id=workspace_id, item_id=item_id, actor_id=user.id, reason=body.reason
+        workspace_id=workspace_id,
+        item_id=item_id,
+        actor_id=user.id,
+        reason=body.reason,
+        kind=body.kind,
     )
     if not ok:
         raise HTTPException(

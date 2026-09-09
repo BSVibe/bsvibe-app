@@ -22,12 +22,28 @@ export function approveSafeModeItem(itemId: string): Promise<SafeModeActionRespo
   });
 }
 
+/** Which ACT a denial is. Only `rejected_approach` teaches the next run — a
+ *  `queue_cleanup` denial ("same run's intermediate snapshot; not a content
+ *  problem") is swept out of the queue without becoming negative knowledge.
+ *  Mirrors backend `DenyKind`; the backend requires the field (no default,
+ *  because either default is silently wrong in one direction). */
+export type DenyKind = "rejected_approach" | "queue_cleanup";
+
 /** Deny a held delivery — flips it to denied, nothing is dispatched. The deny
- *  endpoint requires a JSON body (`{ reason }`; the backend schema is
- *  extra=forbid), so we always send one — empty reason by default. */
-export function denySafeModeItem(itemId: string, reason = ""): Promise<SafeModeActionResponse> {
+ *  endpoint requires a JSON body (`{ reason, kind }`; the backend schema is
+ *  extra=forbid), so we always send one — empty reason by default.
+ *
+ *  The row's plain Decline is a judgement about the delivery, so it sends
+ *  `rejected_approach` — the same act the phone's reject tap records. It
+ *  carries no reason text, so it teaches nothing either way (the backend's
+ *  founder-authored-text gate still applies). */
+export function denySafeModeItem(
+  itemId: string,
+  reason = "",
+  kind: DenyKind = "rejected_approach",
+): Promise<SafeModeActionResponse> {
   return apiFetch<SafeModeActionResponse>(`/api/v1/safemode/${itemId}/deny`, {
     method: "POST",
-    body: JSON.stringify({ reason }),
+    body: JSON.stringify({ reason, kind }),
   });
 }

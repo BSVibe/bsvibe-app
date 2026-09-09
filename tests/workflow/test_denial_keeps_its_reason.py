@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
-from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.application.safe_mode_queue import DenyKind, SafeModeQueue
 from backend.workflow.infrastructure.delivery.db import (
     SafeModeQueueItemRow,
     SafeModeStatus,
@@ -65,6 +65,7 @@ async def test_a_denial_stores_its_reason() -> None:
             item_id=item.id,
             actor_id=actor,
             reason="이 접근은 실제 스택을 안 띄우고 백엔드를 가로채서 검증 가치가 없다",
+            kind=DenyKind.REJECTED_APPROACH,
         )
 
         assert ok
@@ -84,7 +85,11 @@ async def test_a_denial_records_who_decided() -> None:
         actor = uuid.uuid4()
 
         await SafeModeQueue(session).deny(
-            workspace_id=ws, item_id=item.id, actor_id=actor, reason="사유"
+            workspace_id=ws,
+            item_id=item.id,
+            actor_id=actor,
+            reason="사유",
+            kind=DenyKind.REJECTED_APPROACH,
         )
 
         row = (await session.execute(select(SafeModeQueueItemRow))).scalar_one()
@@ -100,7 +105,11 @@ async def test_a_reasonless_denial_stores_no_reason() -> None:
         item = await _queued(session, ws)
 
         await SafeModeQueue(session).deny(
-            workspace_id=ws, item_id=item.id, actor_id=uuid.uuid4(), reason="   "
+            workspace_id=ws,
+            item_id=item.id,
+            actor_id=uuid.uuid4(),
+            reason="   ",
+            kind=DenyKind.REJECTED_APPROACH,
         )
 
         row = (await session.execute(select(SafeModeQueueItemRow))).scalar_one()
@@ -132,7 +141,11 @@ async def test_denying_a_non_pending_item_changes_nothing() -> None:
         await queue.approve(workspace_id=ws, item_id=item.id, actor_id=uuid.uuid4())
 
         ok = await queue.deny(
-            workspace_id=ws, item_id=item.id, actor_id=uuid.uuid4(), reason="뒤늦은 거절"
+            workspace_id=ws,
+            item_id=item.id,
+            actor_id=uuid.uuid4(),
+            reason="뒤늦은 거절",
+            kind=DenyKind.REJECTED_APPROACH,
         )
 
         assert ok is False
@@ -152,6 +165,7 @@ async def test_another_workspace_cannot_deny_this_item() -> None:
             item_id=item.id,
             actor_id=uuid.uuid4(),
             reason="남의 워크스페이스",
+            kind=DenyKind.REJECTED_APPROACH,
         )
 
         assert ok is False
