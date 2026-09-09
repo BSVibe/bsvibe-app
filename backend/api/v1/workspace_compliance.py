@@ -113,6 +113,25 @@ SUB_PROCESSORS: tuple[SubProcessor, ...] = (
 )
 
 
+def _audit_retention_sentence(retention_days: int | None) -> str:
+    """The audit-trail retention actually in force for ONE workspace.
+
+    ``None`` is the documented default (``audit_retention_days`` NULL = forever)
+    and is what every prod workspace runs on, so it is the branch this record
+    makes a statement about almost every time it is served.
+    """
+    if retention_days is None:
+        return (
+            "audit_retention_days is unset for this workspace — the default — "
+            "so audit_outbox rows are retained forever, until the founder sets "
+            "a window or requests deletion of the workspace."
+        )
+    return (
+        f"audit_retention_days = {retention_days}: a daily sweep deletes "
+        f"audit_outbox rows older than {retention_days} days."
+    )
+
+
 def _processing_record(workspace: WorkspaceRow) -> dict[str, Any]:
     """Compose the Art. 30 doc for one workspace."""
     return {
@@ -151,7 +170,21 @@ def _processing_record(workspace: WorkspaceRow) -> dict[str, Any]:
             "retained 30 days then hard-purged (Workflow §10.7).",
             "runs_and_deliverables": "Retained for the life of the workspace; "
             "exported on demand via /workspace/export.",
-            "audit_events": "Retained 1 year for security incident review.",
+            # The audit trail is ``audit_outbox`` — the transactional outbox the
+            # audit subscriber writes inside the producer's session and the relay
+            # ships to the central sink. This entry used to name ``audit_events``
+            # and promise "1 year". That table is producer-less: nothing
+            # constructs the ORM row, nothing selects it, and prod measured 0
+            # rows on 2026-08-16 and again on 2026-09-09 (0 inserts in a stats
+            # window that took 687 into ``audit_outbox``). It asserted a
+            # retention control over a table that has never held a byte, and
+            # ``365`` appears nowhere in the sweep.
+            #
+            # Reading ``audit_retention_days`` here is the OPPOSITE of the
+            # ``region`` defect noted above: ``region`` echoed a column that
+            # steered nothing, whereas ``plugin.audit.retention_sweep`` selects
+            # workspaces on exactly this column.
+            "audit_outbox": _audit_retention_sentence(workspace.audit_retention_days),
         },
         "security_measures": [
             "Encryption in transit (TLS) and at rest (Supabase + PG TDE).",

@@ -2,8 +2,17 @@
 
 Two tables:
 
-- ``audit_events`` — denormalised, query-friendly record of every action
-  taken by an AI agent (lifted from BSupervisor's ``AuditEvent``).
+- ``audit_events`` — PRODUCER-LESS. Lifted from BSupervisor's ``AuditEvent``
+  as a denormalised, query-friendly record of every AI-agent action, but the
+  EventBus rewire (v8 §D5) routed producers to the outbox instead and nothing
+  was ever pointed at this table. Nothing constructs the ORM row, nothing
+  selects it, nothing deletes it; prod measured 0 rows on 2026-08-16 and again
+  on 2026-09-09 (0 inserts in a stats window that took 687 into
+  ``audit_outbox``). It is written here at the definition site because it has
+  now been rediscovered twice from a migration docstring — and because it once
+  spent that time as the subject of the Art. 30 retention promise in
+  ``backend.api.v1.workspace_compliance``. **Do not read it as an audit trail
+  and do not add a producer without deciding it beats the outbox.**
 - ``audit_outbox`` — the in-transaction outbox row inserted by the
   emitter (lifted from ``bsvibe_audit.outbox.schema``); a later relay
   ships rows to the central auth-server audit endpoint.
