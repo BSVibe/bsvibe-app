@@ -16,7 +16,7 @@ the carried event to ``audit_outbox`` inside the producer's session
 Public surface::
 
     from plugin.audit import (
-        AuditActor, AuditEvent, AuditEventBase, AuditResource,
+        AuditActor, AuditEventBase, AuditResource,
         AuditEmitter, AuditOutboxRecord, OutboxStore,
         AuditEventSubscriber,
         safe_emit, make_actor,
@@ -39,7 +39,6 @@ from plugin.audit.events import (
     AuditResource,
 )
 from plugin.audit.models import (
-    AuditEvent,
     AuditOutboxBase,
     AuditOutboxRecord,
     SupervisorBase,
@@ -80,7 +79,6 @@ __all__ = [
     "ActorType",
     "AuditActor",
     "AuditEmitter",
-    "AuditEvent",
     "AuditEventBase",
     "AuditEventSubscriber",
     "AuditOutboxBase",

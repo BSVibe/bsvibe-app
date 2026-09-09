@@ -11,19 +11,31 @@
 
 ## 배포 전 (로컬)
 
-- [ ] `uv run pytest tests/api/test_v1_workspace_compliance.py -q` 전부 통과
-- [ ] 절단 실증: `_audit_retention_sentence` 를 옛 문자열
-      (`"Retained 1 year for security incident review."`)로 되돌리면 새 테스트
-      **둘 다** 빨개진다 (개수까지 확인 — 컴파일 되는 절단이어야 한다)
+- [x] `uv run pytest tests/api/test_v1_workspace_compliance.py -q` → **7 passed**
+- [x] 절단 실증 — 수정 **전** 상태에서 새 테스트 둘이 각각 옳은 이유로 빨갛고
+      (`AssertionError: audit_events` · `KeyError: audit_outbox`) 나머지 5개는
+      초록이었다. 자연 확보된 절단이라 되돌릴 필요가 없었다
 
 ## 배포 후 (prod)
 
-- [ ] prod 컨테이너가 이 커밋으로 갱신됐다 (`docker inspect` 시작 시각 + 커밋)
-- [ ] `GET /api/v1/workspace/processing-record` 응답의 `retention` 에
-      **`audit_events` 키가 없다** (음성 대조군)
-- [ ] 같은 응답에 `audit_outbox` 키가 있고 그 문장이 `audit_retention_days` 와
-      `forever` 를 말한다 (prod 워크스페이스는 NULL 이므로 기본 분기)
-- [ ] DB 대조: `SELECT audit_retention_days FROM workspaces` 가 전부 NULL 이어서
-      응답의 문장과 **실제 컬럼이 일치**한다
-- [ ] `SELECT count(*) FROM audit_events` = 0 이고 `audit_outbox` 는 증가 중
-      (양성 대조군 — 문장이 가리키는 테이블이 살아 있는 쪽이다)
+**검증 방법**: HTTP 로 치려면 토큰이 필요해서, 대신 **배포된 컨테이너 안에서
+그 코드를 직접 실행**했다 (`docker exec … /app/.venv/bin/python`, 읽기 전용).
+정적 grep 보다 강한 증거다 — 실제 배포본이 렌더한 문서를 본 것이다.
+⚠️ 컨테이너의 인터프리터는 `/app/.venv/bin/python` 이다. `python3` 로 치면
+`fastapi` 가 없다고 나온다.
+
+- [x] prod 컨테이너 갱신 — `StartedAt=2026-09-09T08:20:46Z`, 배포본 안에서
+      신규 표현식 **1** · 옛 표현식 **0** (양성/음성 대조군)
+- [x] 렌더된 `retention` 에 **`audit_events` 키 없음** (음성 대조군)
+- [x] `audit_outbox` 키가 있고 문장이 `audit_retention_days` 와 `forever` 를
+      말한다 — *"audit_retention_days is unset for this workspace — the default
+      — so audit_outbox rows are retained forever…"*
+- [x] DB 대조: `SELECT audit_retention_days, count(*) FROM workspaces GROUP BY 1`
+      → **NULL 3건**. 렌더된 문장과 실제 컬럼이 일치한다
+- [x] `audit_events` = **0행** · `audit_outbox` = **5,494행** (양성 대조군 —
+      문장이 가리키는 쪽이 살아 있는 테이블이다)
+
+## 후속
+
+이 검증이 테이블 자체의 DROP 근거가 됐다 —
+`20260909_drop_producerless_audit_events`.

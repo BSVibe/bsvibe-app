@@ -55,7 +55,6 @@ def test_audit_relocated_to_repo_root_plugin() -> None:
     audit_mod = importlib.import_module("plugin.audit")
     for name in (
         "AuditEmitter",
-        "AuditEvent",
         "AuditActor",
         "AuditResource",
         "safe_emit",

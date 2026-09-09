@@ -1,4 +1,11 @@
-"""Schema sanity tests for AuditEvent + AuditOutboxRecord."""
+"""Schema sanity tests for AuditOutboxRecord — the audit subsystem's one table.
+
+The ``audit_events`` ORM used to be tested alongside it. That table was producer-less
+(0 rows in prod for its whole life) and was dropped in
+``20260909_drop_producerless_audit_events``; a schema test over a table
+nothing writes only proved the ORM could round-trip a row the product never
+made.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from plugin.audit.models import (
-    AuditEvent,
     AuditOutboxBase,
     AuditOutboxRecord,
     SupervisorBase,
@@ -27,33 +33,6 @@ async def fresh_session():
     async with maker() as s:
         yield s
     await engine.dispose()
-
-
-class TestAuditEventModel:
-    async def test_insert_and_select(self, fresh_session: AsyncSession):
-        event = AuditEvent(
-            agent_id="agent-1",
-            workspace_id="ws-1",
-            tenant_id="ten-1",
-            source="bsvibe-gateway",
-            event_type="gateway.completion.dispatched",
-            action="dispatch",
-            target="model:gpt-4o",
-            metadata_json={"tokens": 42},
-            allowed=True,
-        )
-        fresh_session.add(event)
-        await fresh_session.commit()
-
-        rows = (await fresh_session.execute(select(AuditEvent))).scalars().all()
-        assert len(rows) == 1
-        row = rows[0]
-        assert row.agent_id == "agent-1"
-        assert row.event_type == "gateway.completion.dispatched"
-        assert row.metadata_json == {"tokens": 42}
-        assert isinstance(row.id, uuid.UUID)
-        assert row.created_at is not None
-        assert row.allowed is True
 
 
 class TestAuditOutboxRecordModel:
