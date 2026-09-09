@@ -3,7 +3,7 @@
 
 Asserts:
 * audit resolves at the NEW repo-root path (``plugin.audit``) with its
-  full public surface (``AuditEmitter`` / ``AuditEvent`` / ``AuditActor`` /
+  full public surface (``AuditEmitter`` / ``AuditActor`` /
   ``AuditResource`` / ``safe_emit`` / ``make_actor`` / ``OutboxStore``).
 * the OLD ``backend.extensions.implementations.audit`` path raises
   ``ModuleNotFoundError`` (full retirement, no compat shim).
@@ -31,7 +31,6 @@ def test_audit_at_new_repo_root_path() -> None:
     mod = importlib.import_module(_NEW)
     for name in (
         "AuditEmitter",
-        "AuditEvent",
         "AuditActor",
         "AuditResource",
         "safe_emit",

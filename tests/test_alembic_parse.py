@@ -168,7 +168,6 @@ def test_target_metadata_covers_all_bases():
     expected_tables = {
         # Bundle 1
         "model_accounts",
-        "audit_events",
         "audit_outbox",
         # Bundle 1.5b
         "account_embedding_settings",

@@ -21,7 +21,6 @@ def test_all_three_modules_import():
     # layer (per v8 D3 — Sandbox = Verifier internal swappable strategy);
     # backend/supervisor/ no longer exists.
     assert audit_mod.safe_emit is not None
-    assert audit_mod.AuditEvent is not None
     assert sandbox_mod.get_sandbox_manager is not None
     assert sandbox_mod.NoopSandboxManager is not None
 
