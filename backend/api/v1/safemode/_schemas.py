@@ -11,6 +11,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.workflow.application.safe_mode_queue import DenyKind
+
 
 class SafeModeItemResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -91,6 +93,10 @@ class SafeModeDenyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(default="", max_length=2000)
+    #: 어떤 행위인가 — REQUIRED. 기본값을 두면 한쪽이 조용히 틀린다
+    #: (:class:`~backend.workflow.application.safe_mode_queue.DenyKind`).
+    #: ``rejected_approach`` 만 다음 런을 가르치고 런을 재개한다.
+    kind: DenyKind
 
 
 class SafeModeActionResponse(BaseModel):

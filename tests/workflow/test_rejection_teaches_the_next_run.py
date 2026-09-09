@@ -32,7 +32,7 @@ import pytest
 from sqlalchemy import select
 
 from backend.workflow.application.checkpoint_resolution import NEGATIVE_PATTERN_SETTLE_KIND
-from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.application.safe_mode_queue import DenyKind, SafeModeQueue
 from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from tests._support import memory_session
@@ -77,6 +77,7 @@ async def test_a_denial_with_a_reason_becomes_negative_knowledge() -> None:
             item_id=item.id,
             actor_id=uuid.uuid4(),
             reason="백엔드를 가로채면 실제 스택 위에서 깨지는 것을 정의상 못 잡는다",
+            kind=DenyKind.REJECTED_APPROACH,
         )
 
         rows = await _negatives(session)
@@ -99,7 +100,11 @@ async def test_a_reasonless_denial_teaches_nothing() -> None:
         ws, _run, item = await _run_and_item(session)
 
         await SafeModeQueue(session).deny(
-            workspace_id=ws, item_id=item.id, actor_id=uuid.uuid4(), reason="   "
+            workspace_id=ws,
+            item_id=item.id,
+            actor_id=uuid.uuid4(),
+            reason="   ",
+            kind=DenyKind.REJECTED_APPROACH,
         )
 
         assert await _negatives(session) == []
@@ -127,7 +132,11 @@ async def test_a_refused_transition_teaches_nothing() -> None:
         await queue.approve(workspace_id=ws, item_id=item.id, actor_id=uuid.uuid4())
 
         ok = await queue.deny(
-            workspace_id=ws, item_id=item.id, actor_id=uuid.uuid4(), reason="뒤늦은 거절"
+            workspace_id=ws,
+            item_id=item.id,
+            actor_id=uuid.uuid4(),
+            reason="뒤늦은 거절",
+            kind=DenyKind.REJECTED_APPROACH,
         )
 
         assert ok is False
@@ -151,7 +160,11 @@ async def test_an_item_without_a_run_still_denies_cleanly() -> None:
         await session.flush()
 
         ok = await SafeModeQueue(session).deny(
-            workspace_id=ws, item_id=item.id, actor_id=uuid.uuid4(), reason="사유 있음"
+            workspace_id=ws,
+            item_id=item.id,
+            actor_id=uuid.uuid4(),
+            reason="사유 있음",
+            kind=DenyKind.REJECTED_APPROACH,
         )
 
         assert ok is True
@@ -174,7 +187,11 @@ async def test_an_item_without_a_run_still_denies_cleanly() -> None:
 
 async def _deny(session, ws, item, reason: str) -> bool:
     return await SafeModeQueue(session).deny(
-        workspace_id=ws, item_id=item.id, actor_id=uuid.uuid4(), reason=reason
+        workspace_id=ws,
+        item_id=item.id,
+        actor_id=uuid.uuid4(),
+        reason=reason,
+        kind=DenyKind.REJECTED_APPROACH,
     )
 
 

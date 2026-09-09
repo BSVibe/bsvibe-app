@@ -24,7 +24,7 @@ from backend.workflow.application.safe_mode_approval import (
     approve_and_dispatch,
     approve_run_and_dispatch,
 )
-from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.application.safe_mode_queue import DenyKind, SafeModeQueue
 
 logger = structlog.get_logger(__name__)
 
@@ -178,6 +178,8 @@ class SafeModeDenyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     item_id: uuid.UUID
     reason: str = Field("", max_length=2000)
+    #: REST 의 ``SafeModeDenyRequest`` 와 같은 필드 — MCP↔REST 스키마 parity.
+    kind: DenyKind
 
 
 async def _h_deny(args: SafeModeDenyInput, ctx: ToolContext) -> Any:
@@ -187,6 +189,7 @@ async def _h_deny(args: SafeModeDenyInput, ctx: ToolContext) -> Any:
         item_id=args.item_id,
         actor_id=ctx.principal.user_id,
         reason=args.reason,
+        kind=args.kind,
     )
     if not ok:
         raise ToolError(f"no pending Safe Mode item {args.item_id}")
@@ -208,6 +211,7 @@ class SafeModeDenyRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run_id: uuid.UUID
     reason: str = Field("", max_length=2000)
+    kind: DenyKind
 
 
 class SafeModeRunActionOutput(_Output):
@@ -229,6 +233,7 @@ async def _h_deny_run(args: SafeModeDenyRunInput, ctx: ToolContext) -> Any:
             item_id=item.id,
             actor_id=ctx.principal.user_id,
             reason=args.reason,
+            kind=args.kind,
         ):
             denied += 1
     await ctx.session.commit()
@@ -323,8 +328,15 @@ def register_safe_mode_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_safe_mode_deny",
             description=(
-                "Deny one queued Safe Mode item with an optional reason. No "
-                "dispatch — the deliverable is dropped."
+                "Deny one queued Safe Mode item. No dispatch — the deliverable "
+                "is dropped. `kind` is REQUIRED and says which act this is: "
+                "`rejected_approach` when the WORK is wrong (it teaches the next "
+                "run and reopens this one with your reason); `queue_cleanup` when "
+                "the row just does not belong in the queue (a duplicate or "
+                "superseded intermediate artifact, a probe, a run already "
+                "cancelled) — that records the reason for audit but teaches "
+                "nothing. Keep writing the reason either way: a cleanup reason is "
+                "worth recording, it is just not a judgement about the approach."
             ),
             input_schema=SafeModeDenyInput,
             output_schema=SafeModeActionOutput,
@@ -340,8 +352,11 @@ def register_safe_mode_tools(registry: ToolRegistry) -> None:
                 "Deny EVERY pending Safe Mode item for one run, with an optional "
                 "reason recorded on each. Safe Mode is a per-run transaction — "
                 "denying item-by-item leaves the rest of the run pending forever. "
-                "Leave the reason EMPTY for housekeeping: a blank reason is not "
-                "captured as a teaching signal."
+                "`kind` is REQUIRED — use `queue_cleanup` for housekeeping (a "
+                "superseded or duplicate artifact, a probe, an already-cancelled "
+                "run) and `rejected_approach` only when the WORK is wrong. You no "
+                "longer have to blank the reason to avoid teaching: `queue_cleanup` "
+                "records the reason for audit without making it a teaching signal."
             ),
             input_schema=SafeModeDenyRunInput,
             output_schema=SafeModeRunActionOutput,

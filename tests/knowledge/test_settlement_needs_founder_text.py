@@ -58,7 +58,7 @@ from backend.workflow.application._checkpoint_shared import (
     ACTION_DISCARD,
 )
 from backend.workflow.application.checkpoint_resolution import resolve_checkpoint
-from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.application.safe_mode_queue import DenyKind, SafeModeQueue
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -394,6 +394,7 @@ async def test_positive_control_safe_mode_denial_with_a_reason_still_becomes_kno
             item_id=item_id,
             actor_id=founder_id,
             reason="백엔드를 가로채면 실제 스택 위에서 깨지는 것을 정의상 못 잡는다",
+            kind=DenyKind.REJECTED_APPROACH,
         )
         await s.commit()
     assert flipped is True

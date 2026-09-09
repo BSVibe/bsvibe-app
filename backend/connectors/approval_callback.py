@@ -74,7 +74,7 @@ from backend.identity.db import MembershipRow
 from backend.identity.workspaces_db import load_workspace_language
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.connector_dispatch._context import _build_context
-from backend.workflow.application.safe_mode_queue import SafeModeQueue
+from backend.workflow.application.safe_mode_queue import DenyKind, SafeModeQueue
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 
 logger = structlog.get_logger(__name__)
@@ -217,6 +217,9 @@ async def handle_approval_callback(  # noqa: PLR0911 — each return is one secu
                 item_id=target_item,
                 actor_id=actor_id,
                 reason="",
+                # 폰의 탭은 판단이다 — 다만 사유가 없어 가르칠 텍스트가 없다.
+                # 빈 사유 게이트가 그대로 막으므로 지식은 안 생긴다.
+                kind=DenyKind.REJECTED_APPROACH,
             )
         await session.commit()
         await _ack(runner, plugin, adapter, context, parsed, _t("declined_answer", language))

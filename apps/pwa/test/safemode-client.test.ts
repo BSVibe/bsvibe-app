@@ -66,7 +66,7 @@ describe("safemode client (approve / deny)", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/v1/safemode/sm-1/deny");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body as string)).toEqual({ reason: "" });
+    expect(JSON.parse(init.body as string)).toEqual({ reason: "", kind: "rejected_approach" });
   });
 
   it("deny forwards an explicit reason", async () => {
@@ -81,7 +81,10 @@ describe("safemode client (approve / deny)", () => {
 
     await denySafeModeItem("sm-1", "not now");
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ reason: "not now" });
+    expect(JSON.parse(init.body as string)).toEqual({
+      reason: "not now",
+      kind: "rejected_approach",
+    });
   });
 
   it("surfaces an ApiError on a non-ok response", async () => {
