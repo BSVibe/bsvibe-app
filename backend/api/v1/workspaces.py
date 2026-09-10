@@ -28,6 +28,7 @@ from backend.identity.domain.repositories import (
     MembershipRepository,
     WorkspaceRepository,
 )
+from backend.identity.roles import role_satisfies
 from backend.identity.workspaces_db import WorkspaceRow
 
 router = APIRouter()
@@ -62,17 +63,30 @@ async def _owned_workspace(
     memberships: MembershipRepository,
     user: UserRow,
     workspace_id: uuid.UUID,
+    *,
+    minimum_role: str | None = None,
 ) -> WorkspaceRow:
     """Return the live workspace iff the caller has an active membership, else 404.
 
-    404 (not 403) so a non-member cannot probe which workspace ids exist.
-    Soft-deleted workspaces (``deleted_at`` set) are treated as gone.
+    404 (not 403) for the membership check so a non-member cannot probe which
+    workspace ids exist. Soft-deleted workspaces (``deleted_at`` set) are gone.
+
+    H3 — this is the membership-scoped multi-workspace surface (path
+    ``workspace_id``), so ``require_role`` (which reads the GUC/active workspace)
+    does not apply; the role is checked here against the membership loaded for
+    the PATH workspace. A member below ``minimum_role`` gets 403 (they already
+    proved membership by getting past the 404, so the role refusal is honest).
     """
     membership = await memberships.active_for_user_in_workspace(user.id, workspace_id)
     row = await workspaces.get_live(workspace_id) if membership is not None else None
-    if row is None:
+    if row is None or membership is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Workspace {workspace_id} not found"
+        )
+    if minimum_role is not None and not role_satisfies(membership.role, minimum_role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"role {minimum_role!r} or higher required",
         )
     return row
 
@@ -128,7 +142,9 @@ async def update_workspace(
     memberships: Annotated[MembershipRepository, Depends(get_membership_repository)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WorkspaceResponse:
-    row = await _owned_workspace(workspaces, memberships, user, workspace_id)
+    # H3 — safe_mode is the tenant-wide delivery approval gate; viewer/editor
+    # must not flip it. admin (owner+admin) can.
+    row = await _owned_workspace(workspaces, memberships, user, workspace_id, minimum_role="admin")
     for field in ("name", "safe_mode"):
         value = getattr(payload, field)
         if value is not None:
@@ -148,7 +164,8 @@ async def delete_workspace(
     # Workflow §10.7 — soft delete: stamp deleted_at and end the caller's
     # membership. Row is retained for the 30-day window; the hard purge +
     # full cascade is a retention-infra follow-up.
-    row = await _owned_workspace(workspaces, memberships, user, workspace_id)
+    # H3 — deleting the whole workspace is owner-only.
+    row = await _owned_workspace(workspaces, memberships, user, workspace_id, minimum_role="owner")
     now = datetime.now(UTC)
     row.deleted_at = now
     membership = await memberships.active_for_user_in_workspace(user.id, workspace_id)
