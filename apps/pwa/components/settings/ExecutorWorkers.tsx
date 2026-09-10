@@ -74,6 +74,10 @@ export default function ExecutorWorkers() {
           <p className="worker-install__title">{t("installTitle")}</p>
           <p className="worker-install__hint">{t("installHint")}</p>
           <CopyField
+            label={t("installBootstrapLabel")}
+            value={t("installBootstrap", { serverUrl: backendBaseUrl() })}
+          />
+          <CopyField
             label={t("installCommandLabel")}
             value={t("installCommand", { serverUrl: backendBaseUrl() })}
           />
