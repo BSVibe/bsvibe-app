@@ -49,15 +49,47 @@ logger = structlog.get_logger(__name__)
 #: would let one silently refuse the other's acquire.
 _VERIFY_SLOT_SALT: Final[bytes] = b"bsvibe.verify.slot/"
 
+#: Domain salt for the TENANT TICKET key space — disjoint from the slot salt
+#: above for the same reason that one is disjoint from promote/dispatch: two
+#: subsystems hashing onto the same bigint would let one silently refuse the
+#: other's acquire.
+_VERIFY_TICKET_SALT: Final[bytes] = b"bsvibe.verify.ticket/"
+
 #: Slot count when the workspace has not set one. Deliberately 1: the safe
 #: default on a single founder machine is "one stack at a time".
 DEFAULT_VERIFY_SLOTS: Final[int] = 1
+
+#: Machine-wide stack count when the deployment has not set one.
+#:
+#: This is the DISK bound, and it is a different quantity from the per-workspace
+#: tier above even though both default to 1. The tier says "how many concurrent
+#: verifications this plan buys"; this says "how many stacks this box can hold
+#: before a full disk bricks it". Conflating them is what let one workspace
+#: raising its own tier raise the concurrency of the whole machine.
+DEFAULT_VERIFY_SLOTS_TOTAL: Final[int] = 1
 
 
 def verify_slot_key(index: int) -> int:
     """Stable signed-int64 advisory-lock key for verification slot ``index``."""
     digest = hashlib.blake2b(
         _VERIFY_SLOT_SALT + index.to_bytes(4, "big", signed=False), digest_size=8
+    ).digest()
+    unsigned = int.from_bytes(digest, byteorder="big", signed=False)
+    return unsigned - 2**64 if unsigned >= 2**63 else unsigned
+
+
+def verify_tenant_ticket_key(workspace_id: uuid.UUID, index: int) -> int:
+    """Stable signed-int64 advisory-lock key for a workspace's tier ticket.
+
+    The axis :func:`verify_slot_key` deliberately does not have. A ticket says
+    "this workspace is using one of ITS OWN budgeted verifications"; it names no
+    stack and owns no compose project — :func:`verify_project_name` stays keyed
+    on the global slot so orphan reclamation keeps meeting exactly one
+    predecessor.
+    """
+    digest = hashlib.blake2b(
+        _VERIFY_TICKET_SALT + workspace_id.bytes + index.to_bytes(4, "big", signed=False),
+        digest_size=8,
     ).digest()
     unsigned = int.from_bytes(digest, byteorder="big", signed=False)
     return unsigned - 2**64 if unsigned >= 2**63 else unsigned
@@ -87,22 +119,27 @@ class VerifySlot:
 
 
 class _FallbackSlots:
-    """In-process slot registry for the SQLite test path."""
+    """In-process lock registry for the SQLite test path.
+
+    Keyed by the same computed advisory-lock key PostgreSQL uses, so both layers
+    (global slot, tenant ticket) share one namespace here exactly as they share
+    one on PG — a fallback keyed by bare index could not represent a ticket.
+    """
 
     def __init__(self) -> None:
         self._guard = asyncio.Lock()
         self._held: set[int] = set()
 
-    async def take(self, index: int) -> bool:
+    async def take(self, key: int) -> bool:
         async with self._guard:
-            if index in self._held:
+            if key in self._held:
                 return False
-            self._held.add(index)
+            self._held.add(key)
             return True
 
-    async def give_back(self, index: int) -> None:
+    async def give_back(self, key: int) -> None:
         async with self._guard:
-            self._held.discard(index)
+            self._held.discard(key)
 
 
 _FALLBACK: Final[_FallbackSlots] = _FallbackSlots()
@@ -112,55 +149,94 @@ def _is_postgres(session: AsyncSession) -> bool:
     return session.bind is not None and session.bind.dialect.name == "postgresql"
 
 
-async def _try_take(session: AsyncSession, index: int) -> bool:
+async def _try_take(session: AsyncSession, key: int) -> bool:
     if _is_postgres(session):
-        result = await session.execute(
-            text("SELECT pg_try_advisory_lock(:k)"), {"k": verify_slot_key(index)}
-        )
+        result = await session.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key})
         return bool(result.scalar())
-    return await _FALLBACK.take(index)
+    return await _FALLBACK.take(key)
 
 
-async def _give_back(session: AsyncSession, index: int) -> None:
+async def _give_back(session: AsyncSession, key: int) -> None:
     if _is_postgres(session):
         try:
-            await session.execute(
-                text("SELECT pg_advisory_unlock(:k)"), {"k": verify_slot_key(index)}
-            )
+            await session.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
         except Exception:  # noqa: BLE001 — a dead session already freed it; that is the design
-            logger.debug("verify_slot_unlock_skipped", slot=index)
+            logger.debug("verify_slot_unlock_skipped", key=key)
         return
-    await _FALLBACK.give_back(index)
+    await _FALLBACK.give_back(key)
 
 
 @asynccontextmanager
 async def acquire_verify_slot(
-    session: AsyncSession, *, slots: int = DEFAULT_VERIFY_SLOTS
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    slots: int = DEFAULT_VERIFY_SLOTS,
+    total_slots: int = DEFAULT_VERIFY_SLOTS_TOTAL,
 ) -> AsyncIterator[VerifySlot | None]:
-    """Hold a free verification slot, or ``None`` when all ``slots`` are taken.
+    """Hold a free verification slot, or ``None`` when there is no capacity.
+
+    TWO limits, both real, taken in order:
+
+    1. ``slots`` — this workspace's PLAN TIER. Held as a tenant ticket
+       (:func:`verify_tenant_ticket_key`), so a workspace can never run more
+       concurrent verifications than its plan buys.
+    2. ``total_slots`` — the MACHINE's disk bound. Held as the global slot
+       (:func:`verify_slot_key`), which also names the compose project.
+
+    They were one number before, and that was the defect: ``slots`` was looped
+    over the GLOBAL key space, so a workspace raising its own tier raised the
+    concurrency of the whole box — oversubscribing the finite disk the bound
+    exists to protect, and starving every other tenant whose slot 0 is the same
+    lock. ``workspace_id`` is required rather than defaulted precisely so a
+    caller cannot silently fall back to the old single-axis behaviour.
 
     Exhaustion yields ``None`` rather than queueing or overrunning: the bound
     exists because the disk is finite, so the honest answer to "no capacity" is
     to not start a stack. The caller decides what to tell the founder.
 
-    ``session`` must be the caller's own connection — the lock lives and dies
-    with it, which is precisely what frees the slot when a run's process is
+    ``session`` must be the caller's own connection — the locks live and die
+    with it, which is precisely what frees BOTH layers when a run's process is
     killed mid-verification.
     """
-    held: int | None = None
+    ticket: int | None = None
     for index in range(max(0, slots)):
-        if await _try_take(session, index):
+        key = verify_tenant_ticket_key(workspace_id, index)
+        if await _try_take(session, key):
+            ticket = key
+            break
+    if ticket is None:
+        logger.info("verify_slot_tier_exhausted", workspace_id=str(workspace_id), slots=slots)
+        yield None
+        return
+
+    held: int | None = None
+    for index in range(max(0, total_slots)):
+        if await _try_take(session, verify_slot_key(index)):
             held = index
             break
     if held is None:
-        logger.info("verify_slot_unavailable", slots=slots)
+        # Give the ticket back. Keeping it would burn a slice of this tenant's
+        # tier for merely ARRIVING while the disk was full — the feature
+        # switching itself off, which is the failure this design exists to avoid.
+        await _give_back(session, ticket)
+        logger.info(
+            "verify_slot_unavailable", workspace_id=str(workspace_id), total_slots=total_slots
+        )
         yield None
         return
-    logger.info("verify_slot_acquired", slot=held, project=verify_project_name(held))
+
+    logger.info(
+        "verify_slot_acquired",
+        slot=held,
+        project=verify_project_name(held),
+        workspace_id=str(workspace_id),
+    )
     try:
         yield VerifySlot(index=held)
     finally:
-        await _give_back(session, held)
+        await _give_back(session, verify_slot_key(held))
+        await _give_back(session, ticket)
         logger.debug("verify_slot_released", slot=held)
 
 
@@ -222,8 +298,10 @@ __all__ = [
     "DEFAULT_VERIFY_SLOTS",
     "VerifySlot",
     "acquire_verify_slot",
+    "DEFAULT_VERIFY_SLOTS_TOTAL",
     "load_workspace_verify_slots",
     "open_slot_session",
     "verify_project_name",
     "verify_slot_key",
+    "verify_tenant_ticket_key",
 ]
