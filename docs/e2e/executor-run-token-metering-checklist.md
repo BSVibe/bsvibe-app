@@ -52,29 +52,50 @@
       확정 — 실패 단언이 `rolsuper OR rolbypassrls` 전제이고 프로브의 `bsvibe`
       역할은 superuser(`t`). CI 는 2역할 셋업이라 통과한다
 
-## 배포 후 (prod)
+## 배포 후 (prod) — 전부 확인 (2026-09-10)
 
 ⚠️ 컨테이너 인터프리터는 `/app/.venv/bin/python` 이다.
-⚠️ 워커는 autodeploy 대상이 아니다 — 배포 후
+⚠️ 워커는 autodeploy 대상이 아니다 —
 `launchctl kickstart -k gui/501/com.bsvibe.worker{,-admin,-mac-mini-e2e}` 필수.
 **워커를 재시작하지 않으면 링크 1·3 이 옛 코드라 이 체크는 전부 0 으로 나온다.**
 
-- [ ] prod 컨테이너 갱신 확인 — `StartedAt` 이 이 배포 이후
-- [ ] 배포된 코드에 신규 표현식 **있음** / 옛 표현식 **없음** (양성·음성 대조군)
-      — `_chat_response_from_task` 존재 · `ChatResponse(content=completed.output`
-      부재를 배포본 소스에서
-- [ ] 마이그레이션이 prod DB 에 적용됨 — `executor_tasks` 에 두 컬럼 실재
-- [ ] 워커 3개 재시작 확인 — 프로세스 시작 시각이 kickstart 이후
-      (낡음의 유일한 신호는 **프로세스 시작 시각**)
-- [ ] **워커 런 1건을 실제로 돌려** `executor_tasks.usage_prompt_tokens > 0` 인
-      행이 생기는지 확인. 0 만 나오면 링크가 아직 끊겨 있는 것이다
-- [ ] 같은 런의 `execution_runs.usage_prompt_tokens > 0` — 체인이 미터까지 닿았다는
-      최종 증거 (**이 항목이 이 PR 의 존재 이유다**)
-- [ ] 워커 로그에 `executor_reported_no_token_usage` 경고가 **없음** — 있으면 그
-      executor 의 CLI 가 usage 를 안 흘린다는 뜻이고, 그 executor 는 아직 미계측
+- [x] prod 컨테이너 갱신 — `StartedAt=2026-09-10T09:22:13Z`, 배포 `0672d7a`
+- [x] 배포된 코드 양성·음성 대조군 — **메커니즘으로** 잰다: 호출 지점
+      `ExecutorAdapter._chat_with_session` 안에
+      `return _chat_response_from_task(completed)` **있음**,
+      `ChatResponse(content=completed.output` **없음**.
+      ⚠️ 첫 판본은 모듈 전체를 문자열로 훑어 **거짓 경보**를 냈다 — 새 함수의
+      독스트링이 옛 코드를 *산문으로 인용*하고 있어서다. 어휘 가드는 메커니즘이
+      아니라 텍스트를 문다
+- [x] 배포본에서 **실행** — 컨테이너 안에서 `_chat_response_from_task` 를 직접
+      호출해 usage `1234/56` 이 그대로 실리는 것을 확인(정적 grep 보다 강한 증거)
+- [x] 배포본 ORM 이 컬럼을 안다 — 둘 다 True, 음성 대조군 `usage_bogus_tokens` False
+- [x] prod DB 에 컬럼 실재 — `bigint NOT NULL DEFAULT '0'::bigint` 2개,
+      `alembic_version = executor_task_tokens`
+- [x] 워커 3개 재시작 — 셋 다 프로세스 시작 시각 `18:24:10 KST`(배포 `18:22:11`
+      이후). `mac-mini-e2e` 하트비트 `09:25:42Z` fresh
+- [x] **워커 런 1건 실행** — direct 런이 `mac-mini-e2e` 로 dispatch,
+      `executor_tasks` 3건이 usage>0 으로 종료
+- [x] **런 미터까지 도달 — 산술이 맞는다**
+
+      | | prompt | completion |
+      |---|---|---|
+      | task `d091da2b` | 14,105 | 11 |
+      | task `53bb91a1` | 29,082 | 647 |
+      | **합** | **43,187** | **658** |
+      | **run `70ff629a`** | **43,187** | **658** |
+
+      런 미터가 자기 executor 태스크들의 보고 usage 의 **정확한 합**이다.
+      (세 번째 태스크 `e70c872d` 1412/180 은 `run_id=None` 인 chat 형태 프레임
+      턴이라 런에 안 묶인다 — 스키마 독스트링과 일치)
+- [x] **모집단 음성 대조군** — 종료된 `executor_tasks` **6,826건 중 usage>0 은 3건**
+      뿐이고 셋 다 배포 후 몇 분 사이. 나머지 6,823건은 전부 0
+- [x] 워커 로그에 `executor_reported_no_token_usage` 경고 없음 —
+      `claude_code` 는 usage 를 보고한다
 
 ## 남은 것 (이 PR 밖)
 
-- 천장 2M 은 데이터 없이 정한 안전천장이다. **이제 실측이 쌓이므로** 튜닝은
-  워커 런 토큰 분포를 본 뒤에 (감사 게이트 1 후속).
+- 천장 2M 은 데이터 없이 정한 안전천장이다. **첫 실측이 나왔다**: 사소한
+  direct 런 하나가 **43,187 토큰**(2 턴)을 썼다 — 2M 은 그런 런 **약 46회**분이다.
+  48 work 턴을 도는 진짜 코딩 런은 훨씬 클 것이므로, 튜닝은 분포가 쌓인 뒤에.
 - 워크스페이스별 토큰 예산(런별이 아닌)은 여전히 없다 — 게이트 4 과금과 함께.
