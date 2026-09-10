@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -137,6 +137,14 @@ class ExecutionRun(ExecutionBase):
     # for RUNNING runs paused on a Decision.
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     claimed_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    # 게이트 1 — per-run LLM token meter (usage from ``ChatResponse``, accumulated
+    # each turn by ``_drive_loop``). server_default 0 so past runs read as 0.
+    usage_prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", default=0
+    )
+    usage_completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", default=0
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

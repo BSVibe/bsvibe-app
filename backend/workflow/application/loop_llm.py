@@ -49,6 +49,10 @@ class ResolverLoopLlm:
         return LoopTurn(
             content=response.content,
             tool_calls=_to_loop_tool_calls(response.tool_calls),
+            # Telemetry, not core: a response (or a test double) without usage
+            # fields reads as 0 rather than breaking the loop.
+            usage_prompt_tokens=getattr(response, "usage_prompt_tokens", 0),
+            usage_completion_tokens=getattr(response, "usage_completion_tokens", 0),
             # Carry the executor's worker-captured files through so the loop
             # records them as the verified deliverable's artifact_refs.
         )
