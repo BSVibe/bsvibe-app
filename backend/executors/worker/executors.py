@@ -32,17 +32,38 @@ if TYPE_CHECKING:
 _logger = structlog.get_logger(__name__)
 
 
+def usage_int(value: Any) -> int:
+    """A non-negative int from a JSON number, else 0.
+
+    Shared by all three executors' usage scrapes: each CLI omits a different
+    subset of its token fields, and a missing one must read as 0 rather than
+    crash the drain. Rejects ``bool`` explicitly — ``True`` is an ``int`` in
+    Python and would silently meter as 1 token.
+    """
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
 @dataclass
 class ExecutionChunk:
     """One incremental message from a streaming executor.
 
     ``delta`` carries new text to append to the running output; ``done`` marks
     terminal end-of-stream (with optional ``error``).
+
+    ``usage_*`` carry the turn's LLM token counts when the CLI reports them —
+    every coding-agent CLI we drive already emits its own usage on the stream we
+    parse. They ride the chunk (rather than a side channel) so the drain loop
+    accumulates them exactly where it accumulates ``delta``. Defaults of 0 keep
+    every existing executor and test double valid; an executor that does not
+    know its usage simply never sets them, and :func:`_stream_and_collect`
+    reports that absence rather than a metered zero.
     """
 
     delta: str = ""
     done: bool = False
     error: str | None = None
+    usage_prompt_tokens: int = 0
+    usage_completion_tokens: int = 0
 
 
 @runtime_checkable

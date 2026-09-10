@@ -37,6 +37,7 @@ from backend.executors.worker.executors import (
     ExecutionChunk,
     _kill_process_group,
     sanitized_subprocess_env,
+    usage_int,
 )
 
 logger = structlog.get_logger(__name__)
@@ -503,6 +504,11 @@ class ClaudeCodeExecutor:
             # stream (e.g. ``rejected`` on a five_hour window with org-disabled
             # overage). Used only when the CLI then exits non-zero — see below.
             rate_status: str | None = None
+            # The turn's token usage, off the terminal ``result`` event. Kept as
+            # the LAST reported value rather than a sum: claude reports one
+            # cumulative ``result`` per invocation, so adding would double-count
+            # if the CLI ever emitted an interim one.
+            usage: tuple[int, int] = (0, 0)
             try:
                 async for line in _aiter_lines(process.stdout, deadline):
                     parsed = _safe_json(line)
@@ -517,9 +523,7 @@ class ClaudeCodeExecutor:
                         _kill_process_group(process)
                         yield abort
                         return
-                    status = _rate_limit_event_status(parsed)
-                    if status is not None and status != "allowed":
-                        rate_status = status
+                    rate_status, usage = _scrape_event(parsed, rate_status, usage)
                     delta = _claude_extract_delta(parsed)
                     if delta:
                         yield ExecutionChunk(delta=delta)
@@ -541,7 +545,7 @@ class ClaudeCodeExecutor:
                     timeout=max(0.1, deadline - asyncio.get_event_loop().time()),
                 )
                 await stderr_task
-            yield _terminal_chunk(rc, "".join(stderr_buf), rate_status)
+            yield _terminal_chunk(rc, "".join(stderr_buf), rate_status, usage)
         except TimeoutError:
             # ``TimeoutError`` is a subclass of ``OSError`` (3.11) — re-raise so
             # ``execute`` surfaces the explicit total-timeout message rather than
@@ -567,19 +571,42 @@ class ClaudeCodeExecutor:
 # ── Stream parsing helpers ────────────────────────────────────────────────────
 
 
-def _terminal_chunk(rc: int, err_text: str, rate_status: str | None) -> ExecutionChunk:
+def _terminal_chunk(
+    rc: int,
+    err_text: str,
+    rate_status: str | None,
+    usage: tuple[int, int] = (0, 0),
+) -> ExecutionChunk:
     """The final ``done`` chunk for a finished subprocess.
 
     A non-zero exit AFTER a non-``allowed`` rate_limit_event (the five_hour
     window hit with org-disabled overage exits 1 with NOTHING on stderr — bare
     "exit 1" otherwise) is surfaced AS a rate-limit failure, so ``_is_rate_limited``
     routes it through the wait+retry path and the founder gets an actionable
-    reason instead of an opaque "claude exited"."""
+    reason instead of an opaque "claude exited".
+
+    ``usage`` rides the terminal chunk on EVERY outcome, failure included: a turn
+    that burned tokens and then exited non-zero still spent the founder's budget,
+    and a ceiling that only counted successes would be blind to exactly the
+    runaway that keeps failing."""
+    prompt_tokens, completion_tokens = usage
     if rc == 0:
-        return ExecutionChunk(done=True)
-    if rate_status is not None:
-        return ExecutionChunk(done=True, error=f"rate limit ({rate_status}): claude exited {rc}")
-    return ExecutionChunk(done=True, error=err_text or f"exit {rc}")
+        return ExecutionChunk(
+            done=True,
+            usage_prompt_tokens=prompt_tokens,
+            usage_completion_tokens=completion_tokens,
+        )
+    error = (
+        f"rate limit ({rate_status}): claude exited {rc}"
+        if rate_status is not None
+        else err_text or f"exit {rc}"
+    )
+    return ExecutionChunk(
+        done=True,
+        error=error,
+        usage_prompt_tokens=prompt_tokens,
+        usage_completion_tokens=completion_tokens,
+    )
 
 
 def _rate_limit_event_status(event: dict[str, Any]) -> str | None:
@@ -594,6 +621,55 @@ def _rate_limit_event_status(event: dict[str, Any]) -> str | None:
         return None
     status = info.get("status")
     return status if isinstance(status, str) else None
+
+
+def _scrape_event(
+    event: dict[str, Any],
+    rate_status: str | None,
+    usage: tuple[int, int],
+) -> tuple[str | None, tuple[int, int]]:
+    """Fold one event's out-of-band signals into the running stream state.
+
+    The rate-limit status and the turn's token usage are both "remember the last
+    one we saw" scrapes that the delta loop otherwise has no use for. Kept
+    together in one helper so ``_run_once`` stays under its branch budget — the
+    same hygiene split as ``main._stream_and_collect``.
+    """
+    status = _rate_limit_event_status(event)
+    if status is not None and status != "allowed":
+        rate_status = status
+    reported = _claude_extract_usage(event)
+    if reported is not None:
+        usage = reported
+    return rate_status, usage
+
+
+def _claude_extract_usage(event: dict[str, Any]) -> tuple[int, int] | None:
+    """Pull ``(prompt, completion)`` token counts off the terminal ``result`` event.
+
+    ``claude --print --output-format stream-json`` closes every turn with
+    ``{"type": "result", ..., "usage": {...}}``; the worker parsed that line
+    like any other and dropped it, which is why an executor run metered zero.
+
+    Cache creation and cache reads are input tokens the account is billed for,
+    so they belong in the prompt total — a ceiling that ignored them would let a
+    heavily-cached agent run far past its budget.
+
+    Returns ``None`` (never ``(0, 0)``) for an event that carries no usage, so
+    the caller can tell "this turn reported nothing" from "this turn cost
+    nothing" — collapsing the two is what made the absence look measured.
+    """
+    if event.get("type") != "result":
+        return None
+    usage = event.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt = (
+        usage_int(usage.get("input_tokens"))
+        + usage_int(usage.get("cache_creation_input_tokens"))
+        + usage_int(usage.get("cache_read_input_tokens"))
+    )
+    return prompt, usage_int(usage.get("output_tokens"))
 
 
 def _claude_extract_delta(event: dict[str, Any]) -> str:

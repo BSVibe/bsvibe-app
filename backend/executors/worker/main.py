@@ -470,6 +470,8 @@ async def handle_task(
                 "success": outcome.success,
                 "output": "".join(outcome.parts),
                 "error_message": outcome.error,
+                "usage_prompt_tokens": outcome.usage_prompt_tokens,
+                "usage_completion_tokens": outcome.usage_completion_tokens,
             },
         )
         if redis is not None:
@@ -495,11 +497,20 @@ async def handle_task(
 
 @dataclass
 class _StreamOutcome:
-    """Aggregated result of one streaming-executor drain (Lift E14)."""
+    """Aggregated result of one streaming-executor drain (Lift E14).
+
+    ``usage_*`` are the turn's LLM token counts as the executor reported them.
+    ``reported_usage`` says whether ANY chunk carried usage at all — a turn that
+    reported nothing and a turn that genuinely cost nothing are both 0, and
+    collapsing them is what let an unmetered executor look like a metered zero.
+    """
 
     success: bool
     parts: list[str]
     error: str | None
+    usage_prompt_tokens: int = 0
+    usage_completion_tokens: int = 0
+    reported_usage: bool = False
 
 
 async def _stream_and_collect(
@@ -528,12 +539,21 @@ async def _stream_and_collect(
     parts: list[str] = []
     error: str | None = None
     success = True
+    usage_prompt = 0
+    usage_completion = 0
+    reported_usage = False
 
     stream = executor.execute(prompt, context)
     try:
         async for chunk in stream:
             if chunk.delta:
                 parts.append(chunk.delta)
+            if chunk.usage_prompt_tokens or chunk.usage_completion_tokens:
+                # Last reported value wins: every CLI we drive reports ONE
+                # cumulative usage per turn, so summing would double-count.
+                usage_prompt = chunk.usage_prompt_tokens
+                usage_completion = chunk.usage_completion_tokens
+                reported_usage = True
             if chunk.error:
                 error = chunk.error
                 success = False
@@ -556,7 +576,20 @@ async def _stream_and_collect(
         await _finalize_task(
             stream, local_workspace, task_id=task_id, cleanup_workspace=cleanup_workspace
         )
-    return _StreamOutcome(success=success, parts=parts, error=error)
+    if not reported_usage:
+        # Make the hole audible instead of shipping a zero that reads as a
+        # measurement. An executor whose CLI stopped emitting usage (a flag or
+        # output-format change on upgrade) would otherwise silently re-open the
+        # very gap this chain closed, with the run meter still showing 0.
+        logger.warning("executor_reported_no_token_usage", task_id=task_id)
+    return _StreamOutcome(
+        success=success,
+        parts=parts,
+        error=error,
+        usage_prompt_tokens=usage_prompt,
+        usage_completion_tokens=usage_completion,
+        reported_usage=reported_usage,
+    )
 
 
 async def _publish(redis: _RedisPublisher, channel: str, payload: dict[str, Any]) -> None:

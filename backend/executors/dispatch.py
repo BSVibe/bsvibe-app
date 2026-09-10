@@ -532,6 +532,8 @@ async def record_result(
     success: bool,
     output: str,
     error_message: str | None,
+    usage_prompt_tokens: int = 0,
+    usage_completion_tokens: int = 0,
 ) -> ExecutorTaskRow | None:
     """Close a task ``done`` / ``failed`` from a worker result. ``None`` if unknown.
 
@@ -542,6 +544,12 @@ async def record_result(
     so a file over the 256 KB cap came back as ``truncated`` and was written as ``raw = b""``,
     ZEROING the agent's real work in place. A deletion, meanwhile, 422-ed the whole result
     (``WorkerResultFile`` is ``extra="forbid"`` and has no ``deleted`` field), losing the run.
+
+    게이트 1 후속 — ``usage_*`` carry the turn's LLM token counts the worker read
+    off its CLI's own stream, and are persisted onto the row because that row is
+    what :class:`ExecutorAdapter` reads a completed turn back from. They default
+    to 0 so a worker deployed before the field still closes its task rather than
+    stranding the run.
 
     The run's ``artifact_refs`` now come from the work tools themselves — the registry records
     what it wrote and the loop reads it back (``WORK_TOOL_STATE_KEY``), which is the same
@@ -586,12 +594,16 @@ async def record_result(
     task.status = "done" if success else "failed"
     task.output = output
     task.error_message = error_message
+    task.usage_prompt_tokens = usage_prompt_tokens
+    task.usage_completion_tokens = usage_completion_tokens
 
     await session.flush()
     logger.info(
         "executor_task_result_recorded",
         task_id=str(task_id),
         status=task.status,
+        usage_prompt_tokens=usage_prompt_tokens,
+        usage_completion_tokens=usage_completion_tokens,
     )
     try:
         await redis.publish(done_channel(task_id), json.dumps({"task_id": str(task_id)}))
