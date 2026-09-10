@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
+from backend.identity.default_account import set_default_model_account_if_unset
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.schemas import (
     ModelAccountCreate,
@@ -47,6 +48,11 @@ async def create_account(
 ) -> ModelAccountOut:
     created = await _service(session).create(
         workspace_id=workspace_id, account_id=account_id, payload=payload
+    )
+    # 게이트 2 — first model account becomes the workspace default (fills the
+    # empty slot only; never overrides), so the founder's first run resolves.
+    await set_default_model_account_if_unset(
+        session, workspace_id=workspace_id, model_account_id=created.id
     )
     await session.commit()
     return created

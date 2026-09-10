@@ -237,3 +237,49 @@ async def test_list_scoped_to_workspace(db, workspace_id, user_id, registry, see
         listed = await registry.call_tool("bsvibe_model_accounts_list", {}, ctx)
     labels = {r["label"] for r in listed}
     assert labels == {"mine"}
+
+
+async def test_mcp_first_account_becomes_workspace_default(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """게이트 2 — MCP create sets the workspace default for the first account,
+    parity with the REST create, so the founder's first run resolves."""
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        created = await registry.call_tool(
+            "bsvibe_model_accounts_create",
+            {
+                "provider": "anthropic",
+                "label": "primary",
+                "litellm_model": "claude-opus-4-7",
+                "api_key": "sk-test-XXXX",
+            },
+            ctx,
+        )
+    first_id = uuid.UUID(created["id"])
+    async with db() as s:
+        ws = await s.get(WorkspaceRow, workspace_id)
+        assert ws.default_account_id == first_id
+
+    # A second account does not override it.
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        await registry.call_tool(
+            "bsvibe_model_accounts_create",
+            {
+                "provider": "anthropic",
+                "label": "secondary",
+                "litellm_model": "claude-opus-4-7",
+                "api_key": "sk-test-YYYY",
+            },
+            ctx,
+        )
+    async with db() as s:
+        ws = await s.get(WorkspaceRow, workspace_id)
+        assert ws.default_account_id == first_id
