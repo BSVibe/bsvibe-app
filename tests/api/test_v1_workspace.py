@@ -261,3 +261,62 @@ async def test_get_workspace_unauthenticated_rejected(db) -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get("/api/v1/workspace")
         assert r.status_code == 401
+
+
+# ── H3: role gate on the safe_mode / workspace-mutation surface ──────────────
+
+
+async def _client_with_role(db, role: str):
+    """A client whose caller has ``role`` in the seeded workspace."""
+    app = create_app()
+    workspace_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    app.dependency_overrides[get_current_user] = fake_current_user()
+    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+
+    async def _session():
+        async with db() as s:
+            yield s
+
+    app.dependency_overrides[get_db_session] = _session
+
+    async with db() as s:
+        s.add(WorkspaceRow(id=workspace_id, name="Acme", safe_mode=True, legal_basis="contract"))
+        s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
+        await s.flush()
+        s.add(MembershipRow(id=uuid.uuid4(), user_id=user_id, workspace_id=workspace_id, role=role))
+        await s.commit()
+
+    transport = httpx.ASGITransport(app=app)
+    client = httpx.AsyncClient(transport=transport, base_url="http://test")
+    return client, workspace_id
+
+
+@pytest.mark.parametrize("role", ["viewer", "editor"])
+async def test_low_role_cannot_disable_safe_mode(db, role) -> None:
+    """H3 — a viewer/editor must not flip Safe Mode (the tenant-wide delivery
+    approval gate). Before the fix, ``update_workspace`` had no role check."""
+    c, workspace_id = await _client_with_role(db, role)
+    async with c:
+        r = await c.patch("/api/v1/workspace", json={"safe_mode": False})
+        assert r.status_code == 403, r.text
+    # The row is untouched — Safe Mode still on.
+    async with db() as s:
+        row = (
+            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+        ).scalar_one()
+        assert row.safe_mode is True
+
+
+@pytest.mark.parametrize("role", ["admin", "owner"])
+async def test_elevated_role_may_change_safe_mode(db, role) -> None:
+    c, workspace_id = await _client_with_role(db, role)
+    async with c:
+        r = await c.patch("/api/v1/workspace", json={"safe_mode": False})
+        assert r.status_code == 200, r.text
+    async with db() as s:
+        row = (
+            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+        ).scalar_one()
+        assert row.safe_mode is False

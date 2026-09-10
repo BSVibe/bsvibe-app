@@ -22,7 +22,7 @@ from backend.api.main import create_app
 from backend.api.webhooks import get_credential_cipher
 from backend.connectors.auth import providers as providers_mod
 from backend.connectors.auth import store
-from backend.connectors.auth.service import set_app_credentials
+from backend.connectors.auth.app_credentials import upsert_app_credentials
 from backend.router.accounts.crypto import CredentialCipher
 
 from .._support import db_engine, fake_current_user
@@ -75,14 +75,19 @@ async def client(
 
 async def _configure_sentry(sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher) -> None:
     async with sf() as s:
-        await set_app_credentials(
+        await upsert_app_credentials(
             s,
             provider="sentry",
+            app_id="",
             client_id="cid",
             client_secret="sec",
+            private_key_pem="",
             app_slug="bsvibe-int",
+            webhook_secret=None,
+            html_url=None,
             cipher=cipher,
         )
+        await s.commit()
 
 
 async def test_install_url_reflects_configured_slug(

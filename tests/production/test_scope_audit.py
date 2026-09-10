@@ -72,7 +72,6 @@ WORKSPACELESS_ALLOWLIST: dict[str, str] = {
     "GET /api/v1/connectors/oauth/github/app-status": "reads deployment-global GitHub App provider config (app_credentials — no workspace_id column)",
     "GET /api/v1/connectors/oauth/sentry/install-url": "reads deployment-global Sentry provider config (no workspace_id column)",
     "GET /api/v1/connectors/oauth/sentry/install/callback": "public Sentry install callback; parks a workspace-less UNCLAIMED install (claim-later)",
-    "POST /api/v1/connectors/oauth/{provider}/app-credentials": "operator sets deployment-global provider App creds (app_credentials — no workspace_id column)",
     # --- SSE stream: query-param token auth (EventSource cannot send headers) -
     "GET /api/v1/events/stream": "SSE; query-param token carries + scopes the workspace, mounted outside the v1 auth gate (eventsource-sse-auth-trap)",
     # --- Worker fleet: worker-token / host-OAuth authed, alternate scoping ----

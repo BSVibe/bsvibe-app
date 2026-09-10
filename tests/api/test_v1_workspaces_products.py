@@ -7,6 +7,7 @@ import uuid
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.api.deps import (
@@ -455,3 +456,74 @@ async def test_the_api_refuses_a_region(db) -> None:
 
         r = await c.patch(f"/api/v1/workspaces/{ws_id}", json={"region": "eu-1"})
         assert r.status_code == 422, r.text
+
+
+# ── H3: role gate on the plural (path-workspace) mutation surface ────────────
+
+
+async def _plural_client_with_role(db, role: str, *, subject: str = "test-user"):
+    """Client whose caller has ``role`` in a seeded workspace (path-addressed)."""
+    from backend.identity.workspaces_db import WorkspaceRow
+
+    app = create_app()
+    workspace_id = uuid.uuid4()
+
+    async def _session():
+        async with db() as s:
+            yield s
+
+    app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[get_current_user] = fake_current_user(subject)
+
+    async with db() as s:
+        s.add(WorkspaceRow(id=workspace_id, name="Acme", safe_mode=True))
+        user = UserRow(id=uuid.uuid4(), supabase_user_id=subject, email=f"{subject}@example.com")
+        s.add(user)
+        await s.flush()
+        s.add(MembershipRow(id=uuid.uuid4(), user_id=user.id, workspace_id=workspace_id, role=role))
+        await s.commit()
+
+    transport = httpx.ASGITransport(app=app)
+    return httpx.AsyncClient(transport=transport, base_url="http://test"), workspace_id
+
+
+@pytest.mark.parametrize("role", ["viewer", "editor"])
+async def test_plural_low_role_cannot_patch_safe_mode(db, role) -> None:
+    """H3 — the plural router gated on membership, not role, so a viewer could
+    flip safe_mode or delete the workspace. Now PATCH needs admin."""
+    from backend.identity.workspaces_db import WorkspaceRow
+
+    c, ws_id = await _plural_client_with_role(db, role)
+    async with c:
+        r = await c.patch(f"/api/v1/workspaces/{ws_id}", json={"safe_mode": False})
+        assert r.status_code == 403, r.text
+    async with db() as s:
+        row = (await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == ws_id))).scalar_one()
+        assert row.safe_mode is True
+
+
+@pytest.mark.parametrize("role", ["viewer", "editor", "admin"])
+async def test_plural_non_owner_cannot_delete(db, role) -> None:
+    """DELETE (soft-delete the whole workspace) is owner-only."""
+    from backend.identity.workspaces_db import WorkspaceRow
+
+    c, ws_id = await _plural_client_with_role(db, role)
+    async with c:
+        r = await c.delete(f"/api/v1/workspaces/{ws_id}")
+        assert r.status_code == 403, r.text
+    async with db() as s:
+        row = (await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == ws_id))).scalar_one()
+        assert row.deleted_at is None
+
+
+async def test_plural_admin_may_patch_owner_may_delete(db) -> None:
+    c, ws_id = await _plural_client_with_role(db, "admin")
+    async with c:
+        r = await c.patch(f"/api/v1/workspaces/{ws_id}", json={"safe_mode": False})
+        assert r.status_code == 200, r.text
+        assert r.json()["safe_mode"] is False
+
+    c2, ws2 = await _plural_client_with_role(db, "owner", subject="owner-user")
+    async with c2:
+        r = await c2.delete(f"/api/v1/workspaces/{ws2}")
+        assert r.status_code == 204, r.text

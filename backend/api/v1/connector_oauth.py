@@ -170,45 +170,14 @@ async def start_github_app_manifest(
     return await service.begin_github_app_manifest(session, workspace_id=workspace_id)
 
 
-class AppCredentialsIn(BaseModel):
-    """Operator-pasted OAuth App credentials for a vanilla provider.
-
-    ``app_slug`` is required only for sentry (its integration slug, used to build
-    the external-install URL); slack/notion/discord ignore it.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    client_id: str = Field(..., min_length=1, max_length=255)
-    client_secret: str = Field(..., min_length=1, max_length=1024)
-    app_slug: str | None = Field(default=None, max_length=255)
-
-
-@router.post("/{provider}/app-credentials")
-async def set_provider_app_credentials(
-    provider: str,
-    payload: AppCredentialsIn,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
-) -> dict[str, object]:
-    """Operator: store a vanilla provider's (slack/notion/discord) App creds.
-
-    The operator creates the OAuth app in the provider's console (no manifest
-    API there) and pastes client_id/secret here — stored encrypted + the
-    provider registers so workspaces can 1-click connect. github uses the
-    manifest flow, not this (→ 400).
-    """
-    try:
-        await service.set_app_credentials(
-            session,
-            provider=provider,
-            client_id=payload.client_id,
-            client_secret=payload.client_secret,
-            app_slug=payload.app_slug,
-            cipher=cipher,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return {"provider": provider, "configured": True}
+# H3 (2026-09-10 audit) — the runtime "set deployment-global provider App creds"
+# write (``POST /{provider}/app-credentials`` + the MCP ``set_oauth_app`` twin)
+# is REMOVED. App credentials are DEPLOYMENT-GLOBAL (one set per instance, no
+# workspace_id column), but the only role vocabulary is per-workspace, so any
+# authenticated member could overwrite the whole instance's slack/notion/discord
+# OAuth App secret — a tenant→instance escalation / OAuth-phishing pivot. There
+# is no operator identity to gate it by. The proper operator path already exists:
+# env (``register_configured_providers``). github keeps its manifest flow.
 
 
 @public_router.get("/connectors/oauth/github/app-manifest/callback")

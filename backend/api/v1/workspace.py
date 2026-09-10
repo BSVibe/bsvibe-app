@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_db_session, get_workspace_id
+from backend.api.deps import get_db_session, get_workspace_id, require_role
 from backend.api.v1._identity_deps import get_workspace_repository
 from backend.identity.domain.repositories import WorkspaceRepository
 
@@ -148,7 +148,10 @@ async def get_workspace(
     )
 
 
-@router.patch("", response_model=WorkspaceOut)
+# H3 — this PATCH flips ``safe_mode`` (the tenant-wide delivery approval gate)
+# and audit retention. Gate it: viewer/editor must not disable Safe Mode.
+# ``admin`` (owner+admin) can; the MCP twin requires ``mcp:admin`` — parity.
+@router.patch("", response_model=WorkspaceOut, dependencies=[Depends(require_role("admin"))])
 async def update_workspace(
     payload: WorkspaceUpdate,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
