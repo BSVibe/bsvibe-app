@@ -1057,14 +1057,18 @@ async def test_cancel_task_swallows_redis_errors() -> None:
 
 async def test_record_result_marks_done() -> None:
     workspace_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
     redis = await _make_redis()
     async with memory_session() as s:
-        task = await dispatch.create_task(
-            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
-        )
-        await s.commit()
+        task = await _dispatched_task(s, redis, workspace_id, worker_id)
         updated = await dispatch.record_result(
-            s, redis, task_id=task.id, success=True, output="all good", error_message=None
+            s,
+            redis,
+            task_id=task.id,
+            worker_id=worker_id,
+            success=True,
+            output="all good",
+            error_message=None,
         )
         await s.commit()
         assert updated is not None
@@ -1076,14 +1080,18 @@ async def test_record_result_marks_done() -> None:
 
 async def test_record_result_marks_failed() -> None:
     workspace_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
     redis = await _make_redis()
     async with memory_session() as s:
-        task = await dispatch.create_task(
-            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
-        )
-        await s.commit()
+        task = await _dispatched_task(s, redis, workspace_id, worker_id)
         updated = await dispatch.record_result(
-            s, redis, task_id=task.id, success=False, output="", error_message="boom"
+            s,
+            redis,
+            task_id=task.id,
+            worker_id=worker_id,
+            success=False,
+            output="",
+            error_message="boom",
         )
         await s.commit()
         assert updated is not None
@@ -1096,7 +1104,13 @@ async def test_record_result_unknown_task_is_none() -> None:
     async with memory_session() as s:
         redis = await _make_redis()
         result = await dispatch.record_result(
-            s, redis, task_id=uuid.uuid4(), success=True, output="", error_message=None
+            s,
+            redis,
+            task_id=uuid.uuid4(),
+            worker_id=uuid.uuid4(),
+            success=True,
+            output="",
+            error_message=None,
         )
         assert result is None
         await redis.aclose()
@@ -1106,12 +1120,10 @@ async def test_record_result_publishes_done_channel() -> None:
     """``record_result`` publishes the done channel so a remote worker (no redis
     of its own) still wakes an awaiter via the backend's redis client."""
     workspace_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
     redis = await _make_redis()
     async with memory_session() as s:
-        task = await dispatch.create_task(
-            s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
-        )
-        await s.commit()
+        task = await _dispatched_task(s, redis, workspace_id, worker_id)
         task_id = task.id
 
         pubsub = redis.pubsub()
@@ -1120,7 +1132,13 @@ async def test_record_result_publishes_done_channel() -> None:
         await pubsub.get_message(timeout=0.2)
 
         updated = await dispatch.record_result(
-            s, redis, task_id=task_id, success=True, output="ok", error_message=None
+            s,
+            redis,
+            task_id=task_id,
+            worker_id=worker_id,
+            success=True,
+            output="ok",
+            error_message=None,
         )
         await s.commit()
         assert updated is not None
@@ -1146,7 +1164,13 @@ async def test_record_result_unknown_task_does_not_publish() -> None:
 
     async with memory_session() as s:
         result = await dispatch.record_result(
-            s, redis, task_id=task_id, success=True, output="", error_message=None
+            s,
+            redis,
+            task_id=task_id,
+            worker_id=uuid.uuid4(),
+            success=True,
+            output="",
+            error_message=None,
         )
         assert result is None
 
@@ -1154,6 +1178,97 @@ async def test_record_result_unknown_task_does_not_publish() -> None:
     assert msg is None
     await pubsub.unsubscribe(dispatch.done_channel(task_id))
     await pubsub.aclose()
+    await redis.aclose()
+
+
+async def _dispatched_task(s, redis, workspace_id, worker_id):
+    """A task in the state a worker legitimately closes: dispatched to ``worker_id``."""
+    task = await dispatch.create_task(
+        s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+    )
+    await s.flush()
+    await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker_id)
+    await s.commit()
+    return task
+
+
+async def test_record_result_rejects_a_foreign_worker() -> None:
+    """A worker may only close the task dispatched TO IT.
+
+    H1 (2026-09-10 audit): ``POST /api/v1/workers/result`` passed the body's
+    ``task_id`` straight through with ``_ = worker  # auth only``. Any active
+    worker token could close another tenant's task with attacker-chosen output,
+    which the awaiting orchestrator then consumes — cross-tenant content
+    injection + a run-completion DoS. The bind mirrors ``revoke_pat``'s rule:
+    a bare id must not be enough to act on another principal's resource.
+    """
+    workspace_id = uuid.uuid4()
+    owner_worker = uuid.uuid4()
+    attacker_worker = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await _dispatched_task(s, redis, workspace_id, owner_worker)
+        # The attacker holds a valid (different) worker token.
+        result = await dispatch.record_result(
+            s,
+            redis,
+            task_id=task.id,
+            worker_id=attacker_worker,
+            success=True,
+            output="INJECTED",
+            error_message=None,
+        )
+        await s.commit()
+        assert result is None, "foreign worker must not close the task"
+        # The row is untouched — still dispatched, no injected output.
+        again = await dispatch.record_result(
+            s,
+            redis,
+            task_id=task.id,
+            worker_id=owner_worker,
+            success=True,
+            output="legit",
+            error_message=None,
+        )
+        await s.commit()
+        assert again is not None and again.status == "done"
+        assert again.output == "legit"
+    await redis.aclose()
+
+
+async def test_record_result_rejects_reclosing_a_terminal_task() -> None:
+    """A worker cannot overwrite the output of an already-terminal task.
+
+    Without a status precondition, a ``done`` task can be re-closed and its
+    output replaced — a second injection vector even for the owning worker id.
+    """
+    workspace_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with memory_session() as s:
+        task = await _dispatched_task(s, redis, workspace_id, worker_id)
+        first = await dispatch.record_result(
+            s,
+            redis,
+            task_id=task.id,
+            worker_id=worker_id,
+            success=True,
+            output="real",
+            error_message=None,
+        )
+        await s.commit()
+        assert first is not None and first.status == "done"
+        second = await dispatch.record_result(
+            s,
+            redis,
+            task_id=task.id,
+            worker_id=worker_id,
+            success=False,
+            output="OVERWRITE",
+            error_message="x",
+        )
+        await s.commit()
+        assert second is None, "a terminal task must not be re-closed"
     await redis.aclose()
 
 
@@ -1171,10 +1286,13 @@ async def test_await_completion_returns_on_done_signal() -> None:
     # with "session is in 'prepared' state" when the poll's read races the
     # worker's commit). A file-WAL engine gives each session its own connection.
     async with shared_file_sessionmaker() as sf:
+        worker_id = uuid.uuid4()
         async with sf() as setup_s:
             task = await dispatch.create_task(
                 setup_s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
             )
+            await setup_s.flush()
+            await dispatch.dispatch_task(redis, session=setup_s, task=task, worker_id=worker_id)
             await setup_s.commit()
             task_id = task.id
 
@@ -1188,6 +1306,7 @@ async def test_await_completion_returns_on_done_signal() -> None:
                     worker_s,
                     redis,
                     task_id=task_id,
+                    worker_id=worker_id,
                     success=True,
                     output="done!",
                     error_message=None,
@@ -1256,12 +1375,21 @@ async def test_await_completion_db_fallback_when_already_done() -> None:
     workspace_id = uuid.uuid4()
     redis = await _make_redis()
     async with memory_session() as s:
+        worker_id = uuid.uuid4()
         task = await dispatch.create_task(
             s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
         )
+        await s.flush()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker_id)
         await s.commit()
         await dispatch.record_result(
-            s, redis, task_id=task.id, success=True, output="pre-done", error_message=None
+            s,
+            redis,
+            task_id=task.id,
+            worker_id=worker_id,
+            success=True,
+            output="pre-done",
+            error_message=None,
         )
         await s.commit()
         row = await dispatch.await_completion(redis, session=s, task_id=task.id, timeout_s=0.3)

@@ -153,6 +153,8 @@ async def test_result_records_done(db, redis) -> None:
         task = await dispatch.create_task(
             s, workspace_id=worker.workspace_id, executor_type="claude_code", prompt="p"
         )
+        await s.flush()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker_id)
         await s.commit()
         task_id = task.id
 
@@ -180,6 +182,8 @@ async def test_result_records_failed(db, redis) -> None:
         task = await dispatch.create_task(
             s, workspace_id=worker.workspace_id, executor_type="claude_code", prompt="p"
         )
+        await s.flush()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker_id)
         await s.commit()
         task_id = task.id
 
@@ -209,6 +213,8 @@ async def test_result_publishes_done_channel(db, redis) -> None:
         task = await dispatch.create_task(
             s, workspace_id=worker.workspace_id, executor_type="claude_code", prompt="p"
         )
+        await s.flush()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker_id)
         await s.commit()
         task_id = task.id
 
@@ -297,6 +303,8 @@ async def test_result_without_files_is_recorded(db, redis) -> None:
             prompt="p",
             run_id=uuid.uuid4(),
         )
+        await s.flush()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker_id)
         await s.commit()
         task_id = task.id
 
@@ -336,3 +344,46 @@ async def test_result_rejects_extra_fields(db, redis) -> None:
             json={"task_id": str(uuid.uuid4()), "success": True, "bogus": 1},
         )
     assert r.status_code == 422, r.text
+
+
+async def test_result_from_a_foreign_worker_is_refused(db, redis) -> None:
+    """H1 — the /result endpoint must not let one worker close another's task.
+
+    Two workers register (both valid tokens). Worker A's task is dispatched to A;
+    worker B posts a result for it with injected output. The endpoint still 200s
+    (a refusal is indistinguishable from success to a prober), but the task row
+    is untouched — no injected output, still awaiting A's real result. Then A
+    closes it legitimately.
+    """
+    worker_a, _token_a = await _seed_worker(db, capabilities=["claude_code"])
+    _worker_b, token_b = await _seed_worker(db, capabilities=["claude_code"])
+    async with db() as s:
+        worker = await s.get(WorkerRow, worker_a)
+        task = await dispatch.create_task(
+            s, workspace_id=worker.workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await s.flush()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker_a)
+        await s.commit()
+        task_id = task.id
+
+    app = create_app()
+    async with _client(app, db, redis) as c:
+        # Worker B (a different, valid token) tries to close A's task.
+        r = await c.post(
+            "/api/v1/workers/result",
+            headers={"X-Worker-Token": token_b},
+            json={
+                "task_id": str(task_id),
+                "success": True,
+                "output": "INJECTED",
+                "error_message": None,
+            },
+        )
+        assert r.status_code == 200, r.text  # opaque: no oracle for the attacker
+
+    async with db() as s:
+        row = await s.get(ExecutorTaskRow, task_id)
+        assert row is not None
+        assert row.status == "dispatched", "foreign worker must not close the task"
+        assert row.output != "INJECTED"

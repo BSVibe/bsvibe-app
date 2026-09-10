@@ -33,7 +33,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_artifact_store, get_db_session, get_workspace_id
+from backend.api.deps import get_db_session, get_workspace_id
 from backend.api.v1.workers_register_auth import (
     BearerAuthError,
     extract_bearer,
@@ -42,7 +42,6 @@ from backend.api.v1.workers_register_auth import (
 from backend.config import get_settings
 from backend.executors import dispatch, service
 from backend.executors.db import WorkerRow
-from backend.storage.artifact_store import ArtifactStore
 
 # JWT-gated routes — mounted under the v1 aggregate (get_current_user upstream).
 router = APIRouter()
@@ -324,7 +323,6 @@ async def report_result(
     worker: Annotated[WorkerRow, Depends(get_current_worker)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     redis: Annotated[Any, Depends(get_poll_redis)],
-    artifact_store: Annotated[ArtifactStore, Depends(get_artifact_store)],
 ) -> HeartbeatResponse:
     """Record a worker's task result — flips the task row to done / failed.
 
@@ -335,11 +333,16 @@ async def report_result(
     promptly instead of letting it block until its timeout.
 
     """
-    _ = worker  # auth only; the task row carries its own workspace binding
+    # H1 — bind the result to the authenticated worker. ``record_result``
+    # refuses a task not dispatched to ``worker.id`` (and any non-dispatched
+    # status), so a stolen or foreign worker token cannot close another tenant's
+    # task with injected output. A refusal returns ``None`` here; we still 200
+    # so a prober cannot distinguish "not yours" from "unknown" from "success".
     await dispatch.record_result(
         session,
         redis,
         task_id=body.task_id,
+        worker_id=worker.id,
         success=body.success,
         output=body.output,
         error_message=body.error_message,
