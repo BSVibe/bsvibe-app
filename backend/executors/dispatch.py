@@ -64,6 +64,24 @@ def is_heartbeat_fresh(last_heartbeat: datetime | None) -> bool:
 
 WORKER_STREAM_PREFIX = "tasks:worker:"
 
+#: Hard cap on entries kept in a worker's dispatch stream.
+#:
+#: ``tasks:worker:{id}`` is a NOTIFICATION queue, not a log — the
+#: ``executor_tasks`` row is the source of truth and the stream only says
+#: "there is something for you". The worker drains it with XREADGROUP +
+#: auto-ack, but a Redis consumer group does NOT delete an acked entry and
+#: nothing ever trimmed, so every dispatch that had ever happened stayed
+#: resident. Measured on prod 2026-09-10: 6,289 entries across 7 streams =
+#: 57.6 MB of a 66 MB Redis (87%), one stale worker's stream alone at 40 MB.
+#:
+#: Why this cannot drop an undelivered task: dispatch is capacity-gated
+#: (``max_parallel_tasks_per_worker``, default 3) and the worker polls every
+#: 5s, so a live stream's UNDELIVERED backlog is a handful of entries. Evicting
+#: one would take this many dispatches inside a single poll gap. The cap keeps
+#: roughly a fortnight of history at the observed rate (~410/week), which is
+#: already far more than anyone reads.
+WORKER_STREAM_MAXLEN = 1000
+
 _TERMINAL_STATUSES = ("done", "failed")
 
 # How often :func:`await_completion` re-reads the DB row as a safety net when no
@@ -453,7 +471,12 @@ async def dispatch_task(
     # crafted variable name.
     if env:
         payload["exec_env"] = json.dumps(dict(env))
-    msg_id = await redis.xadd(worker_stream(worker_id), payload)
+    msg_id = await redis.xadd(
+        worker_stream(worker_id),
+        payload,
+        maxlen=WORKER_STREAM_MAXLEN,
+        approximate=True,
+    )
 
     task.worker_id = worker_id
     task.status = "dispatched"
@@ -506,7 +529,12 @@ async def cancel_task(
         "dispatched_at": datetime.now(UTC).isoformat(),
     }
     try:
-        await redis.xadd(worker_stream(worker_id), payload)
+        await redis.xadd(
+            worker_stream(worker_id),
+            payload,
+            maxlen=WORKER_STREAM_MAXLEN,
+            approximate=True,
+        )
     except Exception:  # noqa: BLE001 — cancel is best-effort, not a control-flow gate
         logger.warning(
             "executor_cancel_publish_failed",

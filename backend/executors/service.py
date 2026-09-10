@@ -29,6 +29,7 @@ import hashlib
 import secrets
 import uuid
 from datetime import UTC, datetime
+from typing import Any, Protocol, runtime_checkable
 
 import structlog
 from sqlalchemy import select
@@ -224,13 +225,73 @@ async def list_workers(session: AsyncSession, workspace_id: uuid.UUID) -> list[W
     return list(rows)
 
 
+@runtime_checkable
+class _RedisDelete(Protocol):
+    """The one Redis verb this module needs."""
+
+    async def delete(self, *names: str) -> Any: ...
+
+
+async def _drop_worker_stream(redis: _RedisDelete | None, worker_id: uuid.UUID) -> None:
+    """Delete a revoked worker's dispatch stream. Best-effort, never raises.
+
+    The DB row is the source of truth for "this worker is gone"; freeing the
+    Redis key is a courtesy. A revoke that 500s because Redis blipped would
+    leave the founder unable to remove a worker they no longer trust — strictly
+    worse than a leaked key, which the XADD cap already bounds.
+
+    ``redis is None`` opens a short-lived client from settings, so the single
+    revoke site owns this cleanup for BOTH callers (REST and the MCP tool);
+    neither has a Redis handle to thread through, and fixing only the one that
+    did would leave the other leaking.
+    """
+    from backend.executors.dispatch import worker_stream  # noqa: PLC0415 — layering
+
+    name = worker_stream(worker_id)
+    try:
+        if redis is None:
+            await _delete_with_own_client(name)
+        else:
+            await redis.delete(name)
+        logger.info("executor_worker_stream_dropped", worker_id=str(worker_id))
+    except Exception:  # noqa: BLE001 — cleanup must never fail the revoke
+        logger.warning("executor_worker_stream_drop_failed", worker_id=str(worker_id))
+
+
+async def _delete_with_own_client(name: str) -> None:
+    """DEL ``name`` on a client opened and closed here.
+
+    Split out so the borrowed-client path above keeps the narrow
+    :class:`_RedisDelete` type: only this function touches a concrete client
+    (and therefore ``aclose``).
+    """
+    import redis.asyncio as redis_aio  # noqa: PLC0415 — only needed on this path
+
+    from backend.config import get_settings  # noqa: PLC0415
+
+    client = redis_aio.from_url(get_settings().redis_url, decode_responses=True)
+    try:
+        await client.delete(name)
+    finally:
+        await client.aclose()
+
+
 async def revoke_worker(
-    session: AsyncSession, *, workspace_id: uuid.UUID, worker_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    worker_id: uuid.UUID,
+    redis: _RedisDelete | None = None,
 ) -> WorkerRow | None:
     """Soft-delete a worker (``is_active=False``), workspace-scoped.
 
     Returns the row on success, or ``None`` when no active worker with that id
     exists in ``workspace_id`` (cross-workspace revoke is a no-op).
+
+    Also frees the worker's dispatch stream. Prod held FIVE streams (9.7 MB) for
+    workers that no longer existed because this never touched Redis. The drop
+    happens only after the workspace check passes — a cross-workspace revoke
+    must not delete the real owner's stream on its way to returning ``None``.
     """
     row = (
         await session.execute(
@@ -248,6 +309,7 @@ async def revoke_worker(
     # longer resolvable (Lift 5a).
     await _remove_executor_model_accounts(session, workspace_id=workspace_id, worker_id=worker_id)
     await session.flush()
+    await _drop_worker_stream(redis, worker_id)
     logger.info(
         "executor_worker_revoked",
         worker_id=str(worker_id),
