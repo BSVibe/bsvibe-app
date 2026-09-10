@@ -584,7 +584,9 @@ from backend.router.accounts.crypto import CredentialCipher as _Cipher  # noqa: 
 from backend.router.accounts.crypto import _key_from_settings as _key  # noqa: E402
 
 
-async def test_list_and_claim_unclaimed(db, workspace_id, user_id, registry) -> None:
+async def test_claim_install_by_proof(db, workspace_id, user_id, registry) -> None:
+    """H2 — claim by presenting the installation ref (possession proof). There is
+    no ``list_unclaimed`` tool: it leaked every tenant's ref + account_label."""
     cipher = _Cipher(_key())
     async with db() as s:
         await _store.create_unclaimed(
@@ -599,20 +601,54 @@ async def test_list_and_claim_unclaimed(db, workspace_id, user_id, registry) -> 
 
     async with db() as s:
         ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        out = await registry.call_tool(
+            "bsvibe_connectors_claim_install",
+            {"provider": "sentry", "installation_ref": "inst-1"},
+            ctx,
+        )
+    assert out["connector"] == "sentry"
+    assert out["claimed"] is True
+
+
+async def test_list_unclaimed_tool_is_gone(db, workspace_id, user_id, registry) -> None:
+    """The enumeration tool must not exist — it was the cross-tenant leak."""
+    from backend.mcp.api import ToolError
+
+    async with db() as s:
+        ctx = ToolContext(
             principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
             session=s,
         )
-        listed = await registry.call_tool("bsvibe_connectors_list_unclaimed", {}, ctx)
-    uid = listed["unclaimed"][0]["id"]
-    assert listed["unclaimed"][0]["installation_ref"] == "inst-1"
+        with pytest.raises(ToolError, match="unknown tool"):
+            await registry.call_tool("bsvibe_connectors_list_unclaimed", {}, ctx)
+
+
+async def test_claim_install_wrong_ref_refused(db, workspace_id, user_id, registry) -> None:
+    cipher = _Cipher(_key())
+    async with db() as s:
+        await _store.create_unclaimed(
+            s,
+            provider="sentry",
+            installation_ref="inst-real",
+            account_label="Acme",
+            token=_TokenSet(access_token="tok", refresh_token=None, expires_at=None),
+            cipher=cipher,
+        )
+        await s.commit()
+
+    from backend.mcp.api import ToolError
 
     async with db() as s:
         ctx = ToolContext(
             principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
             session=s,
         )
-        out = await registry.call_tool(
-            "bsvibe_connectors_claim_install", {"unclaimed_id": uid}, ctx
-        )
-    assert out["connector"] == "sentry"
-    assert out["claimed"] is True
+        with pytest.raises(ToolError, match="not found"):
+            await registry.call_tool(
+                "bsvibe_connectors_claim_install",
+                {"provider": "sentry", "installation_ref": "inst-guessed"},
+                ctx,
+            )
