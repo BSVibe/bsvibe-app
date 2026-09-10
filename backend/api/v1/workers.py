@@ -101,6 +101,14 @@ class WorkerResultBody(BaseModel):
     success: bool
     output: str = ""
     error_message: str | None = None
+    # 게이트 1 후속 — the turn's LLM token usage, as the worker's CLI reported it.
+    # Defaulted (not required) because the backend deploys BEFORE the host workers
+    # are kickstarted: for that window an old worker posts a body without these,
+    # and under ``extra="forbid"`` a required field would 422 the result and
+    # strand the run. ``ge=0`` because a worker is not trusted to report a
+    # negative that would then subtract from the run's meter.
+    usage_prompt_tokens: int = Field(default=0, ge=0)
+    usage_completion_tokens: int = Field(default=0, ge=0)
     # T3 — a result carries NO files. The agent writes to the run's SERVER-SIDE worktree
     # through BSVibe's tools over MCP; there is nothing to ship back. The old ``files`` payload
     # is what let a truncated >256 KB edit come back as ``raw = b""`` and zero the real file,
@@ -346,6 +354,8 @@ async def report_result(
         success=body.success,
         output=body.output,
         error_message=body.error_message,
+        usage_prompt_tokens=body.usage_prompt_tokens,
+        usage_completion_tokens=body.usage_completion_tokens,
     )
     await session.commit()
     return HeartbeatResponse(status="ok")

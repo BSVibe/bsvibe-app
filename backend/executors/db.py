@@ -29,7 +29,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, true
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, String, Text, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
@@ -145,6 +145,17 @@ class ExecutorTaskRow(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 게이트 1 후속 — the turn's LLM token usage as the worker's CLI reported it.
+    # Mirrors ``execution_runs.usage_*`` (#911) in type and default; the adapter
+    # reads these off the completed row onto the ``ChatResponse`` so the drive
+    # loop's ceiling meters an executor turn the same way it meters a native
+    # LiteLLM one. server_default 0 so tasks predating the column read as 0.
+    usage_prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", default=0
+    )
+    usage_completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", default=0
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

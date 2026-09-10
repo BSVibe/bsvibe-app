@@ -49,7 +49,7 @@ import structlog
 
 from backend.executors.worker import opencode_server
 from backend.executors.worker.config import get_worker_settings
-from backend.executors.worker.executors import ExecutionChunk
+from backend.executors.worker.executors import ExecutionChunk, usage_int
 
 logger = structlog.get_logger(__name__)
 
@@ -175,7 +175,12 @@ class OpenCodeExecutor:
         text = _extract_text(resp)
         if text:
             yield ExecutionChunk(delta=text)
-        yield ExecutionChunk(done=True)
+        usage = _opencode_extract_usage(resp) or (0, 0)
+        yield ExecutionChunk(
+            done=True,
+            usage_prompt_tokens=usage[0],
+            usage_completion_tokens=usage[1],
+        )
 
     # ── Internals ───────────────────────────────────────────────────────────
 
@@ -383,6 +388,36 @@ def _extract_error_ref(error_text: str) -> str | None:
     """Pull opencode's ``err_…`` ref token out of a 500 body, or ``None``."""
     match = _ERROR_REF_RE.search(error_text)
     return match.group(0) if match else None
+
+
+def _opencode_extract_usage(resp: dict[str, Any]) -> tuple[int, int] | None:
+    """Pull ``(prompt, completion)`` token counts off a serve message response.
+
+    opencode reports the turn's usage under ``info.tokens``::
+
+        {"info": {"tokens": {"input": N, "output": N, "reasoning": N,
+                             "cache": {"read": N, "write": N}}}, ...}
+
+    Cache read/write are input the account is billed for; reasoning tokens are
+    billed as output. Returns ``None`` — never ``(0, 0)`` — when the response
+    carries no token block, so an unreported turn stays distinguishable from a
+    free one.
+    """
+    info = resp.get("info")
+    if not isinstance(info, dict):
+        return None
+    tokens = info.get("tokens")
+    if not isinstance(tokens, dict):
+        return None
+    cache = tokens.get("cache")
+    cache = cache if isinstance(cache, dict) else {}
+    prompt = (
+        usage_int(tokens.get("input"))
+        + usage_int(cache.get("read"))
+        + usage_int(cache.get("write"))
+    )
+    completion = usage_int(tokens.get("output")) + usage_int(tokens.get("reasoning"))
+    return prompt, completion
 
 
 def _extract_text(resp: dict[str, Any]) -> str:

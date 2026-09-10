@@ -46,6 +46,7 @@ from backend.executors.worker.executors import (
     ExecutionChunk,
     _kill_process_group,
     sanitized_subprocess_env,
+    usage_int,
 )
 
 logger = structlog.get_logger(__name__)
@@ -137,11 +138,17 @@ class CodexExecutor:
             process.stdin.close()
 
             stderr_task = asyncio.create_task(_drain(process.stderr, stderr_buf))
+            # The turn's token usage, off ``turn.completed``. Last value wins —
+            # codex reports one cumulative usage per turn.
+            usage: tuple[int, int] = (0, 0)
             try:
                 async for line in _aiter_lines(process.stdout, deadline):
                     parsed = _safe_json(line)
                     if parsed is None:
                         continue
+                    reported = _codex_extract_usage(parsed)
+                    if reported is not None:
+                        usage = reported
                     delta = _codex_extract_delta(parsed)
                     if delta:
                         yield ExecutionChunk(delta=delta)
@@ -164,10 +171,14 @@ class CodexExecutor:
                 )
                 await stderr_task
             err_text = "".join(stderr_buf)
-            if rc != 0:
-                yield ExecutionChunk(done=True, error=err_text or f"exit {rc}")
-            else:
-                yield ExecutionChunk(done=True)
+            # Usage rides the terminal chunk on failure too: a turn that burned
+            # tokens and then exited non-zero still spent the founder's budget.
+            yield ExecutionChunk(
+                done=True,
+                error=(err_text or f"exit {rc}") if rc != 0 else None,
+                usage_prompt_tokens=usage[0],
+                usage_completion_tokens=usage[1],
+            )
         except TimeoutError:
             # ``TimeoutError`` is a subclass of ``OSError`` (3.11) — handle it
             # BEFORE the ``OSError`` branch so the explicit timeout message is
@@ -221,6 +232,25 @@ def _codex_extract_delta(event: dict[str, Any]) -> str:
             text = item.get("text") or ""
             return text if isinstance(text, str) else ""
     return ""
+
+
+def _codex_extract_usage(event: dict[str, Any]) -> tuple[int, int] | None:
+    """Pull ``(prompt, completion)`` token counts off ``turn.completed``.
+
+    codex closes each turn with ``{"type": "turn.completed", "usage": {...}}``.
+    Cached input is still input the account is billed for, so it counts toward
+    the prompt total.
+
+    Returns ``None`` — never ``(0, 0)`` — for an event without usage, so a turn
+    that reported nothing stays distinguishable from a turn that cost nothing.
+    """
+    if event.get("type") != "turn.completed":
+        return None
+    usage = event.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt = usage_int(usage.get("input_tokens")) + usage_int(usage.get("cached_input_tokens"))
+    return prompt, usage_int(usage.get("output_tokens"))
 
 
 def _write_system_file(system: str) -> str:

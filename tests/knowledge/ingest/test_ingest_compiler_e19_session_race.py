@@ -244,6 +244,10 @@ async def test_adapter_session_factory_opens_fresh_session_per_chat() -> None:
                 output = "ok"
                 artifact_refs = None
                 error_message = None
+                # 게이트 1 후속 — the adapter reads the row's token meter onto
+                # the ChatResponse, so the double carries the real row's columns.
+                usage_prompt_tokens = 0
+                usage_completion_tokens = 0
 
             async def _fake_await_completion(
                 _redis: Any,
@@ -363,6 +367,10 @@ async def test_adapter_without_session_factory_falls_back_to_bound_session() -> 
                 output = "ok"
                 artifact_refs = None
                 error_message = None
+                # 게이트 1 후속 — the adapter reads the row's token meter onto
+                # the ChatResponse, so the double carries the real row's columns.
+                usage_prompt_tokens = 0
+                usage_completion_tokens = 0
 
             async def _fake_await_completion(
                 _redis: Any,

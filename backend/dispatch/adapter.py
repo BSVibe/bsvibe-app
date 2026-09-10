@@ -30,7 +30,7 @@ import asyncio
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -38,6 +38,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.config import Settings
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.predicates import is_executor_account
+
+if TYPE_CHECKING:  # pragma: no cover — annotation only; the runtime import stays
+    # function-level like every other ``backend.executors`` use in this module.
+    from backend.executors.db import ExecutorTaskRow
 from backend.router.llm_client import LlmClient, LlmResponse
 from backend.workflow.application.tool_registry import WORK_TOOL_MCP_NAMES
 
@@ -769,8 +773,8 @@ class ExecutorAdapter:
         # T3 — no synthesized tool call, and nothing scraped to surface. The agent's real tool
         # calls went to the MCP work tools (server-side); the loop reads what it declared and
         # wrote from the run's own state. An executor turn returns plain text, exactly like a
-        # LiteLLM completion does.
-        return ChatResponse(content=completed.output or "")
+        # LiteLLM completion does — usage included (게이트 1 후속).
+        return _chat_response_from_task(completed)
 
 
 #: Directive that makes a coding-agent executor behave like a raw LLM completion
@@ -1040,6 +1044,25 @@ async def _await_worker_with_capacity(
         )
         # Cap sleep at the remaining budget so we don't overshoot the deadline.
         await asyncio.sleep(min(poll_interval, deadline - now))
+
+
+def _chat_response_from_task(task: ExecutorTaskRow) -> ChatResponse:
+    """Shape a completed executor task as a chat turn — 게이트 1 후속.
+
+    The counterpart of :func:`_from_llm_response` for the executor path. It
+    exists because this hop used to be written inline as
+    ``ChatResponse(content=completed.output or "")``: the dataclass's
+    ``usage_* = 0`` defaults then zeroed the numbers the task row already held,
+    and ``loop_llm``'s ``getattr(response, "usage_prompt_tokens", 0)`` laundered
+    that absence into a measurement. Every other link of the metering chain was
+    pointless while this one dropped the value, so it is a named function with
+    its own test rather than an argument list a future edit can quietly shorten.
+    """
+    return ChatResponse(
+        content=task.output or "",
+        usage_prompt_tokens=task.usage_prompt_tokens,
+        usage_completion_tokens=task.usage_completion_tokens,
+    )
 
 
 def _from_llm_response(response: LlmResponse) -> ChatResponse:

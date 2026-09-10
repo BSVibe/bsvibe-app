@@ -296,12 +296,18 @@ class _StubCompletedTask:
     had already quit. Stubbing the transport removes the race at its root:
     ``chat`` still runs the REAL dispatch (worker discovery, ``create_task``,
     ``dispatch_task``, commit), only the awaited terminal result is
-    deterministic. ``_chat_with_session`` reads exactly these three fields.
+    deterministic. ``_chat_with_session`` reads exactly these fields.
+
+    ``usage_*`` mirror the real row's 게이트 1 후속 columns: ``chat`` shapes its
+    ChatResponse via ``_chat_response_from_task``, so a double missing them would
+    only prove the adapter never reads them.
     """
 
     status: str
     output: str = ""
     error_message: str | None = None
+    usage_prompt_tokens: int = 0
+    usage_completion_tokens: int = 0
 
 
 def _stub_await_completion(result: _StubCompletedTask) -> Any:
