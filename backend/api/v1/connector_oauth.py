@@ -258,25 +258,35 @@ async def github_app_manifest_callback(
 # ── Unclaimed installs (claim-later) ────────────────────────────────────
 
 
-@router.get("/unclaimed")
-async def list_unclaimed_installs(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict[str, object]:
-    """Installs awaiting a workspace claim (e.g. Sentry). No secrets returned."""
-    return {"unclaimed": await service.list_unclaimed_installs(session)}
+class ClaimInstallBody(BaseModel):
+    """H2 — claim by PROVING possession of the installation ref, not by picking
+    a row id from a global list. There is intentionally no ``GET /unclaimed``:
+    enumerating pending installs leaked every tenant's ``installation_ref`` (the
+    proof) and ``account_label``. The founder reads the ``installation_ref`` from
+    their own Sentry org (Settings → Integrations) and presents it here."""
+
+    model_config = ConfigDict(extra="forbid")
+    provider: str = Field(..., min_length=1, max_length=64)
+    installation_ref: str = Field(..., min_length=1, max_length=255)
 
 
-@router.post("/unclaimed/{unclaimed_id}/claim")
+@router.post("/unclaimed/claim")
 async def claim_unclaimed_install(
-    unclaimed_id: uuid.UUID,
+    body: ClaimInstallBody,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
 ) -> dict[str, object]:
-    """Bind an unclaimed install to the active workspace."""
+    """Bind an unclaimed install to the active workspace, proving possession of
+    ``installation_ref``. A mismatch and an absent row are the same 404 (no
+    oracle telling a prober which pending installs exist)."""
     try:
         connector = await service.claim_install(
-            session, unclaimed_id=unclaimed_id, workspace_id=workspace_id, cipher=cipher
+            session,
+            provider=body.provider,
+            installation_ref=body.installation_ref,
+            workspace_id=workspace_id,
+            cipher=cipher,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

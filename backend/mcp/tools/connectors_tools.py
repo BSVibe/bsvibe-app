@@ -487,32 +487,15 @@ async def _h_set_oauth_app(args: SetOAuthAppInput, ctx: ToolContext) -> SetOAuth
 # ── unclaimed installs (Sentry claim-later) ─────────────────────────────
 
 
-class ListUnclaimedInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class UnclaimedItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    id: str
-    provider: str
-    installation_ref: str
-    account_label: str | None
-    created_at: str
-
-
-class ListUnclaimedOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    unclaimed: list[UnclaimedItem]
-
-
-async def _h_list_unclaimed(_: ListUnclaimedInput, ctx: ToolContext) -> ListUnclaimedOutput:
-    rows = await oauth_service.list_unclaimed_installs(ctx.session)
-    return ListUnclaimedOutput(unclaimed=[UnclaimedItem(**r) for r in rows])
+# H2 — no ``list_unclaimed`` tool. Enumerating pending installs leaked every
+# tenant's ``installation_ref`` (now the possession proof) and ``account_label``.
+# The founder reads the ref from their own Sentry org and presents it to claim.
 
 
 class ClaimInstallInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    unclaimed_id: str = Field(..., max_length=64)
+    provider: str = Field(..., min_length=1, max_length=64)
+    installation_ref: str = Field(..., min_length=1, max_length=255)
 
 
 class ClaimInstallOutput(BaseModel):
@@ -523,13 +506,10 @@ class ClaimInstallOutput(BaseModel):
 
 async def _h_claim_install(args: ClaimInstallInput, ctx: ToolContext) -> ClaimInstallOutput:
     try:
-        uid = uuid.UUID(args.unclaimed_id)
-    except ValueError as exc:
-        raise ToolError(f"invalid unclaimed_id: {args.unclaimed_id}") from exc
-    try:
         connector = await oauth_service.claim_install(
             ctx.session,
-            unclaimed_id=uid,
+            provider=args.provider,
+            installation_ref=args.installation_ref,
             workspace_id=ctx.principal.workspace_id,
             cipher=oauth_service.build_credential_cipher(),
         )
@@ -695,23 +675,12 @@ def register_connectors_tools(registry: ToolRegistry) -> None:
     )
     registry.register(
         Tool(
-            name="bsvibe_connectors_list_unclaimed",
-            description=(
-                "List OAuth installs awaiting a workspace claim (e.g. Sentry, whose "
-                "install→grant carries no workspace binding). No secrets returned."
-            ),
-            input_schema=ListUnclaimedInput,
-            output_schema=ListUnclaimedOutput,
-            handler=_h_list_unclaimed,
-            required_scopes=("mcp:read",),
-        )
-    )
-    registry.register(
-        Tool(
             name="bsvibe_connectors_claim_install",
             description=(
-                "Bind an unclaimed install (from list_unclaimed) to the active "
-                "workspace — completes the Sentry connect after the operator installed it."
+                "Bind a pending OAuth install (e.g. Sentry, whose install→grant "
+                "carries no workspace binding) to the active workspace by proving "
+                "possession of its installation_ref — the id shown in your own "
+                "Sentry org. There is no list: the ref is the proof."
             ),
             input_schema=ClaimInstallInput,
             output_schema=ClaimInstallOutput,

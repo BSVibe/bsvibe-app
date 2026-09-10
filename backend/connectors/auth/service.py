@@ -187,35 +187,29 @@ async def sentry_install_url(session: AsyncSession, *, cipher: CredentialCipher)
     return f"https://sentry.io/sentry-apps/{creds.app_slug}/external-install/"
 
 
-async def list_unclaimed_installs(session: AsyncSession) -> list[dict[str, Any]]:
-    """Unclaimed installs awaiting a workspace claim (no secrets returned)."""
-    rows = await store.list_unclaimed(session)
-    return [
-        {
-            "id": str(r.id),
-            "provider": r.provider,
-            "installation_ref": r.installation_ref,
-            "account_label": r.account_label,
-            "created_at": r.created_at.isoformat(),
-        }
-        for r in rows
-    ]
-
-
 async def claim_install(
     session: AsyncSession,
     *,
-    unclaimed_id: uuid.UUID,
+    provider: str,
+    installation_ref: str,
     workspace_id: uuid.UUID,
     cipher: CredentialCipher,
 ) -> str:
     """Bind an unclaimed install to ``workspace_id``; return the connector name.
 
+    H2 (2026-09-10 audit) — the caller PROVES possession of ``installation_ref``
+    (visible only in their own Sentry org), which is the workspace binding the
+    provider's stateless callback could not carry. Previously any tenant could
+    claim any pending install by picking its row id from a global list.
+
     Mints (or reuses) the workspace's connector_account, stores the token, and
     records the installation ref on the account (``external_ref``) so the
-    provider's refresh can find it later. Raises :class:`ValueError` if absent.
+    provider's refresh can find it later. Raises :class:`ValueError` if no
+    pending install matches ``(provider, installation_ref)``.
     """
-    claimed = await store.claim_unclaimed(session, unclaimed_id=unclaimed_id, cipher=cipher)
+    claimed = await store.claim_by_installation(
+        session, provider=provider, installation_ref=installation_ref, cipher=cipher
+    )
     if claimed is None:
         raise ValueError("unclaimed install not found")
     provider, installation_ref, token = claimed
@@ -268,7 +262,6 @@ __all__ = [
     "claim_install",
     "complete_sentry_install",
     "compute_github_app_status",
-    "list_unclaimed_installs",
     "manifest_redirect_uri",
     "sentry_install_url",
     "set_app_credentials",

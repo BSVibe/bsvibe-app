@@ -196,23 +196,30 @@ async def create_unclaimed(
     return row
 
 
-async def list_unclaimed(
-    session: AsyncSession, *, provider: str | None = None
-) -> list[ConnectorOAuthUnclaimedRow]:
-    """Unclaimed installs (optionally filtered by provider), newest first."""
-    stmt = select(ConnectorOAuthUnclaimedRow).order_by(ConnectorOAuthUnclaimedRow.created_at.desc())
-    if provider is not None:
-        stmt = stmt.where(ConnectorOAuthUnclaimedRow.provider == provider)
-    return list((await session.execute(stmt)).scalars().all())
-
-
-async def claim_unclaimed(
-    session: AsyncSession, *, unclaimed_id: uuid.UUID, cipher: CredentialCipher
+async def claim_by_installation(
+    session: AsyncSession,
+    *,
+    provider: str,
+    installation_ref: str,
+    cipher: CredentialCipher,
 ) -> tuple[str, str, TokenSet] | None:
-    """Fetch + delete an unclaimed row (single-use). Returns
-    ``(provider, installation_ref, decrypted TokenSet)`` or ``None`` if absent.
+    """Fetch + delete the unclaimed row matching ``(provider, installation_ref)``.
+
+    H2 (2026-09-10 audit) — the caller must PRESENT the ``installation_ref``, not
+    pick a row id from a global list. The ref is a Sentry-side identifier visible
+    only to whoever performed the install in their own Sentry org, so possession
+    of it is the workspace-binding proof the callback could not carry. Matching by
+    a caller-supplied row id let any tenant claim any pending install. Single-use.
+    Returns ``(provider, installation_ref, decrypted TokenSet)`` or ``None``.
     """
-    row = await session.get(ConnectorOAuthUnclaimedRow, unclaimed_id)
+    row = (
+        await session.execute(
+            select(ConnectorOAuthUnclaimedRow).where(
+                ConnectorOAuthUnclaimedRow.provider == provider,
+                ConnectorOAuthUnclaimedRow.installation_ref == installation_ref,
+            )
+        )
+    ).scalar_one_or_none()
     if row is None:
         return None
     token = TokenSet(
@@ -231,10 +238,9 @@ async def claim_unclaimed(
 
 __all__ = [
     "claim_pending",
-    "claim_unclaimed",
+    "claim_by_installation",
     "create_pending",
     "create_unclaimed",
     "get_or_create_account",
-    "list_unclaimed",
     "upsert_token",
 ]

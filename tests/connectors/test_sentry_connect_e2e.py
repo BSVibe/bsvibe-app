@@ -125,11 +125,10 @@ async def test_install_callback_parks_unclaimed(
     assert "sentry_install=pending" in cb.headers["location"]
 
     async with sf() as s:
-        rows = await store.list_unclaimed(s, provider="sentry")
-        assert len(rows) == 1
-        assert rows[0].installation_ref == "inst-1"
-        # token stored, claimable + decryptable
-        claimed = await store.claim_unclaimed(s, unclaimed_id=rows[0].id, cipher=cipher)
+        # token stored under the installation ref, claimable + decryptable
+        claimed = await store.claim_by_installation(
+            s, provider="sentry", installation_ref="inst-1", cipher=cipher
+        )
     assert claimed is not None
     _, install_ref, token = claimed
     assert install_ref == "inst-1"
@@ -147,7 +146,7 @@ async def test_callback_when_not_configured_redirects_error(client: httpx.AsyncC
 
 
 @respx.mock(assert_all_mocked=False)
-async def test_unclaimed_list_and_claim_via_rest(
+async def test_claim_via_rest_with_installation_ref(
     respx_mock: respx.MockRouter,
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
@@ -161,22 +160,49 @@ async def test_unclaimed_list_and_claim_via_rest(
         "/api/v1/connectors/oauth/sentry/install/callback",
         params={"code": "g", "installationId": "inst-1"},
     )
-    listed = await client.get("/api/v1/connectors/oauth/unclaimed")
-    assert listed.status_code == 200
-    items = listed.json()["unclaimed"]
-    assert len(items) == 1 and items[0]["installation_ref"] == "inst-1"
-
-    claim = await client.post(f"/api/v1/connectors/oauth/unclaimed/{items[0]['id']}/claim")
+    # H2 — no GET /unclaimed. The founder presents the ref from their Sentry org.
+    claim = await client.post(
+        "/api/v1/connectors/oauth/unclaimed/claim",
+        json={"provider": "sentry", "installation_ref": "inst-1"},
+    )
     assert claim.status_code == 200, claim.text
     assert claim.json() == {"connector": "sentry", "claimed": True}
 
-    # claimed → unclaimed list now empty
-    again = await client.get("/api/v1/connectors/oauth/unclaimed")
-    assert again.json()["unclaimed"] == []
+    # single-use: the same ref no longer claims.
+    again = await client.post(
+        "/api/v1/connectors/oauth/unclaimed/claim",
+        json={"provider": "sentry", "installation_ref": "inst-1"},
+    )
+    assert again.status_code == 404
+
+
+async def test_claim_wrong_ref_is_404(
+    respx_mock: respx.MockRouter,
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+) -> None:
+    """A ref you do not possess is indistinguishable from a nonexistent one."""
+    await _configure_sentry(sf, cipher)
+    respx_mock.post(_AUTHZ).mock(
+        return_value=httpx.Response(201, json={"token": "t", "refreshToken": "r"})
+    )
+    await client.get(
+        "/api/v1/connectors/oauth/sentry/install/callback",
+        params={"code": "g", "installationId": "inst-1"},
+    )
+    # A pending install exists (inst-1), but the caller presents a ref they do
+    # not possess — same 404 as a nonexistent one, no oracle.
+    r = await client.post(
+        "/api/v1/connectors/oauth/unclaimed/claim",
+        json={"provider": "sentry", "installation_ref": "inst-guessed"},
+    )
+    assert r.status_code == 404
 
 
 async def test_claim_missing_404(client: httpx.AsyncClient) -> None:
-    import uuid as _uuid
-
-    r = await client.post(f"/api/v1/connectors/oauth/unclaimed/{_uuid.uuid4()}/claim")
+    r = await client.post(
+        "/api/v1/connectors/oauth/unclaimed/claim",
+        json={"provider": "sentry", "installation_ref": "nope"},
+    )
     assert r.status_code == 404
