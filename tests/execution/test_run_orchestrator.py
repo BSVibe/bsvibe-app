@@ -3258,3 +3258,120 @@ def test_a_short_command_is_named_in_full() -> None:
     }
     _ = SimpleNamespace
     assert "uv run lint-imports." in _verification_sentence(verdict, "ko")
+
+
+# --------------------------------------------------------------------------
+# 게이트 1 — per-run LLM token metering + runaway token cap
+# --------------------------------------------------------------------------
+
+
+async def test_run_accumulates_llm_token_usage(tmp_path: Path) -> None:
+    """Each turn's token usage is summed onto the run (metering) — the numbers
+    the ChatResponse already carried but LoopTurn used to drop."""
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="write it",
+                tool_calls=(
+                    _declare_command("grep -q 42 answer.txt"),
+                    _tc("file_write", path="answer.txt", content="42\n"),
+                ),
+                usage_prompt_tokens=100,
+                usage_completion_tokens=40,
+            ),
+            LoopTurn(
+                content="done",
+                tool_calls=(),
+                usage_prompt_tokens=70,
+                usage_completion_tokens=10,
+            ),
+        ]
+    )
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+        assert result.outcome == "verified"
+
+        refreshed = (
+            await session.execute(select(ExecutionRun).where(ExecutionRun.id == run.id))
+        ).scalar_one()
+        assert refreshed.usage_prompt_tokens == 170  # 100 + 70
+        assert refreshed.usage_completion_tokens == 50  # 40 + 10
+
+
+async def test_run_stops_on_token_cap_with_a_decision(tmp_path: Path) -> None:
+    """A run whose accumulated tokens cross ``agent_max_run_tokens`` stops on a
+    ``run_token_cap_reached`` Decision — the runaway guard the turn-count round
+    budget cannot give (one turn can be huge)."""
+    from backend.config import Settings
+
+    # A single enormous turn blows past a tiny cap.
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="huge turn",
+                tool_calls=(_tc("file_write", path="a.txt", content="x\n"),),
+                usage_prompt_tokens=9_000,
+                usage_completion_tokens=2_000,
+            ),
+            # A second turn is scripted but must NOT be requested — the cap stops first.
+            LoopTurn(content="should not run", tool_calls=()),
+        ]
+    )
+    settings = Settings(agent_max_run_tokens=1_000)
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), settings=settings
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "needs_decision"
+        # Exactly one turn ran before the cap fired (the loop did not burn the 2nd).
+        assert len(llm.calls) == 1
+
+        decision = (await session.execute(select(Decision))).scalars().all()
+        assert any(d.decision == "run_token_cap_reached" for d in decision)
+        d = next(d for d in decision if d.decision == "run_token_cap_reached")
+        assert d.payload["usage_total_tokens"] == 11_000
+        assert d.payload["token_cap"] == 1_000
+
+        refreshed = (
+            await session.execute(select(ExecutionRun).where(ExecutionRun.id == run.id))
+        ).scalar_one()
+        assert refreshed.usage_prompt_tokens == 9_000
+        assert refreshed.usage_completion_tokens == 2_000
+
+
+async def test_token_cap_zero_is_uncapped(tmp_path: Path) -> None:
+    """``agent_max_run_tokens = 0`` disables the ceiling (metering still runs)."""
+    from backend.config import Settings
+
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="write",
+                tool_calls=(
+                    _declare_command("grep -q 42 answer.txt"),
+                    _tc("file_write", path="answer.txt", content="42\n"),
+                ),
+                usage_prompt_tokens=5_000_000,
+                usage_completion_tokens=1_000_000,
+            ),
+            LoopTurn(content="done", tool_calls=()),
+        ]
+    )
+    settings = Settings(agent_max_run_tokens=0)
+    async with memory_session() as session:
+        run = await _make_run(session)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), settings=settings
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+        # Not stopped by a cap — reaches the normal verified terminal.
+        assert result.outcome == "verified"
+        refreshed = (
+            await session.execute(select(ExecutionRun).where(ExecutionRun.id == run.id))
+        ).scalar_one()
+        assert refreshed.usage_prompt_tokens == 5_000_000

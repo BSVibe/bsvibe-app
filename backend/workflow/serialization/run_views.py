@@ -170,6 +170,9 @@ class RunDetailResponse(BaseModel):
     partial_deliverables: list[RunPartialDeliverable] = []
     activities: list[RunActivity] = []
     timeline_source: str = "derived"
+    # 게이트 1 — per-run LLM token meter (0 for pre-metering runs).
+    usage_prompt_tokens: int = 0
+    usage_completion_tokens: int = 0
     # L2 (#9): WHY a terminal-failed run failed — the latest
     # ExecutionRunHistory ``reason`` for a FAILED / CANCELLED transition. The
     # founder sees the cause (and a Retry affordance) instead of a blank

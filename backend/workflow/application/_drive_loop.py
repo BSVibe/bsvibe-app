@@ -40,6 +40,7 @@ from backend.workflow.application.round_budget import (
     round_budget_stats,
     should_continue_round,
 )
+from backend.workflow.application.token_budget import account_and_enforce_token_cap
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
     MAX_NO_WORK_NUDGES,
@@ -263,6 +264,19 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         await orch._session.commit()
         turn = await orch._llm.complete(messages=messages, tools=tools_schema)
         final_text = turn.content or final_text
+        # 게이트 1 — meter this turn's tokens onto the run; stop on a Decision if
+        # the run crossed the per-run ceiling (see ``token_budget``).
+        _capped = await account_and_enforce_token_cap(
+            orch,
+            run=run,
+            work_step=work_step,
+            attempt=attempt,
+            turn=turn,
+            written_paths=written_paths,
+            final_text=final_text,
+        )
+        if _capped is not None:
+            return _capped
         # An EXECUTOR agent acts through the MCP work tools, which run in the API process —
         # its calls never pass through this loop's ``_invoke_tool_safely``, the only place the
         # native path learns what was written. Without this the loop ends the run believing the

@@ -355,6 +355,15 @@ class Settings(BaseSettings):
     # times in a row is not going to fix itself on the fourth.
     agent_max_drive_failures: int = 3
 
+    # 게이트 1 — per-run LLM token ceiling. A run whose accumulated prompt+completion
+    # tokens reach this stops on a founder Decision (``run_token_cap_reached``), the
+    # runaway guard the turn-count ``round_budget`` cannot give (one turn can be huge).
+    # BYO-key: the spend is the founder's own provider bill, so this is a safety
+    # ceiling, not a price lever. ``0`` = uncapped. Generous by default so it never
+    # trims a legitimate long run — tune down per deployment once metering shows the
+    # real distribution.
+    agent_max_run_tokens: int = 2_000_000
+
     # Capacity-aware dispatch (Lift E16). Backend must NOT dispatch onto a
     # worker stream when the worker is already at its in-flight cap — the
     # worker's poll loop skips polling while ``len(in_flight) >=

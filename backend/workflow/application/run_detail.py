@@ -409,6 +409,8 @@ async def build_run_detail(
         status=run.status,
         created_at=run.created_at,
         updated_at=run.updated_at,
+        usage_prompt_tokens=run.usage_prompt_tokens,
+        usage_completion_tokens=run.usage_completion_tokens,
         trigger=_trigger_context(run.payload),
         decisions=[
             RunDecision(

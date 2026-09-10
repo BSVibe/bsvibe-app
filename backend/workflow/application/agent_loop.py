@@ -108,6 +108,11 @@ class LoopTurn:
 
     content: str
     tool_calls: tuple[LoopToolCall, ...] = ()
+    # 게이트 1 — the LLM token usage for THIS turn, carried from ``ChatResponse``
+    # so ``_drive_loop`` can accumulate it onto the run. 0 on the skill/verify
+    # paths that do not thread usage.
+    usage_prompt_tokens: int = 0
+    usage_completion_tokens: int = 0
     # Files the compute backend captured for this turn OUTSIDE the loop's
     # file_write/file_edit tools. Coding-agent executors edit files in the
     # worker's per-task clone (captured worker-side as the task's
