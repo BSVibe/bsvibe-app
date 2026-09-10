@@ -81,10 +81,31 @@ class TelegramClient:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             return await client.post(url, json=json_body)
 
-    @staticmethod
-    def _ok(resp: httpx.Response) -> dict[str, Any]:
+    def _scrub(self, text: str) -> str:
+        """Redact the bot token from ``text``.
+
+        H4 (2026-09-10 audit) — the token lives in the URL PATH
+        (``/bot<token>/method``), so httpx's ``HTTPStatusError`` message embeds it
+        verbatim (``... for url '.../bot<token>/sendMessage'``). That string flowed
+        into structlog, the wrapped ``PluginRunError``, the run's ``ActionResult``,
+        and a 502 response body via ``PluginRunner._call``'s ``str(exc)``. The
+        client is the only place the token is known, so it scrubs at the source —
+        neutralising both the message and any traceback ``__cause__``."""
+        return text.replace(self._token, "<redacted>") if self._token else text
+
+    def _raise_for_status(self, resp: httpx.Response) -> None:
+        """``resp.raise_for_status()`` but never letting the token-bearing URL
+        escape in the exception. Re-raises as :class:`TelegramApiError` (scrubbed)
+        with ``from None`` so the original httpx error — whose ``str`` and
+        ``request.url`` both carry the token — is not chained into a traceback."""
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise TelegramApiError(self._scrub(str(exc))) from None
+
+    def _ok(self, resp: httpx.Response) -> dict[str, Any]:
         """Raise on transport error, then on Telegram's ``ok:false`` body."""
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         body: dict[str, Any] = resp.json()
         if not body.get("ok", False):
             raise TelegramApiError(str(body.get("description", "unknown_error")))
@@ -172,7 +193,7 @@ class TelegramClient:
         found") so the caller can treat a re-delete as an idempotent no-op. Any
         other ``ok:false`` error raises :class:`TelegramApiError`."""
         resp = await self._post("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         body: dict[str, Any] = resp.json()
         if body.get("ok", False):
             return None

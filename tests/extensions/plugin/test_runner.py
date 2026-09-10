@@ -165,3 +165,31 @@ class TestInputSchemaValidation:
             await runner.dispatch_action(
                 p.meta, action_name="add", context=_Ctx(), kwargs={"a": "no", "b": 2}
             )
+
+
+class TestRunnerDoesNotLeakTokenFromPluginError:
+    """H4 — a plugin action that raises a Telegram-style error must not leak the
+    bot token through ``PluginRunner._call``, which fans ``str(exc)`` out to the
+    log, the wrapped ``PluginRunError``, the run's ``ActionResult``, and a 502.
+    The Telegram client scrubs its token at the source, so the message the runner
+    wraps is already clean."""
+
+    async def test_wrapped_error_has_no_token(self):
+        from plugin.telegram.client import TelegramApiError
+
+        token = "999888:SUPER-SECRET"
+
+        p = plugin(name="tg", credentials=[])
+
+        @p.action(name="send")
+        async def send(context):  # noqa: ARG001
+            # What the Telegram client raises AFTER scrubbing its own token.
+            raise TelegramApiError(
+                "Server error '500' for url 'https://api.telegram.org/bot<redacted>/send'"
+            )
+
+        runner = _make_runner()
+        with pytest.raises(PluginRunError) as caught:
+            await runner.dispatch_action(p.meta, action_name="send", context=_Ctx(), kwargs={})
+        assert token not in str(caught.value)
+        assert "<redacted>" in str(caught.value)

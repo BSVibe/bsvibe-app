@@ -80,9 +80,13 @@ class TestSendMessage:
 
     @respx.mock
     async def test_send_message_raises_on_http_error(self, client):
+        # H4 — an HTTP error now raises TelegramApiError (not httpx.HTTPStatusError)
+        # so the token-bearing URL in the httpx message is scrubbed at the source.
         respx.post(f"{BOT}/sendMessage").mock(return_value=httpx.Response(500, text="boom"))
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(TelegramApiError) as caught:
             await client.send_message(99, "hello")
+        assert TOKEN not in str(caught.value)
+        assert "<redacted>" in str(caught.value)
 
 
 class TestDeleteMessage:
@@ -269,3 +273,35 @@ class TestInjectedClient:
             tc = TelegramClient(TOKEN, base_url=API, client=injected)
             data = await tc.send_message(1, "hi")
         assert data["message_id"] == 7
+
+
+class TestTokenNeverLeaksIntoErrors:
+    """H4 (2026-09-10 audit) — the bot token is in the URL path
+    (``/bot<token>/method``), so httpx's HTTPStatusError embeds it. That string
+    flowed into structlog, PluginRunError, the run's ActionResult, and a 502 body
+    via ``PluginRunner._call``'s ``str(exc)``. The client scrubs at the source."""
+
+    @respx.mock
+    async def test_http_error_message_has_no_token(self, client):
+        respx.post(f"{BOT}/sendMessage").mock(return_value=httpx.Response(403, text="forbidden"))
+        with pytest.raises(TelegramApiError) as caught:
+            await client.send_message(99, "hi")
+        assert TOKEN not in str(caught.value)
+
+    @respx.mock
+    async def test_http_error_suppresses_the_token_bearing_context(self, client):
+        """``from None`` clears ``__cause__`` and sets ``__suppress_context__``,
+        so the original httpx error (whose str carries the token) is NOT rendered
+        in a traceback — the ``exc_info=True`` leak vector is closed."""
+        respx.post(f"{BOT}/sendMessage").mock(return_value=httpx.Response(500, text="x"))
+        with pytest.raises(TelegramApiError) as caught:
+            await client.send_message(99, "hi")
+        assert caught.value.__cause__ is None
+        assert caught.value.__suppress_context__ is True
+
+    @respx.mock
+    async def test_delete_message_http_error_has_no_token(self, client):
+        respx.post(f"{BOT}/deleteMessage").mock(return_value=httpx.Response(500, text="x"))
+        with pytest.raises(TelegramApiError) as caught:
+            await client.delete_message(99, 42)
+        assert TOKEN not in str(caught.value)
