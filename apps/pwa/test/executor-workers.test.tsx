@@ -159,8 +159,14 @@ describe("Executor workers surface", () => {
     await screen.findByText(/No worker connected yet/i);
     await userEvent.click(screen.getByRole("button", { name: /add a worker/i }));
 
-    // The new flow is `bsvibe login && bsvibe-worker register …` — NO install
-    // token to paste, NO `python -m backend.executors.worker INSTALL_TOKEN=…`.
+    // Step 1 — the curl-based CLI install (GitHub-Actions-runner style), pointing
+    // at THIS deployment's backend.
+    const bootstrap = await screen.findByText(
+      /curl -fsSL https:\/\/api\.bsvibe\.dev\/install-worker\.sh \| sh/,
+    );
+    expect(bootstrap).toBeInTheDocument();
+    // Step 2 — `bsvibe login && bsvibe-worker register …` — NO install token to
+    // paste, NO `python -m backend.executors.worker INSTALL_TOKEN=…`.
     const cmd = await screen.findByText(
       /bsvibe login && bsvibe-worker register --name \$\(hostname\) && bsvibe-worker run/,
     );

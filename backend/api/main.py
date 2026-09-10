@@ -21,6 +21,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from backend.api.auth import router as auth_router
 from backend.api.deps import _get_session_factory
 from backend.api.health import router as health_router
+from backend.api.install_script import router as install_script_router
 from backend.api.middleware import WorkspaceContextMiddleware
 from backend.api.oauth import metadata_router as oauth_metadata_router
 from backend.api.oauth import pats_router as oauth_pats_router
@@ -204,6 +205,8 @@ def create_app() -> FastAPI:
     # discovery — the SDK chokes on FastAPI's ``{"detail":"Not Found"}``
     # body that lacks the OAuth ``error`` field.
     app.include_router(oauth_metadata_router)
+    # 게이트 2 — worker installer for ``curl | sh``, served at the root path.
+    app.include_router(install_script_router)
     # SSE live-events stream (B16) — query-param token auth because the
     # browser EventSource cannot send Authorization headers
     # (eventsource-sse-auth-trap). Mounted OUTSIDE the auth-gated v1 router
