@@ -28,7 +28,7 @@ from backend.dispatch.adapter import (
     _render_prompt,
 )
 from backend.executors import dispatch
-from backend.executors.db import WorkerRow
+from backend.executors.db import ExecutorTaskRow, WorkerRow
 from backend.router.accounts.models import ModelAccount
 from backend.router.llm_client import LlmClient, LlmResponse
 
@@ -1025,10 +1025,12 @@ class TestExecutorAdapterChat:
                 # await_completion's fast path (_read_terminal) returns it
                 # immediately, deterministically, with no polling race.
                 async with sf() as ws_session:
+                    _owner = await ws_session.get(ExecutorTaskRow, kwargs["task_id"])
                     await dispatch.record_result(
                         ws_session,
                         redis,
                         task_id=kwargs["task_id"],
+                        worker_id=_owner.worker_id,
                         success=True,
                         output="ok",
                         error_message=None,
@@ -1090,10 +1092,12 @@ class TestExecutorAdapterChat:
             async def _spy_await(*args: Any, **kwargs: Any) -> Any:
                 captured["timeout_s"] = kwargs["timeout_s"]
                 async with sf() as ws_session:
+                    _owner = await ws_session.get(ExecutorTaskRow, kwargs["task_id"])
                     await dispatch.record_result(
                         ws_session,
                         redis,
                         task_id=kwargs["task_id"],
+                        worker_id=_owner.worker_id,
                         success=True,
                         output="ok",
                         error_message=None,

@@ -230,6 +230,7 @@ async def _run_one_exec_task(
                         s,
                         redis,
                         task_id=task_id,
+                        worker_id=worker_id,
                         success=exit_code == 0,
                         output=out.decode("utf-8", errors="replace")[-20_000:],
                         error_message=None if exit_code == 0 else f"exit {exit_code}",

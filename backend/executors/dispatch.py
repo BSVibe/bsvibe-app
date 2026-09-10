@@ -528,6 +528,7 @@ async def record_result(
     redis: _RedisDispatch,
     *,
     task_id: uuid.UUID,
+    worker_id: uuid.UUID,
     success: bool,
     output: str,
     error_message: str | None,
@@ -557,6 +558,30 @@ async def record_result(
     """
     task = await session.get(ExecutorTaskRow, task_id)
     if task is None:
+        return None
+    # H1 (2026-09-10 audit) — a bare ``task_id`` from the /result body is not
+    # enough to close a task. The row must have been dispatched TO THIS worker,
+    # and must still be awaiting a result. Without the first check, any active
+    # worker token closes another tenant's task with attacker-chosen ``output``,
+    # which the awaiting orchestrator consumes (cross-tenant content injection +
+    # a run-completion DoS). Without the second, a terminal task is re-closable
+    # and its output overwritable. Mirrors ``revoke_pat``: a bare id must not be
+    # enough to act on another principal's resource. Both refusals return
+    # ``None`` (the unknown-task shape) so a prober cannot tell them apart.
+    if task.worker_id != worker_id:
+        logger.warning(
+            "executor_result_worker_mismatch",
+            task_id=str(task_id),
+            claimed_by=str(worker_id),
+            owned_by=str(task.worker_id) if task.worker_id else None,
+        )
+        return None
+    if task.status != "dispatched":
+        logger.warning(
+            "executor_result_not_dispatched",
+            task_id=str(task_id),
+            status=task.status,
+        )
         return None
     task.status = "done" if success else "failed"
     task.output = output
