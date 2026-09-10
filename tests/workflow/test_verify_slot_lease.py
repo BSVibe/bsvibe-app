@@ -82,7 +82,11 @@ async def test_slot_key_space_is_disjoint_from_the_other_leases() -> None:
 async def test_acquire_returns_a_slot_and_releases_it() -> None:
     from backend.workflow.infrastructure.verify_slots import acquire_verify_slot
 
-    async with _two_sessions() as (a, _b), acquire_verify_slot(a, slots=2) as slot:
+    ws = uuid.uuid4()
+    async with (
+        _two_sessions() as (a, _b),
+        acquire_verify_slot(a, workspace_id=ws, slots=2, total_slots=2) as slot,
+    ):
         assert slot is not None
         assert slot.index == 0
         assert slot.project == "verify-slot-0"
@@ -92,10 +96,11 @@ async def test_acquire_returns_a_slot_and_releases_it() -> None:
 async def test_a_second_holder_gets_the_next_free_slot() -> None:
     from backend.workflow.infrastructure.verify_slots import acquire_verify_slot
 
+    ws = uuid.uuid4()
     async with _two_sessions() as (a, b):
-        async with acquire_verify_slot(a, slots=2) as first:
+        async with acquire_verify_slot(a, workspace_id=ws, slots=2, total_slots=2) as first:
             assert first is not None and first.index == 0
-            async with acquire_verify_slot(b, slots=2) as second:
+            async with acquire_verify_slot(b, workspace_id=ws, slots=2, total_slots=2) as second:
                 assert second is not None and second.index == 1
 
 
@@ -105,10 +110,11 @@ async def test_no_slot_when_all_are_taken() -> None:
     disk bound is the point."""
     from backend.workflow.infrastructure.verify_slots import acquire_verify_slot
 
+    ws = uuid.uuid4()
     async with _two_sessions() as (a, b):
-        async with acquire_verify_slot(a, slots=1) as first:
+        async with acquire_verify_slot(a, workspace_id=ws, slots=1, total_slots=1) as first:
             assert first is not None
-            async with acquire_verify_slot(b, slots=1) as second:
+            async with acquire_verify_slot(b, workspace_id=ws, slots=1, total_slots=1) as second:
                 assert second is None
 
 
@@ -119,15 +125,16 @@ async def test_slot_frees_when_the_holder_connection_dies() -> None:
     """
     from backend.workflow.infrastructure.verify_slots import acquire_verify_slot
 
+    ws = uuid.uuid4()
     async with _two_sessions() as (a, b):
-        ctx = acquire_verify_slot(a, slots=1)
+        ctx = acquire_verify_slot(a, workspace_id=ws, slots=1, total_slots=1)
         got = await ctx.__aenter__()
         assert got is not None
         # The holder's process dies: the connection goes WITHOUT the context
         # manager ever unwinding.
         await a.close()
 
-        async with acquire_verify_slot(b, slots=1) as after:
+        async with acquire_verify_slot(b, workspace_id=ws, slots=1, total_slots=1) as after:
             assert after is not None, "a dead holder must not hold its slot forever"
             assert after.index == 0
 

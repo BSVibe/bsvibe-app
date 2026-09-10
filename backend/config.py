@@ -364,6 +364,16 @@ class Settings(BaseSettings):
     # real distribution.
     agent_max_run_tokens: int = 2_000_000
 
+    # The MACHINE's verification-stack bound (감사 §Ⅱ, 2026-09-10). Distinct
+    # from ``workspaces.verify_stack_slots``, which is a PLAN TIER: the tier
+    # says how many concurrent verifications a workspace's plan buys, this says
+    # how many stacks this box can hold before a full disk bricks it. They were
+    # one number, and a workspace raising its own tier therefore raised the
+    # concurrency of the whole machine. Default 1 preserves today's behaviour
+    # exactly (every prod workspace sits at 1); raise it only as far as the disk
+    # genuinely allows.
+    verify_stack_slots_total: int = 1
+
     # Capacity-aware dispatch (Lift E16). Backend must NOT dispatch onto a
     # worker stream when the worker is already at its in-flight cap — the
     # worker's poll loop skips polling while ``len(in_flight) >=

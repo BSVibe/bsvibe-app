@@ -290,12 +290,19 @@ async def open_run_check_environment(
 
     settings = get_settings()
     metadata = await _product_metadata(session, run.product_id) if run.product_id else {}
+    # Two axes: the workspace's plan tier and the machine's disk bound. Passing
+    # only the first is what let one tenant's tier become the whole box's limit.
     slots = await load_workspace_verify_slots(session, run.workspace_id)
     repo_files = await list_repo_files(box)
 
     async with (
         open_slot_session() as slot_session,
-        acquire_verify_slot(slot_session, slots=slots) as slot,
+        acquire_verify_slot(
+            slot_session,
+            workspace_id=run.workspace_id,
+            slots=slots,
+            total_slots=settings.verify_stack_slots_total,
+        ) as slot,
     ):
         async with open_check_environment(
             box=box,
