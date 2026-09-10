@@ -24,6 +24,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
+from backend.identity.default_account import set_default_model_account_if_unset
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.accounts.account_service import ensure_personal_account
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
@@ -147,6 +148,13 @@ async def _h_create(args: ModelAccountsCreateInput, ctx: ToolContext) -> Any:
         workspace_id=ctx.principal.workspace_id,
         account_id=account_id,
         payload=payload,
+    )
+    # 게이트 2 — first model account becomes the workspace default (parity with
+    # the REST create), so the founder's first run resolves.
+    await set_default_model_account_if_unset(
+        ctx.session,
+        workspace_id=ctx.principal.workspace_id,
+        model_account_id=created.id,
     )
     await ctx.session.commit()
     return _Envelope(_out_to_dict(created))
