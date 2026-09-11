@@ -10,10 +10,12 @@ sleeps gate the assertions.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -92,6 +94,11 @@ def _mock_transport(state: dict[str, Any]) -> httpx.MockTransport:
             return httpx.Response(200, json=tasks)
         if path == "/api/v1/workers/result":
             state.setdefault("results", []).append(json.loads(request.content))
+            # Default 200. A test that sets ``result_status`` makes the backend
+            # REFUSE the result hop — the shape the worker used to discard.
+            status_code = int(state.get("result_status", 200))
+            if status_code != 200:
+                return httpx.Response(status_code, text=str(state.get("result_body", "")))
             return httpx.Response(200, json={"status": "ok"})
         return httpx.Response(404)  # pragma: no cover
 
@@ -1422,3 +1429,221 @@ async def test_the_worker_does_not_clone_the_repo(monkeypatch: Any) -> None:
         "the CLI's cwd must stay an empty temp dir — it has no local file tools to use it with"
     )
     assert state["results"][0]["success"] is True
+
+
+# ── The result hop must not be silent (2026-09-11) ───────────────────────────
+#
+# MEASURED, prod: a client_attach run dispatched its in-place verify-gate
+# deriver task (``cd987b69``) to a host worker. The worker logged
+# ``task_received`` 16:33:15 and ``task_completed success=True`` 16:33:20 —
+# five seconds, a clean run. Hours later the DB row was STILL
+# ``status='dispatched'`` with ``output=''``. The backend waited its full 180s
+# verify budget and recorded ``gate_deriver_failed="deriver_error:
+# TimeoutError"``; the run settled ``review_ready`` with
+# ``proof_state='untested'``.
+#
+# The worker's three ``POST /api/v1/workers/result`` call sites never checked
+# the response — unlike ``register`` and the poll, which both
+# ``raise_for_status()``. So a 401 / 422 / 500 / proxy error on the result hop
+# was discarded and the very next line claimed success. The worker's own log
+# was the false witness.
+
+
+class _KwargCapturingLogger:
+    """Records ``(event, kwargs)`` for every log call, level-agnostic.
+
+    Same reason as :class:`_CapturingLogger` above — we capture the module
+    ``logger`` object rather than using ``structlog.testing.capture_logs``,
+    because a prior test in the full suite can globally configure structlog
+    (including ``cache_logger_on_first_use``) before this module's lazy proxy
+    is first bound, at which point the capture processor never sees the call.
+    """
+
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict[str, Any]]] = []
+
+    def _record(self, event: str, **kw: Any) -> None:
+        self.records.append((event, kw))
+
+    debug = _record
+    info = _record
+    warning = _record
+    error = _record
+    exception = _record
+
+    def events(self) -> list[str]:
+        return [e for e, _ in self.records]
+
+    def kwargs_for(self, event: str) -> dict[str, Any]:
+        for name, kw in self.records:
+            if name == event:
+                return kw
+        raise AssertionError(f"{event!r} was never logged; saw {self.events()}")
+
+
+async def _run_agent_turn(state: dict[str, Any]) -> None:
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(prompt="hello"),
+            executors={"claude_code": _StubExecutor()},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+
+
+async def _run_client_attach_missing_dir(state: dict[str, Any]) -> None:
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(
+                workspace_dir="/definitely/not/a/dir/on/this/host",
+                execution_target="client_attach",
+            ),
+            executors={"claude_code": _StubExecutor()},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+
+
+async def _run_exec_task(state: dict[str, Any]) -> None:
+    async with _client(state) as client:
+        await worker_main.handle_task(
+            _task(action="exec", prompt="true", workspace_dir=os.getcwd()),
+            executors={},
+            client=client,
+            headers={"X-Worker-Token": "WORKER-TOKEN"},
+            redis=None,
+        )
+
+
+#: The THREE result-reporting paths, by the public entry point that reaches
+#: them. Pinning the runners (not a grep for spellings) is what makes a fourth,
+#: unchecked path fail this file rather than slip past it.
+_RESULT_POSTING_PATHS = {
+    "agent_turn": _run_agent_turn,
+    "client_attach_missing_dir": _run_client_attach_missing_dir,
+    "exec_task": _run_exec_task,
+}
+
+
+@pytest.mark.parametrize("path_name", sorted(_RESULT_POSTING_PATHS))
+async def test_every_result_post_raises_when_the_backend_refuses_it(
+    path_name: str, monkeypatch: Any
+) -> None:
+    """ALL THREE result hops must FAIL LOUDLY on a non-2xx, never discard it.
+
+    ``run_once``'s ``_run`` wrapper already catches ``Exception`` and logs
+    ``task_execution_error``, so raising here keeps the poll loop alive and
+    turns a silent lie into a visible failure.
+    """
+    cap = _KwargCapturingLogger()
+    monkeypatch.setattr(worker_main, "logger", cap)
+    state: dict[str, Any] = {"result_status": 500, "result_body": "boom"}
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await _RESULT_POSTING_PATHS[path_name](state)
+
+    kw = cap.kwargs_for("executor_result_post_rejected")
+    assert kw["status_code"] == 500
+    assert kw["task_id"]
+    assert "boom" in str(kw["body"])
+    assert "task_completed" not in cap.events(), (
+        "the worker must never claim success for a result the backend refused"
+    )
+
+
+@pytest.mark.parametrize("path_name", sorted(_RESULT_POSTING_PATHS))
+async def test_every_result_post_stays_silent_on_success(path_name: str, monkeypatch: Any) -> None:
+    """Control: the 2xx path is unchanged — the result lands, nothing is logged
+    as rejected. Without this, an implementation that always raised would pass
+    the sibling test."""
+    cap = _KwargCapturingLogger()
+    monkeypatch.setattr(worker_main, "logger", cap)
+    state: dict[str, Any] = {}
+
+    await _RESULT_POSTING_PATHS[path_name](state)
+
+    assert len(state["results"]) == 1
+    assert "executor_result_post_rejected" not in cap.events()
+
+
+def test_the_body_echoed_on_a_rejection_is_truncated() -> None:
+    """A refused result may come back with an entire HTML error page. Log a
+    bounded prefix — enough to identify the refusal, never an unbounded dump."""
+    assert worker_main._RESULT_ERROR_BODY_MAX <= 2000
+
+
+async def test_a_rejected_result_body_is_truncated_in_the_log(monkeypatch: Any) -> None:
+    cap = _KwargCapturingLogger()
+    monkeypatch.setattr(worker_main, "logger", cap)
+    state: dict[str, Any] = {"result_status": 502, "result_body": "x" * 50_000}
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await _run_agent_turn(state)
+
+    body = str(cap.kwargs_for("executor_result_post_rejected")["body"])
+    assert len(body) <= worker_main._RESULT_ERROR_BODY_MAX
+
+
+class _PostCallSites(ast.NodeVisitor):
+    """Collects ``(innermost enclosing function, first argument as source)`` for
+    EVERY ``*.post(...)`` call in the worker module.
+
+    Every POST, not only the ones naming the result path — a fourth result hop
+    could just as well spell its path through a constant, an f-string or a
+    variable, and a guard that enumerates spellings only proves what I managed
+    to imagine. The whole POST surface is small enough to pin outright.
+    """
+
+    def __init__(self) -> None:
+        self._stack: list[str] = []
+        self.sites: set[tuple[str, str]] = set()
+
+    def _enter(self, node: Any) -> None:
+        self._stack.append(str(node.name))
+        self.generic_visit(node)
+        self._stack.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+        self._enter(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+        self._enter(node)
+
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "post":
+            where = self._stack[-1] if self._stack else "<module>"
+            target = ast.unparse(node.args[0]) if node.args else "<no positional arg>"
+            self.sites.add((where, target))
+        self.generic_visit(node)
+
+
+#: The COMPLETE set of HTTP POSTs the worker module makes, as
+#: ``(function, first argument source)``. Exactly one function reports results,
+#: and it is the one that checks the response.
+_EXPECTED_POST_SITES = {
+    ("register", "'/api/v1/workers/register'"),
+    ("run_once", "'/api/v1/workers/heartbeat'"),
+    ("run_once", "'/api/v1/workers/poll'"),
+    ("_post_result", "_RESULT_PATH"),
+}
+
+
+def test_only_the_checked_helper_posts_a_result() -> None:
+    """Wire-cut pin: the SET of POST call sites, not a grep for spellings.
+
+    Add a fourth result hop — or move one of the three back inline — and a new
+    ``(function, path)`` pair appears here and this fails, whichever way the
+    path is spelled. The behavioural siblings above prove that the one
+    permitted reporter, :func:`_post_result`, checks the response.
+    """
+    source = Path(worker_main.__file__).read_text(encoding="utf-8")
+    visitor = _PostCallSites()
+    visitor.visit(ast.parse(source))
+    assert visitor.sites == _EXPECTED_POST_SITES, (
+        "the worker's POST surface changed; every task result must go through "
+        f"_post_result (which checks the response). Found {sorted(visitor.sites)}"
+    )
+    assert worker_main._RESULT_PATH == "/api/v1/workers/result"

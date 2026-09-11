@@ -31,10 +31,10 @@ import json
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.executors.db import ExecutorTaskRow, WorkerRow
@@ -111,6 +111,21 @@ class TaskTimeout(Exception):
       was starved and the safety-net read never got its turn.
     * ``last_status`` TERMINAL at raise time → the row was done and every read
       here missed it. That one is the alarming shape.
+
+    A fifth cell, added 2026-09-11 — the table above reads only THIS side of the
+    wire, so it had nowhere to put what prod actually did: ``last_status`` still
+    ``"dispatched"`` while the WORKER logged ``task_completed success=True``
+    (task ``cd987b69``, five seconds of work). "The worker never reported" was
+    wrong; the worker reported and the report never landed. The signal that
+    separates this from a worker that truly never reported is on the worker
+    side: ``executor_result_post_rejected`` (the worker's result POST came back
+    non-2xx). Before that log existed the worker discarded the response, so for
+    the one measured instance WHY the POST was refused is unknown — the backend
+    logs for that window have rotated away. Both cells look identical from here.
+
+    Whichever of the two it was, the awaiter now closes the row ``failed``
+    before raising (see :func:`_fail_orphaned_dispatched_row`): ``last_status``
+    remains the status OBSERVED, so the readings above are unchanged.
     """
 
     def __init__(
@@ -712,6 +727,98 @@ async def _read_status_isolated(
         return None
 
 
+async def _flip_dispatched_to_failed(
+    session: AsyncSession,
+    task_id: uuid.UUID,
+    *,
+    error_message: str,
+) -> bool:
+    """CONDITIONALLY close ``task_id`` ``failed``. True iff this call closed it.
+
+    ``WHERE status = 'dispatched'`` is the whole point: between the raise-path
+    status read and this UPDATE the worker's result may have landed, and
+    overwriting a genuine ``done`` row with ``failed`` + no output would destroy
+    the answer rather than record the loss.
+    """
+    # ``Session.execute`` is typed as returning ``Result``; an UPDATE always
+    # yields a ``CursorResult``, which is where ``rowcount`` lives.
+    result = cast(
+        "CursorResult[Any]",
+        await session.execute(
+            update(ExecutorTaskRow)
+            .where(ExecutorTaskRow.id == task_id, ExecutorTaskRow.status == "dispatched")
+            .values(status="failed", error_message=error_message)
+        ),
+    )
+    return bool(result.rowcount)
+
+
+async def _fail_orphaned_dispatched_row(
+    task_id: uuid.UUID,
+    *,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    timeout_s: float,
+) -> bool:
+    """Best-effort: close a still-``dispatched`` row on the timeout path.
+
+    Until 2026-09-11 nothing ever moved an executor task OUT of ``dispatched``:
+    ``grep '\\.status = '`` across the backend finds exactly two writes — this
+    module's :func:`dispatch_task` and :func:`record_result`. The
+    :class:`~backend.dispatch.adapter.ExecutorAdapter` timeout path only
+    :func:`cancel_task`s the worker's subprocess, so a timed-out row stayed
+    ``dispatched`` forever and read, to everything downstream, as a task still
+    in flight. Prod carried 147 such orphans since June.
+
+    The rest of the design already assumed this flip existed: ``record_result``
+    refuses a row whose ``status != "dispatched"``, and the worker's cancel
+    branch explains that it skips its result POST because "a late ``failed``
+    POST would clobber a row it may have already terminal-flipped".
+
+    Same short-session discipline as :func:`_read_terminal_isolated`: with a
+    ``session_factory`` the UPDATE runs (and commits) in its OWN session opened
+    and closed here, so a caller parked mid-drive needs no spare pooled
+    connection — holding one across a long executor turn is what exhausted the
+    pool in the live outage. Without a factory it FLUSHES on the bound session
+    and leaves the commit to the caller's unit of work, which owns that
+    transaction boundary.
+
+    Best-effort by contract: any failure is logged and swallowed, because the
+    caller's contract is :class:`TaskTimeout` and a flip that cannot happen must
+    not replace it with something else.
+    """
+    error_message = (
+        f"no worker result arrived within {timeout_s:g}s; "
+        "the awaiting backend gave up and closed this task"
+    )
+    try:
+        if session_factory is not None:
+            async with session_factory() as short:
+                flipped = await _flip_dispatched_to_failed(
+                    short, task_id, error_message=error_message
+                )
+                await short.commit()
+        else:
+            flipped = await _flip_dispatched_to_failed(
+                session, task_id, error_message=error_message
+            )
+            await session.flush()
+    except Exception:  # noqa: BLE001 — the TaskTimeout is the contract, not this
+        logger.warning(
+            "executor_timeout_flip_failed",
+            task_id=str(task_id),
+            exc_info=True,
+        )
+        return False
+    if flipped:
+        logger.warning(
+            "executor_task_timed_out_unreported",
+            task_id=str(task_id),
+            timeout_s=timeout_s,
+        )
+    return flipped
+
+
 async def await_completion(
     redis: _RedisDispatch,
     *,
@@ -802,6 +909,14 @@ async def await_completion(
         task_id, session=session, session_factory=session_factory
     )
     elapsed_s = asyncio.get_event_loop().time() - started
+    if last_status == "dispatched":
+        # Nothing else ever moves a row out of ``dispatched`` — the adapter's
+        # timeout path only cancels the worker's subprocess. Close it here so it
+        # stops reading as a task still in flight. Conditional + best-effort;
+        # ``last_status`` below stays what we OBSERVED.
+        await _fail_orphaned_dispatched_row(
+            task_id, session=session, session_factory=session_factory, timeout_s=timeout_s
+        )
     seen = f"last status {last_status!r}" if last_status is not None else "row not visible"
     raise TaskTimeout(
         f"executor task {task_id} did not complete within {timeout_s}s "
