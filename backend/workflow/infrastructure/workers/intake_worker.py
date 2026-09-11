@@ -222,6 +222,7 @@ class IntakeWorker(BaseWorker):
                     await emit_notification(
                         session,
                         workspace_id=trig.workspace_id,
+                        product_id=trig.product_id,
                         event="triggered",
                         dedupe_key=f"triggered:{request_id}",
                         payload={

@@ -150,6 +150,7 @@ async def _emit_needs_you(session: AsyncSession, run: ExecutionRun, decision: De
     await emit_notification(
         session,
         workspace_id=run.workspace_id,
+        product_id=run.product_id,
         event="needs_you",
         dedupe_key=f"needs_you:{decision.id}",
         payload={

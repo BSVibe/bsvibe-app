@@ -416,6 +416,7 @@ async def write_verified_deliverable(
     await emit_notification(
         session,
         workspace_id=run.workspace_id,
+        product_id=run.product_id,
         event="shipped",
         dedupe_key=f"shipped:{deliverable.id}",
         payload={
