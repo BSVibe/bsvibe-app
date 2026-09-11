@@ -169,9 +169,16 @@ async def _ensure_workspace(session: AsyncSession, workspace_id: uuid.UUID) -> N
 async def _seed_verified_deliverable(session: AsyncSession, workspace_id: uuid.UUID) -> uuid.UUID:
     """Seed a Safe-Mode ON workspace + a verified Deliverable + its DeliveryEvent."""
     await _ensure_workspace(session, workspace_id)
+    # Attach the run to the workspace's product — connector targets are scoped
+    # by the Product × ConnectorAccount binding, so a product-less run resolves
+    # no targets (deliberately: "unknown product" must not mean "every target").
+    product_id = await session.scalar(
+        select(ProductRow.id).where(ProductRow.workspace_id == workspace_id)
+    )
     run = ExecutionRun(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
+        product_id=product_id,
         status=RunStatus.REVIEW_READY,
         payload={"intent_text": "publish the spec"},
     )

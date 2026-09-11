@@ -48,6 +48,7 @@ async def _resolve_bindings(
     *,
     workspace_id: uuid.UUID,
     plugins_by_name: dict[str, PluginMeta],
+    product_id: uuid.UUID | None = None,
 ) -> list[_Binding]:
     """Active connector_accounts for the workspace that are deliverable targets.
 
@@ -63,6 +64,21 @@ async def _resolve_bindings(
     and got a raw duplicate of every deliverable. Rows failing any condition are
     skipped (a builder-less connector is the deliberate not-yet-wired seam; a
     binding-less one is simply not a delivery target the founder chose).
+
+    **Product-scoped.** The binding is a Product × ConnectorAccount pair, but this
+    used to read only its ``connector_account_id``: once a connector was bound for
+    ONE product it qualified for EVERY product in the workspace, so a sibling's
+    deliverable shipped into it. That is the same defect ``resolve_github_binding``
+    fixed for github in #681 — here for every other connector.
+
+    **A product with no binding resolves to NO targets, and that is deliberate.**
+    Notification channels fall back to the workspace's (#923) because losing an
+    alert is worse than one arriving on a shared channel. Delivery inverts it: an
+    artifact written to the wrong place is outward-facing and hard to take back.
+    The github path states the same rule — *"``None`` is the deliberate safe
+    outcome … beats writing to a repo the product does not own."* A deliverable
+    whose run names no product likewise ships nowhere: treating "unknown" as "all
+    targets" would make the most ambiguous deliverables the widest.
     """
     rows = (
         (
@@ -78,16 +94,23 @@ async def _resolve_bindings(
     )
     # The connector_accounts the founder EXPLICITLY bound as delivery targets
     # (a resource_bindings row). Only these are swept into deliverable delivery.
-    bound_account_ids: set[uuid.UUID] = set(
-        (
-            await session.execute(
-                select(ResourceBindingRow.connector_account_id).where(
-                    ResourceBindingRow.workspace_id == workspace_id
+    # Scoped to THIS product's bindings. ``product_id is None`` yields an empty
+    # set — no product, no targets — rather than every binding in the workspace.
+    bound_account_ids: set[uuid.UUID] = (
+        set(
+            (
+                await session.execute(
+                    select(ResourceBindingRow.connector_account_id).where(
+                        ResourceBindingRow.workspace_id == workspace_id,
+                        ResourceBindingRow.product_id == product_id,
+                    )
                 )
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
+        if product_id is not None
+        else set()
     )
     bindings: list[_Binding] = []
     for row in rows:
