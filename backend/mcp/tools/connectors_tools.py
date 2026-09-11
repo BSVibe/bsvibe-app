@@ -369,6 +369,63 @@ async def _h_import_now(args: ConnectorsImportNowInput, ctx: ToolContext) -> Any
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_connectors_webhook_register — wire telegram's inbound ingress
+# ---------------------------------------------------------------------------
+class ConnectorsWebhookRegisterInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connector_id: uuid.UUID
+
+
+class ConnectorsWebhookRegisterOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connector_id: str
+    registered: bool
+    pending_update_count: int = 0
+    last_error: str | None = None
+
+
+async def _telegram_client(ctx: ToolContext, bot_token: str) -> Any:
+    """The Bot API client, or a test-injected double from ``ctx.extras``."""
+    factory = getattr(ctx, "extras", {}).get("telegram_client_factory")
+    if factory is not None:
+        return factory(bot_token)
+    from plugin.telegram.client import TelegramClient  # noqa: PLC0415
+
+    return TelegramClient(bot_token)
+
+
+async def _h_webhook_register(args: ConnectorsWebhookRegisterInput, ctx: ToolContext) -> Any:
+    row = await _resolve_connector(ctx, args.connector_id)
+    if not row.is_active:
+        raise ToolError(f"connector not found: {args.connector_id}")
+    if row.connector != "telegram":
+        raise ToolError(
+            f"connector {row.connector!r} has no programmatic webhook registration — "
+            "configure its webhook in that provider's own console"
+        )
+    from backend.config import get_settings  # noqa: PLC0415
+    from backend.connectors.telegram_webhook import register_telegram_webhook  # noqa: PLC0415
+
+    cipher = CredentialCipher(_key_from_settings())
+    bot_token = cipher.decrypt(row.signing_secret_ciphertext)
+    try:
+        result = await register_telegram_webhook(
+            row,
+            telegram=await _telegram_client(ctx, bot_token),
+            public_base_url=get_settings().oauth_issuer,
+        )
+    except Exception as exc:  # noqa: BLE001 — surfaced to the caller verbatim
+        raise ToolError(f"telegram refused the webhook registration: {exc}") from None
+    await ctx.session.commit()
+    return ConnectorsWebhookRegisterOutput(
+        connector_id=str(args.connector_id),
+        registered=result.registered,
+        pending_update_count=result.pending_update_count,
+        last_error=result.last_error,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 # ── OAuth connect / GitHub-App setup (this branch) ──────────────────────
@@ -573,6 +630,25 @@ def register_connectors_tools(registry: ToolRegistry) -> None:
             handler=_h_set_delivery_config,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.connectors_set_delivery_config.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_webhook_register",
+            description=(
+                "Register (or re-register) a connector's inbound webhook with its "
+                "provider. Telegram only — it is the one connector whose ingress "
+                "the product can wire itself (Bot API setWebhook); the others are "
+                "configured in their own consoles. Also mints the webhook secret "
+                "when absent, so inbound updates actually verify. Returns what "
+                "the provider reports: whether a webhook is registered, how many "
+                "updates are pending, and the last delivery error if any."
+            ),
+            input_schema=ConnectorsWebhookRegisterInput,
+            output_schema=ConnectorsWebhookRegisterOutput,
+            handler=_h_webhook_register,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.connectors_webhook_register.invoked",
         )
     )
     registry.register(

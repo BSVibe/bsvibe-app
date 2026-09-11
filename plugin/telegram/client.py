@@ -103,6 +103,29 @@ class TelegramClient:
         except httpx.HTTPStatusError as exc:
             raise TelegramApiError(self._scrub(str(exc))) from None
 
+    def _ok_with_reason(self, resp: httpx.Response) -> dict[str, Any]:
+        """Like :meth:`_ok`, but keeps Telegram's ``description`` on a 4xx.
+
+        Telegram refuses a bad ``setWebhook`` with HTTP 400 AND a description
+        that names the cause ("bad webhook: invalid secret", "failed to resolve
+        host"). :meth:`_raise_for_status` fires first and replaces that with a
+        generic status error, which leaves an operator with "400" and nothing to
+        act on — for a registration call the reason IS the value. Same shape as
+        :meth:`_ack_result`, which already knows Telegram answers 400-with-body.
+        """
+        try:
+            body: dict[str, Any] = resp.json()
+        except ValueError:
+            body = {}
+        if body.get("ok", False):
+            return body
+        description = body.get("description")
+        if description:
+            raise TelegramApiError(self._scrub(str(description)))
+        # No usable body — fall back to the scrubbed transport/status error.
+        self._raise_for_status(resp)
+        raise TelegramApiError("unknown_error")
+
     def _ok(self, resp: httpx.Response) -> dict[str, Any]:
         """Raise on transport error, then on Telegram's ``ok:false`` body."""
         self._raise_for_status(resp)
@@ -186,6 +209,38 @@ class TelegramClient:
             payload["entities"] = entities
         resp = await self._post("editMessageText", payload)
         return self._ack_result("editMessageText", resp)
+
+    async def set_webhook(self, url: str, *, secret_token: str) -> dict[str, Any]:
+        """Tell Telegram where to deliver updates — 게이트 3 후속.
+
+        This client had send/answer/edit/delete and no way to say WHERE updates
+        should go, so nothing in the product ever registered an ingress. Asked
+        directly on 2026-09-11, prod's bot answered ``url_set: False`` with no
+        ``last_error_*`` fields at all: Telegram had never attempted a delivery.
+        Meanwhile outbound kept working, so approve/deny cards arrived and their
+        buttons did nothing.
+
+        ``secret_token`` comes back on every update in
+        ``X-Telegram-Bot-Api-Secret-Token`` and is what the resolver verifies. It
+        accepts only ``A-Za-z0-9_-`` — which is why a bot token (it contains
+        ``:``) can never serve as one. An ``ok:false`` RAISES rather than
+        returning: reporting "registered" over a webhook Telegram refused would
+        recreate exactly the silence this exists to end.
+        """
+        resp = await self._post("setWebhook", {"url": url, "secret_token": secret_token})
+        return self._ok_with_reason(resp)
+
+    async def get_webhook_info(self) -> dict[str, Any]:
+        """Telegram's own view of this bot's webhook.
+
+        ``url`` empty with NO ``last_error_*`` means "never registered"; a set
+        ``url`` with ``last_error_message`` means "registered but delivery is
+        failing". Different faults, different fixes — the product could surface
+        neither before this.
+        """
+        resp = await self._post("getWebhookInfo", {})
+        result: dict[str, Any] = self._ok(resp)["result"]
+        return result
 
     async def delete_message(self, chat_id: str | int, message_id: int) -> str | None:
         """Delete a message. Returns ``None`` on success, or the Telegram error
