@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from sqlalchemy import select
 
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.base import OutboundCapability, PluginMeta
@@ -100,7 +101,7 @@ async def _seed(session, **kw) -> uuid.UUID:
     return account_id
 
 
-async def _bind_resource(session, *, workspace_id: uuid.UUID, account_id: uuid.UUID) -> None:
+async def _bind_resource(session, *, workspace_id: uuid.UUID, account_id: uuid.UUID) -> uuid.UUID:
     """Add an explicit ResourceBinding making ``account_id`` a delivery target.
 
     ``ResourceBindingRow`` FKs to workspaces + products; seed those parents in FK
@@ -127,6 +128,22 @@ async def _bind_resource(session, *, workspace_id: uuid.UUID, account_id: uuid.U
             connector_account_id=account_id,
             resource_id="r1",
         )
+    )
+    # Returned so the caller can scope the resolver to the SAME product: a
+    # binding is a Product × ConnectorAccount pair, and resolving without the
+    # product is what let a sibling product's deliverable reach this target.
+    return product_id
+
+
+async def _product_of(session, workspace_id: uuid.UUID) -> uuid.UUID | None:
+    """The product ``_bind_resource`` created for this workspace.
+
+    Connector targets are scoped to a product now, so a resolution test must ask
+    on behalf of one — resolving without it is the very thing that let a sibling
+    product's deliverable reach a bound target.
+    """
+    return await session.scalar(
+        select(ProductRow.id).where(ProductRow.workspace_id == workspace_id)
     )
 
 
@@ -444,7 +461,10 @@ class TestResolution:
         async with memory_session() as s:
             await _seed(s, workspace_id=ws, connector="notion", delivery_config={})
             bindings = await _resolve_bindings(
-                s, workspace_id=ws, plugins_by_name={"notion": _meta("notion", with_outbound=True)}
+                s,
+                workspace_id=ws,
+                product_id=await _product_of(s, ws),
+                plugins_by_name={"notion": _meta("notion", with_outbound=True)},
             )
         assert bindings == []
 
@@ -453,7 +473,10 @@ class TestResolution:
         async with memory_session() as s:
             await _seed(s, workspace_id=ws, connector="slack", delivery_config={"x": 1})
             bindings = await _resolve_bindings(
-                s, workspace_id=ws, plugins_by_name={"slack": _meta("slack", with_outbound=False)}
+                s,
+                workspace_id=ws,
+                product_id=await _product_of(s, ws),
+                plugins_by_name={"slack": _meta("slack", with_outbound=False)},
             )
         assert bindings == []
 
@@ -464,7 +487,10 @@ class TestResolution:
         async with memory_session() as s:
             await _seed(s, workspace_id=ws, connector="github", delivery_config={"x": 1})
             bindings = await _resolve_bindings(
-                s, workspace_id=ws, plugins_by_name={"github": _meta("github", with_outbound=True)}
+                s,
+                workspace_id=ws,
+                product_id=await _product_of(s, ws),
+                plugins_by_name={"github": _meta("github", with_outbound=True)},
             )
         assert bindings == []
 
@@ -484,6 +510,7 @@ class TestResolution:
             bindings = await _resolve_bindings(
                 s,
                 workspace_id=ws,
+                product_id=await _product_of(s, ws),
                 plugins_by_name={"telegram": _meta("telegram", with_outbound=True)},
             )
         assert bindings == []
@@ -503,6 +530,7 @@ class TestResolution:
             bindings = await _resolve_bindings(
                 s,
                 workspace_id=ws,
+                product_id=await _product_of(s, ws),
                 plugins_by_name={"telegram": _meta("telegram", with_outbound=True)},
             )
         assert len(bindings) == 1
@@ -525,6 +553,7 @@ class TestResolution:
             bindings = await _resolve_bindings(
                 s,
                 workspace_id=ws,
+                product_id=await _product_of(s, ws),
                 plugins_by_name={
                     "notion": _meta("notion", with_outbound=True),
                     "telegram": _meta("telegram", with_outbound=True),
@@ -539,7 +568,10 @@ class TestResolution:
                 s, workspace_id=ws, connector="notion", delivery_config={"parent_page_id": "P"}
             )
             bindings = await _resolve_bindings(
-                s, workspace_id=ws, plugins_by_name={"notion": _meta("notion", with_outbound=True)}
+                s,
+                workspace_id=ws,
+                product_id=await _product_of(s, ws),
+                plugins_by_name={"notion": _meta("notion", with_outbound=True)},
             )
         assert len(bindings) == 1
         assert bindings[0].account.connector == "notion"
@@ -549,7 +581,10 @@ class TestResolution:
         async with memory_session() as s:
             await _seed(s, workspace_id=ws, connector="slack", delivery_config={"channel": "C1"})
             bindings = await _resolve_bindings(
-                s, workspace_id=ws, plugins_by_name={"slack": _meta("slack", with_outbound=True)}
+                s,
+                workspace_id=ws,
+                product_id=await _product_of(s, ws),
+                plugins_by_name={"slack": _meta("slack", with_outbound=True)},
             )
         assert len(bindings) == 1
         assert bindings[0].account.connector == "slack"
@@ -564,6 +599,7 @@ class TestResolution:
             bindings = await _resolve_bindings(
                 s,
                 workspace_id=ws,
+                product_id=await _product_of(s, ws),
                 plugins_by_name={"email-sender": _meta("email-sender", with_outbound=True)},
             )
         assert len(bindings) == 1
@@ -577,6 +613,7 @@ class TestResolution:
             bindings = await _resolve_bindings(
                 s,
                 workspace_id=ws,
+                product_id=await _product_of(s, ws),
                 plugins_by_name={"telegram": _meta("telegram", with_outbound=True)},
             )
         assert len(bindings) == 1
@@ -592,6 +629,7 @@ class TestResolution:
             bindings = await _resolve_bindings(
                 s,
                 workspace_id=ws,
+                product_id=await _product_of(s, ws),
                 plugins_by_name={"discord": _meta("discord", with_outbound=True)},
             )
         assert len(bindings) == 1
@@ -605,6 +643,7 @@ class TestResolution:
             bindings = await _resolve_bindings(
                 s,
                 workspace_id=ws,
+                product_id=await _product_of(s, ws),
                 plugins_by_name={"linear": _meta("linear", with_outbound=True)},
             )
         assert len(bindings) == 1
@@ -618,6 +657,7 @@ class TestResolution:
             bindings = await _resolve_bindings(
                 s,
                 workspace_id=ws,
+                product_id=await _product_of(s, ws),
                 plugins_by_name={"trello": _meta("trello", with_outbound=True)},
             )
         assert len(bindings) == 1
@@ -631,6 +671,7 @@ class TestResolution:
             bindings = await _resolve_bindings(
                 s,
                 workspace_id=ws,
+                product_id=await _product_of(s, ws),
                 plugins_by_name={"sentry": _meta("sentry", with_outbound=True)},
             )
         assert len(bindings) == 1

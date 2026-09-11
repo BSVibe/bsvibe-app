@@ -71,10 +71,20 @@ def cipher() -> CredentialCipher:
 
 
 async def _seed_verified_deliverable(session: AsyncSession, workspace_id: uuid.UUID) -> uuid.UUID:
-    """Seed a verified ExecutionRun + Deliverable + DeliveryEventRow."""
+    """Seed a verified ExecutionRun + Deliverable + DeliveryEventRow.
+
+    The run is attached to the workspace's product — the shape a real delivered
+    run has, and the one connector targets are now scoped by: a binding is a
+    Product × ConnectorAccount pair, so a product-less run resolves no targets
+    (deliberately: "unknown product" must not mean "every target").
+    """
+    product_id = await session.scalar(
+        select(ProductRow.id).where(ProductRow.workspace_id == workspace_id)
+    )
     run = ExecutionRun(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
+        product_id=product_id,
         status=RunStatus.REVIEW_READY,
         payload={"intent_text": "publish the spec"},
     )

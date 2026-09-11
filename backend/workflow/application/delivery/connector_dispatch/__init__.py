@@ -202,11 +202,6 @@ class ConnectorDeliveryAdapter:
             deliverable = await session.get(Deliverable, deliverable_id)
             content = dict(deliverable.payload) if deliverable is not None else {}
             run_id = deliverable.run_id if deliverable is not None else None
-            bindings = await _resolve_bindings(
-                session,
-                workspace_id=workspace_id,
-                plugins_by_name=self.plugins_by_name,
-            )
             # The deliverable's run names the product, and the product decides
             # WHICH github repo this delivery may push to (#681). Resolving
             # workspace-wide let a multi-product workspace open the PR on a
@@ -218,6 +213,16 @@ class ConnectorDeliveryAdapter:
                 )
                 if run_id is not None
                 else None
+            )
+            # Connector targets are scoped to the SAME product, for the same
+            # reason github is: a binding is a Product × ConnectorAccount pair,
+            # and reading only the account let a sibling product's deliverable
+            # ship into it.
+            bindings = await _resolve_bindings(
+                session,
+                workspace_id=workspace_id,
+                plugins_by_name=self.plugins_by_name,
+                product_id=product_id,
             )
             github_binding = await resolve_github_binding(
                 session, workspace_id=workspace_id, product_id=product_id
