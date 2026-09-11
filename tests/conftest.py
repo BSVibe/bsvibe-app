@@ -72,3 +72,22 @@ def _reset_live_event_bus_singleton() -> Iterator[None]:
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_oauth_rate_limit_buckets() -> Iterator[None]:
+    """Clear the process-wide OAuth abuse-limit buckets between tests.
+
+    The limiters in :mod:`backend.api.oauth` are module-level sliding-window
+    counters — deliberately so (per-process, in-memory, no Redis in v1), which
+    means they are shared by every test in the session. Without this, a module
+    that drives ``/token`` or ``/device_authorization`` enough times leaves a
+    full bucket behind and the NEXT module's first honest request answers 429
+    for a reason that has nothing to do with what it is testing.
+    """
+    # Lazy import: not every test needs the OAuth module loaded.
+    from backend.api.oauth import _reset_oauth_rate_limits_for_tests
+
+    _reset_oauth_rate_limits_for_tests()
+    yield
+    _reset_oauth_rate_limits_for_tests()

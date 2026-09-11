@@ -248,12 +248,12 @@ async def test_mcp_no_slash_preserves_query_string(
 
 @pytest.fixture(autouse=True)
 def _reset_anon_dcr_buckets():
-    """Clear the in-process anonymous-DCR rate-limit table between tests."""
-    from backend.api import oauth as oauth_mod
+    """Clear the in-process OAuth rate-limit tables between tests."""
+    from backend.api.oauth import _reset_oauth_rate_limits_for_tests
 
-    oauth_mod._anon_dcr_buckets.clear()
+    _reset_oauth_rate_limits_for_tests()
     yield
-    oauth_mod._anon_dcr_buckets.clear()
+    _reset_oauth_rate_limits_for_tests()
 
 
 async def test_anon_register_loopback_succeeds(client: httpx.AsyncClient) -> None:
