@@ -388,6 +388,45 @@ main.login {
   text-align: center;
 }
 
+/* The /device consent screen's unverified-caller block. Styled as evidence,
+   NOT as a name: a caption, then the raw string in mono inside a bordered
+   box, so nothing here can be mistaken for a title the server vouched for. */
+.device-consent__unverified {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--hair);
+  border-left: 3px solid #b3261e;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+}
+
+:root[data-theme="dark"] .device-consent__unverified {
+  border-left-color: #f2b8b5;
+}
+
+.device-consent__claimed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+}
+
+.device-consent__claimed-label {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+
+.device-consent__claimed-id {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.84rem;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
 /* ── Shell ──────────────────────────────────────────────────────────────── */
 
 .auth-splash {

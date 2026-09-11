@@ -93,10 +93,18 @@ export async function postOAuthAuthorize(
  *  Deliberately carries NO `device_code`: the browser half of this flow must
  *  never be able to complete the device half. */
 export interface DeviceRequest {
+  /** EXACTLY what the device supplied. The grant accepts it unvalidated by
+   *  design, so this is a claim, not a name — check `client_verified` before
+   *  presenting it as an identity. */
   client_id: string;
   scope: string[];
   status: "pending" | "approved" | "denied" | "expired" | "consumed";
   expires_at: string;
+  /** `true` when the server resolved `client_id` to an identity it knows (a
+   *  live registration, or the first-party allow-list). */
+  client_verified: boolean;
+  /** The resolved display name — present only when `client_verified`. */
+  client_label: string | null;
 }
 
 export interface DeviceDecision {

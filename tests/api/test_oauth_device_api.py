@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -32,8 +33,11 @@ from backend.api.deps import (
 from backend.api.main import create_app
 from backend.config import get_settings
 from backend.identity.db import UserRow
+from backend.identity.oauth_clients_service import FIRST_PARTY_DEVICE_CLIENTS
+from backend.identity.oauth_db import OAuthClientRow
 from backend.identity.oauth_keys import reset_signing_key_for_tests
 from backend.identity.workspaces_db import WorkspaceRow
+from backend.shared.oauth_client_ids import DEVICE_CLIENT_ID
 
 from .._support import db_engine, fake_current_user
 
@@ -246,3 +250,104 @@ async def test_metadata_advertises_the_device_grant(client) -> None:
     body = (await client.get("/.well-known/oauth-authorization-server")).json()
     assert "urn:ietf:params:oauth:grant-type:device_code" in body["grant_types_supported"]
     assert body["device_authorization_endpoint"].endswith("/api/oauth/device_authorization")
+
+
+# ---------------------------------------------------------------------------
+# Consent-screen identity — the string a device supplies is not a name
+# ---------------------------------------------------------------------------
+# ``client_id`` on this grant is caller-supplied and nothing verifies it, and
+# that is deliberate: RFC 8628 is a PUBLIC-client flow whose security rests on
+# the human approving a short code, not on client identity (see
+# ``backend.shared.oauth_client_ids.DEVICE_CLIENT_ID``). What the lookup owes
+# the consent screen, then, is whether the string it is about to render
+# resolves to an identity this server knows — or is merely what the caller
+# typed. Showing an unverified string as "Allow <x> to sign in?" IS the
+# device-code phishing attack.
+
+
+async def _start_as(client: httpx.AsyncClient, client_id: str) -> dict[str, Any]:
+    r = await client.post(
+        "/api/oauth/device_authorization",
+        data={"client_id": client_id, "scope": "mcp:read"},
+    )
+    assert r.status_code == 200, r.text
+    return dict(r.json())
+
+
+async def _lookup(client: httpx.AsyncClient, user_code: str) -> dict[str, Any]:
+    r = await client.get(f"/api/v1/oauth/device?user_code={user_code}")
+    assert r.status_code == 200, r.text
+    return dict(r.json())
+
+
+async def test_lookup_marks_a_registered_client_verified_with_its_name(
+    client, db, workspace_id
+) -> None:
+    """A DCR-registered client has a name THIS server issued — show that one."""
+    async with db() as s:
+        s.add(
+            OAuthClientRow(
+                workspace_id=workspace_id,
+                client_id="dcr-registered-tool",
+                client_name="Registered Tool",
+                redirect_uris=["http://127.0.0.1:0/"],
+                allowed_scopes=["mcp:read"],
+            )
+        )
+        await s.commit()
+
+    started = await _start_as(client, "dcr-registered-tool")
+    body = await _lookup(client, started["user_code"])
+
+    assert body["client_verified"] is True
+    assert body["client_label"] == "Registered Tool"
+    assert body["client_id"] == "dcr-registered-tool"
+
+
+async def test_lookup_marks_the_first_party_cli_verified(client) -> None:
+    """``bsvibe-cli`` is the real first-party client and is NOT registered.
+
+    Prod carries no ``oauth_clients`` row for it by design (the grant needs no
+    registration step), so the allow-list is the only thing that can vouch.
+    """
+    started = await _start_as(client, DEVICE_CLIENT_ID)
+    body = await _lookup(client, started["user_code"])
+
+    assert body["client_verified"] is True
+    assert body["client_label"] == FIRST_PARTY_DEVICE_CLIENTS[DEVICE_CLIENT_ID]
+    assert body["client_id"] == DEVICE_CLIENT_ID
+
+
+async def test_lookup_refuses_to_vouch_for_an_arbitrary_client_id(client) -> None:
+    """The phishing string. Unverified, unnamed — but still disclosed."""
+    attacker = "BSVibe Official Setup"
+    started = await _start_as(client, attacker)
+    body = await _lookup(client, started["user_code"])
+
+    assert body["client_verified"] is False
+    assert body["client_label"] is None
+    # Still returned — the human needs to see what the caller claimed, just not
+    # dressed up as an identity this server stands behind.
+    assert body["client_id"] == attacker
+
+
+async def test_lookup_does_not_vouch_for_a_revoked_client(client, db, workspace_id) -> None:
+    """A revoked registration is not an identity this server still stands behind."""
+    async with db() as s:
+        s.add(
+            OAuthClientRow(
+                workspace_id=workspace_id,
+                client_id="dcr-revoked-tool",
+                client_name="Revoked Tool",
+                redirect_uris=["http://127.0.0.1:0/"],
+                allowed_scopes=["mcp:read"],
+                revoked_at=datetime.now(UTC),
+            )
+        )
+        await s.commit()
+
+    started = await _start_as(client, "dcr-revoked-tool")
+    body = await _lookup(client, started["user_code"])
+
+    assert body["client_verified"] is False
+    assert body["client_label"] is None

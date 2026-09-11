@@ -438,3 +438,26 @@ ignore_imports = [
     "backend.mcp.tools.checkpoint_tools -> backend.workflow.application.checkpoint_resolution",
 ]
 
+
+[[tool.importlinter.contracts]]
+# The authorization server does not depend on its own clients.
+#
+# Identity answers "who is this client, and do I vouch for it?". The worker
+# CLI (``backend.executors.worker.login``) is one of the callers asking. The
+# arrow only runs one way — and there was nothing stopping the reverse: a
+# first attempt at the device-consent fix imported ``DEVICE_CLIENT_ID``
+# straight from the CLI's login module, which type-checked, passed every
+# contract here, and dragged ``click`` plus ~320 modules of command-line
+# surface into the production API import path (``backend.api.oauth`` imports
+# ``oauth_clients_service``). ``lint-imports`` could not have caught it:
+# ``backend.identity`` was not a source module in ANY contract, so a green
+# run was structurally guaranteed rather than earned.
+#
+# The shared literal now lives in ``backend.shared.oauth_client_ids`` — a
+# common leaf both sides may import, already guarded by the "common leaves do
+# not import bounded contexts" contract above. This one makes the reverse
+# direction fail loudly instead of silently.
+name = "Identity does not depend on Executors (the server does not import its clients)"
+type = "forbidden"
+source_modules = ["backend.identity"]
+forbidden_modules = ["backend.executors"]

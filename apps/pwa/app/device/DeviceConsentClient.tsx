@@ -154,9 +154,29 @@ export function DeviceConsentClient() {
   }
 
   const busy = submitting !== null;
+  // `client_id` is whatever the device typed into the form — this grant takes
+  // it unvalidated on purpose (no registration step; the security is the short
+  // code plus this human). So only a label the SERVER resolved may be worn as
+  // an identity. Otherwise the title asserts nothing and the claimed string is
+  // shown for what it is: the caller's own word.
+  const vouchedName = request.client_verified ? request.client_label : null;
   return (
-    <Shell title={t("confirmTitle", { clientId: request.client_id })}>
+    <Shell
+      title={
+        vouchedName ? t("confirmTitle", { clientLabel: vouchedName }) : t("confirmTitleUnverified")
+      }
+    >
       <p className="login__subtitle">{t("confirmBody")}</p>
+
+      {!vouchedName && (
+        <section className="device-consent__unverified">
+          <p className="device-consent__claimed">
+            <span className="device-consent__claimed-label">{t("unverifiedClientLabel")}</span>
+            <code className="device-consent__claimed-id">{request.client_id}</code>
+          </p>
+          <p className="login__error">{t("unverifiedWarning")}</p>
+        </section>
+      )}
 
       <section className="oauth-consent__scopes" aria-label={t("scopesLabel")}>
         <h2 className="oauth-consent__scopes-title">{t("scopesHeading")}</h2>
