@@ -66,7 +66,40 @@ describe("message catalogues parse", () => {
   it("en and ko expose exactly the same keys", () => {
     const enKeys = leafKeys(en as Messages).sort();
     const koKeys = leafKeys(ko as Messages).sort();
+    // A set-difference assertion passes trivially against two empty
+    // catalogues, so pin that there is actually something to compare.
+    expect(enKeys.length).toBeGreaterThan(100);
+    expect(koKeys.length).toBe(enKeys.length);
     expect(koKeys.filter((k) => !enKeys.includes(k))).toEqual([]);
     expect(enKeys.filter((k) => !koKeys.includes(k))).toEqual([]);
+  });
+
+  /**
+   * The device-consent security copy specifically.
+   *
+   * A locale missing the unverified-warning keys does not crash — next-intl
+   * renders the key path — so the Korean founder would be shown
+   * `deviceConsent.unverifiedWarning` exactly where the warning belongs. The
+   * parity test above would catch a wholly absent key; this names the ones
+   * the phishing defence rests on so a future rename cannot quietly drop the
+   * warning from one side while both catalogues stay "in parity".
+   */
+  it("carries the device-consent unverified-client copy in both locales", () => {
+    const required = [
+      "deviceConsent.confirmTitle",
+      "deviceConsent.confirmTitleUnverified",
+      "deviceConsent.unverifiedClientLabel",
+      "deviceConsent.unverifiedWarning",
+    ];
+    for (const [locale, messages] of [
+      ["en", en as Messages],
+      ["ko", ko as Messages],
+    ] as const) {
+      const keys = leafKeys(messages);
+      expect(
+        required.filter((k) => !keys.includes(k)),
+        locale,
+      ).toEqual([]);
+    }
   });
 });

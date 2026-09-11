@@ -60,6 +60,7 @@ from backend.identity.oauth_clients_service import (
     list_clients_for_workspace,
     lookup_client_by_client_id,
     register_client,
+    resolve_client_identity,
     revoke_client,
 )
 from backend.identity.oauth_db import OAuthAccessTokenRow, OAuthClientRow
@@ -990,10 +991,20 @@ class DeviceLookupResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    #: EXACTLY what the caller supplied at ``/device_authorization``. Nothing
+    #: validates it and nothing should (the grant is registration-free by
+    #: design), so the UI must never render it as an identity on its own —
+    #: read ``client_verified`` first.
     client_id: str
     scope: list[str]
     status: str
     expires_at: datetime
+    #: ``True`` when ``client_id`` resolves to an identity this server knows:
+    #: a live ``oauth_clients`` registration, or the first-party allow-list.
+    client_verified: bool = False
+    #: The resolved display name, present only when ``client_verified``.
+    #: ``None`` means "this server will not put a name to that string".
+    client_label: str | None = None
 
 
 @v1_router.get("/device", response_model=DeviceLookupResponse)
@@ -1001,7 +1012,13 @@ async def device_lookup(
     user_code: str,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> DeviceLookupResponse:
-    """Resolve a typed user code so the consent screen can describe the request."""
+    """Resolve a typed user code so the consent screen can describe the request.
+
+    The stored ``client_id`` is a string the device chose; this grant accepts it
+    unvalidated on purpose. So the answer also carries whether that string
+    resolves to a KNOWN identity — otherwise the consent screen has no way to
+    avoid presenting an attacker's chosen name as the thing being trusted.
+    """
     row = await lookup_device_code_by_user_code(session, user_code=user_code)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown code")
@@ -1015,11 +1032,14 @@ async def device_lookup(
         state = "expired"
     else:
         state = "pending"
+    identity = await resolve_client_identity(session, client_id=row.client_id)
     return DeviceLookupResponse(
         client_id=row.client_id,
         scope=list(row.scope),
         status=state,
         expires_at=row.expires_at,
+        client_verified=identity.verified,
+        client_label=identity.label,
     )
 
 

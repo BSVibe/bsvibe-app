@@ -55,6 +55,16 @@ const PENDING = {
   scope: ["mcp:read", "mcp:write", "mcp:admin"],
   status: "pending" as const,
   expires_at: new Date(Date.now() + 600_000).toISOString(),
+  client_verified: true,
+  client_label: "Registered Tool",
+};
+
+/** The phishing shape: a caller-chosen string nothing on the server verified. */
+const UNVERIFIED = {
+  ...PENDING,
+  client_id: "BSVibe Official Setup",
+  client_verified: false,
+  client_label: null,
 };
 
 describe("/device — device authorization consent", () => {
@@ -142,6 +152,52 @@ describe("/device — device authorization consent", () => {
     render(<DeviceConsentClient />);
 
     expect(await screen.findByText(/didn.t match|not found|no request/i)).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------
+  // Who is asking — and whether this server will vouch for that answer
+  // -------------------------------------------------------------------
+  // `client_id` is chosen by whoever opened the request; the device grant
+  // accepts it unvalidated by design. So an attacker can open one as
+  // "BSVibe Official Setup" and phone the founder with the code. Rendering
+  // that string as the title's identity is what makes the call work.
+
+  it("never renders an unverified client_id as the identity being trusted", async () => {
+    searchParams = new URLSearchParams("user_code=WXYZ-2345");
+    getDeviceRequest.mockResolvedValue(UNVERIFIED);
+
+    render(<DeviceConsentClient />);
+
+    const heading = await screen.findByRole("heading", { level: 1 });
+    expect(heading.textContent).not.toContain("BSVibe Official Setup");
+    expect(heading).toHaveTextContent(/approve this sign-in request/i);
+  });
+
+  it("marks the unverified string as self-reported and warns before approving", async () => {
+    searchParams = new URLSearchParams("user_code=WXYZ-2345");
+    getDeviceRequest.mockResolvedValue(UNVERIFIED);
+
+    render(<DeviceConsentClient />);
+
+    // Still disclosed — the human must see what was claimed...
+    const claimed = await screen.findByText("BSVibe Official Setup");
+    expect(claimed).toBeInTheDocument();
+    // ...labelled as the caller's own unverified claim, with the one
+    // instruction that actually defeats the attack.
+    expect(screen.getByText(/not verified/i)).toBeInTheDocument();
+    expect(screen.getByText(/only if you started this sign-in yourself/i)).toBeInTheDocument();
+  });
+
+  it("names a verified client by its resolved label, not the raw client_id", async () => {
+    searchParams = new URLSearchParams("user_code=WXYZ-2345");
+
+    render(<DeviceConsentClient />);
+
+    const heading = await screen.findByRole("heading", { level: 1 });
+    expect(heading).toHaveTextContent(/allow registered tool to sign in/i);
+    expect(heading.textContent).not.toContain("dcr-device-cli");
+    // No scare copy on a request this server DOES vouch for.
+    expect(screen.queryByText(/not verified/i)).not.toBeInTheDocument();
   });
 
   it("bounces a signed-out visitor to login and back", async () => {
