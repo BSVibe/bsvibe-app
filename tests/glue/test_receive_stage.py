@@ -167,7 +167,7 @@ async def test_receive_resolves_binding_and_populates_routing_hints(sf: Any) -> 
             connector_account_id=account_id,
             resource_id="bsvibe/bsvibe-site",
             selection={"labels": ["bug"], "artifact_type": "code"},
-            trigger={"enabled": True, "filters": {}},
+            trigger={"filters": {}},
         )
         await s.commit()
 
@@ -206,7 +206,7 @@ async def test_receive_applies_filter_pass(sf: Any) -> None:
             product_id=product_id,
             connector_account_id=account_id,
             resource_id="r",
-            trigger={"enabled": True, "filters": {"action": "opened"}},
+            trigger={"filters": {"action": "opened"}},
         )
         await s.commit()
 
@@ -237,7 +237,7 @@ async def test_receive_applies_filter_reject(sf: Any) -> None:
             product_id=product_id,
             connector_account_id=account_id,
             resource_id="r",
-            trigger={"enabled": True, "filters": {"action": "opened"}},
+            trigger={"filters": {"action": "opened"}},
         )
         await s.commit()
 
@@ -330,7 +330,6 @@ async def test_receive_filter_multi_key_must_all_match(sf: Any) -> None:
             connector_account_id=account_id,
             resource_id="r",
             trigger={
-                "enabled": True,
                 "filters": {"action": "opened", "github_event": "pull_request"},
             },
         )
@@ -382,7 +381,7 @@ async def test_intake_worker_creates_request_with_routing_hints(sf: Any) -> None
             connector_account_id=account_id,
             resource_id="repo-x",
             selection={"artifact_type": "page"},
-            trigger={"enabled": True, "filters": {"action": "opened"}},
+            trigger={"filters": {"action": "opened"}},
         )
         await s.commit()
 
@@ -429,7 +428,7 @@ async def test_intake_worker_skips_request_on_filter_reject(sf: Any) -> None:
             product_id=product_id,
             connector_account_id=account_id,
             resource_id="repo-x",
-            trigger={"enabled": True, "filters": {"action": "opened"}},
+            trigger={"filters": {"action": "opened"}},
         )
         await s.commit()
 

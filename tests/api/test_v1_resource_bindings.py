@@ -1,7 +1,7 @@
 """/api/v1/products/{product_id}/bindings — per-Product × Connector 3-knob CRUD.
 
 A Resource binding (Workflow §3) carries **selection**, **trigger
-{enabled, filters}**, and **output_mode {safe|direct}** for one Product against
+{filters}**, and **output_mode {safe|direct}** for one Product against
 one ConnectorAccount + a connector-side ``resource_id``.
 
 Workspace-scoped exactly like the parent product: a binding for a product in
@@ -93,7 +93,7 @@ async def test_create_binding_persists_and_lists(client_with_parents) -> None:
             "connector_account_id": str(conn_id),
             "resource_id": "bsvibe/bsvibe-site",
             "selection": {"labels": ["bug"]},
-            "trigger": {"enabled": True, "filters": {"branch": "main"}},
+            "trigger": {"filters": {"branch": "main"}},
             "output_mode": "direct",
         },
     )
@@ -103,7 +103,7 @@ async def test_create_binding_persists_and_lists(client_with_parents) -> None:
     assert created["connector_account_id"] == str(conn_id)
     assert created["resource_id"] == "bsvibe/bsvibe-site"
     assert created["selection"] == {"labels": ["bug"]}
-    assert created["trigger"] == {"enabled": True, "filters": {"branch": "main"}}
+    assert created["trigger"] == {"filters": {"branch": "main"}}
     assert created["output_mode"] == "direct"
 
     # Now listed.
@@ -114,7 +114,7 @@ async def test_create_binding_persists_and_lists(client_with_parents) -> None:
     assert rows[0]["id"] == created["id"]
 
 
-async def test_create_binding_defaults_safe_and_disabled(client_with_parents) -> None:
+async def test_create_binding_defaults_safe_with_no_filters(client_with_parents) -> None:
     c, _ws, product_id, conn_id = client_with_parents
     r = await c.post(
         f"/api/v1/products/{product_id}/bindings",
@@ -124,7 +124,7 @@ async def test_create_binding_defaults_safe_and_disabled(client_with_parents) ->
     body = r.json()
     # Spec defaults.
     assert body["output_mode"] == "safe"
-    assert body["trigger"] == {"enabled": False, "filters": {}}
+    assert body["trigger"] == {"filters": {}}
     assert body["selection"] == {}
 
 
@@ -188,14 +188,14 @@ async def test_update_binding_changes_knobs(client_with_parents) -> None:
         f"/api/v1/products/{product_id}/bindings/{binding_id}",
         json={
             "output_mode": "direct",
-            "trigger": {"enabled": True, "filters": {"k": "v"}},
+            "trigger": {"filters": {"k": "v"}},
             "selection": {"folder": "inbox"},
         },
     )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["output_mode"] == "direct"
-    assert body["trigger"] == {"enabled": True, "filters": {"k": "v"}}
+    assert body["trigger"] == {"filters": {"k": "v"}}
     assert body["selection"] == {"folder": "inbox"}
 
 
