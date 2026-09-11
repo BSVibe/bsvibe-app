@@ -10,11 +10,13 @@
 > R2 cutover 를 *"아직 local"* 이라 적었으나 prod 는 **`BSVIBE_PRODUCT_BUNDLE_BACKEND=s3`**
 > (컷오버 완료), launchd worker 를 **2대**라 적었으나 실제 **3대**다.
 >
-> 🔴 **이 파일과 `BSVibe_Roadmap.md`(2026-06-24) · `BSVibe_Reality_Audit_2026-07-14.md`
-> 는 실제 트랙보다 뒤처져 있다.** 최근 두 달의 실작업(신뢰 래칫 · 판정 축 재정의 ·
-> 구조 삭제 · 검증 게이트 정합성)은 **세션 인수인계 사슬**에만 있다.
-> **→ 현행 SoT: `internal-docs:BSVibe_Handoff_Prompt_2026-09-09-b.md` +
-> `docs/design/pipeline-removal-routing.md` §10~§24.**
+> 🔴 **낡은 백로그 문서 둘(`BSVibe_Roadmap.md` 2026-06-24 · `BSVibe_Reality_Audit_2026-07-14.md`)은
+> 2026-09-12 정리에서 삭제됐다** — `BSVibe/internal-docs` 이력에만 있다(커밋 `c9441f7`).
+> 둘 다 스스로 `🔴 STALE — 여기 적힌 항목을 근거로 작업을 시작하지 마라` 를 머리에 달고 있었다.
+> **→ 현행 SoT: 이 파일 + [`HANDOFF.md`](./HANDOFF.md) + [`audit/multiuser-readiness-2026-09-10.md`](./audit/multiuser-readiness-2026-09-10.md)
+> + [`design/pipeline-removal-routing.md`](./design/pipeline-removal-routing.md) §10~§24.**
+> **열린 작업은 문서가 아니라 [GitHub 이슈](https://github.com/BSVibe/bsvibe-app/issues)에 있다** —
+> 게이트별로 `gate-1`~`gate-4` · 리포 밖은 `founder-action` 라벨.
 >
 > ⚠️ **백로그 문서의 항목을 근거로 작업을 시작하지 마라 — 먼저 prod/코드로 다시 재라.**
 > 2026-08-26 스팟체크: Reality Audit 의 `3.5-1`(knowledge_search 항상 에러) 과
@@ -112,7 +114,7 @@
 
 ✅ **R2 번들 cutover 완료** (2026-08-18 실측): 프로덕션은 `BSVIBE_PRODUCT_BUNDLE_BACKEND=s3`,
 엔드포인트는 Cloudflare R2. 제품 번들이 앱 디스크 밖에 산다 = durable.
-절차 기록 = `BSVibe_Product_Bundle_R2_Cutover_Runbook.md`.
+절차 기록 = `internal-docs:BSVibe_Product_Bundle_R2_Cutover_Runbook.md` (실행 완료된 런북).
 > ⚠️ 이 항목은 2026-08-18 까지 *"미완, backend=local, 아직 durability 아님"* 으로 적혀 있었다.
 > **문서가 이미 해소된 위험을 경고하고 있었다** — 디스크 풀이 복구불능 브릭인 제품에서 특히 나쁜 종류의 어긋남.
 
@@ -309,7 +311,7 @@ worker 컨테이너 up, host launchd executor(2대: mac-mini-executor + worker-a
 | Notifier 배선 (파이프라인 주체이전 push→pull) | #593~#597 | ✅ 머지·배포 |
 | Executor 실행모델 실체화 + 세션릭 outage 수리 | #632/#633 | ✅ |
 | bootstrap private repo clone | #679/#682 | ✅ |
-| 로컬 제품 R2-bundle | #667~#672 | ⚠️ 코드 완성, **prod cutover 미실행** |
+| 로컬 제품 R2-bundle | #667~#672 | ✅ **cutover 완료** — `deploy/.env.prod` 가 `BSVIBE_PRODUCT_BUNDLE_BACKEND=s3` (2026-09-12 재확인) |
 | **client-attach 실행 모델** | #693~#701 | ✅ 머지 + E2E 실증 |
 | **in-place verify (정직한 PROVED)** | #702~#705, #716~#718 | ✅ 머지 + E2E 실증 |
 | **실행 모드 파리티** | #719~#721 | ✅ 머지 + E2E 실증 |
@@ -784,15 +786,26 @@ Proof Surface**. **✅ 이번 라운드 (§4.0, 2026-06-24):** 라스트마일 +
   - `docs/design/client-attach-execution.md` — client_attach 실행 모델 + in-place verify SoT.
   - `docs/design/execution-mode-parity.md` — 워크스페이스/플랫폼 툴 축 분리.
   - `docs/design/production-verification.md` — **다음 트랙.** 증명을 배포 너머로.
-- **미완 작업 (열려 있음)**:
-  - ~~`BSVibe_Product_Bundle_R2_Cutover_Runbook.md` — prod cutover 절차 (아직 `local`).~~
-    ✅ **컷오버 완료** (2026-08-26 실측: prod `BSVIBE_PRODUCT_BUNDLE_BACKEND=s3`, R2 엔드포인트).
-    ⚠️ 잔여: `/app/var/bundles` 에 14MB 가 남아 있고 최근 48h 업로드 로그 0 — 정리·동작 실증 미확인.
-  - `BSVibe_Local_Product_R2_Bundle_Plan.md` — 그 계획.
-  - `BSVibe_Product_Tick_MVP_Handoff.md` — product tick 트랙.
-  - `BSVibe_Reality_Audit_2026-07-14.md` — 전수 현실 감사 (미해결 항목 추적).
-  - `BSVibe_Chat_Executor_Parity_Audit_2026-07-14.md` — executor 3종 중 1종만 파리티 확보 상태.
-- **별도 프로젝트**: `BStockReport_Design.md` · `BStockReport_Progress.md` · `bloasis/` · `BStalk3r/`.
+- **미완 작업 → [GitHub 이슈](https://github.com/BSVibe/bsvibe-app/issues)** (2026-09-12 이관.
+  문서 안의 백로그 목록은 낡는다 — 실제로 이 목록의 R2 항목은 이미 완료된 것을 열린 것으로 적고 있었다):
+
+  | 이슈 | 내용 | 라벨 |
+  |---|---|---|
+  | [#928](https://github.com/BSVibe/bsvibe-app/issues/928) | 타임아웃 난 워커 턴의 토큰이 어디에도 계상되지 않는다 | `gate-4` |
+  | [#929](https://github.com/BSVibe/bsvibe-app/issues/929) | 수평확장 — `var/` 공유화 · 샌드박스 상태 외부화 · verify slot 워크스페이스 축 | `gate-4` |
+  | [#930](https://github.com/BSVibe/bsvibe-app/issues/930) | 게이트 1 후속 — 워크스페이스 토큰 예산 · 스케줄/웹훅 cap · 상한 튜닝 | `gate-1` |
+  | [#931](https://github.com/BSVibe/bsvibe-app/issues/931) | prod 고아 `dispatched` 146건 + 타임아웃 종결 경로 부재 | `bug` |
+  | [#932](https://github.com/BSVibe/bsvibe-app/issues/932) | `oauth` 표면 rate limit 부재 | `enhancement` |
+  | [#933](https://github.com/BSVibe/bsvibe-app/issues/933) | `needs_you` 알림에 인라인 액션 없음 (제품 결정 선행) | `question` |
+  | [#935](https://github.com/BSVibe/bsvibe-app/issues/935) | 키 로테이션 절차 부재 + `.env.prod` 시크릿 2개 로테이션 권고 | `gate-4` `founder-action` |
+  | [#936](https://github.com/BSVibe/bsvibe-app/issues/936) | `pipeline` 제거 + 라우팅 재설계 — 설계 완료, 코드 0 | `open-track` |
+  | [#937](https://github.com/BSVibe/bsvibe-app/issues/937) | 리포 밖 잔여 — healthchecks URL · 재부팅 테스트 · Supabase 가입 정책 | `founder-action` |
+  | [#938](https://github.com/BSVibe/bsvibe-app/issues/938) | Receive 스테이지 통합 여지 — 미착수 | `question` |
+  | [#939](https://github.com/BSVibe/bsvibe-app/issues/939) | **재측정 필요** — Chat/Executor 파리티 · Product Tick 트랙이 아직 열려 있는가 | `question` |
+
+  닫힘: [#934](https://github.com/BSVibe/bsvibe-app/issues/934) R2 cutover — 실측으로 이미 완료(`deploy/.env.prod` = `s3`).
+  ⚠️ 잔여 관측 하나는 남는다: `/app/var/bundles` 에 14MB + 최근 48h 업로드 로그 0 — #929 에서 같이 본다.
+- **별도 프로젝트**: `bloasis/` · `BStalk3r/` · BStockReport — 각자 레포 또는 `BSVibe/internal-docs`.
 
 **최근 archive (2026-08-10 — 정리 22건):** 소비된 handoff 5건(2026-07-14 · 07-23 · 08-06 · 08-07 ·
 BStockReport) · verify 재설계 시리즈 4건 · 출시 전 E2E/체크 3건 · 구현 완료 설계 4건(Executor Remote

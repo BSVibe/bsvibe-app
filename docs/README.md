@@ -11,6 +11,7 @@
 | **[STATUS.md](./STATUS.md)** | **Master Status SoT.** 전체 상태·아키텍처·구현 표·운영. 모든 세션은 여기서 시작한다. Living — in-place 갱신, 새 status 파일 만들지 말 것. |
 | **[HANDOFF.md](./HANDOFF.md)** | 가장 최근 세션 인수인계. **최신 1건만 유지** — 새 세션이 끝나면 이 파일을 덮어쓰고, 이전 판은 Notion 으로 옮긴다. |
 | **[audit/multiuser-readiness-2026-09-10.md](./audit/multiuser-readiness-2026-09-10.md)** | 다중 사용자 준비도 감사. 게이트 0~4 로드맵이 여기 있다. 열린 작업은 GitHub 이슈. |
+| **[이슈](https://github.com/BSVibe/bsvibe-app/issues)** | **열린 작업은 전부 여기.** 게이트별 `gate-1`~`gate-4` · 리포 밖은 `founder-action` · 설계 트랙은 `open-track`. 문서 안의 백로그 목록은 낡는다. |
 
 ## 계층
 
