@@ -12,6 +12,14 @@
 # Alerting needs no setup: GitHub emails the repo owner when a scheduled workflow
 # fails, and the run shows red in the Actions tab.
 #
+# It takes TWO readings and names the layer that broke (see
+# .github/scripts/offbox-probe.sh): a shallow ``/api/health`` for edge+tunnel+app,
+# and a deep ``/api/auth/login`` that also exercises the auth dependency. The
+# first version probed only ``/api/health``, which is settings-in-settings-out —
+# so when Supabase was paused on 2026-09-11 it answered 200 through the whole
+# outage. A watch that green-lights an app whose auth is dead converts an outage
+# into confidence.
+#
 # What this canNOT do, and why the push-based heartbeat is still worth adding:
 # this is POLL-IN monitoring. It sees "prod did not answer me", which cannot
 # distinguish a dead box from a broken network path, and a cache or tunnel quirk
@@ -42,46 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - name: Probe prod from off the box
         env:
-          HEALTH_URL: https://api.bsvibe.dev/api/health
-        run: |
-          set -uo pipefail
-
-          # ``/api/health`` is the app's OWN route and answers
-          # {"status":"ok","version":…,"git_sha":…}. Requiring 200 from THIS path
-          # is what makes the check able to fail: an earlier draft probed
-          # ``/api/v1/health`` — a path that does not exist — and accepted "any
-          # real HTTP response", so the 404 that Caddy or Cloudflare would return
-          # with the app completely gone read as "prod is up". A check that
-          # cannot go red measures nothing.
-          #
-          # NOTE: no ``|| echo 000`` here. curl -w already prints the code, so the
-          # fallback would CONCATENATE and yield "000000" — a string that matches
-          # no case below and silently passes. That bug has appeared twice in this
-          # repo's probes; ``${code:-000}`` is the correct empty-guard.
-          probe() {
-            local code
-            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$HEALTH_URL" 2>/dev/null)"
-            printf '%s' "${code:-000}"
-          }
-
-          first="$(probe)"
-          echo "probe 1: HTTP $first"
-          if [ "$first" = "200" ]; then
-            echo "prod is up — $(curl -s --max-time 20 "$HEALTH_URL")"
-            exit 0
-          fi
-
-          # One bad probe is not an outage: GitHub runners have their own network
-          # blips, and a deploy restarts the backend for a few seconds. Confirm
-          # before alerting so this stays a signal people still believe.
-          echo "first probe failed — re-checking in 30s before alerting"
-          sleep 30
-          second="$(probe)"
-          echo "probe 2: HTTP $second"
-          if [ "$second" != "200" ]; then
-            echo "::error::prod unhealthy from off-box: HTTP $first then $second ($HEALTH_URL)"
-            exit 1
-          fi
-          echo "prod recovered on the second probe (HTTP $second) — not alerting"
+          BASE_URL: https://api.bsvibe.dev
+        run: bash .github/scripts/offbox-probe.sh
