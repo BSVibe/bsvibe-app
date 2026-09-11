@@ -38,7 +38,7 @@ Response contract:
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, Path, Request, status
@@ -60,6 +60,10 @@ from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
 from backend.workflow.application.intake.webhook import WebhookReceiver
 from bsvibe_sdk import WebhookSignatureError
+
+if TYPE_CHECKING:  # pragma: no cover — annotation only, so this module keeps the
+    # narrow runtime import surface R2c guards (see the contract in pyproject).
+    from backend.connectors.db import ConnectorAccountRow
 
 logger = structlog.get_logger(__name__)
 
@@ -86,6 +90,91 @@ def _repo_slug(repo: str) -> str:
         if p
     ]
     return "/".join(parts[-2:]) if len(parts) >= 2 else s
+
+
+#: Where each connector's RESOURCE identifier lives in its parsed payload.
+#:
+#: ``resource_bindings.resource_id`` is documented as *"Connector-shaped opaque
+#: identifier … Free string — each connector defines its own grammar"*, and these
+#: are the grammars the parsers actually emit (measured 2026-09-11):
+#: telegram ``chat_id`` · discord ``channel_id`` · slack ``channel`` ·
+#: github ``repo``.
+#:
+#: Declared here rather than inferred because a WRONG guess binds a founder's
+#: message to the wrong product. A connector absent from this map resolves to
+#: "no product" — loudly, via the guard in
+#: ``tests/api/test_webhook_product_from_binding.py``, not silently in a chat.
+_RESOURCE_ID_KEYS: dict[str, str] = {
+    "telegram": "chat_id",
+    "discord": "channel_id",
+    "slack": "channel",
+    "github": "repo",
+    # A Sentry PROJECT is the unit a founder would bind to a product — the same
+    # granularity as a github repo or a chat channel. (Added because the guard
+    # test caught it missing: sentry can receive a webhook, so a founder could
+    # bind it and get silence.)
+    "sentry": "project",
+}
+
+
+def _resource_id_for(connector: str, payload: dict[str, Any]) -> str | None:
+    """This event's connector-side resource id, or ``None``.
+
+    Stringified because the wire types differ from what a founder types into a
+    binding: telegram sends ``chat_id`` as a JSON NUMBER while the binding holds
+    ``"8242700007"``. Comparing the raw types would never match — and would fail
+    the way this whole class of bug fails, by quietly resolving to no product.
+    """
+    key = _RESOURCE_ID_KEYS.get(connector)
+    if key is None:
+        return None
+    value = payload.get(key)
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+async def _product_id_from_binding(
+    session: AsyncSession,
+    *,
+    account: ConnectorAccountRow,
+    payload: dict[str, Any],
+) -> uuid.UUID | None:
+    """The product the founder bound to THIS connector account + resource.
+
+    The call site the ``(connector_account_id, resource_id)`` index was built for
+    — its own docstring says *"what Receive (B10b) will use to resolve an inbound
+    webhook → binding → Product"* — and which had no caller until now. Prod
+    already held the data (``BStockReport × telegram`` keyed on the founder's
+    chat id) and nothing read it, so every chat message opened a run with no
+    product: no repo to clone, "running unbound in an empty workspace".
+
+    Keyed on the ACCOUNT the webhook token already resolved, so two workspaces
+    binding the same channel string cannot reach each other's product.
+
+    A miss is the normal state (a fresh connector, or a chat nobody bound) and
+    yields ``None`` — never a guess. Picking "the workspace's only product" would
+    work today and mis-route the moment there are two, which is exactly how this
+    gap stayed invisible while there was one.
+    """
+    from backend.identity.infrastructure.repositories.resource_binding_repository_sql import (  # noqa: PLC0415, E501
+        SqlAlchemyResourceBindingRepository,
+    )
+
+    resource_id = _resource_id_for(account.connector, payload)
+    if resource_id is None:
+        return None
+    binding = await SqlAlchemyResourceBindingRepository(session).find_binding(
+        connector_account_id=account.id, resource_id=resource_id
+    )
+    if binding is None:
+        return None
+    logger.info(
+        "inbound_product_resolved_from_binding",
+        connector=account.connector,
+        product_id=str(binding.product_id),
+    )
+    return binding.product_id
 
 
 async def _product_id_for_repo(
@@ -218,6 +307,14 @@ async def receive_connector_webhook(  # noqa: PLR0911 — 404/401/handshake/call
     # bound repo) so the run clones that repo + works in context + delivers a
     # repo-native PR — instead of running unbound in an empty workspace.
     product_id = event.product_id
+    if product_id is None:
+        # The founder's EXPLICIT Product × Connector binding first: it is a
+        # stated intent, where the repo path below is an inference. This is also
+        # the only route a chat connector has — telegram / discord / slack carry
+        # no repo, so before this they resolved to no product by construction.
+        product_id = await _product_id_from_binding(
+            session, account=account, payload=(event.payload or {})
+        )
     if product_id is None:
         repo = (event.payload or {}).get("repo") or account.external_ref
         if repo:
