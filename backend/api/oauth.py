@@ -88,6 +88,7 @@ from backend.identity.oauth_service import (
     rotate_refresh_token,
     start_device_authorization,
 )
+from backend.shared.client_ip import resolve_client_ip
 
 logger = structlog.get_logger(__name__)
 
@@ -130,41 +131,159 @@ def _is_loopback_redirect_uri(uri: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Anonymous DCR rate limiter
+# Abuse limits on the unauthenticated OAuth surface
 # ---------------------------------------------------------------------------
-# Simple per-IP sliding-window counter. Used to throttle the unauthenticated
-# ``POST /api/oauth/register`` endpoint so a flood of bot registrations
-# can't pollute the client table. In-process / single-worker only — v1
-# deliberately ships without a Redis dependency; if we later move to
-# multi-worker uvicorn we can swap this for a Redis-backed counter.
+# Everything below ``/api/oauth/`` that a caller can reach without a
+# credential shares ONE sliding-window implementation and ONE key.
+#
+# **The key** is :func:`backend.shared.client_ip.resolve_client_ip`, NOT
+# ``request.client.host``. The latter is derived by
+# ``ProxyHeadersMiddleware(trusted_hosts="*")`` from the FIRST
+# ``X-Forwarded-For`` entry, and Cloudflare APPENDS rather than overwrites
+# that header — so it is attacker-chosen. See that module for the measured
+# table. A limiter on a forgeable key is theatre: one header per request
+# mints a fresh bucket, and naming someone else's address spends THEIR
+# budget.
+#
+# **The limitation, stated honestly**: these buckets are per-process and
+# in-memory. They reset on every deploy and they do not compose across
+# replicas — two backend containers would each grant the full budget. That
+# is acceptable today because prod runs a single backend container; it
+# becomes gate 4's problem when horizontal scaling lands, at which point
+# this class is the one seam to swap for a Redis-backed counter. Bucket keys
+# are also never evicted except by the lazy window prune, so a very large
+# spread of distinct source addresses grows the dict — bounded in practice
+# by the same single-origin ingress that makes the key trustworthy.
+
+
+class _SlidingWindowLimiter:
+    """Per-key sliding-window counter. In-process, in-memory, thread-safe.
+
+    Semantics are the ones the original ``_anon_dcr_rate_check`` shipped
+    with, factored out so five routes share one implementation instead of
+    five copies: buckets are pruned lazily on every call, and the bucket is
+    mutated on success only.
+
+    Two counting shapes are supported:
+
+    * :meth:`check_and_record` — a plain REQUEST counter. Ask once per call;
+      a ``True`` answer consumes one unit.
+    * :meth:`exhausted` + :meth:`record` — a FAILURE counter. Ask first
+      (read-only), do the work, then record only the outcomes that indicate
+      abuse. ``/token`` needs this shape: the device grant polls it every
+      ``DEVICE_POLL_INTERVAL_S`` seconds while a human decides, so a request
+      counter there would break ``bsvibe login``.
+    """
+
+    def __init__(self, *, window_secs: int, max_per_window: int) -> None:
+        self._window_secs = window_secs
+        self._max_per_window = max_per_window
+        self._lock = Lock()
+        self._buckets: dict[str, list[float]] = {}
+
+    def _pruned(self, key: str, cutoff: float) -> list[float]:
+        return [ts for ts in self._buckets.get(key, ()) if ts > cutoff]
+
+    def check_and_record(self, key: str, *, now: float | None = None) -> bool:
+        """Return ``True`` if ``key`` may spend one more unit, and spend it."""
+        t = time.monotonic() if now is None else now
+        with self._lock:
+            bucket = self._pruned(key, t - self._window_secs)
+            if len(bucket) >= self._max_per_window:
+                self._buckets[key] = bucket
+                return False
+            bucket.append(t)
+            self._buckets[key] = bucket
+            return True
+
+    def exhausted(self, key: str, *, now: float | None = None) -> bool:
+        """Read-only: has ``key`` already spent its whole budget?"""
+        t = time.monotonic() if now is None else now
+        with self._lock:
+            return len(self._pruned(key, t - self._window_secs)) >= self._max_per_window
+
+    def record(self, key: str, *, now: float | None = None) -> None:
+        """Charge one unit to ``key``. Capped so a flood cannot grow the list."""
+        t = time.monotonic() if now is None else now
+        with self._lock:
+            bucket = self._pruned(key, t - self._window_secs)
+            if len(bucket) < self._max_per_window:
+                bucket.append(t)
+            self._buckets[key] = bucket
+
+    def reset(self) -> None:
+        with self._lock:
+            self._buckets.clear()
+
+
+#: ``POST /register`` — anonymous DCR. One registration per real MCP client
+#: install; 10/hour is already ~10x any honest burst, and it bounds bot rows
+#: in ``oauth_clients``.
 _ANON_DCR_WINDOW_SECS = 3600
 _ANON_DCR_MAX_PER_WINDOW = 10
-_anon_dcr_lock = Lock()
-_anon_dcr_buckets: dict[str, list[float]] = {}
+
+#: ``POST /token`` — FAILED credential attempts, never requests. An honest
+#: client produces 0-2 of these per sign-in (one ``expired_token`` if the
+#: human walks away, the odd refresh-rotation race), so 50 per 15 minutes is
+#: ~25x headroom for a person while leaving an attacker 200/hour against
+#: high-entropy codes.
+_TOKEN_FAILURE_WINDOW_SECS = 900
+_TOKEN_FAILURE_MAX_PER_WINDOW = 50
+
+#: ``POST /introspect`` — nothing polls it (BSVibe validates its own tokens
+#: locally); an external RS calls it a handful of times per session.
+_INTROSPECT_WINDOW_SECS = 3600
+_INTROSPECT_MAX_PER_WINDOW = 100
+
+#: ``POST /revoke`` — called on sign-out, once per token pair.
+_REVOKE_WINDOW_SECS = 3600
+_REVOKE_MAX_PER_WINDOW = 100
+
+#: ``POST /device_authorization`` — this is what bounds unauthenticated row
+#: creation in ``oauth_device_codes``. 60/hour is one sign-in per minute
+#: sustained, which covers even a founder hammering ``bsvibe login`` while
+#: debugging the CLI.
+_DEVICE_AUTHZ_WINDOW_SECS = 3600
+_DEVICE_AUTHZ_MAX_PER_WINDOW = 60
+
+_anon_dcr_limiter = _SlidingWindowLimiter(
+    window_secs=_ANON_DCR_WINDOW_SECS, max_per_window=_ANON_DCR_MAX_PER_WINDOW
+)
+_token_failure_limiter = _SlidingWindowLimiter(
+    window_secs=_TOKEN_FAILURE_WINDOW_SECS, max_per_window=_TOKEN_FAILURE_MAX_PER_WINDOW
+)
+_introspect_limiter = _SlidingWindowLimiter(
+    window_secs=_INTROSPECT_WINDOW_SECS, max_per_window=_INTROSPECT_MAX_PER_WINDOW
+)
+_revoke_limiter = _SlidingWindowLimiter(
+    window_secs=_REVOKE_WINDOW_SECS, max_per_window=_REVOKE_MAX_PER_WINDOW
+)
+_device_authz_limiter = _SlidingWindowLimiter(
+    window_secs=_DEVICE_AUTHZ_WINDOW_SECS, max_per_window=_DEVICE_AUTHZ_MAX_PER_WINDOW
+)
+
+#: The RFC 6749 §5.2 / RFC 8628 §3.5 error codes that mean "a credential was
+#: presented and rejected" — the ONLY answers that consume ``/token``'s
+#: budget. Deliberately absent: ``authorization_pending`` and ``slow_down``
+#: (the device grant working exactly as designed — counting them breaks
+#: ``bsvibe login``), ``access_denied`` (a human decision, not a guess), and
+#: ``invalid_request`` / ``unsupported_grant_type`` (malformed input, which by
+#: the same convention as ``/register`` must not fill a bucket).
+_TOKEN_COUNTED_ERRORS = frozenset({"invalid_client", "invalid_grant", "expired_token"})
+
+_ALL_LIMITERS: tuple[_SlidingWindowLimiter, ...] = (
+    _anon_dcr_limiter,
+    _token_failure_limiter,
+    _introspect_limiter,
+    _revoke_limiter,
+    _device_authz_limiter,
+)
 
 
-def _anon_dcr_rate_check(ip: str, *, now: float | None = None) -> bool:
-    """Return ``True`` if the IP may register one more client.
-
-    Side-effect: on success, records ``now`` into the IP's bucket.
-    Buckets older than the window are pruned lazily on every call.
-    """
-    t = time.monotonic() if now is None else now
-    cutoff = t - _ANON_DCR_WINDOW_SECS
-    with _anon_dcr_lock:
-        bucket = [ts for ts in _anon_dcr_buckets.get(ip, ()) if ts > cutoff]
-        if len(bucket) >= _ANON_DCR_MAX_PER_WINDOW:
-            _anon_dcr_buckets[ip] = bucket
-            return False
-        bucket.append(t)
-        _anon_dcr_buckets[ip] = bucket
-        return True
-
-
-def _reset_anon_dcr_rate_limit_for_tests() -> None:
-    """Test-only: clear the per-IP buckets between cases."""
-    with _anon_dcr_lock:
-        _anon_dcr_buckets.clear()
+def _reset_oauth_rate_limits_for_tests() -> None:
+    """Test-only: clear every per-IP bucket on this surface between cases."""
+    for limiter in _ALL_LIMITERS:
+        limiter.reset()
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +305,29 @@ class _OAuthError(JSONResponse):
         if description:
             payload["error_description"] = description
         super().__init__(payload, status_code=status_code, headers=headers)
+
+
+def _too_many_requests(what: str) -> HTTPException:
+    """The one 429 shape for this surface.
+
+    Deliberately NOT an :class:`_OAuthError`: 429 is a transport-level
+    throttle, not a value in the OAuth error vocabulary, and inventing a code
+    there would make a device client branch on something no RFC defines.
+    Matches the shape ``/register`` has always returned.
+    """
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"{what} rate limit exceeded — try again later",
+    )
+
+
+def _token_error(
+    ip: str, status_code: int, error: str, description: str | None = None
+) -> _OAuthError:
+    """Answer ``/token``, charging the failure budget when the code says to."""
+    if error in _TOKEN_COUNTED_ERRORS:
+        _token_failure_limiter.record(ip)
+    return _OAuthError(status_code, error, description)
 
 
 class TokenResponse(BaseModel):
@@ -663,7 +805,7 @@ async def lookup_public_client(
 
 
 @public_router.post("/token")
-async def token(  # noqa: PLR0911 — OAuth state machine
+async def token(  # noqa: PLR0911, PLR0912 — OAuth state machine × RFC answer table
     request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     grant_type: Annotated[str, Form()],
@@ -674,8 +816,19 @@ async def token(  # noqa: PLR0911 — OAuth state machine
     refresh_token: Annotated[str | None, Form()] = None,
     device_code: Annotated[str | None, Form()] = None,
 ) -> Any:
-    """RFC 6749 §4.1 + §6 + RFC 8628 §3.4 — code / refresh / device grants."""
-    del request
+    """RFC 6749 §4.1 + §6 + RFC 8628 §3.4 — code / refresh / device grants.
+
+    Rate-limited on FAILED credential attempts (:data:`_TOKEN_COUNTED_ERRORS`)
+    rather than on requests: the device grant polls this endpoint every
+    ``DEVICE_POLL_INTERVAL_S`` seconds for the whole time a human takes to
+    approve — easily 100+ POSTs for ONE legitimate ``bsvibe login``, all
+    answering ``authorization_pending`` / ``slow_down``. Counting those would
+    break the CLI, and counting guesses is the correct shape for brute-force
+    protection anyway.
+    """
+    ip = resolve_client_ip(request, route="/api/oauth/token")
+    if _token_failure_limiter.exhausted(ip):
+        raise _too_many_requests("token endpoint")
     settings = get_settings()
     issuer = settings.oauth_issuer
     if grant_type == DEVICE_GRANT_TYPE:
@@ -697,7 +850,7 @@ async def token(  # noqa: PLR0911 — OAuth state machine
             )
         # RFC 8628 §3.5 — every non-success is a 400 whose `error` the device
         # branches on: pending/slow_down mean keep going, the rest mean stop.
-        return _OAuthError(400, device_outcome.value)
+        return _token_error(ip, 400, device_outcome.value)
     if grant_type == "authorization_code":
         if not code:
             return _OAuthError(400, "invalid_request", "code is required")
@@ -707,7 +860,7 @@ async def token(  # noqa: PLR0911 — OAuth state machine
             return _OAuthError(400, "invalid_request", "code_verifier is required")
         client = await lookup_client_by_client_id(session, client_id)
         if client is None or client.revoked_at is not None:
-            return _OAuthError(401, "invalid_client", "unknown or revoked client")
+            return _token_error(ip, 401, "invalid_client", "unknown or revoked client")
         outcome, claimed = await claim_authorization_code(
             session,
             code=code,
@@ -716,7 +869,8 @@ async def token(  # noqa: PLR0911 — OAuth state machine
             code_verifier=code_verifier,
         )
         if outcome is not CodeClaimOutcome.CLAIMED or claimed is None:
-            return _OAuthError(
+            return _token_error(
+                ip,
                 400,
                 "invalid_grant",
                 f"authorization code {outcome.value.replace('_', ' ')}",
@@ -747,7 +901,7 @@ async def token(  # noqa: PLR0911 — OAuth state machine
             issuer=issuer,
         )
         if rotate_outcome is not RefreshRotateOutcome.ROTATED or rotated is None:
-            return _OAuthError(401, "invalid_grant", rotate_outcome.value)
+            return _token_error(ip, 401, "invalid_grant", rotate_outcome.value)
         await session.commit()
         return TokenResponse(
             access_token=rotated.access_token,
@@ -769,11 +923,20 @@ async def token(  # noqa: PLR0911 — OAuth state machine
 
 @public_router.post("/introspect")
 async def introspect(
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     token: Annotated[str, Form()],
     token_type_hint: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
-    """RFC 7662 token introspection. ``active: false`` on any failure."""
+    """RFC 7662 token introspection. ``active: false`` on any failure.
+
+    Per-IP REQUEST limit (nothing polls this endpoint), applied after
+    FastAPI has validated the form so a malformed probe fills no bucket.
+    """
+    if not _introspect_limiter.check_and_record(
+        resolve_client_ip(request, route="/api/oauth/introspect")
+    ):
+        raise _too_many_requests("introspection")
     settings = get_settings()
     hint = (
         RevokeKind.REFRESH_TOKEN
@@ -795,11 +958,18 @@ async def introspect(
 
 @public_router.post("/revoke", status_code=status.HTTP_200_OK)
 async def revoke(
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     token: Annotated[str, Form()],
     token_type_hint: Annotated[str | None, Form()] = None,
 ) -> dict[str, bool]:
-    """RFC 7009 — revoke an access or refresh token. Always 200."""
+    """RFC 7009 — revoke an access or refresh token. Always 200.
+
+    Per-IP REQUEST limit (nothing polls this endpoint), applied after
+    FastAPI has validated the form so a malformed probe fills no bucket.
+    """
+    if not _revoke_limiter.check_and_record(resolve_client_ip(request, route="/api/oauth/revoke")):
+        raise _too_many_requests("revocation")
     settings = get_settings()
     hint = (
         RevokeKind.REFRESH_TOKEN
@@ -835,7 +1005,8 @@ async def register_client_anonymous(  # noqa: PLR0912 — RFC 7591 §2 capabilit
 
     * **Loopback-only redirect URIs** (RFC 8252) — open registration
       cannot mint open-redirect clients to phishing-grade hostnames.
-    * Per-IP rate limit (10/hour, in-process).
+    * Per-IP rate limit (10/hour, in-process — see the module's
+      rate-limit section for the key and its stated limitation).
     * ``client_name`` ≤ 100 chars, ≤ 4 redirect URIs, scopes ⊆ server set.
     * Public client only — no ``client_secret`` returned. PKCE mandatory
       everywhere downstream.
@@ -844,10 +1015,10 @@ async def register_client_anonymous(  # noqa: PLR0912 — RFC 7591 §2 capabilit
     *user* binds a workspace at ``/authorize`` time (which DOES run on a
     real PWA session).
     """
-    # Resolve caller IP. Honors X-Forwarded-For if the ProxyHeaders
-    # middleware (see backend.api.main) has rewritten scope.client; falls
-    # back to the raw socket address for direct connections (dev / tests).
-    ip = request.client.host if request.client else "unknown"
+    # The rate-limit key. NOT ``request.client.host``: see
+    # ``backend.shared.client_ip`` for why that value is attacker-chosen
+    # behind ``ProxyHeadersMiddleware(trusted_hosts="*")`` + Cloudflare.
+    ip = resolve_client_ip(request, route="/api/oauth/register")
 
     # Validate redirect URIs — strict loopback only. We do this before
     # the rate-limit check so a bot probing the surface with garbage
@@ -896,13 +1067,10 @@ async def register_client_anonymous(  # noqa: PLR0912 — RFC 7591 §2 capabilit
                 f"{payload.token_endpoint_auth_method} (only 'none' = PKCE-public)"
             ),
         )
-    # Rate limit AFTER input validation. ``_anon_dcr_rate_check`` mutates
-    # the bucket on success only.
-    if not _anon_dcr_rate_check(ip):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="anonymous DCR rate limit exceeded — try again later",
-        )
+    # Rate limit AFTER input validation. ``check_and_record`` mutates the
+    # bucket on success only.
+    if not _anon_dcr_limiter.check_and_record(ip):
+        raise _too_many_requests("anonymous DCR")
 
     row = await register_client(
         session,
@@ -941,6 +1109,7 @@ async def register_client_anonymous(  # noqa: PLR0912 — RFC 7591 §2 capabilit
 
 @public_router.post("/device_authorization")
 async def device_authorization(
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     client_id: Annotated[str, Form()],
     scope: Annotated[str | None, Form()] = None,
@@ -948,12 +1117,19 @@ async def device_authorization(
     """RFC 8628 §3.1 — open a device authorization request.
 
     Unauthenticated by definition: the device has no credential yet, which is
-    the entire reason this grant exists.
+    the entire reason this grant exists — so the per-IP REQUEST limit here is
+    the only thing bounding unauthenticated row creation in
+    ``oauth_device_codes``. Applied after scope validation so a garbage probe
+    fills no bucket.
     """
     requested = [s for s in (scope or DEFAULT_SCOPE).split() if s]
     for s in requested:
         if s not in ALLOWED_SCOPES:
             return _OAuthError(400, "invalid_scope", f"unknown scope: {s}")
+    if not _device_authz_limiter.check_and_record(
+        resolve_client_ip(request, route="/api/oauth/device_authorization")
+    ):
+        raise _too_many_requests("device authorization")
 
     started = await start_device_authorization(session, client_id=client_id, scope=requested)
     await session.commit()
