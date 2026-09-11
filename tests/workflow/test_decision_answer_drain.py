@@ -33,6 +33,11 @@ async def _seed(session, *, kind: str, payload: dict) -> tuple[uuid.UUID, uuid.U
     owner = UserRow(id=uuid.uuid4(), supabase_user_id=f"sub-{uuid.uuid4().hex}")
     session.add(WorkspaceRow(id=ws, name="WS", language="en"))
     session.add(owner)
+    # Flush the FK TARGETS before the row that points at them. SQLAlchemy orders
+    # inserts per-mapper, not by cross-model FK dependency, so on PostgreSQL the
+    # membership can reach the wire before its user — SQLite's lax FK enforcement
+    # hides this entirely, which is why it only ever fails in CI.
+    await session.flush()
     session.add(MembershipRow(user_id=owner.id, workspace_id=ws, role="owner"))
     run = ExecutionRun(id=uuid.uuid4(), workspace_id=ws, status="running")
     session.add(run)
