@@ -305,3 +305,67 @@ class TestTokenNeverLeaksIntoErrors:
         with pytest.raises(TelegramApiError) as caught:
             await client.delete_message(99, 42)
         assert TOKEN not in str(caught.value)
+
+
+# ── setWebhook / getWebhookInfo — 게이트 3 후속 ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_set_webhook_posts_the_url_and_secret() -> None:
+    """The two values Telegram needs, on the method it needs them on.
+
+    Prod answered ``url_set: False`` on 2026-09-11 because nothing in this repo
+    ever called ``setWebhook`` — the client had send/answer/edit/delete and no
+    way to say where updates should go.
+    """
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"ok": True, "result": True})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = TelegramClient("bot-token", client=http)
+        await client.set_webhook("https://api.example/hook/tok", secret_token="s3cr3t")
+
+    assert str(seen["path"]).endswith("/setWebhook")
+    assert seen["body"] == {"url": "https://api.example/hook/tok", "secret_token": "s3cr3t"}
+
+
+@pytest.mark.asyncio
+async def test_get_webhook_info_returns_the_result_object() -> None:
+    """``url`` empty + no ``last_error_*`` is the "never registered" reading."""
+    payload = {"ok": True, "result": {"url": "", "pending_update_count": 0}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/getWebhookInfo")
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = TelegramClient("bot-token", client=http)
+        info = await client.get_webhook_info()
+
+    assert info == {"url": "", "pending_update_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_set_webhook_raises_when_telegram_refuses() -> None:
+    """An ``ok:false`` must not read as a successful registration.
+
+    Swallowing it would leave the product reporting "registered" over a webhook
+    Telegram never accepted — the same silence this whole change exists to end.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400, json={"ok": False, "description": "Bad Request: bad webhook: invalid secret"}
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = TelegramClient("bot-token", client=http)
+        with pytest.raises(Exception, match="invalid secret"):
+            await client.set_webhook("https://api.example/hook/tok", secret_token="bad:token")

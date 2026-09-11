@@ -67,6 +67,10 @@ from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.connectors.catalog import ConnectorInfo, get_connector_catalog
 from backend.connectors.db import ConnectorAccountRow
+from backend.connectors.telegram_webhook import (
+    TelegramWebhookStatus,
+    register_telegram_webhook,
+)
 from backend.extensions.plugin.base import PluginMeta, PluginRunError
 from backend.extensions.plugin.context import SkillContext
 from backend.extensions.plugin.runner import PluginRunner
@@ -342,12 +346,42 @@ async def get_catalog() -> ConnectorCatalog:
     return ConnectorCatalog(connectors=entries)
 
 
+TelegramClientFactory = Callable[[str], Any]
+
+
+async def get_telegram_client_factory() -> (
+    TelegramClientFactory
+):  # pragma: no cover — overridden in tests
+    """Production factory: bot token → telegram Bot API client."""
+    from plugin.telegram.client import TelegramClient  # noqa: PLC0415
+
+    return TelegramClient
+
+
+async def _register_telegram_ingress(
+    row: ConnectorAccountRow,
+    *,
+    cipher: CredentialCipher,
+    factory: TelegramClientFactory,
+) -> TelegramWebhookStatus:
+    """Point Telegram at ``row``'s ingress. Raises on a Bot API refusal."""
+    from backend.config import get_settings  # noqa: PLC0415
+
+    bot_token = cipher.decrypt(row.signing_secret_ciphertext)
+    return await register_telegram_webhook(
+        row,
+        telegram=factory(bot_token),
+        public_base_url=get_settings().oauth_issuer,
+    )
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_connector(
     payload: ConnectorCreate,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+    telegram_factory: Annotated[TelegramClientFactory, Depends(get_telegram_client_factory)],
 ) -> ConnectorCreated:
     webhook_token = secrets.token_urlsafe(_TOKEN_BYTES)
     row = ConnectorAccountRow(
@@ -362,6 +396,21 @@ async def create_connector(
     )
     session.add(row)
     await session.commit()
+    if row.connector == "telegram":
+        # Wire the ingress at birth so the gap that left prod's binding
+        # unregistered does not reopen for the next one. Best-effort: a Telegram
+        # blip must not destroy a binding the founder just configured, and
+        # ``POST /{id}/webhook`` repairs it separately (and DOES report failure,
+        # because answering "is it registered?" is that route's whole job).
+        try:
+            await _register_telegram_ingress(row, cipher=cipher, factory=telegram_factory)
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001 — never fail the create
+            logger.warning(
+                "connector_webhook_register_on_create_failed",
+                connector_id=str(row.id),
+                error=str(exc),
+            )
     info = _capabilities(row.connector)
     return ConnectorCreated(
         id=row.id,
@@ -565,6 +614,85 @@ async def get_import_dispatcher() -> ImportDispatcher:  # pragma: no cover — o
         plugins_by_name=dict(registry),
         cipher=CredentialCipher(_key_from_settings()),
         knowledge_factory=_knowledge,
+    )
+
+
+class TelegramWebhookRegistered(BaseModel):
+    """What Telegram reports about its delivery target after registration."""
+
+    registered: bool
+    pending_update_count: int = 0
+    last_error: str | None = None
+    # The URL is derived from public config, not a secret — but the token in it
+    # IS the capability, so only the connector id is echoed back.
+    connector_id: uuid.UUID
+
+
+@router.post("/{connector_id}/webhook")
+async def register_connector_webhook(
+    connector_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+    factory: Annotated[TelegramClientFactory, Depends(get_telegram_client_factory)],
+) -> TelegramWebhookRegistered:
+    """Register (or re-register) this connector's inbound webhook.
+
+    Telegram is the only connector whose ingress the product can wire itself —
+    its Bot API has ``setWebhook``. Slack/GitHub/Discord are configured in their
+    own consoles, so they 422 rather than report a success that never happened.
+
+    This route exists because prod's telegram binding sat with NO webhook
+    registered (``getWebhookInfo`` → ``url_set: False``, and no ``last_error_*``
+    at all: Telegram had never attempted a delivery). Outbound was unaffected, so
+    the founder kept receiving approve/deny cards whose buttons did nothing. The
+    binding already existed, so wiring registration into *create* alone could not
+    have repaired it.
+
+    Registration also mints ``delivery_config["webhook_secret"]`` when absent —
+    without it the resolver falls back to the signing secret, which for telegram
+    is the bot token, and a bot token contains ``:`` so Telegram can never echo
+    it back. See :mod:`backend.connectors.telegram_webhook`.
+
+    Failure modes:
+
+    * 404 — not in this workspace, or soft-revoked (same shape as the ingress)
+    * 422 — a connector with no programmatic webhook registration
+    * 502 — the Bot API refused (its ``description`` is surfaced verbatim)
+    """
+    row = await session.get(ConnectorAccountRow, connector_id)
+    if row is None or row.workspace_id != workspace_id or not row.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"connector {connector_id} not found",
+        )
+    if row.connector != "telegram":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"connector {row.connector!r} has no programmatic webhook registration — "
+                "configure its webhook in that provider's own console"
+            ),
+        )
+    try:
+        result = await _register_telegram_ingress(row, cipher=cipher, factory=factory)
+    except Exception as exc:  # noqa: BLE001 — surfaced verbatim as 502 below
+        logger.warning(
+            "connector_webhook_register_failed",
+            connector_id=str(connector_id),
+            connector=row.connector,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"telegram refused the webhook registration: {exc}",
+        ) from None
+    await session.commit()
+    return TelegramWebhookRegistered(
+        registered=result.registered,
+        pending_update_count=result.pending_update_count,
+        last_error=result.last_error,
+        connector_id=connector_id,
     )
 
 
