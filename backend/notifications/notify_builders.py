@@ -57,6 +57,14 @@ class NotificationContent:
     # 게이트 3 후속 — a ``needs_you`` card's tappable answers. The notify
     # boundary loads the paused Decision and fills whichever shape it offers;
     # a Decision with neither is free-text only and keeps the brief link.
+    # The product this notification is ABOUT. One workspace's channels carry
+    # every product's cards, and none of them said which — so "작업 완료" was
+    # ambiguous the moment a second product existed.
+    product_name: str | None = None
+    # The id as recorded by the producer; the notify boundary resolves it to
+    # ``product_name`` above. Kept separate so a product that has been renamed —
+    # or removed — cannot make the card lie about what it is about.
+    product_id: str | None = None
     decision_id: str | None = None
     decision_actions: tuple[DecisionChoice, ...] = ()
     decision_options: tuple[str, ...] = ()
@@ -336,7 +344,12 @@ def _telegram_html_text(content: NotificationContent) -> str:
     """
     parts: list[str] = []
     if content.title.strip():
-        parts.append(html.escape(content.title.strip()))
+        title = content.title.strip()
+        # Prefix rather than a separate line: a chat card is skimmed, and the
+        # product is the first thing the founder needs to disambiguate it.
+        if content.product_name:
+            title = f"[{content.product_name}] {title}"
+        parts.append(html.escape(title))
     if content.body.strip():
         parts.append(html.escape(content.body.strip()))
     options_block = _numbered_options_block(content)

@@ -373,6 +373,7 @@ class AgentRunner:
         await emit_notification(
             self._session,
             workspace_id=run.workspace_id,
+            product_id=run.product_id,
             event="failed",
             dedupe_key=f"failed:{run.id}",
             payload={

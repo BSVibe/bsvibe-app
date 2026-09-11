@@ -51,13 +51,33 @@ class NotifyBinding:
 
 
 async def resolve_notify_bindings(
-    session: AsyncSession, *, workspace_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    product_channel_ids: set[uuid.UUID] | None = None,
 ) -> list[NotifyBinding]:
     """Active connector_accounts for the workspace that are notify channels.
 
     Selection only — no credential decrypt, no plugin invoke (that is N2). Rows
     failing any qualifying condition (see module docstring) are skipped; a
     connector without a notify builder is the deliberate seam.
+
+    ``product_channel_ids`` narrows to the channels the founder EXPLICITLY bound
+    to the product this notification is about — the same per-product axis the
+    inbound path resolves on. Without it every product's notifications went to
+    every channel, and the card did not even name which product it was about.
+
+    The ids are RESOLVED BY THE CALLER, not queried here: ``resource_bindings``
+    lives in ``backend.identity``, and this module is a common leaf that may not
+    depend on a bounded context. Passing the set in keeps the leaf rule intact
+    and keeps the selection policy (below) in one place.
+
+    **The narrowing FALLS BACK deliberately.** A product with no *notify* binding
+    keeps the workspace's channels. Measured in prod: ``BSVibe`` is bound only to
+    github, which is not a notify channel — a straight filter would give it ZERO
+    channels and silently stop alerts the founder receives today. Losing an alert
+    is strictly worse than one arriving on a shared channel, so the filter only
+    ever narrows when there is something to narrow TO.
     """
     rows = (
         (
@@ -85,7 +105,22 @@ async def resolve_notify_bindings(
             )
             continue
         bindings.append(NotifyBinding(account=row, connector=row.connector))
-    return bindings
+    return _narrow_to_product(bindings, product_channel_ids)
+
+
+def _narrow_to_product(
+    bindings: list[NotifyBinding], bound_account_ids: set[uuid.UUID] | None
+) -> list[NotifyBinding]:
+    """Keep only the product's bound channels — unless that would keep none.
+
+    ``None`` means no product was given (a workspace-level notification), which
+    is not the same as "a product that bound nothing": both fall back, but for
+    different reasons, and neither may end up silent.
+    """
+    if bound_account_ids is None:
+        return bindings
+    narrowed = [b for b in bindings if b.account.id in bound_account_ids]
+    return narrowed or bindings
 
 
 async def available_channels(session: AsyncSession, *, workspace_id: uuid.UUID) -> list[str]:

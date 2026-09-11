@@ -45,18 +45,29 @@ async def emit_notification(
     dedupe_key: str,
     payload: dict[str, object],
     producer_id: str,
+    product_id: uuid.UUID | None = None,
 ) -> None:
     """Stage one notification-outbox row in the caller's transaction.
 
     See the module docstring for the transactional + dedupe contract. A
     duplicate ``dedupe_key`` is swallowed (logged, not raised), so a retried
     producer never double-notifies and never breaks its own terminal write.
+
+    ``product_id`` is what the notification is ABOUT. Every producer holds a run
+    (which holds it) and none passed it, so an outbox row could not say which
+    product a "작업 완료" card belonged to — and channel selection had nothing to
+    route on. Optional because some notifications are about the WORKSPACE, not a
+    product (``auth_down``); omitting it leaves the key absent rather than
+    writing an empty string that a reader would later mistake for an id.
     """
+    enriched = dict(payload)
+    if product_id is not None:
+        enriched["product_id"] = str(product_id)
     row = NotificationEventRow(
         workspace_id=workspace_id,
         event=event,
         dedupe_key=dedupe_key,
-        payload=payload,
+        payload=enriched,
     )
     try:
         async with session.begin_nested():

@@ -49,7 +49,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.channels import Channel
 from backend.config import get_settings
-from backend.identity.workspaces_db import WorkspaceRow, load_workspace_language
+from backend.identity.workspaces_db import (
+    ProductRow,
+    ResourceBindingRow,
+    WorkspaceRow,
+    load_workspace_language,
+)
 from backend.notifications.bindings import IN_APP_CHANNEL, resolve_notify_bindings
 from backend.notifications.channels import NOTIFICATION_OUTBOX
 from backend.notifications.copy import notification_cta_parts
@@ -182,6 +187,37 @@ def channels_for_event(matrix: dict[str, bool], *, event: str, bound: set[str]) 
     return {ch for ch in bound if ch != IN_APP_CHANNEL}
 
 
+async def product_channel_ids(
+    session: AsyncSession, *, workspace_id: uuid.UUID, product_id: uuid.UUID | None
+) -> set[uuid.UUID] | None:
+    """Connector accounts the founder bound to ``product_id``, or ``None``.
+
+    The engine-side half of product-aware notification routing.
+    ``resource_bindings`` lives in ``backend.identity`` and
+    ``backend.notifications`` is a common leaf that may not reach a bounded
+    context — so the lookup happens here and the ids are handed to
+    :func:`resolve_notify_bindings`, which owns the policy.
+
+    ``None`` (no product) and an empty set (a product that bound nothing) are
+    deliberately different values: the selector falls back for both, but only
+    the second is a case where the founder DID express bindings elsewhere.
+    """
+    if product_id is None:
+        return None
+    return set(
+        (
+            await session.execute(
+                select(ResourceBindingRow.connector_account_id).where(
+                    ResourceBindingRow.workspace_id == workspace_id,
+                    ResourceBindingRow.product_id == product_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 class NotifyWorker(BaseWorker):
     """Periodic drain of ``notification_outbox`` into the founder's push channels."""
 
@@ -234,7 +270,20 @@ class NotifyWorker(BaseWorker):
         matrix = await self._matrix(session, row.workspace_id)
         # Bindings are resolved BEFORE the prefs decision because a default-on
         # event needs to know what channels exist to default them on.
-        bindings = await resolve_notify_bindings(session, workspace_id=row.workspace_id)
+        # Narrow to the product's own channels when the founder bound any —
+        # the outbound half of the per-product axis (the inbound half landed in
+        # #922). Falls back to every workspace channel, so a product with no
+        # notify binding never goes silent.
+        content_product = (row.payload or {}).get("product_id")
+        bindings = await resolve_notify_bindings(
+            session,
+            workspace_id=row.workspace_id,
+            product_channel_ids=await product_channel_ids(
+                session,
+                workspace_id=row.workspace_id,
+                product_id=uuid.UUID(str(content_product)) if content_product else None,
+            ),
+        )
         binding_by_connector = {b.connector: b for b in bindings}
         enabled = channels_for_event(matrix, event=row.event, bound=set(binding_by_connector))
 
@@ -321,6 +370,9 @@ class NotifyWorker(BaseWorker):
             # read it, so chat channels had no Decision to address their buttons
             # to. ``_with_decision_answers`` loads the answers it offers.
             decision_id=(str(payload["decision_id"]) if payload.get("decision_id") else None),
+            # Recorded by ``emit_notification``; resolved to a name below so the
+            # card can say which product it is about.
+            product_id=(str(payload["product_id"]) if payload.get("product_id") else None),
         )
 
     async def _localized_content(
@@ -341,6 +393,7 @@ class NotifyWorker(BaseWorker):
         language = await load_workspace_language(session, row.workspace_id)
         content = replace(content, language=language)
         content = await self._with_decision_answers(session, row, content, language)
+        content = await self._with_product_name(session, content)
         if not content.link:
             return content
         # Carry BOTH the flattened "label → url" line (for plain-text channels)
@@ -348,6 +401,29 @@ class NotifyWorker(BaseWorker):
         # tappable anchor instead of showing the raw URL).
         label, url = notification_cta_parts(row.event, language, self._pwa_url, content.link)
         return replace(content, link=f"{label} → {url}", cta_label=label, cta_url=url)
+
+    @staticmethod
+    async def _with_product_name(
+        session: AsyncSession, content: NotificationContent
+    ) -> NotificationContent:
+        """Resolve the product id the producer recorded into a readable name.
+
+        The id is what routing needs; the NAME is what the founder needs — one
+        workspace's channels carry every product's cards and none of them said
+        which. A missing or unknown product leaves the card exactly as it was:
+        a notification must never fail because its product row moved.
+        """
+        product_id = content.product_id
+        if not product_id:
+            return content
+        try:
+            product = await session.get(ProductRow, uuid.UUID(product_id))
+        except (ValueError, SQLAlchemyError):  # pragma: no cover — defensive
+            logger.warning("notify_product_lookup_failed", product_id=product_id)
+            return content
+        if product is None:
+            return content
+        return replace(content, product_name=product.name)
 
     @staticmethod
     async def _with_decision_answers(
