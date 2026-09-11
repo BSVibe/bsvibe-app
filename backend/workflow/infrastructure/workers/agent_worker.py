@@ -273,9 +273,35 @@ class AgentWorker(BaseWorker):
         return 2.0 * self._settings.executor_task_timeout_s
 
     async def _tick(self) -> int:
+        # 게이트 3 후속 — apply chat answers BEFORE driving. A queued answer flips
+        # its run RUNNING → OPEN, so applying first lets the same tick pick the
+        # run up instead of waiting a full interval to notice it.
+        answered = await self.apply_queued_answers()
         claimed = await self.claim_once()
         driven = await self.drive_once()
-        return claimed + driven
+        return answered + claimed + driven
+
+    async def apply_queued_answers(self) -> int:
+        """Apply ``needs_you`` answers a chat tap queued. Returns the count.
+
+        The engine half of the inbound/engine split: the connector layer records
+        the founder's tap and returns fast (R2c keeps the resolver — and through
+        it ``plugin.audit`` — out of the inbound layer), and this applies it
+        through the same ``resolve_checkpoint`` the PWA uses.
+
+        Best-effort: a failure here must not stop the worker from claiming and
+        driving runs, which is its primary job.
+        """
+        from backend.workflow.application.decision_answer_drain import (  # noqa: PLC0415
+            drain_queued_answers,
+        )
+
+        try:
+            async with self._session_factory() as session:
+                return await drain_queued_answers(session)
+        except Exception:  # noqa: BLE001 — never let the drain stall the worker
+            logger.warning("agent_worker_answer_drain_failed", exc_info=True)
+            return 0
 
     async def claim_once(self) -> int:
         """Pull one batch of OPEN Requests, open a run + flip to RUNNING. Returns count."""

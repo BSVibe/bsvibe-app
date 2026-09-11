@@ -248,3 +248,73 @@ class TestParseUpdate:
                 raw_body=b"{not json",
                 secret=None,
             )
+
+
+# ── decision taps — 게이트 3 후속 ─────────────────────────────────────────────
+
+
+def _cq(data: str) -> dict:
+    return {
+        "callback_query": {
+            "id": "cbq1",
+            "from": {"id": 8242700007},
+            "data": data,
+            "message": {
+                "message_id": 7,
+                "chat": {"id": 8242700007, "type": "private"},
+                "text": "답해주세요",
+            },
+        }
+    }
+
+
+def test_a_decision_action_tap_is_parsed() -> None:
+    """``dca:<decision_id>:<action_key>`` — the 35-of-49 shape.
+
+    Three parts, where the existing approve/reject vocabulary has two; a parser
+    that only ``partition``s once reads the action key as part of the id.
+    """
+    parsed = parse_callback_query(_cq("dca:11111111-2222-3333-4444-555555555555:discard"))
+    assert parsed is not None
+    assert parsed["malformed"] is False
+    assert parsed["verb"] == "dca"
+    assert parsed["decision_id"] == "11111111-2222-3333-4444-555555555555"
+    assert parsed["decision_answer"] == "discard"
+    # The deliverable vocabulary must not be populated by a decision tap.
+    assert parsed["deliverable_id"] is None
+
+
+def test_a_decision_option_tap_is_parsed() -> None:
+    """``dco:<decision_id>:<index>`` — the option carries its INDEX because a
+    prod option runs to 159 characters and callback_data caps at 64 bytes."""
+    parsed = parse_callback_query(_cq("dco:11111111-2222-3333-4444-555555555555:2"))
+    assert parsed is not None
+    assert parsed["malformed"] is False
+    assert parsed["verb"] == "dco"
+    assert parsed["decision_id"] == "11111111-2222-3333-4444-555555555555"
+    assert parsed["decision_answer"] == "2"
+
+
+def test_an_approve_tap_still_parses_unchanged() -> None:
+    """Negative control: the existing two-part vocabulary must not regress."""
+    parsed = parse_callback_query(_cq("apv:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+    assert parsed is not None
+    assert parsed["malformed"] is False
+    assert parsed["verb"] == "apv"
+    assert parsed["deliverable_id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    assert parsed["decision_id"] is None
+
+
+def test_a_decision_verb_without_an_answer_is_malformed() -> None:
+    """``dca:<id>`` with no key answers nothing — the handler must say so rather
+    than resolve the Decision with an empty action."""
+    parsed = parse_callback_query(_cq("dca:11111111-2222-3333-4444-555555555555"))
+    assert parsed is not None
+    assert parsed["malformed"] is True
+    assert parsed["decision_id"] is None
+
+
+def test_an_unknown_verb_is_malformed() -> None:
+    parsed = parse_callback_query(_cq("nope:11111111-2222-3333-4444-555555555555:x"))
+    assert parsed is not None
+    assert parsed["malformed"] is True

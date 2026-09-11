@@ -132,6 +132,10 @@ def parse_update(
 
 # callback_data verbs an approve/reject tap can carry (mirror
 # ``backend.notifications.notify_builders`` CALLBACK_APPROVE / CALLBACK_REJECT).
+#: The needs_you answer verbs (게이트 3 후속). Carried as ``<verb>:<decision_id>:<answer>``
+#: — a THIRD part the approve/reject vocabulary does not have.
+_DECISION_CALLBACK_VERBS = frozenset({"dca", "dco"})
+
 _CALLBACK_VERBS = frozenset({"apv", "rej"})
 
 
@@ -156,8 +160,24 @@ def parse_callback_query(body: dict[str, Any]) -> dict[str, Any] | None:
         return None
     message = cq.get("message") or {}
     chat = message.get("chat") or {}
-    verb, _, deliverable_id = str(cq.get("data") or "").partition(":")
-    malformed = verb not in _CALLBACK_VERBS or not deliverable_id
+    # Two vocabularies share this stream:
+    #   ``<verb>:<deliverable_id>``        approve / reject a shipped delivery
+    #   ``<verb>:<decision_id>:<answer>``  answer a needs_you Decision (게이트 3 후속)
+    # A single ``partition`` reads the decision answer as part of its id, so the
+    # split is by parts, not by first colon.
+    verb, _, rest = str(cq.get("data") or "").partition(":")
+    decision_id: str | None = None
+    decision_answer: str | None = None
+    deliverable_id: str | None = None
+    if verb in _DECISION_CALLBACK_VERBS:
+        target, _, answer = rest.partition(":")
+        malformed = not target or not answer
+        if not malformed:
+            decision_id, decision_answer = target, answer
+    else:
+        malformed = verb not in _CALLBACK_VERBS or not rest
+        if not malformed:
+            deliverable_id = rest
     return {
         "callback_query_id": cq.get("id"),
         "from_id": (cq.get("from") or {}).get("id"),
@@ -172,7 +192,9 @@ def parse_callback_query(body: dict[str, Any]) -> dict[str, Any] | None:
         "message_text": message.get("text"),
         "message_entities": message.get("entities"),
         "verb": None if malformed else verb,
-        "deliverable_id": None if malformed else deliverable_id,
+        "deliverable_id": deliverable_id,
+        "decision_id": decision_id,
+        "decision_answer": decision_answer,
         "malformed": malformed,
     }
 

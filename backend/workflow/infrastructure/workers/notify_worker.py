@@ -44,6 +44,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import structlog
 from sqlalchemy import Select, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.channels import Channel
@@ -58,8 +59,9 @@ from backend.notifications.db import (
     NotificationPrefsRow,
     NotificationStatus,
 )
-from backend.notifications.notify_builders import NotificationContent
+from backend.notifications.notify_builders import DecisionChoice, NotificationContent
 from backend.workers.base import BaseWorker
+from backend.workflow.infrastructure.db import Decision, DecisionStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -315,6 +317,10 @@ class NotifyWorker(BaseWorker):
             deliverable_id=(
                 str(payload["deliverable_id"]) if payload.get("deliverable_id") else None
             ),
+            # 게이트 3 후속 — ``_emit_needs_you`` has always written this; nothing
+            # read it, so chat channels had no Decision to address their buttons
+            # to. ``_with_decision_answers`` loads the answers it offers.
+            decision_id=(str(payload["decision_id"]) if payload.get("decision_id") else None),
         )
 
     async def _localized_content(
@@ -334,6 +340,7 @@ class NotifyWorker(BaseWorker):
         # ``shipped`` card. Best-effort — degrades to "en".
         language = await load_workspace_language(session, row.workspace_id)
         content = replace(content, language=language)
+        content = await self._with_decision_answers(session, row, content, language)
         if not content.link:
             return content
         # Carry BOTH the flattened "label → url" line (for plain-text channels)
@@ -341,6 +348,57 @@ class NotifyWorker(BaseWorker):
         # tappable anchor instead of showing the raw URL).
         label, url = notification_cta_parts(row.event, language, self._pwa_url, content.link)
         return replace(content, link=f"{label} → {url}", cta_label=label, cta_url=url)
+
+    @staticmethod
+    async def _with_decision_answers(
+        session: AsyncSession,
+        row: NotificationEventRow,
+        content: NotificationContent,
+        language: str,
+    ) -> NotificationContent:
+        """Load the paused Decision's tappable answers onto a ``needs_you`` card.
+
+        ``_emit_needs_you`` already writes ``decision_id`` into the outbox
+        payload; nothing read it, so chat channels had nothing to render and the
+        founder got a link to the brief for the ONE event that exists because a
+        run is blocked on an answer.
+
+        Only ``needs_you`` pays for the extra read. A Decision that is gone, or
+        no longer pending, yields no answers rather than failing the send: the
+        outbox delivers late (retries, quiet hours) and a live keyboard over a
+        settled Decision invites a tap that can only fail — while the founder
+        still needs to be told, and the link still works.
+        """
+        if row.event != "needs_you" or not content.decision_id:
+            return content
+        from backend.workflow.application._checkpoint_shared import (  # noqa: PLC0415
+            _decision_actions,
+            _decision_options,
+        )
+
+        try:
+            decision = await session.get(Decision, uuid.UUID(content.decision_id))
+        except (ValueError, SQLAlchemyError):  # pragma: no cover — defensive
+            logger.warning("notify_decision_lookup_failed", decision_id=content.decision_id)
+            return content
+        if decision is None or decision.status != DecisionStatus.PENDING:
+            return content
+        actions = _decision_actions(decision) or []
+        options = _decision_options(decision) or []
+        return replace(
+            content,
+            decision_actions=tuple(
+                DecisionChoice(
+                    key=action.key,
+                    # Labels ship for every locale so the keyboard does no i18n
+                    # of its own; pick the workspace's here, at the boundary that
+                    # already resolved the language.
+                    label=(action.label_ko if language == "ko" else action.label_en),
+                )
+                for action in actions
+            ),
+            decision_options=tuple(options),
+        )
 
     @staticmethod
     async def _matrix(session: AsyncSession, workspace_id: uuid.UUID) -> dict[str, bool]:

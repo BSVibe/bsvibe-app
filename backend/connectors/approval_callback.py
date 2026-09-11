@@ -68,6 +68,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.connectors.decision_answer_queue import queue_answer
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.runner import PluginRunner
 from backend.identity.db import MembershipRow
@@ -88,7 +89,22 @@ _STRINGS: dict[str, dict[str, str]] = {
     "declined_answer": {"ko": "거절했어요.", "en": "Declined."},
     "approved_result": {"ko": "✅ 승인됨 — 내보냈어요.", "en": "✅ Approved — sent."},
     "declined_result": {"ko": "❌ 거절했어요.", "en": "❌ Declined."},
+    # 접수 문구다 — 반영은 엔진이 한다. "반영했어요"라고 쓰면 아직 안 일어난 일을
+    # 단언하게 된다(드레인 전에 형님이 화면을 열면 그대로 pending 이다).
+    "answered": {"ko": "답변을 받았어요.", "en": "Got your answer."},
+    "answered_result": {
+        "ko": "✅ 답했어요 — 곧 이어서 진행해요.",
+        "en": "✅ Answered — picking it up.",
+    },
 }
+
+#: The ``needs_you`` answer verbs (게이트 3 후속). They address a DECISION, not a
+#: held deliverable — and this layer only QUEUES the answer
+#: (:mod:`backend.connectors.decision_answer_queue`). The engine applies it
+#: through the same resolver the PWA uses, so there is still exactly one chain
+#: that records the answer, resumes the run, and dispatches ship/discard.
+_DECISION_ACTION_VERB = "dca"
+_DECISION_OPTION_VERB = "dco"
 
 
 @dataclass(frozen=True)
@@ -161,6 +177,23 @@ async def handle_approval_callback(  # noqa: PLR0911 — each return is one secu
         await _ack(runner, plugin, adapter, context, parsed, _t("no_permission", language))
         return True
 
+    # 1b) A ``needs_you`` answer addresses a Decision, not a held deliverable —
+    # branch BEFORE the deliverable-shaped checks below, which would read a
+    # decision tap as malformed.
+    if parsed.get("verb") in {_DECISION_ACTION_VERB, _DECISION_OPTION_VERB} and not parsed.get(
+        "malformed"
+    ):
+        return await _handle_decision_tap(
+            session=session,
+            account=account,
+            parsed=parsed,
+            language=language,
+            runner=runner,
+            plugin=plugin,
+            adapter=adapter,
+            context=context,
+        )
+
     # 2) Malformed data (unknown verb / no deliverable id) → friendly error.
     verb = parsed.get("verb")
     deliverable_raw = parsed.get("deliverable_id")
@@ -224,6 +257,103 @@ async def handle_approval_callback(  # noqa: PLR0911 — each return is one secu
         await session.commit()
         await _ack(runner, plugin, adapter, context, parsed, _t("declined_answer", language))
         await _update(runner, plugin, adapter, context, parsed, _t("declined_result", language))
+    return True
+
+
+async def _handle_decision_tap(
+    *,
+    session: AsyncSession,
+    account: ConnectorAccountRow,
+    parsed: dict[str, Any],
+    language: str,
+    runner: Any,
+    plugin: Any,
+    adapter: ApprovalConnectorAdapter,
+    context: Any,
+) -> bool:
+    """Queue a founder's ``needs_you`` answer for the engine to apply.
+
+    This layer RECORDS; it does not decide. Applying the answer resumes a run and
+    can ship or discard a deliverable — the engine's heaviest transition — and
+    the resolver transitively imports ``plugin.audit``, which the R2c gate
+    forbids here by design. The product already draws this line the same way for
+    the heavier direction: a chat MESSAGE lands a ``TriggerEvent`` and returns
+    202 while the IntakeWorker builds the run.
+
+    Validation stays here because it needs the Decision anyway: workspace scope
+    (the security boundary), still-pending, and — for an option — that the index
+    the card carried is one the Decision still offers. Resolving the index to its
+    TEXT here means the engine never has to know a button existed, and a queued
+    ``"1"`` can never reach the re-driven agent as the founder's answer.
+
+    Every refusal acks and changes nothing. The card outlives the Decision on the
+    founder's phone, so a late or stale tap is expected traffic, not an error.
+    """
+    from backend.workflow.application._checkpoint_shared import (  # noqa: PLC0415
+        _decision_options,
+    )
+    from backend.workflow.infrastructure.db import Decision, DecisionStatus  # noqa: PLC0415
+
+    try:
+        decision_id = uuid.UUID(str(parsed.get("decision_id")))
+    except ValueError:
+        await _ack(runner, plugin, adapter, context, parsed, _t("bad_request", language))
+        return True
+
+    decision = await session.get(Decision, decision_id)
+    # A crafted id from another tenant must look exactly like an already-handled
+    # tap, leaking nothing about whether it exists.
+    if (
+        decision is None
+        or decision.workspace_id != account.workspace_id
+        or decision.status != DecisionStatus.PENDING
+    ):
+        await _ack(runner, plugin, adapter, context, parsed, _t("already", language))
+        return True
+
+    answer_raw = str(parsed.get("decision_answer") or "")
+    action_key: str | None = None
+    answer = ""
+    if parsed.get("verb") == _DECISION_ACTION_VERB:
+        action_key = answer_raw
+    else:
+        options = _decision_options(decision) or []
+        try:
+            answer = options[int(answer_raw)]
+        except (ValueError, IndexError):
+            logger.info(
+                "decision_callback_option_out_of_range",
+                decision_id=str(decision_id),
+                index=answer_raw,
+                offered=len(options),
+            )
+            await _ack(runner, plugin, adapter, context, parsed, _t("bad_request", language))
+            return True
+
+    actor_id = await _owner_user_id(session, account.workspace_id)
+    if actor_id is None:  # pragma: no cover - a workspace always has an owner
+        await _ack(runner, plugin, adapter, context, parsed, _t("bad_request", language))
+        return True
+
+    if not queue_answer(
+        decision,
+        action_key=action_key,
+        answer=answer,
+        actor_id=actor_id,
+        connector=adapter.connector,
+    ):
+        # First tap wins; a second must not race the drain.
+        await _ack(runner, plugin, adapter, context, parsed, _t("already", language))
+        return True
+    await session.commit()
+    logger.info(
+        "decision_answer_queued",
+        connector=adapter.connector,
+        decision_id=str(decision_id),
+        action_key=action_key,
+    )
+    await _ack(runner, plugin, adapter, context, parsed, _t("answered", language))
+    await _update(runner, plugin, adapter, context, parsed, _t("answered_result", language))
     return True
 
 
