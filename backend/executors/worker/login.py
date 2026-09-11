@@ -52,6 +52,7 @@ from backend.executors.worker.credentials import (
     load_host_credentials,
     save_host_credentials,
 )
+from backend.shared.oauth_client_ids import DEVICE_CLIENT_ID
 
 logger = structlog.get_logger(__name__)
 
@@ -510,10 +511,15 @@ def run_login_manual(*, issuer: str) -> LoginResult:
 # and picks the credential up on its own. Nothing is ever pasted back, so no
 # secret crosses a channel a person reads.
 
-#: Client identifier the CLI presents. The device grant is a PUBLIC-client flow
-#: with no secret, and its security rests on the human approving a short code —
-#: not on client identity — so no dynamic registration step is needed here.
-DEVICE_CLIENT_ID = "bsvibe-cli"
+# Client identifier the CLI presents. The device grant is a PUBLIC-client flow
+# with no secret, and its security rests on the human approving a short code —
+# not on client identity — so no dynamic registration step is needed here.
+#
+# The literal itself lives in the shared kernel: the authorization server's
+# consent screen has to recognise this SAME id to tell the real CLI apart from
+# a name an attacker typed, and it must be able to do that without importing
+# this module. Re-exported here (it stays in ``__all__``) because this is the
+# name callers already reach for.
 DEVICE_SCOPES = "mcp:read mcp:write mcp:admin"
 #: Added to the poll interval each time the server answers ``slow_down``.
 DEVICE_SLOW_DOWN_STEP_S = 5

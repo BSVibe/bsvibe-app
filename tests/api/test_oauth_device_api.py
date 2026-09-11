@@ -32,12 +32,12 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import get_settings
-from backend.executors.worker.login import DEVICE_CLIENT_ID
 from backend.identity.db import UserRow
 from backend.identity.oauth_clients_service import FIRST_PARTY_DEVICE_CLIENTS
 from backend.identity.oauth_db import OAuthClientRow
 from backend.identity.oauth_keys import reset_signing_key_for_tests
 from backend.identity.workspaces_db import WorkspaceRow
+from backend.shared.oauth_client_ids import DEVICE_CLIENT_ID
 
 from .._support import db_engine, fake_current_user
 
@@ -258,7 +258,7 @@ async def test_metadata_advertises_the_device_grant(client) -> None:
 # ``client_id`` on this grant is caller-supplied and nothing verifies it, and
 # that is deliberate: RFC 8628 is a PUBLIC-client flow whose security rests on
 # the human approving a short code, not on client identity (see
-# ``backend.executors.worker.login.DEVICE_CLIENT_ID``). What the lookup owes
+# ``backend.shared.oauth_client_ids.DEVICE_CLIENT_ID``). What the lookup owes
 # the consent screen, then, is whether the string it is about to render
 # resolves to an identity this server knows — or is merely what the caller
 # typed. Showing an unverified string as "Allow <x> to sign in?" IS the

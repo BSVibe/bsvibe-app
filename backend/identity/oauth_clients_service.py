@@ -26,22 +26,23 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.executors.worker.login import DEVICE_CLIENT_ID
 from backend.identity.oauth_db import OAuthClientRow
+from backend.shared.oauth_client_ids import DEVICE_CLIENT_ID
 
 #: Clients this server vouches for WITHOUT a registration row.
 #:
 #: The RFC 8628 device grant deliberately has no registration step — it is a
 #: public-client flow whose security rests on the human approving a short code,
-#: not on client identity (see ``backend.executors.worker.login``). That is
+#: not on client identity (see ``backend.shared.oauth_client_ids``). That is
 #: why prod carries no ``oauth_clients`` row for ``bsvibe-cli`` even though it
 #: is the client behind most device sign-ins. Without this allow-list the real
 #: first-party CLI would be indistinguishable from a string an attacker typed,
 #: and the consent screen could only ever say "unverified".
 #:
-#: The key is imported, never re-typed: two copies of this literal is exactly
-#: how the CLI and the consent screen would drift into disagreeing about who
-#: the first party is.
+#: The key is imported from the shared kernel, never re-typed: two copies of
+#: this literal is exactly how the CLI and the consent screen would drift into
+#: disagreeing about who the first party is. It is NOT imported from the CLI's
+#: login module — the server does not depend on its clients.
 FIRST_PARTY_DEVICE_CLIENTS: dict[str, str] = {DEVICE_CLIENT_ID: "BSVibe CLI"}
 
 
