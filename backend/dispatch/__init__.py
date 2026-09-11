@@ -23,7 +23,7 @@ Lift E2 removed the classifier / tier / provider-allow-list plumbing
 ``backend.router.routing.run_routing.multi_account``). The new path is
 the only path.
 
-Design source: ``~/Docs/BSVibe_Dispatch_Redesign_2026-06-05.md``.
+Design source: ``internal-docs:BSVibe_Dispatch_Redesign_2026-06-05.md``.
 Founder policy: ``feedback_bsvibe_no_implicit_routing``.
 """
 

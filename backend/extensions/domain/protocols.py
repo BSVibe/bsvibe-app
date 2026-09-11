@@ -2,7 +2,7 @@
 # Owners: extensions/domain
 """Extension Protocols — Lift G publication surface, Lift S SDK re-export.
 
-Design source: ``~/Docs/BSVibe_Class_Architecture_Design_2026-05-30.md``
+Design source: ``internal-docs:BSVibe_Class_Architecture_Design_2026-05-30.md``
 v8 §13 Lift G + Lift S + D33 + D39 + D42 + v2 §7 extension hooks.
 
 Lift G formalized the engine-facing Protocols (``Plugin``, ``Skill``,

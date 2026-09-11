@@ -1,7 +1,7 @@
 """Lift S — bsvibe_sdk public surface contract.
 
 Verifies the SDK exposes exactly the Plugin-author-facing types declared in
-``~/Docs/BSVibe_Class_Architecture_Design_2026-05-30.md`` v8 §13 Lift S +
+``internal-docs:BSVibe_Class_Architecture_Design_2026-05-30.md`` v8 §13 Lift S +
 D39 + D42, and no more.
 
 The SDK is plugin-only (D42): no Skill Protocol, no engine internals.

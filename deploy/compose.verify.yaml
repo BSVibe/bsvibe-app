@@ -3,7 +3,7 @@
 # A run's changes are verified by standing the whole product up and driving its
 # real user surfaces, BEFORE the change merges. (Verifying after merge+deploy is
 # too late: prod is already contaminated, and there is nothing left for the
-# founder to approve. See ~/Docs/BSVibe_Production_Verification_Design.md §3.3.)
+# founder to approve. See docs/design/production-verification.md §3.3.)
 #
 # That stack comes up on the SAME machine that runs production, so isolation is
 # not a nicety — an un-neutralised collision takes prod down. This overlay

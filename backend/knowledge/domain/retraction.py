@@ -13,7 +13,7 @@ through, end to end:
 
 The signal is intentionally smaller than the full
 ``OntologyCorrectionSignal`` sketched in
-``~/Docs/BSVibe_Ontology_Inspect_Correct_Design_2026-05-30.md`` §2.1 —
+``internal-docs:BSVibe_Ontology_Inspect_Correct_Design_2026-05-30.md`` §2.1 —
 dependents-walk + correlation_run_id are deferred to a follow-up lift. The
 five required + one optional fields here are the load-bearing contract:
 identity (workspace + actor), target node, action, undo deadline, audit

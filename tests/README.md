@@ -9,7 +9,7 @@ on Postgres; local runs default to in-memory SQLite (see `tests/_support.py`).
 delivery / safe-mode / verify path MUST assert the CHANGE the lift was
 supposed to produce — never just a status transition or a row's existence.
 
-The audit (`~/Docs/BSVibe_Feature_Reality_Audit_2026-05-26.md`, RC-5) found
+The audit (`internal-docs:BSVibe_Feature_Reality_Audit_2026-05-26.md`, RC-5) found
 months of green tests on a hollow executor because assertions like
 "run reached `REVIEW_READY`" or "a `Deliverable` row exists" silently
 accepted output-less, verification-less, knowledge-less runs. The fix is

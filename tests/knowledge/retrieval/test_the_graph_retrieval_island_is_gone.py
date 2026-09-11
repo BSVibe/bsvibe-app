@@ -2,7 +2,7 @@
 
 감사 B1 은 *"엔티티/관계 그래프 백엔드 전체가 프로덕션 미도달 섬 (24모듈 · ~5,850 LOC)"*
 이라고 적었다. **실측이 그것을 두 군데 정정했다** — SoT
-``~/Docs/BSVibe_B1_Graph_Island_Measurement_2026-08-21.md``:
+``internal-docs:BSVibe_B1_Graph_Island_Measurement_2026-08-21.md``:
 
 1. 살아 있는 MCP 툴 ``bsvibe_graph_*`` 은 ``backend.knowledge.**code_graph**`` 를 쓴다.
    B1 이 지목한 ``knowledge.graph`` 가 **아니다**.

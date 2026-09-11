@@ -1,6 +1,6 @@
 """B1 (graph 절반) — 도달하지 않는 그래프 백엔드를 지운다. 실측 기준.
 
-SoT: ``~/Docs/BSVibe_B1_Graph_Island_Measurement_2026-08-21.md``.
+SoT: ``internal-docs:BSVibe_B1_Graph_Island_Measurement_2026-08-21.md``.
 #792 로 retrieval 쪽 7모듈이 나간 뒤 다시 잰 결과: 섬 53 · 문 24 · 도달 40 ·
 **미도달 9 (2,854 LOC)**.
 

@@ -1,7 +1,6 @@
 """Connector AuthStrategy — bsvibe as an OAuth *client* of third parties.
 
-The common skeleton (design ~/Docs/BSVibe_Connector_OAuth_AuthStrategy_Design_
-2026-06-05.md) that lets a workspace connect a connector with one click where
+The common skeleton (design internal-docs:BSVibe_Connector_OAuth_AuthStrategy_Design_2026-06-05.md) that lets a workspace connect a connector with one click where
 the provider supports OAuth, while token / local-path connectors keep their
 simpler controls. One :class:`~backend.connectors.auth.providers.OAuthProvider`
 interface, three knobs; storage + resolution never branch on provider.

@@ -21,7 +21,7 @@ The resolution is one mechanism, not two:
    tears them down before starting.
 
 ∴ **reclaiming the slot IS reclaiming the stack.** (See
-``~/Docs/BSVibe_Production_Verification_Design.md`` §3.3.3.)
+``docs/design/production-verification.md`` §3.3.3.)
 
 The SQLite fallback mirrors :mod:`backend.workflow.infrastructure.lease`: an
 in-process registry so test races are meaningful, while the real property —
