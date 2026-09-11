@@ -54,6 +54,12 @@ class NotificationContent:
     # actions (telegram) render Approve/Reject buttons carrying it in the
     # ``callback_data`` so the founder can settle the held delivery in place.
     deliverable_id: str | None = None
+    # 게이트 3 후속 — a ``needs_you`` card's tappable answers. The notify
+    # boundary loads the paused Decision and fills whichever shape it offers;
+    # a Decision with neither is free-text only and keeps the brief link.
+    decision_id: str | None = None
+    decision_actions: tuple[DecisionChoice, ...] = ()
+    decision_options: tuple[str, ...] = ()
     # The workspace's output language ("ko" / "en"), resolved by the NotifyWorker
     # push-render boundary — so a channel can localize button labels / result
     # lines. Defaults to "en" (the workspace-language fallback).
@@ -112,6 +118,43 @@ def _message_text(content: NotificationContent) -> str:
 # both connectors act on this shared ``"<verb>:<deliverable_id>"`` vocabulary.
 CALLBACK_APPROVE = "apv"
 CALLBACK_REJECT = "rej"
+
+# 게이트 3 후속 — the ``needs_you`` verb space. Distinct prefixes from
+# ``apv``/``rej`` because these address a DECISION (resolved through
+# ``resolve_checkpoint``), not a held Safe-Mode deliverable: one inbound handler
+# reads both, and a shared prefix would make it guess.
+#
+# ``callback_data`` is capped at 64 BYTES by the Bot API, and exceeding it does
+# not truncate — Telegram rejects the whole ``sendMessage``, so the founder gets
+# NO notification. A decision UUID is already 36 characters, which is why an
+# option travels as its INDEX and never as its text (prod's longest option: 159
+# characters).
+CALLBACK_DECISION_ACTION = "dca"
+CALLBACK_DECISION_OPTION = "dco"
+
+#: Longest button label we will render. Telegram accepts more, but a long label
+#: wraps into an unreadable slab on a phone — the full text lives in the message
+#: body, where it can wrap properly.
+_MAX_BUTTON_LABEL = 40
+
+
+@dataclass(frozen=True)
+class DecisionChoice:
+    """One tappable answer on a ``needs_you`` card.
+
+    ``key`` is the ``resolve_checkpoint`` action key (``ship`` / ``retry`` /
+    ``discard`` / ``acknowledge``); ``label`` is already localized —
+    ``_decision_actions`` stores both locales and the notify boundary picks one.
+    """
+
+    key: str
+    label: str
+
+
+def _ellipsize(text: str, limit: int = _MAX_BUTTON_LABEL) -> str:
+    """``text`` trimmed to a readable button label."""
+    clean = " ".join(text.split())
+    return clean if len(clean) <= limit else clean[: limit - 1].rstrip() + "…"
 
 
 def _callback_value(verb: str, deliverable_id: str) -> str:
@@ -228,6 +271,58 @@ def _approval_keyboard(content: NotificationContent) -> dict[str, Any] | None:
     }
 
 
+def _decision_keyboard(content: NotificationContent) -> dict[str, Any] | None:
+    """The inline keyboard that lets a founder answer a ``needs_you`` in place.
+
+    ``None`` for any other event, for a card with no ``decision_id`` to address,
+    and for a Decision that offers neither actions nor options — 3 of prod's 49
+    are free-text only, and an EMPTY keyboard would be worse than the link: a
+    button set we cannot populate invites a tap that answers nothing.
+
+    Actions come first: they are the Decision's own one-click answers and their
+    labels are already short. Options follow as numbers, because their text runs
+    to 159 characters in prod and the readable copy belongs in the body.
+    """
+    if content.event != "needs_you" or not content.decision_id:
+        return None
+    rows: list[list[dict[str, Any]]] = []
+    for action in content.decision_actions:
+        rows.append(
+            [
+                {
+                    "text": _ellipsize(action.label),
+                    "callback_data": (
+                        f"{CALLBACK_DECISION_ACTION}:{content.decision_id}:{action.key}"
+                    ),
+                }
+            ]
+        )
+    for index, option in enumerate(content.decision_options):
+        rows.append(
+            [
+                {
+                    "text": _ellipsize(f"{index + 1}. {option}"),
+                    "callback_data": (f"{CALLBACK_DECISION_OPTION}:{content.decision_id}:{index}"),
+                }
+            ]
+        )
+    return {"inline_keyboard": rows} if rows else None
+
+
+def _numbered_options_block(content: NotificationContent) -> str:
+    """The option texts, numbered to match their buttons.
+
+    Without this the founder taps "2." having never read option 2 — the button
+    carries a number precisely because the sentence does not fit on it.
+    """
+    if not content.decision_options:
+        return ""
+    return "\n".join(
+        f"{index + 1}. {html.escape(option.strip())}"
+        for index, option in enumerate(content.decision_options)
+    )
+
+
 def _telegram_html_text(content: NotificationContent) -> str:
     """Render the telegram card as an ``parse_mode=HTML`` message body.
 
@@ -244,6 +339,9 @@ def _telegram_html_text(content: NotificationContent) -> str:
         parts.append(html.escape(content.title.strip()))
     if content.body.strip():
         parts.append(html.escape(content.body.strip()))
+    options_block = _numbered_options_block(content)
+    if options_block:
+        parts.append(options_block)
     if content.cta_label and content.cta_url:
         parts.append(
             f'<a href="{html.escape(content.cta_url, quote=True)}">'
@@ -276,7 +374,7 @@ def build_telegram_notification(
         "text": _telegram_html_text(content),
         "parse_mode": "HTML",
     }
-    keyboard = _approval_keyboard(content)
+    keyboard = _approval_keyboard(content) or _decision_keyboard(content)
     if keyboard is not None:
         payload["reply_markup"] = keyboard
     return ShapedNotification(
