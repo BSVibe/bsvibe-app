@@ -1504,3 +1504,258 @@ async def test_task_timeout_reports_elapsed_time() -> None:
             await dispatch.await_completion(redis, session=s, task_id=task.id, timeout_s=0.3)
     assert exc.value.elapsed_s >= 0.3
     await redis.aclose()
+
+
+# --------------------------------------------------------------------------
+# A timed-out task must not be left at "dispatched" forever (2026-09-11)
+# --------------------------------------------------------------------------
+#
+# MEASURED, prod: a client_attach run's in-place verify-gate deriver task
+# (``cd987b69``) was dispatched to a host worker, which logged
+# ``task_completed success=True`` five seconds later. Hours later the row was
+# STILL ``status='dispatched'``, ``output=''``. The awaiter had burned its full
+# 180s verify budget and raised :class:`TaskTimeout`.
+#
+# ``grep '\.status = '`` across the backend finds exactly TWO writes to an
+# executor task's status: :func:`dispatch_task` (``dispatched``) and
+# :func:`record_result` (``done`` / ``failed``). Nothing moved a row OUT of
+# ``dispatched``: the :class:`ExecutorAdapter` timeout path only
+# ``cancel_task``s the worker's subprocess. Prod carries 147 such orphans since
+# June (138 / 6 / 2 / 1 per month — rare, never zero).
+#
+# The design already assumed this flip existed: ``record_result`` refuses a row
+# whose ``status != "dispatched"``, and the worker's cancel comment says "a late
+# ``failed`` POST would clobber a row it may have already terminal-flipped". It
+# just never happened. ``failed`` + an ``error_message`` is the honest minimum —
+# no new status value, and the 147 historical rows are left alone.
+
+
+async def _orphan_candidate(sf: Any, *, workspace_id: uuid.UUID, redis: Any) -> uuid.UUID:
+    """Create + dispatch one task, committed, and return its id."""
+    async with sf() as setup_s:
+        task = await dispatch.create_task(
+            setup_s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await setup_s.flush()
+        await dispatch.dispatch_task(redis, session=setup_s, task=task, worker_id=uuid.uuid4())
+        await setup_s.commit()
+        return task.id
+
+
+async def test_timeout_flips_an_orphaned_dispatched_row_to_failed() -> None:
+    """The awaiter gave up; the row must not stay ``dispatched`` forever.
+
+    ``failed`` + an ``error_message`` naming the timeout is what makes the
+    orphan legible — and what stops the row from looking, to every later
+    reader, like a task still in flight."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with shared_file_sessionmaker() as sf:
+        task_id = await _orphan_candidate(sf, workspace_id=workspace_id, redis=redis)
+
+        async with sf() as awaiter_s:
+            with pytest.raises(dispatch.TaskTimeout) as exc:
+                await dispatch.await_completion(
+                    redis,
+                    session=awaiter_s,
+                    task_id=task_id,
+                    timeout_s=0.3,
+                    session_factory=sf,
+                )
+
+        # The exception still carries exactly what it carried before — the
+        # status the awaiter OBSERVED, not the one the flip then wrote.
+        assert exc.value.task_id == task_id
+        assert exc.value.last_status == "dispatched"
+        assert exc.value.polls >= 1
+        assert exc.value.elapsed_s >= 0.3
+        assert "dispatched" in str(exc.value)
+
+        async with sf() as check_s:
+            row = await check_s.get(ExecutorTaskRow, task_id)
+            assert row is not None
+            assert row.status == "failed", "the orphan must be closed, not left in flight"
+            assert row.error_message, "a terminal row that names no reason is another orphan"
+            assert "0.3" in row.error_message, "the error must name the timeout it hit"
+            assert "worker" in row.error_message.lower(), (
+                "the error must say no worker result arrived"
+            )
+    await redis.aclose()
+
+
+async def test_the_timeout_flip_does_not_clobber_a_row_that_turned_terminal() -> None:
+    """The race window is real: the status read happens, THEN the worker's
+    result lands, THEN the flip runs. A conditional UPDATE
+    (``WHERE status = 'dispatched'``) is what keeps the flip from overwriting a
+    genuine ``done`` result with ``failed`` + an empty output."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    worker_id = uuid.uuid4()
+    async with shared_file_sessionmaker() as sf:
+        async with sf() as setup_s:
+            task = await dispatch.create_task(
+                setup_s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+            )
+            await setup_s.flush()
+            await dispatch.dispatch_task(redis, session=setup_s, task=task, worker_id=worker_id)
+            await setup_s.commit()
+            task_id = task.id
+
+        # The worker's result lands — this is the row state at the moment the
+        # (already-decided) flip would run.
+        async with sf() as worker_s:
+            await dispatch.record_result(
+                worker_s,
+                redis,
+                task_id=task_id,
+                worker_id=worker_id,
+                success=True,
+                output="the real answer",
+                error_message=None,
+            )
+            await worker_s.commit()
+
+        async with sf() as flip_s:
+            flipped = await dispatch._fail_orphaned_dispatched_row(
+                task_id, session=flip_s, session_factory=sf, timeout_s=0.3
+            )
+        assert flipped is False, "nothing was orphaned — the row had already closed"
+
+        async with sf() as check_s:
+            row = await check_s.get(ExecutorTaskRow, task_id)
+            assert row is not None
+            assert row.status == "done"
+            assert row.output == "the real answer"
+            assert row.error_message is None
+    await redis.aclose()
+
+
+async def test_a_flip_failure_never_masks_the_timeout(monkeypatch: Any) -> None:
+    """Best-effort: the flip is a courtesy to later readers, the
+    :class:`TaskTimeout` is the caller's contract. A DB hiccup while flipping
+    must not turn a legible timeout into an unrelated exception."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+
+    async def _explode(*_a: Any, **_kw: Any) -> bool:
+        raise RuntimeError("pool exhausted")
+
+    async with shared_file_sessionmaker() as sf:
+        task_id = await _orphan_candidate(sf, workspace_id=workspace_id, redis=redis)
+        monkeypatch.setattr(dispatch, "_flip_dispatched_to_failed", _explode)
+        async with sf() as awaiter_s:
+            with pytest.raises(dispatch.TaskTimeout) as exc:
+                await dispatch.await_completion(
+                    redis,
+                    session=awaiter_s,
+                    task_id=task_id,
+                    timeout_s=0.3,
+                    session_factory=sf,
+                )
+        assert exc.value.last_status == "dispatched"
+    await redis.aclose()
+
+
+async def test_only_a_still_dispatched_row_is_flipped() -> None:
+    """A row that never reached ``dispatched`` (still ``pending`` — never
+    handed to a worker) is a different failure and is left alone."""
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with shared_file_sessionmaker() as sf:
+        async with sf() as setup_s:
+            task = await dispatch.create_task(
+                setup_s, workspace_id=workspace_id, executor_type="claude_code", prompt="p"
+            )
+            await setup_s.commit()
+            task_id = task.id
+            assert task.status == "pending"
+
+        async with sf() as awaiter_s:
+            with pytest.raises(dispatch.TaskTimeout) as exc:
+                await dispatch.await_completion(
+                    redis,
+                    session=awaiter_s,
+                    task_id=task_id,
+                    timeout_s=0.3,
+                    session_factory=sf,
+                )
+        assert exc.value.last_status == "pending"
+
+        async with sf() as check_s:
+            row = await check_s.get(ExecutorTaskRow, task_id)
+            assert row is not None
+            assert row.status == "pending"
+            assert row.error_message is None
+    await redis.aclose()
+
+
+async def test_the_timeout_flip_is_conditional_on_real_postgres() -> None:
+    """The flip's guard is a ``WHERE``, so it is the DATABASE that enforces it —
+    and the siblings above run on SQLite, which is not the database prod uses.
+
+    Both branches, one PG transaction each: a still-``dispatched`` orphan is
+    closed ``failed``, and a row that already reached ``done`` is untouched."""
+    if not use_real_pg():
+        pytest.skip(
+            "the conditional UPDATE must be validated on real PostgreSQL "
+            "(citest-pg @ localhost:5442). Set BSVIBE_DATABASE_URL and start the container."
+        )
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker  # noqa: PLC0415
+
+    workspace_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with db_engine() as (engine, is_pg):
+        assert is_pg, "this test only runs against PostgreSQL"
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+
+        async with maker() as s:
+            orphan = await dispatch.create_task(
+                s, workspace_id=workspace_id, executor_type="claude_code", prompt="orphan"
+            )
+            closed = await dispatch.create_task(
+                s, workspace_id=workspace_id, executor_type="claude_code", prompt="closed"
+            )
+            await s.flush()
+            await dispatch.dispatch_task(redis, session=s, task=orphan, worker_id=worker_id)
+            await dispatch.dispatch_task(redis, session=s, task=closed, worker_id=worker_id)
+            await s.commit()
+            orphan_id, closed_id = orphan.id, closed.id
+
+        async with maker() as s:
+            await dispatch.record_result(
+                s,
+                redis,
+                task_id=closed_id,
+                worker_id=worker_id,
+                success=True,
+                output="the real answer",
+                error_message=None,
+            )
+            await s.commit()
+
+        async with maker() as s:
+            assert (
+                await dispatch._fail_orphaned_dispatched_row(
+                    orphan_id, session=s, session_factory=maker, timeout_s=180.0
+                )
+                is True
+            )
+            assert (
+                await dispatch._fail_orphaned_dispatched_row(
+                    closed_id, session=s, session_factory=maker, timeout_s=180.0
+                )
+                is False
+            )
+
+        async with maker() as s:
+            flipped = await s.get(ExecutorTaskRow, orphan_id)
+            intact = await s.get(ExecutorTaskRow, closed_id)
+            assert flipped is not None and intact is not None
+            assert flipped.status == "failed"
+            assert "180s" in (flipped.error_message or "")
+            assert intact.status == "done"
+            assert intact.output == "the real answer"
+            assert intact.error_message is None
+    await redis.aclose()

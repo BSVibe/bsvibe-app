@@ -180,6 +180,52 @@ _EXEC_TIMEOUT_S = 900.0
 #: tail, small enough that a runaway log cannot flood the result POST.
 _EXEC_OUTPUT_MAX = 20_000
 
+#: The one path every worker result is reported on. A single constant so the
+#: three call sites cannot drift apart.
+_RESULT_PATH = "/api/v1/workers/result"
+
+#: How much of a REFUSED result response is echoed into the log. A rejection can
+#: come back as a whole HTML error page; a bounded prefix is enough to identify
+#: it. Never log credentials — the headers are not echoed, only the body.
+_RESULT_ERROR_BODY_MAX = 500
+
+
+async def _post_result(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    *,
+    payload: dict[str, Any],
+) -> None:
+    """POST one task result and CHECK the answer — the ONLY way to report one.
+
+    2026-09-11, measured in prod: a client_attach run's verify-gate deriver task
+    (``cd987b69``) ran here in 5 seconds and this worker logged
+    ``task_completed success=True``. The DB row stayed ``status='dispatched'``
+    with ``output=''`` for hours; the backend burned its full 180s verify budget
+    and recorded ``gate_deriver_failed``, and the run settled ``review_ready``
+    with ``proof_state='untested'``. The three result POSTs never called
+    ``raise_for_status()`` — unlike :func:`register` and the poll in
+    :func:`run_once`, which both do — so any non-2xx (401 / 422 / 500, a proxy
+    error) was discarded and the very next line claimed success. WHY that one
+    POST was refused is unknown: the backend logs for that window are gone.
+
+    Raising is the point, not a regression: :func:`run_once`'s ``_run`` wrapper
+    already catches ``Exception`` and logs ``task_execution_error``, so the poll
+    loop survives and the failure becomes LOUD instead of a false
+    ``task_completed``. No retry is added here — reporting honestly is a
+    separate question from reporting again.
+    """
+    res = await client.post(_RESULT_PATH, headers=headers, json=payload)
+    if res.is_success:
+        return
+    logger.error(
+        "executor_result_post_rejected",
+        task_id=payload.get("task_id"),
+        status_code=res.status_code,
+        body=res.text[:_RESULT_ERROR_BODY_MAX],
+    )
+    res.raise_for_status()
+
 
 def _exec_timeout_error(command: str) -> str:
     """The ``error_message`` posted when a command exceeds ``_EXEC_TIMEOUT_S``.
@@ -311,10 +357,10 @@ async def _post_exec_result(
     error: str | None,
 ) -> None:
     """Report one exec result on the SAME surfaces an agent turn uses."""
-    await client.post(
-        "/api/v1/workers/result",
-        headers=headers,
-        json={
+    await _post_result(
+        client,
+        headers,
+        payload={
             "task_id": task_id,
             "success": success,
             "output": output,
@@ -402,10 +448,17 @@ async def handle_task(
             logger.warning(
                 "client_attach_workspace_missing", task_id=task_id, workspace_dir=user_dir
             )
-            await client.post(
-                "/api/v1/workers/result",
-                headers=headers,
-                json={"task_id": task_id, "success": False, "output": "", "error_message": msg},
+            # Checked (2026-09-11): this guard exists to fail LOUDLY, and a
+            # report the backend refuses is exactly as silent as no report.
+            await _post_result(
+                client,
+                headers,
+                payload={
+                    "task_id": task_id,
+                    "success": False,
+                    "output": "",
+                    "error_message": msg,
+                },
             )
             if redis is not None:
                 await _publish(
@@ -462,10 +515,10 @@ async def handle_task(
             local_workspace=local_workspace,
             cleanup_workspace=cleanup_workspace,
         )
-        await client.post(
-            "/api/v1/workers/result",
-            headers=headers,
-            json={
+        await _post_result(
+            client,
+            headers,
+            payload={
                 "task_id": task_id,
                 "success": outcome.success,
                 "output": "".join(outcome.parts),
