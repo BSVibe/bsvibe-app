@@ -1,7 +1,7 @@
 """ResourceBindingRepository — the per-Product × Connector 3-knob binding.
 
 A Resource (Workflow §3) is the binding that carries **selection**, **trigger
-{enabled, filters}**, and **output_mode {safe|direct}** for one Product against
+{filters}**, and **output_mode {safe|direct}** for one Product against
 one ConnectorAccount + a connector-side ``resource_id``. The repository is
 workspace-scoped; ``find_binding(connector_account_id, resource_id)`` is the
 lookup the Receive stage (B10b) will use to resolve an inbound webhook back to a
@@ -74,7 +74,7 @@ async def test_create_persists_three_knobs(sf) -> None:
             connector_account_id=conn_id,
             resource_id="bsvibe/bsvibe-site",
             selection={"labels": ["bug"]},
-            trigger={"enabled": True, "filters": {"branch": "main"}},
+            trigger={"filters": {"branch": "main"}},
             output_mode="direct",
         )
         await s.commit()
@@ -88,11 +88,11 @@ async def test_create_persists_three_knobs(sf) -> None:
         assert got.connector_account_id == conn_id
         assert got.resource_id == "bsvibe/bsvibe-site"
         assert got.selection == {"labels": ["bug"]}
-        assert got.trigger == {"enabled": True, "filters": {"branch": "main"}}
+        assert got.trigger == {"filters": {"branch": "main"}}
         assert got.output_mode == "direct"
 
 
-async def test_create_defaults_safe_and_disabled_trigger(sf) -> None:
+async def test_create_defaults_safe_with_no_filters(sf) -> None:
     ws = uuid.uuid4()
     product_id, conn_id = await _seed_parents(sf, workspace_id=ws)
 
@@ -107,7 +107,7 @@ async def test_create_defaults_safe_and_disabled_trigger(sf) -> None:
         await s.commit()
         # Defaults per spec: output_mode 'safe', trigger disabled with no filters.
         assert row.output_mode == "safe"
-        assert row.trigger == {"enabled": False, "filters": {}}
+        assert row.trigger == {"filters": {}}
         assert row.selection == {}
 
 
@@ -153,7 +153,7 @@ async def test_update_changes_knobs(sf) -> None:
         await repo.update(
             row,
             output_mode="direct",
-            trigger={"enabled": True, "filters": {}},
+            trigger={"filters": {}},
             selection={"folder": "inbox"},
         )
         await s.commit()
@@ -163,7 +163,7 @@ async def test_update_changes_knobs(sf) -> None:
         got = await repo.get(workspace_id=ws, binding_id=binding_id)
         assert got is not None
         assert got.output_mode == "direct"
-        assert got.trigger == {"enabled": True, "filters": {}}
+        assert got.trigger == {"filters": {}}
         assert got.selection == {"folder": "inbox"}
 
 

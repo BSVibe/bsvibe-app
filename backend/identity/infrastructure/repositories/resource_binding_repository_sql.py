@@ -34,7 +34,15 @@ def _validate_output_mode(value: str) -> str:
 
 
 def _default_trigger() -> dict[str, Any]:
-    return {"enabled": False, "filters": {}}
+    """A fresh binding's trigger knob: no filters — i.e. act on everything.
+
+    ``enabled`` used to live here and **nothing ever read it** (the Receive stage
+    consumes ``filters`` only), so a founder could toggle it and the trigger kept
+    firing. Removed rather than wired up: ``filters`` already expresses "do I
+    act", and the stored default was ``False`` — activating it would have
+    silently switched off every live binding.
+    """
+    return {"filters": {}}
 
 
 class SqlAlchemyResourceBindingRepository:

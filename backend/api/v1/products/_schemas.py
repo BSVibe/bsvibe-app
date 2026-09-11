@@ -168,11 +168,15 @@ class ResourceResponse(BaseModel):
 
 
 class TriggerKnob(BaseModel):
-    """The trigger knob — ``{"enabled": bool, "filters": dict}``."""
+    """The trigger knob — ``{"filters": dict}``.
+
+    ``extra="forbid"`` is load-bearing here: an older client still sending
+    ``enabled`` is REFUSED rather than silently storing a value nothing reads,
+    which is the state this field was removed from.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = False
     filters: dict[str, Any] = Field(default_factory=dict)
 
 

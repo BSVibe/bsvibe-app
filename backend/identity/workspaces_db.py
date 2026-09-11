@@ -299,7 +299,12 @@ class ResourceBindingRow(WorkspacesBase):
     knobs for one Product × ConnectorAccount pairing:
 
     * ``selection`` — connector-shaped scope (e.g. ``{"labels": ["bug"]}``).
-    * ``trigger`` — ``{"enabled": bool, "filters": dict}`` (the *do I act* knob).
+    * ``trigger`` — ``{"filters": dict}`` (the *do I act* knob). Simple
+      key-equality filters applied by the Receive stage; an empty ``filters``
+      acts on everything. It briefly also carried ``enabled``, which no code
+      ever read — removed 2026-09-11 rather than wired up, because ``filters``
+      already says whether to act and the stored default (``False``) would have
+      switched off every live binding the moment it gained a consumer.
     * ``output_mode`` — ``'safe'`` (queue for founder approval, default) or
       ``'direct'`` (deliver straight out). See Workflow §1/§3/§12.5.
 
@@ -340,10 +345,16 @@ class ResourceBindingRow(WorkspacesBase):
     resource_id: Mapped[str] = mapped_column(String(512), nullable=False)
     # Selection scope (connector-shaped). Empty ``{}`` = the whole resource.
     selection: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    # Trigger knob: {"enabled": bool, "filters": dict}. Default = disabled,
-    # no filters (the safest default — a fresh binding doesn't auto-fire).
+    # Trigger knob: {"filters": dict}. Default = no filters, i.e. act on
+    # everything the binding routes here; a founder narrows it by adding
+    # key-equality filters the Receive stage checks.
+    #
+    # This default previously ALSO carried ``enabled: False`` with the comment
+    # "the safest default — a fresh binding doesn't auto-fire". Nothing ever read
+    # it, so it was neither safe nor a default — it was a stored value that
+    # governed nothing, and the two live prod bindings both held ``False``.
     trigger: Mapped[dict[str, Any]] = mapped_column(
-        JSON, nullable=False, default=lambda: {"enabled": False, "filters": {}}
+        JSON, nullable=False, default=lambda: {"filters": {}}
     )
     # Output mode: 'safe' = Safe Mode queue (founder approves), 'direct' =
     # auto-deliver. TEXT + app-side validation keeps this portable across the
