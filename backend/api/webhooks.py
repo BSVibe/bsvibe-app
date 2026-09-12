@@ -57,6 +57,10 @@ from backend.extensions.plugin.webhook_registry import (
 )
 from backend.identity.workspaces_db import ProductRow
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.shared.wire_kinds import (
+    PAYLOAD_KEY_CONNECTOR_ACCOUNT_ID,
+    PAYLOAD_KEY_RESOURCE_ID,
+)
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
 from backend.workflow.application.intake.webhook import WebhookReceiver
 from bsvibe_sdk import WebhookSignatureError
@@ -64,6 +68,7 @@ from bsvibe_sdk import WebhookSignatureError
 if TYPE_CHECKING:  # pragma: no cover — annotation only, so this module keeps the
     # narrow runtime import surface R2c guards (see the contract in pyproject).
     from backend.connectors.db import ConnectorAccountRow
+    from backend.identity.workspaces_db import ResourceBindingRow
 
 logger = structlog.get_logger(__name__)
 
@@ -134,13 +139,14 @@ def _resource_id_for(connector: str, payload: dict[str, Any]) -> str | None:
     return str(value)
 
 
-async def _product_id_from_binding(
+async def _binding_for_event(
     session: AsyncSession,
     *,
     account: ConnectorAccountRow,
     payload: dict[str, Any],
-) -> uuid.UUID | None:
-    """The product the founder bound to THIS connector account + resource.
+) -> tuple[ResourceBindingRow, str] | None:
+    """The binding the founder made for THIS connector account + resource, plus
+    the resource id it matched on.
 
     The call site the ``(connector_account_id, resource_id)`` index was built for
     — its own docstring says *"what Receive (B10b) will use to resolve an inbound
@@ -173,8 +179,58 @@ async def _product_id_from_binding(
         "inbound_product_resolved_from_binding",
         connector=account.connector,
         product_id=str(binding.product_id),
+        binding_id=str(binding.id),
     )
-    return binding.product_id
+    return binding, resource_id
+
+
+async def _resolve_inbound_product(
+    session: AsyncSession,
+    *,
+    account: ConnectorAccountRow,
+    parsed_product_id: uuid.UUID | None,
+    payload: dict[str, Any],
+) -> uuid.UUID | None:
+    """Which product this delivery belongs to — and the Receive routing keys.
+
+    Order is the point. The parser's own ``product_id`` wins if it set one; then
+    the founder's EXPLICIT Product × Connector binding, because that is a stated
+    intent where the repo path below is only an inference; then the repo match.
+    If the fallback ran first, a github event whose repo matches one product
+    would silently outrank a binding the founder made to a different one.
+
+    **Side effect, and the reason this function exists.** When the binding
+    resolves, ``payload`` is stamped in place with the ``(connector_account_id,
+    resource_id)`` pair the Receive stage
+    (:func:`backend.workflow.application.stages.intake.receive`) looks a binding
+    up by — so the stage lands on the SAME binding off the durable row and
+    applies its ``trigger.filters`` and ``selection`` enrichment. #922 resolved
+    the binding here but never wrote those keys: prod's 13 webhook trigger
+    events carried neither, Receive fell through to pass-through every single
+    time, and ``filters`` went with it — never once applied in production.
+
+    Only on an actual match. An unbound delivery keeps the payload the parser
+    built, and with it today's pass-through: a stamped key with no binding
+    behind it would only buy Receive a lookup that cannot hit.
+    """
+    if parsed_product_id is not None:
+        return parsed_product_id
+
+    resolved = await _binding_for_event(session, account=account, payload=payload)
+    if resolved is not None:
+        binding, resource_id = resolved
+        payload[PAYLOAD_KEY_CONNECTOR_ACCOUNT_ID] = str(account.id)
+        payload[PAYLOAD_KEY_RESOURCE_ID] = resource_id
+        return binding.product_id
+
+    # Unify inbound with the Direct path: a github issue/PR is processed like a
+    # direct message ON the product it came from, so the run clones that repo +
+    # works in context + delivers a repo-native PR — instead of running unbound
+    # in an empty workspace.
+    repo = payload.get("repo") or account.external_ref
+    if repo:
+        return await _product_id_for_repo(session, account.workspace_id, str(repo))
+    return None
 
 
 async def _product_id_for_repo(
@@ -301,31 +357,19 @@ async def receive_connector_webhook(  # noqa: PLR0911 — 404/401/handshake/call
     # The parser already computed a stable idempotency_key (e.g. Slack event_id,
     # GitHub delivery id); thread it through the header the receiver honours so
     # a redelivery collapses regardless of header presence on the wire.
-    # Unify inbound with the Direct path: a github issue/PR is processed like a
-    # direct message ON the product it came from. When the parser didn't bind a
-    # product, resolve it from the repo (the event's repo, else the connector's
-    # bound repo) so the run clones that repo + works in context + delivers a
-    # repo-native PR — instead of running unbound in an empty workspace.
-    product_id = event.product_id
-    if product_id is None:
-        # The founder's EXPLICIT Product × Connector binding first: it is a
-        # stated intent, where the repo path below is an inference. This is also
-        # the only route a chat connector has — telegram / discord / slack carry
-        # no repo, so before this they resolved to no product by construction.
-        product_id = await _product_id_from_binding(
-            session, account=account, payload=(event.payload or {})
-        )
-    if product_id is None:
-        repo = (event.payload or {}).get("repo") or account.external_ref
-        if repo:
-            product_id = await _product_id_for_repo(session, account.workspace_id, str(repo))
+    # The payload we STORE — ``_resolve_inbound_product`` stamps the Receive
+    # stage's routing keys onto it when the founder's binding matches.
+    payload: dict[str, Any] = dict(event.payload or {})
+    product_id = await _resolve_inbound_product(
+        session, account=account, parsed_product_id=event.product_id, payload=payload
+    )
 
     receiver = WebhookReceiver(session)
     outcome = await receiver.handle(
         workspace_id=event.workspace_id,
         source=event.source,
         headers={"X-Idempotency-Key": event.idempotency_key},
-        body=event.payload,
+        body=payload,
         product_id=product_id,
         trace_id=event.trace_id,
     )

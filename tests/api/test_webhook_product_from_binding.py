@@ -37,13 +37,27 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.api.webhooks import _product_id_from_binding, _resource_id_for
+from backend.api.webhooks import _binding_for_event, _resource_id_for
 from backend.connectors.db import ConnectorAccountRow
 from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 
 from .._support import db_engine
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _product_id_from_binding(
+    session: AsyncSession, *, account: ConnectorAccountRow, payload: dict[str, Any]
+) -> uuid.UUID | None:
+    """The product half of ``_binding_for_event`` — what this file asserts on.
+
+    The route helper now returns the BINDING (plus the resource id it matched
+    on), because the route also has to stamp those routing keys onto the payload
+    it stores for the Receive stage. Every assertion below is about WHICH product
+    a delivery lands on, so it reads that one field off the result.
+    """
+    resolved = await _binding_for_event(session, account=account, payload=payload)
+    return None if resolved is None else resolved[0].product_id
 
 
 @pytest_asyncio.fixture
@@ -270,8 +284,13 @@ def test_the_route_asks_the_binding_before_the_repo_fallback() -> None:
 
     from backend.api import webhooks
 
-    source = inspect.getsource(webhooks.receive_connector_webhook)
-    assert "_product_id_from_binding" in source, "the route never asks the binding"
-    assert source.index("_product_id_from_binding") < source.index("_product_id_for_repo"), (
+    # The route delegates the whole "which product" decision to one resolver...
+    route = inspect.getsource(webhooks.receive_connector_webhook)
+    assert "_resolve_inbound_product" in route, "the route never resolves a product"
+
+    # ...and inside it, the binding is asked before the repo inference.
+    source = inspect.getsource(webhooks._resolve_inbound_product)
+    assert "_binding_for_event" in source, "the resolver never asks the binding"
+    assert source.index("_binding_for_event") < source.index("_product_id_for_repo"), (
         "the repo inference must not outrank the founder's explicit binding"
     )
