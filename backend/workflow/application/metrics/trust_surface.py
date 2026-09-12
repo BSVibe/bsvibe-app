@@ -1,6 +1,6 @@
 """Proof-surface trust metrics — touch time, deposit rate, trend arrow, contract strength.
 
-Lift M4a. The design SoT is ``~/Docs/BSVibe_Proof_Surface_Design_2026-05-30.md``;
+Lift M4a. The design SoT is ``internal-docs:BSVibe_Proof_Surface_Design_2026-05-30.md``;
 this module implements §1 (touch_minutes + deposit_count) + §2.1 (Signal
 A/B/C decomposition) + §1.3 (north-star ratio + arrow) + §2.1 goodhart
 cross-check.

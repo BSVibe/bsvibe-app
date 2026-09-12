@@ -6,7 +6,7 @@ The SDK is the plugin-author-facing surface — Protocols, decorators,
 and helper types that external plugin authors import to write a BSVibe
 plugin without depending on backend internals.
 
-Design source: `~/Docs/BSVibe_Class_Architecture_Design_2026-05-30.md`
+Design source: `internal-docs:BSVibe_Class_Architecture_Design_2026-05-30.md`
 (v8 §13 Lift S + D39 + D42).
 
 ## Status

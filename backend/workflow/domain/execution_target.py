@@ -10,7 +10,7 @@ A product declares its execution target in its free-form ``metadata`` object
 * ``client_attach`` — the agent runs natively in the user's OWN working
   directory on a registered worker host, continuing the user's work in place
   (Claude Code local). Files / env / toolchain are whatever is already there;
-  the user's machine is trusted. See ``~/Docs/BSVibe_Client_Attach_Execution_Design.md``.
+  the user's machine is trusted. See ``docs/design/client-attach-execution.md``.
 
 This module is the SINGLE reader + validator so dispatch, the worker, and the
 read models never drift on the vocabulary or the default.

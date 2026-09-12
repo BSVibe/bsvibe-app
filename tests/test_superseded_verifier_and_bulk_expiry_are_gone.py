@@ -1,6 +1,6 @@
 """추월당한 두 표면을 지운다 — ``VerifierWorker`` 와 벌크 Safe Mode 만료.
 
-`~/Docs/BSVibe_Reality_Audit_2026-07-14.md` 의 **5-4** 와 **5-12**. 그 문서는
+`internal-docs:BSVibe_Reality_Audit_2026-07-14.md` 의 **5-4** 와 **5-12**. 그 문서는
 STALE 배너를 달고 있어 **재측정 후에** 착수했다 — 같은 표의 5-11
 (``SafeModeBoundary.gate``)은 이미 해소돼 있었고, MCP parity 5갭도 대부분
 메워져 있었다. 이 둘만 여전히 열려 있었다.

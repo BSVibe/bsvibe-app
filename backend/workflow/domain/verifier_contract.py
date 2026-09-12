@@ -1,6 +1,6 @@
 """Verification Contract — the work LLM's declared "how this is checked".
 
-Design: ``~/Docs/BSNexus_Verification_Contract_Design_2026-05-17.md``.
+Design: ``internal-docs:BSNexus_Verification_Contract_Design_2026-05-17.md``.
 
 The work LLM declares a contract before doing the work (via the
 ``declare_verification`` tool). The contract is a list of checks; each

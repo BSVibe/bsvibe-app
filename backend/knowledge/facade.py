@@ -7,7 +7,7 @@ callers are switched to it yet; concrete implementations land in subsequent
 lifts which move the existing ``backend/knowledge`` ingest / retrieval /
 canonicalization / graph code behind this facade.
 
-Design source: ``~/Docs/BSVibe_Class_Architecture_Design_2026-05-30.md`` v8 §5.2.
+Design source: ``internal-docs:BSVibe_Class_Architecture_Design_2026-05-30.md`` v8 §5.2.
 """
 
 from __future__ import annotations

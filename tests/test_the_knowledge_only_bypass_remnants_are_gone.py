@@ -2,7 +2,7 @@
 
 ## 우회 자체는 이미 사라졌다
 
-설계 SoT ``~/Docs/BSVibe_Tool_Surface_Design.md`` §5 의 PR 1·2 는 이미 끝났다:
+설계 SoT ``docs/design/tool-surface.md`` §5 의 PR 1·2 는 이미 끝났다:
 
 * **PR 1** (우회 제거) — ``knowledge_only`` 로 분기해 툴 0개로 답하던 경로가 없다.
   모든 런이 같은 표면을 받는다. (2026-08-24 이후 그 표면은 실행모델로도 안 갈린다 —

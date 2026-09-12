@@ -1,7 +1,7 @@
 """connector_oauth_tokens — OAuth token + pending-state tables (Lift 0).
 
-The connector AuthStrategy skeleton (design ~/Docs/BSVibe_Connector_OAuth_
-AuthStrategy_Design_2026-06-05.md §4). Two tables:
+The connector AuthStrategy skeleton (design
+internal-docs:BSVibe_Connector_OAuth_AuthStrategy_Design_2026-06-05.md §4). Two tables:
 
 * ``connector_oauth_tokens`` — encrypted access/refresh material, 1:1 with a
   ``connector_accounts`` binding (FK CASCADE + unique). Refresh/expiry

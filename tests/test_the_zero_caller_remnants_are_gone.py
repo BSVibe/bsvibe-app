@@ -1,6 +1,6 @@
 """호출자 0인 확장점·잔재 7건을 지운다 — 감사가 아니라 실측 기준으로.
 
-`~/Docs/BSVibe_Unnecessary_Structure_Audit_2026-08-19.md` 의 A7 · B5 · B10 ·
+`internal-docs:BSVibe_Unnecessary_Structure_Audit_2026-08-19.md` 의 A7 · B5 · B10 ·
 D2 · D4 · D7 · D12. **감사 문장을 근거로 쓰지 않고 전부 현재 코드로 다시 셌다** —
 그 과정에서 감사가 세 군데 틀린 것을 찾았다.
 
