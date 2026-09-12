@@ -9,7 +9,7 @@
 | 파일 | 역할 |
 |---|---|
 | **[STATUS.md](./STATUS.md)** | **Master Status SoT.** 전체 상태·아키텍처·구현 표·운영. 모든 세션은 여기서 시작한다. Living — in-place 갱신, 새 status 파일 만들지 말 것. |
-| **[HANDOFF.md](./HANDOFF.md)** | 가장 최근 세션 인수인계. **최신 1건만 유지** — 새 세션이 끝나면 이 파일을 덮어쓰고, 이전 판은 Notion 으로 옮긴다. |
+| **[HANDOFF.md](./HANDOFF.md)** | 가장 최근 세션 인수인계. **최신 1건만 유지** — 새 세션이 끝나면 이 파일을 덮어쓰고, **덮어쓰기 전에 직전 판을 [Notion 아카이브](https://app.notion.com/p/3d9edf4af708814aa578ddb83643bbca) 로 옮긴다.** |
 | **[audit/multiuser-readiness-2026-09-10.md](./audit/multiuser-readiness-2026-09-10.md)** | 다중 사용자 준비도 감사. 게이트 0~4 로드맵이 여기 있다. 열린 작업은 GitHub 이슈. |
 | **[이슈](https://github.com/BSVibe/bsvibe-app/issues)** | **열린 작업은 전부 여기.** 게이트별 `gate-1`~`gate-4` · 리포 밖은 `founder-action` · 설계 트랙은 `open-track`. 문서 안의 백로그 목록은 낡는다. |
 
@@ -37,6 +37,7 @@
 - **할 일이면 GitHub 이슈.** 문서 안의 `- [ ]` 는 그 문서 범위의 검증 항목일 때만.
 - **종결된 이력은 `BSVibe/internal-docs`.** 코드가 인용할 때는 `internal-docs:<파일명>`
   으로 표기한다 — 열리지 않는 경로를 경로처럼 쓰지 않는다.
-- **과거 인수인계는 Notion.** 날짜별 세션 로그는 사람이 읽는 것이고, 에이전트가
-  코딩 중 볼 것은 `STATUS.md` 하나로 수렴한다.
+- **과거 인수인계는 [Notion 아카이브](https://app.notion.com/p/3d9edf4af708814aa578ddb83643bbca).** 날짜별 세션 로그는 사람이 읽는
+  것이고, 에이전트가 코딩 중 볼 것은 `STATUS.md` 하나로 수렴한다. 2026-09-07~09-10
+  5건이 거기 있다.
 - **회고 자산은 `~/.claude/skills/`** — 함정·교훈은 스킬 시스템에.
