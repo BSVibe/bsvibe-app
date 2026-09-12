@@ -13,7 +13,7 @@
 > | 경로 | 내용 |
 > |---|---|
 > | `docs/STATUS.md` | Master Status SoT — 세션은 여기서 시작한다 |
-> | `docs/HANDOFF.md` | 가장 최근 세션 인수인계 (**최신 1건만**; 과거분은 Notion) |
+> | `docs/HANDOFF.md` | 가장 최근 세션 인수인계 (**최신 1건만**; 과거분은 [Notion 아카이브](https://app.notion.com/p/3d9edf4af708814aa578ddb83643bbca)) |
 > | `docs/architecture/` | 불변식 + 전략·UX·백엔드 설계 |
 > | `docs/design/` | 살아있는 실행·검증 설계 계약 |
 > | `docs/audit/` | 현행 감사 (다중 사용자 준비도 = 게이트 0~4 로드맵) |
