@@ -1,6 +1,6 @@
 # BSVibe 세션 인수인계 — 2026-09-11
 
-**prod**: `f0629ba` (배포·실행검증 완료) · **열린 PR**: 없음 · **워크트리**: 없음
+**prod**: `3d2b61b` (§Ⅷ 이어진 세션 #941 까지 배포·실행검증 완료) · **열린 PR**: 없음 · **워크트리**: 없음
 **워커**: 호스트 3개 — 배포마다 `launchctl kickstart -k gui/501/com.bsvibe.worker{,-admin,-mac-mini-e2e}`
 
 이 세션은 인수인계(09-10)의 **게이트 1 후속**으로 시작해 PR **#914~#925 열두 개**를 냈고,
@@ -258,3 +258,44 @@ PWA(Vercel, main 머지 시 자동)는 두 로케일 다 서빙 확인.
 run_caps · verify_slots · device_auth 무인증 · `load_run_cap` 의 `None`=uncapped ·
 `lookup_public_client` 무인증(*"client_id is already visible in the user-facing URL"*).
 ⇒ **"X 가 없다/틀렸다"를 적기 전에 그 자리의 독스트링을 먼저 읽어라.** 다섯 번 중 다섯 번 거기 있었다.
+
+---
+
+## §Ⅷ — 같은 날 이어진 세션 · prod `3d2b61b`
+
+### ✅ PR #941 — 레이트리밋 키가 공격자 손에 있었다 (prod `3d2b61b`)
+
+**⚠️ "리미터를 추가한다"가 아니라 "기존 리미터가 이미 무력이었다"가 본론이다.**
+`ProxyHeadersMiddleware(trusted_hosts="*")` → uvicorn 0.47 `always_trust` → `x_forwarded_for_hosts[**0**]`.
+Cloudflare 는 XFF 를 **덮어쓰지 않고 뒤에 덧붙이므로** 첫 항목은 **호출자가 타이핑한 값**이다.
+
+| 클라이언트가 보낸 XFF | 앱이 인식한 IP |
+|---|---|
+| (없음) | `203.0.113.9` ✅ |
+| `1.2.3.4, 203.0.113.9` | **`1.2.3.4`** |
+| `9.9.9.9, …`(매번 다름) | **`9.9.9.9`** ← 요청마다 새 버킷 |
+| `198.51.100.7, …`(피해자) | **`198.51.100.7`** ← **남의 버킷 오염 = 표적 잠금** |
+
+⇒ 기존 DCR 리미터(10회/1h)는 헤더 한 줄로 우회됐고, **역으로 남을 잠글 수 있었다.**
+수정: `backend/shared/client_ip.py` 가 **`CF-Connecting-IP`**(CF 가 **set** 하므로 위조 불가,
+유일 인그레스가 CF 터널) 우선, 없으면 기존 동작으로 폴백하되 **폴백을 경고 로그로 드러낸다**.
+`trusted_hosts="*"` 는 그대로 — 그 주석대로 `X-Forwarded-Proto`(https URL 생성)에 하중이다.
+
+한도: `/token` **실패한 자격증명 시도** 50/15m(`{invalid_client, invalid_grant, expired_token}`) ·
+`/introspect`·`/revoke` 100/1h · `/device_authorization` 60/1h · `/register` 10/1h(유지).
+⚠️ **`/token` 을 요청 수로 세면 `bsvibe login` 이 깨진다** — device flow 가 **5초마다 폴링**하므로
+로그인 한 번에 100회 넘는 POST 가 정상이다. `authorization_pending`/`slow_down` 은 예산을 안 쓴다.
+버킷은 **프로세스 내 메모리** — 배포 시 초기화, 복제본 간 공유 없음. 수평 확장은 게이트 4 의 몫.
+
+**prod 검증 (양성 + 음성 대조군, 이게 이 PR 의 하중이다 — 코드가 아니라 인프라 주장이라서):**
+* 공개 URL `/api/oauth/introspect` → `client_ip.cf_header_missing` **0건** = 헤더 도착함
+* 컨테이너 loopback 같은 호출 → **정확히 1건** = **탐지기가 뒤집힐 수 있음도 증명**
+  (음성 대조군 없이 "로그 없음"은 *헤더가 온다* 와 *내 grep 이 틀렸다* 를 구분 못 한다)
+* 배포된 `resolve_client_ip` 로 위조 4종 → **distinct bucket 1개**. 위조가 무력화됐다.
+
+**⚠️ 서브에이전트가 자기 검증이 무효였음을 스스로 밝혔다** — 첫 절단 하네스가 `git checkout --` 로
+복원했는데 대상 하나가 **추적되지 않는 새 파일**이라 pathspec 에서 실패 → **아무것도 복원 안 된 채
+절단 10개가 누적**. red 가 단조 증가해 그럴듯해 보였다. 바이트 스냅샷 복원으로 재작성해 재실행.
+⇒ **"컴파일 안 되는 절단"과 다른 모양: 복원이 조용히 실패하는 절단.**
+그리고 `.venv/bin/python -m pytest` 로 돌렸을 때 `shutil.which("lint-imports")` 테스트 2개가
+**PATH 때문에** 빨갰다(계약은 멀쩡) — 게이트는 CI 와 같은 런처 `uv run` 으로.
