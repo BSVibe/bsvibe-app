@@ -26,12 +26,14 @@ out/
 pnpm-debug.log*
 npm-debug.log*
 
-# Env
+# Env — secrets are ignored by default; only key-listing templates are committed.
+# A narrow pattern let `.env.stale-local-dev` sit uncommitted-but-committable for
+# four months (2026-05-29~09-12) with a worker token in it: `.env.*.local` requires
+# the name to END in `.local`, and "local" in the middle looks like it is covered.
+# Guard: tests/test_env_files_cannot_be_committed.py
 .env
-.env.local
-.env.*.local
-# Prod secrets — only deploy/.env.prod.example is committed.
-deploy/.env.prod
+.env.*
+!*.example
 
 # Devcontainer worktree overlay (auto-generated)
 .devcontainer/docker-compose.override.yml
