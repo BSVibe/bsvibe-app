@@ -39,6 +39,18 @@ from backend.identity.infrastructure.repositories import (
     SqlAlchemyResourceBindingRepository,
 )
 from backend.identity.workspaces_db import ResourceBindingRow
+
+# The payload keys this stage READS to resolve a connector-inbound trigger to
+# its binding are a wire contract with their producer — the public webhook
+# route (``backend.api.webhooks``), which stamps them when it resolves a
+# binding. One definition in the shared kernel, so a rename cannot land on one
+# end only: until 2026-09-12 they were private literals on this side and
+# nothing wrote them, so this lookup (and the ``trigger.filters`` it gates)
+# had never once run in production.
+from backend.shared.wire_kinds import (
+    PAYLOAD_KEY_CONNECTOR_ACCOUNT_ID,
+    PAYLOAD_KEY_RESOURCE_ID,
+)
 from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKind
 
 logger = structlog.get_logger(__name__)
@@ -48,13 +60,6 @@ logger = structlog.get_logger(__name__)
 # (so the operator can see the trigger landed but was intentionally NOT turned
 # into a Request). The value is an honest record dict — see :func:`receive`.
 RECEIVE_FILTERED_KEY: str = "_received_filtered"
-
-# Payload keys parsers/dispatch are expected to populate on a connector-inbound
-# trigger for the Receive lookup. The keys are namespaced with a leading
-# underscore to signal "system metadata, not user payload" (the connector body
-# itself lives alongside, e.g. ``action`` / ``github_event`` / ``repo``).
-_PAYLOAD_KEY_ACCOUNT_ID: str = "connector_account_id"
-_PAYLOAD_KEY_RESOURCE_ID: str = "resource_id"
 
 
 @dataclass(slots=True)
@@ -138,8 +143,8 @@ async def receive(session: AsyncSession, trigger: TriggerEventRow) -> ReceiveOut
             product_id=trigger.product_id,
         )
 
-    account_id = _coerce_account_id(payload.get(_PAYLOAD_KEY_ACCOUNT_ID))
-    resource_id_raw = payload.get(_PAYLOAD_KEY_RESOURCE_ID)
+    account_id = _coerce_account_id(payload.get(PAYLOAD_KEY_CONNECTOR_ACCOUNT_ID))
+    resource_id_raw = payload.get(PAYLOAD_KEY_RESOURCE_ID)
     resource_id = resource_id_raw if isinstance(resource_id_raw, str) else None
 
     # Pass-through for webhook triggers that don't carry the routing keys —
