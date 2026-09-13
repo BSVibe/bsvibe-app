@@ -35,6 +35,14 @@ npm-debug.log*
 .env.*
 !*.example
 
+# Tool + deploy-link state — machine-local, never shared.
+# `.vercel/README.txt` says it itself ("you should not share the .vercel folder
+# with anyone") and claims it auto-adds itself to .gitignore — it did not, and
+# the folder sat committable for months. `.opencode/` is 57MB / 3,439 files of
+# tool cache; one stray `git add -A` stages all of it.
+.vercel/
+.opencode/
+
 # Devcontainer worktree overlay (auto-generated)
 .devcontainer/docker-compose.override.yml
 
