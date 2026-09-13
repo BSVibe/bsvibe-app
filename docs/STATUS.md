@@ -786,25 +786,28 @@ Proof Surface**. **✅ 이번 라운드 (§4.0, 2026-06-24):** 라스트마일 +
   - `docs/design/client-attach-execution.md` — client_attach 실행 모델 + in-place verify SoT.
   - `docs/design/execution-mode-parity.md` — 워크스페이스/플랫폼 툴 축 분리.
   - `docs/design/production-verification.md` — **다음 트랙.** 증명을 배포 너머로.
-- **미완 작업 → [GitHub 이슈](https://github.com/BSVibe/bsvibe-app/issues)** (2026-09-12 이관.
-  문서 안의 백로그 목록은 낡는다 — 실제로 이 목록의 R2 항목은 이미 완료된 것을 열린 것으로 적고 있었다):
+- **미완 작업 → [열린 이슈](https://github.com/BSVibe/bsvibe-app/issues)**
 
-  | 이슈 | 내용 | 라벨 |
-  |---|---|---|
-  | [#928](https://github.com/BSVibe/bsvibe-app/issues/928) | 타임아웃 난 워커 턴의 토큰이 어디에도 계상되지 않는다 | `gate-4` |
-  | [#929](https://github.com/BSVibe/bsvibe-app/issues/929) | 수평확장 — `var/` 공유화 · 샌드박스 상태 외부화 · verify slot 워크스페이스 축 | `gate-4` |
-  | [#930](https://github.com/BSVibe/bsvibe-app/issues/930) | 게이트 1 후속 — 워크스페이스 토큰 예산 · 스케줄/웹훅 cap · 상한 튜닝 | `gate-1` |
-  | [#931](https://github.com/BSVibe/bsvibe-app/issues/931) | prod 고아 `dispatched` 146건 + 타임아웃 종결 경로 부재 | `bug` |
-  | [#932](https://github.com/BSVibe/bsvibe-app/issues/932) | `oauth` 표면 rate limit 부재 | `enhancement` |
-  | [#933](https://github.com/BSVibe/bsvibe-app/issues/933) | `needs_you` 알림에 인라인 액션 없음 (제품 결정 선행) | `question` |
-  | [#935](https://github.com/BSVibe/bsvibe-app/issues/935) | 키 로테이션 절차 부재 + `.env.prod` 시크릿 2개 로테이션 권고 | `gate-4` `founder-action` |
-  | [#936](https://github.com/BSVibe/bsvibe-app/issues/936) | `pipeline` 제거 + 라우팅 재설계 — 설계 완료, 코드 0 | `open-track` |
-  | [#937](https://github.com/BSVibe/bsvibe-app/issues/937) | 리포 밖 잔여 — healthchecks URL · 재부팅 테스트 · Supabase 가입 정책 | `founder-action` |
-  | [#938](https://github.com/BSVibe/bsvibe-app/issues/938) | Receive 스테이지 통합 여지 — 미착수 | `question` |
-  | [#939](https://github.com/BSVibe/bsvibe-app/issues/939) | **재측정 필요** — Chat/Executor 파리티 · Product Tick 트랙이 아직 열려 있는가 | `question` |
+  ⚠️ **여기에 목록을 복제하지 않는다.** 2026-09-12 에 한 번 표로 옮겼더니 **하루도 안 돼
+  낡았다** — #932·#938·#939 가 닫히고 #948~#951 이 생기는 동안 표는 그대로였다. 그 전에도
+  이 자리의 R2 항목이 *이미 완료된 것*을 열린 것으로 적고 있었고, 그 낡은 줄을 근거로
+  이슈를 열었다가 실측으로 닫아야 했다(#934). **복제하지 않으면 낡을 수 없다.**
 
-  닫힘: [#934](https://github.com/BSVibe/bsvibe-app/issues/934) R2 cutover — 실측으로 이미 완료(`deploy/.env.prod` = `s3`).
-  ⚠️ 잔여 관측 하나는 남는다: `/app/var/bundles` 에 14MB + 최근 48h 업로드 로그 0 — #929 에서 같이 본다.
+  | 보고 싶은 것 | 링크 |
+  |---|---|
+  | 전부 | [open issues](https://github.com/BSVibe/bsvibe-app/issues) |
+  | 게이트 1 (계측·상한 후속) | [`gate-1`](https://github.com/BSVibe/bsvibe-app/issues?q=is%3Aissue+is%3Aopen+label%3Agate-1) |
+  | 게이트 2 (온보딩) | [`gate-2`](https://github.com/BSVibe/bsvibe-app/issues?q=is%3Aissue+is%3Aopen+label%3Agate-2) |
+  | 게이트 3 (가용성) | [`gate-3`](https://github.com/BSVibe/bsvibe-app/issues?q=is%3Aissue+is%3Aopen+label%3Agate-3) |
+  | **게이트 4 (과금·수평확장)** — 다중사용자 개방의 마지막 관문 | [`gate-4`](https://github.com/BSVibe/bsvibe-app/issues?q=is%3Aissue+is%3Aopen+label%3Agate-4) |
+  | 리포 밖 — 형님 손이 필요 | [`founder-action`](https://github.com/BSVibe/bsvibe-app/issues?q=is%3Aissue+is%3Aopen+label%3Afounder-action) |
+  | 열린 설계 트랙 | [`open-track`](https://github.com/BSVibe/bsvibe-app/issues?q=is%3Aissue+is%3Aopen+label%3Aopen-track) |
+  | 결함 | [`bug`](https://github.com/BSVibe/bsvibe-app/issues?q=is%3Aissue+is%3Aopen+label%3Abug) |
+  | 답이 필요한 것 (제품 결정·측정) | [`question`](https://github.com/BSVibe/bsvibe-app/issues?q=is%3Aissue+is%3Aopen+label%3Aquestion) |
+
+  라벨이 없는 이슈도 있으니 **판단이 필요하면 전체 목록을 봐라.** 게이트 로드맵의 근거는
+  [`audit/multiuser-readiness-2026-09-10.md`](./audit/multiuser-readiness-2026-09-10.md) §Ⅴ 다.
+
 - **별도 프로젝트**: `bloasis/` · `BStalk3r/` · BStockReport — 각자 레포 또는 `BSVibe/internal-docs`.
 
 **최근 archive (2026-08-10 — 정리 22건):** 소비된 handoff 5건(2026-07-14 · 07-23 · 08-06 · 08-07 ·
