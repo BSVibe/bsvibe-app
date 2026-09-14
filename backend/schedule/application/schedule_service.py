@@ -11,10 +11,17 @@ the :class:`~backend.schedule.domain.advancer.CronScheduleAdvancer` (so the row
 is immediately pollable), and inserts through the INV-1
 :data:`~backend.schedule.channels.WORKSPACE_SCHEDULES` producer seam.
 
-S1 supports the ``instruction`` kind only — ``payload={"text": <what to do>}``.
-The run framer reads ``text``, so a scheduled run frames the founder's
-instruction rather than "Untitled run". skill / product_tick / plugin_action
-kinds are S4.
+Two kinds are accepted today (:data:`_SUPPORTED_KINDS`). ``instruction`` carries
+``payload={"text": <what to do>}`` — the run framer reads ``text``, so a
+scheduled run frames the founder's instruction rather than "Untitled run".
+``product_tick`` carries only the cadence + ``product_id`` and shipped
+2026-07-21 (PR #609). ``skill`` / ``plugin_action`` are still S4.
+
+Keep this paragraph honest against :data:`_SUPPORTED_KINDS` below: it said
+"product_tick is S4" for seven weeks after the kind shipped, and the PWA
+repeated that claim to founders until #948. The PWA now pins itself to this
+frozenset (``apps/pwa/test/schedule-kinds-backend-parity.test.ts``), so changing
+it without updating the prose turns that test red.
 """
 
 from __future__ import annotations

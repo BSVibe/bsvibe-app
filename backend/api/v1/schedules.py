@@ -14,8 +14,10 @@ a dead channel. These endpoints are the authoring input:
 
 Workspace resolution mirrors the sibling routers (:mod:`backend.api.v1.notifications`):
 the ``get_workspace_id`` dep publishes the workspace into the ORM-scoping
-contextvar + Postgres RLS GUC. S1 is the ``instruction`` kind only; other kinds
-(skill / product_tick / plugin_action) are S4.
+contextvar + Postgres RLS GUC. This route accepts the kinds in
+:data:`~backend.schedule.application.schedule_service._SUPPORTED_KINDS` —
+``instruction`` and ``product_tick`` (the latter shipped 2026-07-21 in PR #609).
+``skill`` / ``plugin_action`` remain deferred to S4.
 """
 
 from __future__ import annotations
