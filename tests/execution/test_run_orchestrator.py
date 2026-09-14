@@ -11,9 +11,11 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -3375,3 +3377,77 @@ async def test_token_cap_zero_is_uncapped(tmp_path: Path) -> None:
             await session.execute(select(ExecutionRun).where(ExecutionRun.id == run.id))
         ).scalar_one()
         assert refreshed.usage_prompt_tokens == 5_000_000
+
+
+async def test_the_per_run_ceiling_fires_even_for_a_workspace_over_its_token_budget(
+    tmp_path: Path,
+) -> None:
+    """⭐ #930 part 1 — independence, direction 2.
+
+    The workspace budget (``workspaces.monthly_token_budget``) is enforced at
+    ADMISSION; the per-run ceiling is enforced MID-RUN. A workspace that has
+    blown its monthly budget still gets the per-run ceiling on the runs it is
+    already driving — the mid-run guard must not learn about the budget and
+    start deferring to it.
+
+    The companion assertion is the point: without it this is just the existing
+    cap test with a workspace row added, and would pass whether or not the
+    workspace is actually over budget.
+    """
+    from backend.config import Settings
+    from backend.workflow.application.workspace_token_budget import (
+        TokenBudgetReached,
+        budget_window_start,
+        enforce_workspace_token_budget,
+    )
+
+    workspace_id = uuid.uuid4()
+    llm = ScriptedLlm(
+        [
+            LoopTurn(
+                content="huge turn",
+                tool_calls=(_tc("file_write", path="a.txt", content="x\n"),),
+                usage_prompt_tokens=9_000,
+                usage_completion_tokens=2_000,
+            ),
+            LoopTurn(content="should not run", tool_calls=()),
+        ]
+    )
+    settings = Settings(agent_max_run_tokens=1_000)
+    async with memory_session() as session:
+        session.add(
+            WorkspaceRow(id=workspace_id, name="ws", safe_mode=True, monthly_token_budget=5_000)
+        )
+        # A finished run inside the current window that already spent the whole
+        # monthly budget.
+        session.add(
+            ExecutionRun(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                product_id=None,
+                request_id=None,
+                status=RunStatus.SHIPPED,
+                payload={},
+                usage_prompt_tokens=50_000,
+                usage_completion_tokens=0,
+                created_at=budget_window_start() + timedelta(seconds=1),
+                updated_at=budget_window_start() + timedelta(seconds=1),
+            )
+        )
+        await session.flush()
+
+        # Companion: this workspace really IS over its budget right now.
+        with pytest.raises(TokenBudgetReached):
+            await enforce_workspace_token_budget(session, workspace_id=workspace_id)
+
+        run = await _make_run(session, workspace_id=workspace_id)
+        orch = RunOrchestrator(
+            session=session, llm=llm, sandbox_manager=NoopSandboxManager(), settings=settings
+        )
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert result.outcome == "needs_decision"
+        decisions = (await session.execute(select(Decision))).scalars().all()
+        assert [d for d in decisions if d.decision == "run_token_cap_reached"], (
+            "the per-run ceiling did not fire — the budget swallowed it"
+        )

@@ -109,6 +109,14 @@ class ExecutionRun(ExecutionBase):
     __table_args__ = (
         Index("ix_execution_runs_ws_status", "workspace_id", "status"),
         Index("ix_execution_runs_ws_product", "workspace_id", "product_id"),
+        # #930 part 1 — the per-workspace token budget sums ``usage_*`` over
+        # ``workspace_id = ? AND created_at >= <window start>``. Neither
+        # existing composite serves that predicate (one is keyed on ``status``,
+        # the other on ``product_id``), and the bare ``workspace_id`` index
+        # would have to fetch every run the workspace ever made and filter. The
+        # budget is read at EVERY founder submission, so the window column has
+        # to be in the index.
+        Index("ix_execution_runs_ws_created", "workspace_id", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

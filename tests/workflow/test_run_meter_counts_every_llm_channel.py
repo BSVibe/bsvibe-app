@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -710,3 +710,68 @@ async def test_tick_planner_usage_lands_on_the_run(
         assert run is not None
         assert run.usage_prompt_tokens == 880
         assert run.usage_completion_tokens == 44
+
+
+# --------------------------------------------------------------------------
+# 5. The property #953 established, kept by #930 part 1
+# --------------------------------------------------------------------------
+
+
+async def test_verify_accrues_past_the_workspace_budget_without_refusing() -> None:
+    """⭐ Verify ACCRUES but never ENFORCES — including the workspace budget.
+
+    #953 settled this for the per-run ceiling: the cap terminates a run
+    mid-loop, and verify is the END of the work, so stopping there throws away
+    finished work over a budget that is already spent. #930 part 1 adds a
+    SECOND ceiling, and the cheapest way to write it would have been "check the
+    budget wherever tokens are added" — which is exactly this method.
+
+    The three companion assertions make the pass non-vacuous: the judge really
+    ran, the meter really moved, and the workspace really is over its budget by
+    the same rule the admission gate uses. Without them, a ``verify()`` that
+    returned early would satisfy the proposition for free.
+    """
+    from backend.identity.workspaces_db import WorkspaceRow
+    from backend.workflow.application.workspace_token_budget import (
+        TokenBudgetReached,
+        budget_window_start,
+        enforce_workspace_token_budget,
+    )
+
+    llm = _StubJudgeLlm(prompt=40, completion=9)
+    async with memory_session() as session:
+        run = await _seed_run(session)
+        # An aware UTC ``created_at`` — the ORM default is a naive
+        # ``datetime.now()``, which SQLite stores verbatim and asyncpg
+        # localizes, so a naive row would sit at two different instants on the
+        # two tiers (measured on the probe PG: a -9h shift).
+        run.created_at = budget_window_start() + timedelta(seconds=1)
+        session.add(WorkspaceRow(id=run.workspace_id, name="ws", monthly_token_budget=1))
+        step, attempt = await _seed_step_and_attempt(session, run)
+        svc = VerificationService(session=session, llm=llm)
+        contract = VerificationContract(
+            checks=(VerificationCheck(kind="judge", criteria=("it works",)),)
+        )
+
+        result = await svc.verify(
+            run=run,
+            work_step=step,
+            attempt=attempt,
+            contract=contract,
+            box=_Box(files={"answer.py": b"def f():\n    return 1\n"}),
+            written_paths=["answer.py"],
+            final_text="done",
+        )
+
+        # It finished — no refusal, no early return.
+        assert result is not None
+        # Companion 1 — the producer actually ran.
+        assert llm.calls >= 2, "no judge turn ran; the guard would pass vacuously"
+        # Companion 2 — the accrual #953 added is still happening.
+        assert run.usage_prompt_tokens == llm.calls * 40
+        assert run.usage_completion_tokens == llm.calls * 9
+        # Companion 3 — the workspace IS over budget by the admission rule, so
+        # "verify did not refuse" is a real observation and not a tautology.
+        await session.flush()
+        with pytest.raises(TokenBudgetReached):
+            await enforce_workspace_token_budget(session, workspace_id=run.workspace_id)

@@ -24,6 +24,10 @@ from backend.workers.emit import (
 )
 from backend.workflow.application.intake.direct import DirectTrigger
 from backend.workflow.application.run_caps import RunCapReached, enforce_run_cap
+from backend.workflow.application.workspace_token_budget import (
+    TokenBudgetReached,
+    enforce_workspace_token_budget,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -69,6 +73,20 @@ async def _h_direct(args: DirectInput, ctx: ToolContext) -> Any:
         raise ToolError(
             f"workspace already holds {exc.held} concurrent runs (limit {exc.limit}) — "
             "ship or discard a run that is waiting for review, then submit again"
+        ) from exc
+
+    # #930 part 1 — 같은 이유로 워크스페이스 토큰 예산도 여기서 본다. REST 문만
+    # 막으면 에이전트 클라이언트가 그대로 우회한다. 규칙은
+    # :mod:`backend.workflow.application.workspace_token_budget` 가 소유하고, 여기서는
+    # MCP 의 오류 표면만 얹는다. 런 상한 **뒤에** 두어 둘 다 걸리는 워크스페이스가
+    # 기존 거절 문구를 그대로 받게 한다.
+    try:
+        await enforce_workspace_token_budget(ctx.session, workspace_id=ctx.principal.workspace_id)
+    except TokenBudgetReached as exc:
+        raise ToolError(
+            f"workspace has spent {exc.used} of its {exc.limit} LLM tokens for the period "
+            f"beginning {exc.window_start.date().isoformat()} — the budget reopens at the "
+            "start of the next month (UTC)"
         ) from exc
 
     trigger = DirectTrigger(ctx.session)
