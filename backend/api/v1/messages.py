@@ -32,6 +32,11 @@ from backend.workers.emit import (
 from backend.workflow.application.direct_answer import DirectAnswerService
 from backend.workflow.application.intake.direct import DirectTrigger
 from backend.workflow.application.run_caps import RunCapReached, enforce_run_cap
+from backend.workflow.application.workspace_token_budget import (
+    WORKSPACE_TOKEN_BUDGET_CODE,
+    TokenBudgetReached,
+    enforce_workspace_token_budget,
+)
 
 router = APIRouter()
 
@@ -137,6 +142,25 @@ async def submit_message(
             # localized copy (an English string would land verbatim on a KO
             # surface) and needs the real limit, which differs per workspace.
             detail={"code": "run_cap_reached", "limit": exc.limit, "held": exc.held},
+        ) from exc
+
+    # #930 part 1 — the per-workspace token budget, checked AFTER the run cap so
+    # a workspace hitting both keeps getting ``run_cap_reached`` (the refusal the
+    # PWA already renders with a "ship or discard a run" hint). 429 for the same
+    # reason the run cap is: a 400 here means "this workspace has no products".
+    try:
+        await enforce_workspace_token_budget(session, workspace_id=workspace_id)
+    except TokenBudgetReached as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": WORKSPACE_TOKEN_BUDGET_CODE,
+                "limit": exc.limit,
+                "used": exc.used,
+                # The founder's only action is to wait for the period to turn,
+                # so the surface has to be able to say when that is.
+                "window_start": exc.window_start.isoformat(),
+            },
         ) from exc
 
     trigger = DirectTrigger(session)

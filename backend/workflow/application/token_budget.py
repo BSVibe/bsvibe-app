@@ -4,8 +4,30 @@
 crosses ``agent_max_run_tokens``, stops on a founder Decision. Kept out of
 ``_drive_loop`` (the god-file cap, v8 §17.1) the way ``round_budget`` is: the
 turn-count budget cannot bound a single huge turn, so this is the other half of
-the runaway guard. BYO-key means the spend is the founder's own provider bill,
-so the ceiling is a safety limit, not a price lever.
+the runaway guard.
+
+⚠️ **This is a safety ceiling, not a price lever** — but the sentence that used
+to justify that here no longer holds. It read "BYO-key means the spend is the
+founder's own provider bill, so the ceiling is a safety limit, not a price
+lever", and the founder decided on 2026-09-14 that BSVibe opens to public
+signup, which breaks the BYO-key premise. The conclusion survives the premise:
+the free plan's price lever is ``workspaces.max_concurrent_runs`` and billing is
+#928. Nothing in this module prices anything.
+
+**This is one of TWO ceilings.** The other — the per-WORKSPACE cumulative budget
+(``workspaces.monthly_token_budget``, #930 part 1) — lives in
+:mod:`backend.workflow.application.workspace_token_budget`, enforced at
+ADMISSION rather than mid-run. That module carries the argument for its window,
+its moment and its refusal shape. The two are deliberately INDEPENDENT: setting
+``agent_max_run_tokens = 0`` must not switch the workspace budget off, and a
+workspace over its budget must still get this ceiling on the runs it is already
+driving (both directions are pinned by tests).
+
+It lives in its own module and not here because this one is typed against
+``RunOrchestrator``, so it carries a ``TYPE_CHECKING`` import of ``agent_loop``
+— and import-linter counts ``TYPE_CHECKING`` edges. Every importer of this
+module therefore inherits the whole loop graph, and the workspace budget's
+callers include ``backend.mcp``, which is contractually forbidden it.
 """
 
 from __future__ import annotations
