@@ -85,6 +85,12 @@ class FramedRequest:
     # default, since a workspace whose rules distinguish no stages has told us
     # nothing to split on.
     steps: list[FrameStep] = field(default_factory=list)
+    # #930 — what the framing turn COST. The caller (``AgentWorker``) holds the
+    # run this framing belongs to and accrues these onto its meter; carrying
+    # them out here is the only way they can get there, because the stage
+    # itself is handed a Request, never a run.
+    usage_prompt_tokens: int = 0
+    usage_completion_tokens: int = 0
 
 
 # Cap the skill catalog we send to the cheap LLM so a workspace with many skills
@@ -101,16 +107,38 @@ _FRAME_MAX_SKILLS = 40
 _FRAME_MAX_DESC_CHARS = 300
 
 
+@dataclass(frozen=True, slots=True)
+class TextCompletion:
+    """One cheap-LLM completion — the text AND what it cost.
+
+    The seam used to be ``-> str``, so every implementation ended in
+    ``return str(response.content)`` and the usage riding on that same response
+    was discarded on that line. The frame stage runs on EVERY run, so those
+    tokens were a permanent, invisible slice of each run's real spend (#930).
+
+    Shaped after :class:`~backend.workflow.application.agent_loop.LoopTurn` —
+    the act path's equivalent, which has carried ``usage_prompt_tokens`` /
+    ``usage_completion_tokens`` alongside its content since 게이트 1. Same two
+    field names, so a reader who knows one knows the other; defaults of ``0``
+    so a test double that does not care about metering stays a one-liner.
+    """
+
+    text: str
+    usage_prompt_tokens: int = 0
+    usage_completion_tokens: int = 0
+
+
 @runtime_checkable
 class FrameLlm(Protocol):
     """The single cheap-LLM seam the frame stage depends on.
 
     One plain text completion (no tools): given a system + user prompt, return
-    the model's response text (expected to be a JSON object the stage parses).
-    Production resolves a per-workspace gateway adapter; tests inject a stub.
+    the model's response :class:`TextCompletion` — the text (expected to be a
+    JSON object the stage parses) plus the turn's token usage. Production
+    resolves a per-workspace gateway adapter; tests inject a stub.
     """
 
-    async def complete_text(self, *, system: str, user: str) -> str: ...
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion: ...
 
 
 @dataclass(slots=True)
@@ -264,17 +292,17 @@ class FrameStage:
             raise FrameModelUnresolvedError("no frame model is routed for this workspace")
         user_prompt = _build_user_prompt(text, config.skill_loader, config.stage_vocabulary)
         try:
-            raw = await llm.complete_text(
+            completion = await llm.complete_text(
                 system=_system_prompt(config.stage_vocabulary), user=user_prompt
             )
         except Exception as exc:
             logger.warning("frame_stage_llm_failed", exc_info=True)
             raise FrameUnclassifiedError("the frame model call failed") from exc
-        parsed = _parse_frame_json(raw)
+        parsed = _parse_frame_json(completion.text)
         if parsed is None:
             logger.warning("frame_stage_llm_unparseable")
             raise FrameUnclassifiedError("the frame model returned unparseable output")
-        return _framed_from_llm(parsed, config)
+        return _framed_from_llm(parsed, config, completion)
 
 
 # --------------------------------------------------------------------------
@@ -318,7 +346,9 @@ def _parse_frame_json(raw: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedRequest:
+def _framed_from_llm(
+    parsed: dict[str, Any], config: FrameConfig, completion: TextCompletion
+) -> FramedRequest:
     """Build a :class:`FramedRequest` from the parsed LLM JSON, validated.
 
     A hallucinated ``skill_match`` (not in the loader's registry) is dropped —
@@ -373,6 +403,8 @@ def _framed_from_llm(parsed: dict[str, Any], config: FrameConfig) -> FramedReque
     return FramedRequest(
         skill_match=skill_match,
         artifact_type_hint=artifact_hint,
+        usage_prompt_tokens=completion.usage_prompt_tokens,
+        usage_completion_tokens=completion.usage_completion_tokens,
         framed_intent=framed_intent,
         summary_title=summary_title,
         path_classification=path_classification,
@@ -459,4 +491,5 @@ __all__ = [
     "FramedRequest",
     "PathClassification",
     "FrameStep",
+    "TextCompletion",
 ]

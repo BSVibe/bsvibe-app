@@ -261,7 +261,9 @@ async def run_inplace_gate(
     # the manifests: it is about the source under test, not the check runner.
     ci_declarations = await service._read_ci_declarations(box)
 
-    gate = await service._author_derived_gate(intent, manifests, changed, baseline, ci_declarations)
+    gate = await service._author_derived_gate(
+        run, intent, manifests, changed, baseline, ci_declarations
+    )
 
     if isinstance(gate, DerivedGateFailed):
         # A manifest EXISTS, so a gate was expected here and we could not produce

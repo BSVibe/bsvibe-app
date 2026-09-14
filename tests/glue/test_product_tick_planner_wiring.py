@@ -36,6 +36,7 @@ from backend.extensions.skill.loader import SkillLoader
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.product_tick_planner import ProductTickPlanner, TickPlan
 from backend.workflow.application.runtime.agent_runtime import build_agent_execution_deps
+from backend.workflow.application.stages.frame import TextCompletion
 from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.infrastructure.intake.db import (
     RequestRow,
@@ -65,16 +66,18 @@ class _RecordingFrameLlm:
     def __init__(self) -> None:
         self.users: list[str] = []
 
-    async def complete_text(self, *, system: str, user: str) -> str:
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
         self.users.append(user)
-        return json.dumps(
-            {
-                "framed_intent": "framed",
-                "skill_match": None,
-                "artifact_type_hint": "code",
-                "path_classification": "agent_loop",
-                "pipeline": "single",
-            }
+        return TextCompletion(
+            text=json.dumps(
+                {
+                    "framed_intent": "framed",
+                    "skill_match": None,
+                    "artifact_type_hint": "code",
+                    "path_classification": "agent_loop",
+                    "pipeline": "single",
+                }
+            )
         )
 
 

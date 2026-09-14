@@ -19,7 +19,11 @@ from typing import Any
 import pytest
 
 from backend.extensions.skill.loader import SkillLoader
-from backend.workflow.application.stages.frame import FrameConfig, FrameStage
+from backend.workflow.application.stages.frame import (
+    FrameConfig,
+    FrameStage,
+    TextCompletion,
+)
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
 
@@ -27,8 +31,8 @@ class _StubFrameLlm:
     def __init__(self, response: dict[str, Any]) -> None:
         self._response = json.dumps(response)
 
-    async def complete_text(self, *, system: str, user: str) -> str:
-        return self._response
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
+        return TextCompletion(text=self._response)
 
 
 def _loader(tmp_path: Path) -> SkillLoader:

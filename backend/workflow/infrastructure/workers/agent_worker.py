@@ -733,6 +733,14 @@ class AgentWorker(BaseWorker):
                     "intent_text": _request_intent_text(request),
                     "frame": frame_payload,
                 }
+                # #930 — the framing turn is real spend on THIS run. The frame
+                # stage is handed a Request and never a run, so this is the one
+                # place the two are both in scope; the same flush below that
+                # persists ``payload["frame"]`` persists the meter. Without it
+                # a run's total was exactly its act turns (prod 08547545) even
+                # though ``payload["frame"]`` proved a call had been made.
+                run.usage_prompt_tokens += framed.usage_prompt_tokens
+                run.usage_completion_tokens += framed.usage_completion_tokens
                 if framed.steps:
                     # The plan the chaining walks. The FIRST step runs here (its
                     # intent is this run's directive); the rest are spawned as
@@ -834,6 +842,11 @@ class AgentWorker(BaseWorker):
             **(run.payload or {}),
             "tick_plan": {"instruction": plan.instruction, "rationale": plan.rationale},
         }
+        # #930 — the planner's turn is this run's spend too. Same leak shape as
+        # the frame turn just below: a ``ResolverLoopLlm`` turn carrying usage
+        # that nothing read. The run is right here, so it has a real home.
+        run.usage_prompt_tokens += plan.usage_prompt_tokens
+        run.usage_completion_tokens += plan.usage_completion_tokens
         logger.info(
             "product_tick_planned",
             run_id=str(run.id),

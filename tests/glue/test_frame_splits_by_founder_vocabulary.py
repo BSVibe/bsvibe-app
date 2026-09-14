@@ -22,7 +22,11 @@ from typing import Any
 
 from backend.extensions.skill.loader import SkillLoader
 from backend.router.routing.run_routing.chaining import StageTerm
-from backend.workflow.application.stages.frame import FrameConfig, FrameStage
+from backend.workflow.application.stages.frame import (
+    FrameConfig,
+    FrameStage,
+    TextCompletion,
+)
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
 
@@ -32,10 +36,10 @@ class _StubFrameLlm:
         self.prompts: list[str] = []
         self.systems: list[str] = []
 
-    async def complete_text(self, *, system: str, user: str) -> str:
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
         self.systems.append(system)
         self.prompts.append(user)
-        return self._response
+        return TextCompletion(text=self._response)
 
 
 def _request(text: str = "결제 시스템을 새로 만들어줘") -> RequestRow:

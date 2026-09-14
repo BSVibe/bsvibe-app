@@ -33,6 +33,7 @@ from backend.workflow.application.stages.frame import (
     FrameConfig,
     FrameStage,
     FrameUnclassifiedError,
+    TextCompletion,
 )
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
@@ -41,12 +42,12 @@ class _StubFrameLlm:
     def __init__(self, response: dict[str, Any] | str) -> None:
         self._response = response if isinstance(response, str) else json.dumps(response)
 
-    async def complete_text(self, *, system: str, user: str) -> str:
-        return self._response
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
+        return TextCompletion(text=self._response)
 
 
 class _FailingFrameLlm:
-    async def complete_text(self, *, system: str, user: str) -> str:
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
         raise RuntimeError("model unavailable")
 
 

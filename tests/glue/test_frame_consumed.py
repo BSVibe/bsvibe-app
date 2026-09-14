@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.extensions.skill.loader import SkillLoader
 from backend.workflow.application.agent_loop import LoopTurn, RunOrchestrator
 from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.application.stages.frame import TextCompletion
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import (
     RequestRow,
@@ -64,8 +65,8 @@ class _StubFrameLlm:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = json.dumps(payload)
 
-    async def complete_text(self, *, system: str, user: str) -> str:
-        return self._payload
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
+        return TextCompletion(text=self._payload)
 
 
 def _write_skill(root: Path, name: str, description: str) -> None:
@@ -188,16 +189,18 @@ class _CountingFrameLlm:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def complete_text(self, *, system: str, user: str) -> str:
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
         self.calls += 1
-        return json.dumps(
-            {
-                "framed_intent": "build a thing",
-                "skill_match": None,
-                "artifact_type_hint": "code",
-                "path_classification": "agent_loop",
-                "pipeline": "single",
-            }
+        return TextCompletion(
+            text=json.dumps(
+                {
+                    "framed_intent": "build a thing",
+                    "skill_match": None,
+                    "artifact_type_hint": "code",
+                    "path_classification": "agent_loop",
+                    "pipeline": "single",
+                }
+            )
         )
 
 

@@ -49,6 +49,7 @@ from backend.extensions.skill.loader import SkillLoader
 from backend.notifications.db import NotificationEventRow
 from backend.workflow.application.agent_loop import LoopTurn, RunOrchestrator
 from backend.workflow.application.agent_runner import AgentRunner
+from backend.workflow.application.stages.frame import TextCompletion
 from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import (
     RequestRow,
@@ -98,19 +99,21 @@ class _FlakyFrameLlm:
         self._remaining = failures
         self.calls = 0
 
-    async def complete_text(self, *, system: str, user: str) -> str:
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
         self.calls += 1
         if self._remaining > 0:
             self._remaining -= 1
             raise RuntimeError("upstream 503")
-        return json.dumps(
-            {
-                "framed_intent": "build a thing",
-                "skill_match": None,
-                "artifact_type_hint": "code",
-                "path_classification": "agent_loop",
-                "pipeline": "single",
-            }
+        return TextCompletion(
+            text=json.dumps(
+                {
+                    "framed_intent": "build a thing",
+                    "skill_match": None,
+                    "artifact_type_hint": "code",
+                    "path_classification": "agent_loop",
+                    "pipeline": "single",
+                }
+            )
         )
 
 

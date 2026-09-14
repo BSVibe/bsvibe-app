@@ -22,6 +22,7 @@ from backend.workflow.application.stages.frame import (
     FrameModelUnresolvedError,
     FrameStage,
     FrameUnclassifiedError,
+    TextCompletion,
 )
 from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
 
@@ -36,15 +37,15 @@ class _StubFrameLlm:
         self._response = response if isinstance(response, str) else json.dumps(response)
         self.calls: list[str] = []
 
-    async def complete_text(self, *, system: str, user: str) -> str:
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
         self.calls.append(user)
-        return self._response
+        return TextCompletion(text=self._response)
 
 
 class _RaisingFrameLlm:
     """A :class:`FrameLlm` whose call always raises."""
 
-    async def complete_text(self, *, system: str, user: str) -> str:
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
         raise RuntimeError("gateway exploded")
 
 

@@ -129,6 +129,9 @@ class _Run:
         self.workspace_id = uuid.uuid4()
         self.product_id = uuid.uuid4()
         self.payload: dict[str, Any] = {"intent_text": "add a feature"}
+        # #930 — a run row carries the meter the verify LLM turns accrue onto.
+        self.usage_prompt_tokens = 0
+        self.usage_completion_tokens = 0
 
 
 async def test_gate_runs_on_the_founder_machine_and_proves_on_zero_exit() -> None:
