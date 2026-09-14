@@ -30,6 +30,7 @@
   - [pipeline-removal-routing.md](./design/pipeline-removal-routing.md) — `pipeline` 제거 + 라우팅 재설계 (열린 트랙).
 - **[audit/](./audit/)** — 현행 감사.
 - **[e2e/](./e2e/)** — E2E 체크리스트. 기능마다 한 장.
+- **[runbook/](./runbook/)** — 운영 절차. ⚠️ 각 문서가 **검증 여부를 항목마다 밝힌다** — 안 걸어본 절차를 걸어본 것처럼 읽지 마라.
 
 ## 정리 원칙
 
