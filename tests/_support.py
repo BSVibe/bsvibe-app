@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from backend.data import Base
+from backend.workflow.application.stages.frame import TextCompletion
 
 # Default points at the local dev/CI Postgres. Tests only use it when
 # ``BSVIBE_DATABASE_URL`` is explicitly set *and* the host:port answers a TCP
@@ -259,15 +260,17 @@ class BuildFrameLlm:
     def __init__(self, artifact_type_hint: str | None = "code") -> None:
         self._hint = artifact_type_hint
 
-    async def complete_text(self, *, system: str, user: str) -> str:
-        return json.dumps(
-            {
-                "framed_intent": None,
-                "skill_match": None,
-                "artifact_type_hint": self._hint,
-                "path_classification": "agent_loop",
-                "pipeline": "single",
-            }
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
+        return TextCompletion(
+            text=json.dumps(
+                {
+                    "framed_intent": None,
+                    "skill_match": None,
+                    "artifact_type_hint": self._hint,
+                    "path_classification": "agent_loop",
+                    "pipeline": "single",
+                }
+            )
         )
 
 

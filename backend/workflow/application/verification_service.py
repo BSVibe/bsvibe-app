@@ -448,6 +448,27 @@ class VerificationService:
         self._llm = llm
         self._retriever = retriever
 
+    async def _complete(self, run: ExecutionRun, messages: list[dict[str, Any]]) -> Any:
+        """One judge/verify LLM turn, WITH its tokens added to the run's meter.
+
+        #930 — :class:`JudgeLlm` is "structurally identical to ``LoopLlm``", so
+        the usage rides in on the turn exactly as it does on the act path. The
+        act path accrues it (``token_budget.account_and_enforce_token_cap``);
+        this service read only ``turn.content`` and dropped the rest, which is
+        why a run whose verify burned four LLM calls reported a total equal to
+        its act turns alone. Every call site here goes through this method so
+        a fifth one cannot be added silently unmetered.
+
+        Accrual only — deliberately NOT the cap enforcement. The cap terminates
+        a run mid-loop with a founder Decision; verify is the END of the work,
+        and stopping there would reject finished work for a budget it already
+        spent. Metering first, budgeting after (#930 part 1).
+        """
+        turn = await self._llm.complete(messages=messages, tools=None)
+        run.usage_prompt_tokens += int(getattr(turn, "usage_prompt_tokens", 0) or 0)
+        run.usage_completion_tokens += int(getattr(turn, "usage_completion_tokens", 0) or 0)
+        return turn
+
     async def _release_connection(self, run: ExecutionRun) -> None:
         """End any open transaction so NO pooled DB connection is held across the
         long external step that follows.
@@ -705,7 +726,7 @@ class VerificationService:
             # as Delivery-Report references via the persisted contract.
             await self._release_connection(run)
             judge_blob = await self._run_judge(
-                gating_criteria, written_paths, final_text, box, baseline
+                run, gating_criteria, written_paths, final_text, box, baseline
             )
             # cannot_determine → pass: judge uncertainty must not override command evidence.
             judge_pass = (
@@ -1059,6 +1080,7 @@ class VerificationService:
 
     async def _author_derived_gate(
         self,
+        run: ExecutionRun,
         intent: str,
         manifests: dict[str, str],
         written_paths: list[str],
@@ -1077,15 +1099,15 @@ class VerificationService:
         PROVED; the caller now fails closed on a manifest-present repo."""
         try:
             turn = await asyncio.wait_for(
-                self._llm.complete(
-                    messages=derivation_planner_messages(
+                self._complete(
+                    run,
+                    derivation_planner_messages(
                         manifests=manifests,
                         changed_files=written_paths,
                         intent=intent,
                         baseline=baseline,
                         ci_declarations=ci_declarations,
                     ),
-                    tools=None,
                 ),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
             )
@@ -1128,7 +1150,7 @@ class VerificationService:
         manifests = await self._read_repo_manifests(box)
         ci_declarations = await self._read_ci_declarations(box)
         gate = await self._author_derived_gate(
-            intent, manifests, written_paths, baseline, ci_declarations
+            run, intent, manifests, written_paths, baseline, ci_declarations
         )
         if isinstance(gate, DerivedGateFailed):
             return gate
@@ -1258,9 +1280,9 @@ class VerificationService:
         surface = "code" if strict else "artifact"
 
         plan = (
-            await self._author_demonstration_plan(intent, sources)
+            await self._author_demonstration_plan(run, intent, sources)
             if strict
-            else await self._author_artifact_plan(intent, artifact_paths)
+            else await self._author_artifact_plan(run, intent, artifact_paths)
         )
         # When the planner saw truncated source, its expectations may be based
         # on incomplete code. Mark every probe so judge_probe returns "not_seen"
@@ -1351,29 +1373,31 @@ class VerificationService:
         return blob
 
     async def _author_artifact_plan(
-        self, intent: str, artifact_paths: list[str]
+        self, run: ExecutionRun, intent: str, artifact_paths: list[str]
     ) -> DemonstrationPlan | None:
         """The artifact surface's planner — same bounded call, different
         grounding: the TASK plus the produced PATHS, never their contents
         (:func:`artifact_planner_messages`)."""
         return await self._author_plan(
-            artifact_planner_messages(intent=intent, artifact_paths=artifact_paths)
+            run, artifact_planner_messages(intent=intent, artifact_paths=artifact_paths)
         )
 
     async def _author_demonstration_plan(
-        self, intent: str, sources: list[tuple[str, str]]
+        self, run: ExecutionRun, intent: str, sources: list[tuple[str, str]]
     ) -> DemonstrationPlan | None:
         """Ask the independent verifier for a demonstration plan, grounded in the
         deliverable's SOURCE (writing a probe that CALLS the code takes knowing
         its API)."""
-        return await self._author_plan(_demonstration_planner_messages(intent, sources))
+        return await self._author_plan(run, _demonstration_planner_messages(intent, sources))
 
-    async def _author_plan(self, messages: list[dict[str, str]]) -> DemonstrationPlan | None:
+    async def _author_plan(
+        self, run: ExecutionRun, messages: list[dict[str, str]]
+    ) -> DemonstrationPlan | None:
         """One bounded planner call — a hung executor CLI must never stall the
         run; a hiccup → ``None`` → undemonstrable, never a false-fail."""
         try:
             turn = await asyncio.wait_for(
-                self._llm.complete(messages=list(messages), tools=None),
+                self._complete(run, list(messages)),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
             )
         except Exception:  # noqa: BLE001 — planner hiccup must never break the run
@@ -1411,7 +1435,7 @@ class VerificationService:
             return None
         try:
             turn = await asyncio.wait_for(
-                self._llm.complete(messages=_scope_judge_messages(intent, candidates), tools=None),
+                self._complete(run, _scope_judge_messages(intent, candidates)),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
             )
         except Exception:  # noqa: BLE001 — a scope hiccup must never break the run
@@ -1441,6 +1465,7 @@ class VerificationService:
 
     async def _run_judge(
         self,
+        run: ExecutionRun,
         criteria: list[str],
         written_paths: list[str],
         final_text: str,
@@ -1481,7 +1506,7 @@ class VerificationService:
             # NON-pass (consistent with "never a silent pass") so the founder
             # reviews rather than the run rotting in ``review_ready``.
             turn = await asyncio.wait_for(
-                self._llm.complete(messages=judge_messages, tools=None),
+                self._complete(run, judge_messages),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
             )
         except (TimeoutError, asyncio.TimeoutError):

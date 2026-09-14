@@ -40,7 +40,9 @@ from backend.workflow.application.runtime.account_resolution import resolve_via_
 from backend.workflow.application.runtime.dispatcher import (
     _ResolverCompileLlm,
     _ResolverFrameLlm,
+    log_unattributed_usage,
 )
+from backend.workflow.application.stages.frame import TextCompletion
 
 logger = structlog.get_logger(__name__)
 
@@ -103,7 +105,11 @@ def build_settle_entity_extractor_factory(
                     caller_id=CALLER_SETTLE_EXTRACT,
                 )
                 return None
-            llm = _ResolverCompileLlm(adapter=resolved.adapter)
+            llm = _ResolverCompileLlm(
+                adapter=resolved.adapter,
+                workspace_id=workspace_id,
+                site=CALLER_SETTLE_EXTRACT,
+            )
             knowledge = KnowledgeFactory(
                 workspace_id=str(workspace_id),
                 vault_root=vault_root,
@@ -153,30 +159,47 @@ class _RoutedConceptFramer:
     never product-chosen. A single ``(system, user)`` → text completion per
     newly created concept; the promoter bounds + soft-fails the result."""
 
-    __slots__ = ("_llm",)
+    __slots__ = ("_llm", "_workspace_id")
 
-    def __init__(self, llm: _ResolverFrameLlm) -> None:
+    def __init__(self, llm: _ResolverFrameLlm, *, workspace_id: uuid.UUID) -> None:
         self._llm = llm
+        # #930 — the promoter that calls this has no run: concept framing is
+        # triggered by a settle pass over a workspace vault, not by one run's
+        # work. So the spend is REPORTED under the workspace rather than
+        # attached to whichever run happened to trigger the settlement.
+        self._workspace_id = workspace_id
 
     async def frame(self, *, concept: str, members: list[tuple[str, str]]) -> str | None:
         notes = "\n".join(f"- {detail}" for _stem, detail in members if detail)
         if not notes:
             return None
         user = f"Concept: {concept}\n\nSource notes:\n{notes}"
-        text = await self._llm.complete_text(system=_FRAMING_SYSTEM, user=user)
-        return text.strip() or None
+        completion = await self._llm.complete_text(system=_FRAMING_SYSTEM, user=user)
+        self._report(completion, concept=concept)
+        return completion.text.strip() or None
 
     async def label(self, *, concept: str) -> str | None:
         """A localized DISPLAY label for the concept name (founder decision
         2026-07). The routed adapter appends the workspace output-language
         directive, so the reply is in that language; a single line, bounded and
         soft-failed by the promoter."""
-        text = await self._llm.complete_text(
+        completion = await self._llm.complete_text(
             system=_DISPLAY_LABEL_SYSTEM, user=f"Concept: {concept}"
         )
+        self._report(completion, concept=concept)
         # Defensive: take the first non-empty line, strip wrapping quotes.
-        line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+        line = next((ln.strip() for ln in completion.text.splitlines() if ln.strip()), "")
         return line.strip("\"'").strip() or None
+
+    def _report(self, completion: TextCompletion, *, concept: str) -> None:
+        """Report this turn's spend under the workspace — there is no run."""
+        log_unattributed_usage(
+            site=CALLER_KNOWLEDGE_CANONICALIZATION,
+            workspace_id=self._workspace_id,
+            usage_prompt_tokens=completion.usage_prompt_tokens,
+            usage_completion_tokens=completion.usage_completion_tokens,
+            concept=concept,
+        )
 
 
 def build_concept_framer(
@@ -213,7 +236,10 @@ def build_concept_framer(
                     caller_id=CALLER_KNOWLEDGE_CANONICALIZATION,
                 )
                 return None
-            return _RoutedConceptFramer(_ResolverFrameLlm(adapter=resolved.adapter))
+            return _RoutedConceptFramer(
+                _ResolverFrameLlm(adapter=resolved.adapter),
+                workspace_id=workspace_id,
+            )
 
     return _factory
 

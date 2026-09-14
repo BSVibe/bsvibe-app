@@ -93,6 +93,9 @@ class _Run:
         self.workspace_id = uuid.uuid4()
         self.product_id = uuid.uuid4()
         self.payload: dict[str, Any] = {"intent_text": "fix a bug"}
+        # #930 — a run row carries the meter the verify LLM turns accrue onto.
+        self.usage_prompt_tokens = 0
+        self.usage_completion_tokens = 0
         self.declared_contract = declared
 
 

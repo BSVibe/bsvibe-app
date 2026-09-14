@@ -489,7 +489,15 @@ def _build_bootstrap_knowledge_inner(
                 caller_id=CALLER_KNOWLEDGE_INGEST,
             )
             return _IngestCallResult(notes_created=0, notes_updated=0, chunk_failures=0)
-        llm = _ResolverCompileLlm(adapter=resolved.adapter)
+        # #930 — knowledge ingest is one chat call PER CHUNK, and none of
+        # them has an ``execution_runs`` row to accrue onto (a bootstrap's
+        # ``bootstrap_run_id`` is a loose correlation uuid, not a run). The
+        # seam reports each turn under ``llm_usage_unattributed`` instead.
+        llm = _ResolverCompileLlm(
+            adapter=resolved.adapter,
+            workspace_id=workspace_id,
+            site=CALLER_KNOWLEDGE_INGEST,
+        )
         factory = KnowledgeFactory(
             workspace_id=str(workspace_id),
             vault_root=Path(settings.knowledge_vault_root),

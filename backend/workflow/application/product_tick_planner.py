@@ -90,6 +90,12 @@ class TickPlan:
 
     instruction: str
     rationale: str
+    # #930 — what the planning turn COST. The tick planner runs on a
+    # ``ResolverLoopLlm`` (usage IS on the turn) inside an already-open run, and
+    # nothing read it: same leak shape as frame/judge, same remedy. The caller
+    # (``AgentWorker._plan_product_tick``) holds the run and accrues these.
+    usage_prompt_tokens: int = 0
+    usage_completion_tokens: int = 0
 
 
 class ProductTickPlanner:
@@ -165,7 +171,11 @@ class ProductTickPlanner:
             {"role": "user", "content": user_message},
         ]
         turn = await llm.complete(messages=messages, tools=None)
-        return _parse_plan(turn.content)
+        return _parse_plan(
+            turn.content,
+            usage_prompt_tokens=getattr(turn, "usage_prompt_tokens", 0),
+            usage_completion_tokens=getattr(turn, "usage_completion_tokens", 0),
+        )
 
     async def _history_summary(self, workspace_id: uuid.UUID, product_id: uuid.UUID) -> str:
         run_repo = SqlAlchemyRunRepository(self._session)
@@ -239,7 +249,12 @@ def _build_user_message(
     return "\n\n".join(parts)
 
 
-def _parse_plan(raw: str | None) -> TickPlan | None:
+def _parse_plan(
+    raw: str | None,
+    *,
+    usage_prompt_tokens: int = 0,
+    usage_completion_tokens: int = 0,
+) -> TickPlan | None:
     """Parse the LLM's JSON plan, tolerating a code fence. ``None`` when the
     output is unparseable or the instruction is empty — the caller then falls
     back to the static meta-instruction."""
@@ -264,6 +279,8 @@ def _parse_plan(raw: str | None) -> TickPlan | None:
     return TickPlan(
         instruction=instruction.strip()[:_INSTRUCTION_MAX_CHARS],
         rationale=rationale_text[:_RATIONALE_MAX_CHARS],
+        usage_prompt_tokens=usage_prompt_tokens,
+        usage_completion_tokens=usage_completion_tokens,
     )
 
 

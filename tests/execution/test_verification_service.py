@@ -844,7 +844,9 @@ async def test_verify_retrieved_knowledge_excluded_from_gating_judge() -> None:
         )
         seen: dict[str, list[str]] = {}
 
-        async def _fake_judge(criteria, written_paths, final_text, box, baseline=None):  # noqa: ANN001, ANN202
+        async def _fake_judge(  # noqa: ANN001, ANN202
+            run_row, criteria, written_paths, final_text, box, baseline=None
+        ):
             seen["criteria"] = list(criteria)
             return {"passed": True}
 
@@ -1462,6 +1464,7 @@ async def test_run_judge_times_out_to_non_pass(monkeypatch: Any) -> None:
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=_HangingLlm())
         verdict = await svc._run_judge(
+            await _make_run(session),
             criteria=["it works"],
             written_paths=[],
             final_text="did the thing",
@@ -1594,6 +1597,7 @@ async def test_run_judge_uses_git_diff_when_available() -> None:
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=llm)
         await svc._run_judge(
+            await _make_run(session),
             criteria=["new_func must exist"],
             written_paths=["backend/big.py"],
             final_text="added new_func",
@@ -1624,6 +1628,7 @@ async def test_run_judge_falls_back_to_file_blobs_when_no_valid_diff() -> None:
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=llm)
         await svc._run_judge(
+            await _make_run(session),
             criteria=["greets the world"],
             written_paths=["hello.txt"],
             final_text="",
@@ -1645,6 +1650,7 @@ async def test_run_judge_fake_box_default_output_triggers_blob_fallback() -> Non
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=llm)
         await svc._run_judge(
+            await _make_run(session),
             criteria=["foo must exist"],
             written_paths=["x.py"],
             final_text="",
@@ -1688,6 +1694,7 @@ async def test_judge_file_context_truncation_marker_on_large_diff() -> None:
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=llm)
         await svc._run_judge(
+            await _make_run(session),
             criteria=["big.py must exist"],
             written_paths=["big.py"],
             final_text="",
@@ -1713,6 +1720,7 @@ async def test_judge_file_context_truncation_marker_on_large_file_blob() -> None
     async with memory_session() as session:
         svc = VerificationService(session=session, llm=llm)
         await svc._run_judge(
+            await _make_run(session),
             criteria=["src.py must define foo"],
             written_paths=["src.py"],
             final_text="",
@@ -1745,6 +1753,7 @@ def test_judge_prompt_instructs_cannot_determine_for_truncation_marker() -> None
         async with memory_session() as session:
             svc = VerificationService(session=session, llm=CapturingLlm())
             await svc._run_judge(
+                await _make_run(session),
                 criteria=["must define foo"],
                 written_paths=[],
                 final_text="",
