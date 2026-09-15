@@ -23,6 +23,8 @@ router, every pre-existing test) behave exactly as before.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Any
 
@@ -44,6 +46,36 @@ def set_current_workspace_id(workspace_id: uuid.UUID) -> Token[uuid.UUID | None]
 def reset_current_workspace_id(token: Token[uuid.UUID | None]) -> None:
     """Restore the contextvar to its prior value (use the ``set`` token)."""
     current_workspace_id.reset(token)
+
+
+@contextmanager
+def workspace_scope(workspace_id: uuid.UUID) -> Iterator[None]:
+    """Bind ``workspace_id`` for the duration of the block, then restore.
+
+    The publication point for code that has no request to hang scoping off —
+    the background paths (#959). A queue poller claims work ACROSS tenants by
+    design, but everything it does *after* the claim belongs to exactly one
+    workspace; wrapping that stretch here engages layer 2 (this contextvar's
+    ORM auto-filter) and, through the ``after_begin`` listener in
+    :mod:`backend.data.rls`, layer 3 (the Postgres RLS GUC) for every
+    transaction opened inside it.
+
+    Restores on the way out INCLUDING on an exception — a crashed drive must
+    not leave the next claim scoped to the workspace that crashed.
+
+    The ``backend.data.rls`` import is deliberate and load-bearing (it is here
+    rather than at module level only because rls imports THIS module): layer 3's
+    listener registers on that module's import, and the worker process's import
+    graph was measured NOT to reach it. Without this line a background path
+    would get layer 2 and silently no layer 3 — the one process #959 is about.
+    """
+    from backend.data import rls  # noqa: PLC0415, F401 — installs the layer-3 listener
+
+    token = set_current_workspace_id(workspace_id)
+    try:
+        yield
+    finally:
+        reset_current_workspace_id(token)
 
 
 def _scoped_mappers() -> list[Any]:
