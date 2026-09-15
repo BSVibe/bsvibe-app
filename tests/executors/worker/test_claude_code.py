@@ -68,6 +68,11 @@ class _FakeProcess:
         returncode: int = 0,
         hang_stdout: bool = False,
     ) -> None:
+        # A real ``asyncio.subprocess.Process`` always has one, and the turn's
+        # progress markers (#965) log it so a hung turn can be tied to a pid in
+        # ``ps``. The double needs it for the same reason ``_kill_process_group``
+        # does.
+        self.pid = 4242
         self.stdin = _FakeStreamWriter()
         self.stdout = _FakeStreamReader(stdout_lines, hang=hang_stdout)
         self.stderr = _FakeStreamReader(stderr_lines)

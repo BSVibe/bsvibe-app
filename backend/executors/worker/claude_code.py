@@ -495,6 +495,15 @@ class ClaudeCodeExecutor:
             assert process.stdout is not None
             assert process.stderr is not None
 
+            # #965 — a hung turn used to be TOTAL silence between the worker's
+            # ``task_received`` and the timeout, which left three very different
+            # failures indistinguishable: the subprocess never started, it
+            # started and the model never answered, or it streamed then stalled.
+            # These two markers split them in one grep. (An investigation that
+            # eliminated the CLI, the env, the model and the exact prompt bytes
+            # by replay was stopped by this silence, not by a lack of theories.)
+            turn_started_at = _log_turn_started(process.pid)
+
             process.stdin.write(prompt.encode("utf-8"))
             await process.stdin.drain()
             process.stdin.close()
@@ -510,7 +519,11 @@ class ClaudeCodeExecutor:
             # if the CLI ever emitted an interim one.
             usage: tuple[int, int] = (0, 0)
             try:
-                async for line in _aiter_lines(process.stdout, deadline):
+                async for line in _marking_first_event(
+                    _aiter_lines(process.stdout, deadline),
+                    pid=process.pid,
+                    started_at=turn_started_at,
+                ):
                     parsed = _safe_json(line)
                     if parsed is None:
                         continue
@@ -709,6 +722,43 @@ async def _aiter_lines(stream: asyncio.StreamReader, deadline: float) -> AsyncIt
         if not line:
             return
         yield line.decode("utf-8", errors="replace").rstrip("\n")
+
+
+def _log_turn_started(pid: int) -> float:
+    """Mark the subprocess as STARTED and return the turn's t0.
+
+    #965 — a hung turn used to be total silence between the worker's
+    ``task_received`` and the caller's timeout, which left three very different
+    failures indistinguishable: the subprocess never started, it started and the
+    model never answered, or it streamed then stalled. This marker and
+    :func:`_marking_first_event` split them in one grep. (The investigation that
+    eliminated the CLI, the env, the model and the hung task's own prompt bytes
+    by replay was stopped by that silence, not by a shortage of theories.)
+    """
+    logger.info("executor_turn_started", pid=pid, executor="claude_code")
+    return asyncio.get_event_loop().time()
+
+
+async def _marking_first_event(
+    lines: AsyncIterator[str], *, pid: int, started_at: float
+) -> AsyncIterator[str]:
+    """Pass ``lines`` through, logging ONCE when the first one arrives.
+
+    ``elapsed_s`` is the load-bearing field: "the model answered in 2s" and
+    "it answered after 280s" are the same line without it, and only the second
+    explains a turn that then dies on its caller's deadline.
+    """
+    first = True
+    async for line in lines:
+        if first:
+            first = False
+            logger.info(
+                "executor_turn_first_event",
+                pid=pid,
+                executor="claude_code",
+                elapsed_s=round(asyncio.get_event_loop().time() - started_at, 3),
+            )
+        yield line
 
 
 async def _drain(stream: asyncio.StreamReader, buf: list[str]) -> None:
