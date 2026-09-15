@@ -52,9 +52,10 @@ SCHEDULE_KIND_INSTRUCTION = "instruction"
 class WorkspaceScheduleRow(Base):
     """Durable schedule the schedule runner polls.
 
-    A workspace may carry many rows, each independently enabled. In S1 a row
-    is a natural-language ``instruction`` (``kind='instruction'``) whose
-    ``payload["text"]`` is the task the scheduled run frames + executes. The
+    A workspace may carry many rows, each independently enabled. A row is
+    either a natural-language ``instruction`` (``kind='instruction'``) whose
+    ``payload["text"]`` is the task the scheduled run frames + executes, or a
+    ``product_tick`` whose ``product_id`` names the product to act on. The
     surrogate ``id`` is the sole identity — there is no
     ``(workspace_id, plugin_name, cron_expr)`` uniqueness (two NL rows may
     legitimately share a cron expr, and ``plugin_name`` is NULL for the
@@ -73,8 +74,9 @@ class WorkspaceScheduleRow(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
     product_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
-    # What the schedule fires. ``instruction`` (S1) reads ``payload["text"]``;
-    # skill / product_tick / plugin_action kinds arrive in S4.
+    # What the schedule fires. ``instruction`` reads ``payload["text"]``;
+    # ``product_tick`` reads ``product_id`` and carries no text (shipped
+    # 2026-07-21, PR #609). skill / plugin_action kinds arrive in S4.
     kind: Mapped[str] = mapped_column(
         String(32),
         nullable=False,

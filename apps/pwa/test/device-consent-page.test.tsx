@@ -14,6 +14,10 @@
  *  - an already-decided or expired code says so instead of offering a button
  *    that will fail;
  *  - a signed-out visitor is bounced to login and comes back to this URL.
+ *
+ * Query discipline (#955): the component renders an `<h1>` in the loading state
+ * too, so nothing here may identify the title by heading LEVEL alone — see
+ * `landsAfterLoadingRender` below.
  */
 
 import { DeviceConsentClient } from "@/app/device/DeviceConsentClient";
@@ -66,6 +70,25 @@ const UNVERIFIED = {
   client_verified: false,
   client_label: null,
 };
+
+/**
+ * A fetch that lands after a real macrotask rather than a microtask (#955).
+ *
+ * The two title assertions below are the ONLY ones in this file that can be
+ * satisfied by the loading render: `DeviceConsentClient` shows an `<h1>` in
+ * BOTH states ("Sign in a device" while `!request`, the real question after),
+ * so `findByRole("heading", { level: 1 })` used to resolve on the loading title
+ * whenever the fetch lost the scheduling race. Locally the microtask won and it
+ * was green; on PR #953's CI it lost once, on a PR that touched no `apps/` file.
+ *
+ * Deferring the mock makes the loading render UNAVOIDABLE, so these tests now
+ * fail deterministically if the queries ever go back to matching on level alone
+ * — a race fix cannot be validated by green, only by making the losing
+ * interleaving the one that always happens.
+ */
+function landsAfterLoadingRender<T>(value: T): Promise<T> {
+  return new Promise((resolve) => setTimeout(() => resolve(value), 40));
+}
 
 describe("/device — device authorization consent", () => {
   beforeEach(() => {
@@ -164,11 +187,15 @@ describe("/device — device authorization consent", () => {
 
   it("never renders an unverified client_id as the identity being trusted", async () => {
     searchParams = new URLSearchParams("user_code=WXYZ-2345");
-    getDeviceRequest.mockResolvedValue(UNVERIFIED);
+    getDeviceRequest.mockReturnValue(landsAfterLoadingRender(UNVERIFIED));
 
     render(<DeviceConsentClient />);
 
-    const heading = await screen.findByRole("heading", { level: 1 });
+    // Anchor on the scopes heading — it exists ONLY in the loaded state, so
+    // waiting for it rules out reading the loading `<h1>` (#955). Only then is
+    // a sync read of the level-1 heading unambiguous.
+    await screen.findByRole("heading", { level: 2, name: /this will grant/i });
+    const heading = screen.getByRole("heading", { level: 1 });
     expect(heading.textContent).not.toContain("BSVibe Official Setup");
     expect(heading).toHaveTextContent(/approve this sign-in request/i);
   });
@@ -190,10 +217,13 @@ describe("/device — device authorization consent", () => {
 
   it("names a verified client by its resolved label, not the raw client_id", async () => {
     searchParams = new URLSearchParams("user_code=WXYZ-2345");
+    getDeviceRequest.mockReturnValue(landsAfterLoadingRender(PENDING));
 
     render(<DeviceConsentClient />);
 
-    const heading = await screen.findByRole("heading", { level: 1 });
+    // Same anchor as above — the loading `<h1>` must not be able to answer.
+    await screen.findByRole("heading", { level: 2, name: /this will grant/i });
+    const heading = screen.getByRole("heading", { level: 1 });
     expect(heading).toHaveTextContent(/allow registered tool to sign in/i);
     expect(heading.textContent).not.toContain("dcr-device-cli");
     // No scare copy on a request this server DOES vouch for.

@@ -4,8 +4,11 @@
  * The surface is the PWA producer for `workspace_schedules` (the channel S1's
  * REST endpoints write to). These tests pin the honesty + wiring invariants:
  *
- *  - Only the `instruction` kind is offered — there is NO kind selector pushing
- *    skill / product_tick / plugin_action (those are S4, not built).
+ *  - Only the `instruction` kind is offered — there is NO kind selector. That is
+ *    this surface's CURRENT SCOPE, not a claim that other kinds do not exist:
+ *    the backend also accepts `product_tick`. Which kinds actually exist is
+ *    pinned against the backend in `schedule-kinds-backend-parity.test.ts`;
+ *    this file only pins what the tab renders (#948).
  *  - A cron PRESET button fills the cron field with the right expression.
  *  - Submitting the create form calls `createSchedule` with the instruction text
  *    and the chosen cron (kind: "instruction").
@@ -19,7 +22,11 @@
  */
 
 import SchedulesTab from "@/components/settings/SchedulesTab";
-import type { Schedule } from "@/lib/api/schedules";
+import {
+  PWA_AUTHORABLE_SCHEDULE_KINDS,
+  SCHEDULE_KIND_INSTRUCTION,
+  type Schedule,
+} from "@/lib/api/schedules";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -93,15 +100,34 @@ describe("SchedulesTab — authoring surface", () => {
     expect(await screen.findByText(/no scheduled/i)).toBeInTheDocument();
   });
 
-  it("offers NO kind selector (only the instruction kind is honest)", async () => {
+  it("authors only the kinds this UI has a form for — today that is `instruction`", async () => {
+    // WHAT THIS PINS (#948): the tab's CURRENT SCOPE, not the backend's
+    // capabilities. The previous version of this test read the same absence as a
+    // correctness property ("product_tick is not built"), which stopped being
+    // true when PR #609 shipped the kind on 2026-07-21 — and because it was a
+    // test, nobody could correct the comments without turning CI red.
+    //
+    // `product_tick` is absent from this form because it takes no `text` and
+    // REQUIRES a `product_id`, so it needs a different form plus a product
+    // picker (the open product decision in #948) — NOT because the backend
+    // lacks it. It is authorable through MCP/REST right now.
+    //
+    // The assertions below are therefore scoped to `PWA_AUTHORABLE_SCHEDULE_KINDS`:
+    // building the picker means adding a kind to that list, which makes the
+    // first expect fail loudly and points the next person at this comment,
+    // instead of leaving a stale absence quietly passing.
+    expect([...PWA_AUTHORABLE_SCHEDULE_KINDS]).toEqual([SCHEDULE_KIND_INSTRUCTION]);
+
     getSchedules.mockResolvedValue([]);
     render(<SchedulesTab />);
     // Wait for the form to settle.
     await screen.findByRole("textbox", { name: /instruction/i });
-    // No skill / product_tick / plugin_action option anywhere.
-    expect(screen.queryByText(/product_tick/i)).toBeNull();
-    expect(screen.queryByText(/plugin_action/i)).toBeNull();
+    // No kind selector, and no kind offered that the form cannot actually fill.
     expect(screen.queryByRole("combobox", { name: /kind/i })).toBeNull();
+    expect(screen.queryByText(/product_tick/i)).toBeNull();
+    // Still genuinely unbuilt on the backend — this half of the old claim stands.
+    expect(screen.queryByText(/plugin_action/i)).toBeNull();
+    expect(screen.queryByText(/\bskill\b/i)).toBeNull();
   });
 
   it("a cron preset button fills the cron field with the right expression", async () => {

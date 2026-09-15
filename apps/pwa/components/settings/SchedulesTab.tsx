@@ -17,9 +17,18 @@ import { useEffect, useMemo, useState } from "react";
  * channel that lets BSVibe start work on its own on a recurring cadence.
  *
  * Honesty rules baked in here:
- *  - Only the `instruction` kind exists today (S1). There is NO kind selector
- *    offering skill / product_tick / plugin_action (those are S4, not built), so
- *    the surface never advertises capabilities that silently do nothing.
+ *  - This tab authors the `instruction` kind only and there is NO kind selector.
+ *    That is a statement about THIS SURFACE, not about the capability: the
+ *    backend also accepts `product_tick` (shipped 2026-07-21 in PR #609, live in
+ *    prod), which the founder can author today through MCP/REST. It is missing
+ *    here because it takes no `text` and REQUIRES a `product_id` — a different
+ *    form plus a product picker, a product decision still open in #948. The
+ *    earlier version of this comment said `product_tick` was "not built"; that
+ *    was true when written and stopped being true when #609 shipped.
+ *  - `skill` / `plugin_action` ARE genuinely unbuilt (they are not in the
+ *    backend's `_SUPPORTED_KINDS`), so the surface still never advertises a
+ *    capability that would silently do nothing. Both halves are machine-checked
+ *    in `test/schedule-kinds-backend-parity.test.ts` rather than asserted here.
  *  - Recurrence is a small preset picker (매일 09:00 / 매주 월요일 09:00 / 매시간)
  *    plus a raw cron field as the "advanced" escape hatch. A preset just fills
  *    the cron field — there is no NL→cron parsing (S3 scope).
