@@ -697,8 +697,26 @@ class ExecutorAdapter:
         # EVERY execution model gets that same surface, client_attach included: which
         # MACHINE a work tool runs on is the sandbox's business, not the surface's.
         mcp = await self._work_tool_surface(session, agentic=agentic)
+        # Lift E9 — per-caller chat timeout. ``self.timeout_s`` is set from
+        # :attr:`CallerSpec.default_timeout_s` at construction time (see
+        # :func:`adapter_for`); ``None`` keeps the legacy global
+        # ``settings.executor_task_timeout_s`` for long-running coding-agent
+        # callers (``workflow.agent_loop.act``, ~5-15 min).
+        #
+        # Computed BEFORE the dispatch (#965) because the worker needs it too:
+        # it is the only thing that tells the worker when to stop, and without
+        # it the worker outlives this wait on every short caller — holding its
+        # one slot, and (being saturated) no longer polling for anything else.
+        effective_timeout_s = (
+            self.timeout_s if self.timeout_s is not None else self.settings.executor_task_timeout_s
+        )
         await dispatch.dispatch_task(
-            self.redis, session=session, task=task, worker_id=worker.id, mcp=mcp
+            self.redis,
+            session=session,
+            task=task,
+            worker_id=worker.id,
+            mcp=mcp,
+            timeout_s=effective_timeout_s,
         )
         # Commit before awaiting — the worker reports its result on a
         # SEPARATE session over HTTP (/api/v1/workers/result), whose
@@ -708,14 +726,6 @@ class ExecutorAdapter:
         # we'd block the full timeout.
         await session.commit()
 
-        # Lift E9 — per-caller chat timeout. ``self.timeout_s`` is set
-        # from :attr:`CallerSpec.default_timeout_s` at construction time
-        # (see :func:`adapter_for`); ``None`` keeps the legacy global
-        # ``settings.executor_task_timeout_s`` for long-running coding-
-        # agent callers (``workflow.agent_loop.act``, ~5-15 min).
-        effective_timeout_s = (
-            self.timeout_s if self.timeout_s is not None else self.settings.executor_task_timeout_s
-        )
         try:
             completed = await dispatch.await_completion(
                 self.redis,

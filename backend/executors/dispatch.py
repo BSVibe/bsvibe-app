@@ -423,6 +423,7 @@ async def dispatch_task(
     mcp: dict[str, Any] | None = None,
     action: str = "execute",
     env: Mapping[str, str] | None = None,
+    timeout_s: float | None = None,
 ) -> str:
     """XADD ``task`` onto the worker's stream + mark it ``dispatched``.
 
@@ -445,6 +446,16 @@ async def dispatch_task(
     channel the derived verifier needs — see
     ``backend/executors/worker/main.py::_handle_exec_task``). Every other caller
     keeps the agent-run default untouched.
+
+    ``timeout_s`` (#965) — **how long the awaiting caller will actually wait.**
+    The wait is per caller (``frame`` 300s, ``judge`` 300s, ``agent_loop.act``
+    the 3600s settings default), while the worker applies one fixed deadline to
+    everything it runs, so without this the worker outlives its awaiter on every
+    short caller. Prod symptom: a hung framing turn held the worker's only slot
+    for eight minutes after the backend had already failed the run — and a
+    saturated worker stops polling, so nothing else reached it either. Omitted
+    from the payload when ``None`` (Streams reject it, and an older worker
+    keeps its own default).
     """
     payload: dict[str, Any] = {
         "task_id": str(task.id),
@@ -468,6 +479,10 @@ async def dispatch_task(
     # before calling the executor. Same omit-when-empty rule as ``model``.
     if task.repo_url:
         payload["repo_url"] = task.repo_url
+    # #965 — the awaiter's deadline, so the worker can stop when nobody is
+    # listening any more instead of holding its slot to its own 3600s.
+    if timeout_s is not None:
+        payload["timeout_s"] = str(timeout_s)
     # Agent run vs. chat turn (Redis Streams take flat strings only). Always
     # emitted — the worker defaults a MISSING key to the agent run, so silence
     # would quietly restore the pre-fix behaviour for chat turns.

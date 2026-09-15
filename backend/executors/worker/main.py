@@ -48,7 +48,7 @@ import shutil
 import signal
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -373,6 +373,62 @@ async def _post_exec_result(
         )
 
 
+def _task_deadline_s(task: dict[str, Any]) -> float | None:
+    """The awaiter's deadline from the dispatch payload, or ``None``.
+
+    Streams carry flat strings, so it arrives as one. A missing, unparsable or
+    non-positive value means "no deadline was dispatched" and the executor's own
+    applies — an older backend must not have its tasks cut short by this.
+    """
+    raw = task.get("timeout_s")
+    if raw is None or raw == "":
+        return None
+    try:
+        parsed = float(str(raw))
+    except (TypeError, ValueError):
+        logger.warning("task_timeout_unparsable", task_id=task.get("task_id"), timeout_s=raw)
+        return None
+    return parsed if parsed > 0 else None
+
+
+async def _with_deadline(
+    coro: Awaitable[_StreamOutcome], deadline_s: float | None
+) -> _StreamOutcome:
+    """Await ``coro``, bounded by ``deadline_s`` when one was dispatched."""
+    if deadline_s is None:
+        return await coro
+    return await asyncio.wait_for(coro, timeout=deadline_s)
+
+
+async def _report_deadline_exceeded(
+    *,
+    task_id: str,
+    deadline_s: float | None,
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    redis: _RedisPublisher | None,
+    done_chan: str,
+) -> None:
+    """Close out a task this worker abandoned at the dispatched deadline.
+
+    REPORTING is the point. A silent abort would leave the row ``dispatched``
+    and the awaiter waiting out its own timeout — the same shape #926 closed one
+    layer in, where a worker finished in 5s and the backend recorded 180s.
+    """
+    msg = f"worker gave up after {deadline_s:g}s — the dispatching caller's deadline had run out"
+    logger.warning("task_deadline_exceeded", task_id=task_id, timeout_s=deadline_s)
+    await _post_result(
+        client,
+        headers,
+        payload={"task_id": task_id, "success": False, "output": "", "error_message": msg},
+    )
+    if redis is not None:
+        await _publish(
+            redis, done_chan, {"task_id": task_id, "success": False, "error_message": msg}
+        )
+    logger.info("task_completed", task_id=task_id, success=False)
+
+
 async def handle_task(
     task: dict[str, Any],
     *,
@@ -505,16 +561,38 @@ async def handle_task(
     if current is not None:
         _RUNNING_TASKS[task_id] = current
     try:
-        outcome = await _stream_and_collect(
-            executor=executor,
-            prompt=prompt,
-            context=context,
-            stream_chan=stream_chan,
-            redis=redis,
-            task_id=task_id,
-            local_workspace=local_workspace,
-            cleanup_workspace=cleanup_workspace,
-        )
+        # #965 — the awaiting caller's own deadline, shipped in the dispatch
+        # payload. The executors carry a fixed 3600s/7200s of their own, which
+        # is right for the long act turn and far too generous for every other
+        # caller: a hung turn held this worker's ONLY slot for eight minutes
+        # after the backend had already failed the run, and a saturated worker
+        # stops polling, so nothing else could be dispatched to it either.
+        # Absent (older backend) → keep the executor's own deadline.
+        deadline_s = _task_deadline_s(task)
+        try:
+            outcome = await _with_deadline(
+                _stream_and_collect(
+                    executor=executor,
+                    prompt=prompt,
+                    context=context,
+                    stream_chan=stream_chan,
+                    redis=redis,
+                    task_id=task_id,
+                    local_workspace=local_workspace,
+                    cleanup_workspace=cleanup_workspace,
+                ),
+                deadline_s,
+            )
+        except TimeoutError:
+            await _report_deadline_exceeded(
+                task_id=task_id,
+                deadline_s=deadline_s,
+                client=client,
+                headers=headers,
+                redis=redis,
+                done_chan=done_chan,
+            )
+            return
         await _post_result(
             client,
             headers,
