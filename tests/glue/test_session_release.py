@@ -456,7 +456,11 @@ async def test_two_workers_never_double_claim_one_batch(sf) -> None:
     claimed1, claimed2 = await asyncio.gather(
         w1._claim_runs_for_drive(), w2._claim_runs_for_drive()
     )
-    set1, set2 = set(claimed1), set(claimed2)
+    # The claim returns ``(run_id, workspace_id)`` pairs since #959 — the drive
+    # scopes on the workspace the claim itself deliberately does not filter by.
+    assert {ws for _, ws in claimed1 + claimed2} <= {ws_id}
+    set1 = {run_id for run_id, _ in claimed1}
+    set2 = {run_id for run_id, _ in claimed2}
 
     # None double-claimed.
     assert set1.isdisjoint(set2), f"a run was claimed by BOTH workers: {set1 & set2}"

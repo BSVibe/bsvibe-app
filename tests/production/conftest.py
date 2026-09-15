@@ -173,10 +173,13 @@ async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
 async def _reset_guc(session: AsyncSession) -> None:
     """Clear any stale RLS GUC on this session's pooled connection.
 
-    ``set_workspace_guc`` uses ``is_local=false`` so the GUC sticks on a pooled
-    connection; a fixture/admin session that reuses that connection must reset
-    it to '' (fail-open) or an INSERT into an RLS table whose id != the stale
-    GUC would fail the policy WITH CHECK.
+    The app no longer leaves one behind — since #959 the GUC is published
+    ``is_local=true`` (per transaction), so it cannot ride a pooled connection
+    into the next caller. This stays for the tests that still set the GUC BY
+    HAND with ``is_local=false`` (``test_tenant_isolation`` drives the policy
+    directly): a fixture reusing that connection must reset it to '' (fail-open)
+    or an INSERT into an RLS table whose id != the stale GUC trips the policy's
+    WITH CHECK.
     """
     conn = await session.connection()
     if conn.dialect.name == "postgresql":

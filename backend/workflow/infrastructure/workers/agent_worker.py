@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from backend.workflow.application.product_tick_planner import ProductTickPlanner
 
 from backend.config import Settings, get_settings
+from backend.data.scoping import workspace_scope
 from backend.dispatch.adapter import ExecutorCapacitySaturated
 from backend.extensions.skill.loader import SkillLoader
 from backend.router.routing.run_routing.chaining import StageTerm, derive_stage_vocabulary
@@ -337,7 +338,12 @@ class AgentWorker(BaseWorker):
            FOR UPDATE SKIP LOCKED) RETURNING`` — committed immediately, so the
            lock releases at once but SKIP LOCKED still gives exact multi-worker
            safety).
-        3. **Drive** each claimed run in its OWN short-txn session; ``_drive_loop``
+        3. **Scope** each claimed run to its workspace — everything past the
+           claim's ``RETURNING`` belongs to one tenant, so layer 2 + layer 3
+           are published for it (#959). The claim itself stays workspace-blind
+           on purpose: ``execution_runs`` is RLS-FORCED, so a scope leaking
+           onto it would stop the pipeline for every other workspace.
+        4. **Drive** each claimed run in its OWN short-txn session; ``_drive_loop``
            commits at every turn boundary so NO connection is held across the
            executor await. ``claimed_at`` is cleared on every drive exit.
         """
@@ -346,42 +352,63 @@ class AgentWorker(BaseWorker):
             return 0
         await self._reap_stale_claims()
         await self._reap_terminal_run_workspaces()
-        claimed_ids = await self._claim_runs_for_drive()
+        claimed = await self._claim_runs_for_drive()
         count = 0
-        for run_id in claimed_ids:
-            try:
-                await self._frame_and_drive_run(run_id, execution)
-            except ExecutorCapacitySaturated:
-                # Saturation yield-back (framing OR the act-stage drive): all
-                # live workers are at capacity. The run is already committed
-                # RUNNING (the atomic claim above), so we cannot merely leave it
-                # OPEN as the pre-refactor FOR-UPDATE path did — reset it
-                # RUNNING → OPEN and clear ``claimed_at`` so the next
-                # ``drive_once`` re-picks it (the scan is on OPEN). Do NOT fail
-                # it (no partial failed / decision state); do NOT count it (a
-                # yielded run was not driven).
-                await self._release_claim_to_open(
-                    run_id, reason="yielded back on executor capacity saturation"
-                )
-                logger.info("agent_worker_yielded_on_capacity", run_id=str(run_id))
-                continue
-            except Exception as exc:  # noqa: BLE001 — one run's crash is not the batch's
-                # Everything that is NOT the capacity yield-back: a timed-out
-                # executor turn, a worker that died mid-drive, a bug in a stage.
-                # This used to leave through the top of the loop, which killed
-                # the whole batch AND left this run RUNNING holding a claim it
-                # was no longer using — invisible until the stale lease (2× the
-                # executor timeout) expired, then re-driven into the same
-                # failure, forever, with nothing said to anyone.
-                await self._on_drive_failed(run_id, exc)
-                continue
-            # A genuinely-driven run — terminal, or paused on a Decision. Either
-            # way the drive is done: clear the claim (a paused run keeps
-            # ``claimed_at`` NULL + a pending Decision, so the reaper never
-            # touches it and the OPEN scan never re-picks it).
-            await self._clear_claim(run_id)
-            count += 1
+        for run_id, workspace_id in claimed:
+            # Everything below belongs to exactly ONE workspace, so publish it:
+            # layer 2 (the ORM auto-filter) and layer 3 (the RLS GUC, re-armed
+            # per transaction by the ``after_begin`` listener) both engage for
+            # the drive AND for the claim-clearing / failure paths that follow
+            # it. The scope is released on the way out — including on a crash —
+            # so the next claim above is workspace-blind again.
+            with workspace_scope(workspace_id):
+                if await self._drive_one_claimed(run_id, execution):
+                    count += 1
         return count
+
+    async def _drive_one_claimed(self, run_id: uuid.UUID, execution: AgentExecutionDeps) -> bool:
+        """One claimed run. Returns True when it was genuinely DRIVEN.
+
+        Split out of :meth:`drive_once` so the workspace scope is a single
+        ``with`` around the whole per-run lifecycle rather than one per exit
+        path — a run whose drive fails writes its failure, its release and its
+        escalation under the same scope the drive itself had. A yielded or
+        crashed run returns False: it was not driven and must not be counted
+        (unchanged from the pre-split loop, where both paths ``continue``d past
+        the increment).
+        """
+        try:
+            await self._frame_and_drive_run(run_id, execution)
+        except ExecutorCapacitySaturated:
+            # Saturation yield-back (framing OR the act-stage drive): all
+            # live workers are at capacity. The run is already committed
+            # RUNNING (the atomic claim above), so we cannot merely leave it
+            # OPEN as the pre-refactor FOR-UPDATE path did — reset it
+            # RUNNING → OPEN and clear ``claimed_at`` so the next
+            # ``drive_once`` re-picks it (the scan is on OPEN). Do NOT fail
+            # it (no partial failed / decision state); do NOT count it (a
+            # yielded run was not driven).
+            await self._release_claim_to_open(
+                run_id, reason="yielded back on executor capacity saturation"
+            )
+            logger.info("agent_worker_yielded_on_capacity", run_id=str(run_id))
+            return False
+        except Exception as exc:  # noqa: BLE001 — one run's crash is not the batch's
+            # Everything that is NOT the capacity yield-back: a timed-out
+            # executor turn, a worker that died mid-drive, a bug in a stage.
+            # This used to leave through the top of the loop, which killed
+            # the whole batch AND left this run RUNNING holding a claim it
+            # was no longer using — invisible until the stale lease (2× the
+            # executor timeout) expired, then re-driven into the same
+            # failure, forever, with nothing said to anyone.
+            await self._on_drive_failed(run_id, exc)
+            return False
+        # A genuinely-driven run — terminal, or paused on a Decision. Either
+        # way the drive is done: clear the claim (a paused run keeps
+        # ``claimed_at`` NULL + a pending Decision, so the reaper never
+        # touches it and the OPEN scan never re-picks it).
+        await self._clear_claim(run_id)
+        return True
 
     async def _on_drive_failed(self, run_id: uuid.UUID, exc: BaseException) -> None:
         """Contain one run's crashed drive: count it, give the claim back, and
@@ -542,16 +569,23 @@ class AgentWorker(BaseWorker):
             await session.commit()
         return len(reaped) + len(reaped_products)
 
-    async def _claim_runs_for_drive(self) -> list[uuid.UUID]:
+    async def _claim_runs_for_drive(self) -> list[tuple[uuid.UUID, uuid.UUID]]:
         """Atomically claim a batch of OPEN runs → RUNNING + stamp the claim.
 
         ``UPDATE execution_runs SET status='running', claimed_at=now(),
         claimed_by=:worker WHERE id IN (SELECT id FROM execution_runs WHERE
         status='open' ORDER BY created_at ASC LIMIT :batch FOR UPDATE SKIP
-        LOCKED) RETURNING id`` — the canonical safe multi-worker claim. The inner
-        ``FOR UPDATE SKIP LOCKED`` guarantees two workers never claim the same
-        run; the row-lock is released on the immediate commit, so (unlike the
-        pre-refactor path) it never spans the drive. Returns the claimed ids."""
+        LOCKED) RETURNING id, workspace_id`` — the canonical safe multi-worker
+        claim. The inner ``FOR UPDATE SKIP LOCKED`` guarantees two workers never
+        claim the same run; the row-lock is released on the immediate commit, so
+        (unlike the pre-refactor path) it never spans the drive.
+
+        The claim is deliberately WORKSPACE-BLIND — a queue poller crosses
+        tenants, and ``execution_runs`` is RLS-FORCED, so a scope leaking onto
+        this query makes it fail closed and the pipeline stops for everyone
+        else. ``workspace_id`` rides along in the RETURNING precisely so the
+        scope can be published on the OTHER side of it: blind up to the claim,
+        scoped for everything the drive does after it (#959)."""
         subq = (
             select(ExecutionRun.id)
             .where(ExecutionRun.status == RunStatus.OPEN)
@@ -567,14 +601,14 @@ class AgentWorker(BaseWorker):
                 claimed_at=datetime.now(UTC),
                 claimed_by=self._worker_id,
             )
-            .returning(ExecutionRun.id)
+            .returning(ExecutionRun.id, ExecutionRun.workspace_id)
         )
         async with self._session_factory() as session:
-            ids = [row[0] for row in (await session.execute(stmt)).all()]
+            claimed = [(row[0], row[1]) for row in (await session.execute(stmt)).all()]
             await session.commit()
-        for run_id in ids:
+        for run_id, _ in claimed:
             logger.info("agent_worker_claimed_for_drive", run_id=str(run_id))
-        return ids
+        return claimed
 
     async def _frame_and_drive_run(self, run_id: uuid.UUID, execution: AgentExecutionDeps) -> None:
         """Frame + drive one claimed run in its OWN session.

@@ -242,3 +242,93 @@ async def test_set_workspace_guc_helper_sets_pg_guc() -> None:
             assert row is not None and row[0] == str(workspace_id)
     finally:
         await engine.dispose()
+
+
+async def test_background_scope_isolates_then_releases_the_connection() -> None:
+    """The #959 shape: a background path scopes, then hands the connection back.
+
+    Three assertions on ONE pooled connection (``pool_size=1``, so "the next
+    session" is provably the same physical connection):
+
+    1. **fail-open** — with no workspace context the queue poller sees BOTH
+       workspaces. This is the load ``compose.prod.yaml:155-157`` documents,
+       not a gap: the claim query must cross tenants.
+    2. **isolated** — inside ``workspace_scope(A)`` the database returns only
+       A's rows, with no explicit GUC call anywhere in the caller.
+    3. **released** — after the scope exits, the poller is fail-open AGAIN.
+       Residue here would stop every other workspace's runs from being claimed.
+
+    Runs through the freshly-minted non-superuser role so ``BYPASSRLS`` cannot
+    short-circuit the policy.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from backend.data.scoping import workspace_scope
+
+    url = _skip_if_no_pg()
+
+    await _drop_everything(url)
+    _alembic_upgrade(url)
+    await _ensure_app_role(url)
+
+    ws_a = _uuid.uuid4()
+    ws_b = _uuid.uuid4()
+    now = datetime.now(UTC)
+
+    superuser_engine = create_async_engine(url, future=True)
+    try:
+        async with superuser_engine.begin() as conn:
+            for ws_id in (ws_a, ws_b):
+                await conn.execute(
+                    text(
+                        "INSERT INTO workspaces (id, name, safe_mode, legal_basis, "
+                        " created_at, updated_at) "
+                        "VALUES (:id, :name, true, 'contract', :now, :now)"
+                    ),
+                    {"id": ws_id, "name": f"ws-{ws_id.hex[:4]}", "now": now},
+                )
+                await conn.execute(
+                    text(
+                        "INSERT INTO products (id, workspace_id, name, slug, "
+                        " created_at, updated_at) "
+                        "VALUES (:id, :ws, 'p', :slug, :now, :now)"
+                    ),
+                    {"id": _uuid.uuid4(), "ws": ws_id, "slug": f"s-{ws_id.hex[:4]}", "now": now},
+                )
+    finally:
+        await superuser_engine.dispose()
+
+    app_engine = create_async_engine(
+        _swap_role(url, _TEST_APP_ROLE, _TEST_APP_PASSWORD),
+        future=True,
+        pool_size=1,
+        max_overflow=0,
+    )
+    sessionmaker = async_sessionmaker(app_engine, expire_on_commit=False)
+
+    async def _visible() -> set[str]:
+        async with sessionmaker() as session:
+            rows = (await session.execute(text("SELECT workspace_id FROM products"))).all()
+            return {str(r[0]) for r in rows}
+
+    try:
+        # 1. fail-open before
+        before = await _visible()
+        assert {str(ws_a), str(ws_b)} <= before, f"poller not fail-open: {before}"
+
+        # 2. isolated inside the scope — no explicit GUC call in this caller
+        with workspace_scope(ws_a):
+            async with sessionmaker() as session:
+                rows = (await session.execute(text("SELECT workspace_id FROM products"))).all()
+                scoped = {str(r[0]) for r in rows}
+        assert scoped == {str(ws_a)}, f"background scope did not isolate: {scoped}"
+
+        # 3. fail-open again — the connection carries no residue
+        after = await _visible()
+        assert {str(ws_a), str(ws_b)} <= after, (
+            f"GUC residue blinded the poller — runs of other workspaces stop being claimed: {after}"
+        )
+    finally:
+        await app_engine.dispose()

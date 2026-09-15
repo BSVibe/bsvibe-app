@@ -81,7 +81,7 @@ async def test_one_runs_failure_does_not_kill_the_rest_of_the_batch(sf) -> None:
     driven: list[uuid.UUID] = []
 
     worker = _worker(sf)
-    worker._claim_runs_for_drive = _returns(ids)  # type: ignore[method-assign]
+    worker._claim_runs_for_drive = _returns(sf, ids)  # type: ignore[method-assign]
 
     async def _drive(run_id: uuid.UUID, _execution: Any) -> None:
         if run_id == ids[0]:
@@ -102,7 +102,7 @@ async def test_a_failed_drive_gives_its_claim_back(sf) -> None:
     length of the stale lease. It has already stopped — say so now."""
     run_id = await _seed_run(sf)
     worker = _worker(sf)
-    worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
+    worker._claim_runs_for_drive = _returns(sf, [run_id])  # type: ignore[method-assign]
     worker._frame_and_drive_run = _raises(_Boom("dead worker"))  # type: ignore[method-assign]
 
     await worker.drive_once()
@@ -128,7 +128,7 @@ async def test_repeated_failures_reach_the_founder_and_stop_retrying(sf) -> None
     burns a machine while saying nothing."""
     run_id = await _seed_run(sf)
     worker = _worker(sf, max_drive_failures=2)
-    worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
+    worker._claim_runs_for_drive = _returns(sf, [run_id])  # type: ignore[method-assign]
     worker._frame_and_drive_run = _raises(_Boom("turn timed out"))  # type: ignore[method-assign]
 
     await worker.drive_once()
@@ -154,7 +154,7 @@ async def test_two_workers_share_one_bound(sf) -> None:
     one = _worker(sf, max_drive_failures=2)
     two = _worker(sf, max_drive_failures=2)
     for worker in (one, two):
-        worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
+        worker._claim_runs_for_drive = _returns(sf, [run_id])  # type: ignore[method-assign]
         worker._frame_and_drive_run = _raises(_Boom("turn timed out"))  # type: ignore[method-assign]
 
     await one.drive_once()
@@ -171,7 +171,7 @@ async def test_a_drive_that_works_clears_the_count(sf) -> None:
     unrelated failures and escalates for no reason."""
     run_id = await _seed_run(sf)
     worker = _worker(sf, max_drive_failures=2)
-    worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
+    worker._claim_runs_for_drive = _returns(sf, [run_id])  # type: ignore[method-assign]
 
     worker._frame_and_drive_run = _raises(_Boom("blip"))  # type: ignore[method-assign]
     await worker.drive_once()
@@ -197,7 +197,7 @@ async def test_the_capacity_yield_is_not_a_failure(sf) -> None:
 
     run_id = await _seed_run(sf)
     worker = _worker(sf, max_drive_failures=2)
-    worker._claim_runs_for_drive = _returns([run_id])  # type: ignore[method-assign]
+    worker._claim_runs_for_drive = _returns(sf, [run_id])  # type: ignore[method-assign]
     worker._frame_and_drive_run = _raises(ExecutorCapacitySaturated("all busy"))  # type: ignore[method-assign]
 
     await worker.drive_once()
@@ -212,9 +212,27 @@ async def test_the_capacity_yield_is_not_a_failure(sf) -> None:
 _EXECUTION: Any = object()
 
 
-def _returns(ids: list[uuid.UUID]) -> Any:
-    async def _f(*_a: Any, **_k: Any) -> list[uuid.UUID]:
-        return list(ids)
+def _returns(sf: Any, ids: list[uuid.UUID]) -> Any:
+    """Stand in for the atomic claim.
+
+    Since #959 the claim's RETURNING carries ``workspace_id`` and ``drive_once``
+    publishes it as the run's scope, so the stub pairs each id with the run's
+    REAL workspace — a made-up one would hide the run from the ORM auto-filter
+    that the claim-clearing / failure paths then run under, and the tests below
+    would fail for a reason that has nothing to do with what they assert.
+    """
+
+    async def _f(*_a: Any, **_k: Any) -> list[tuple[uuid.UUID, uuid.UUID]]:
+        async with sf() as session:
+            rows = (
+                await session.execute(
+                    select(ExecutionRun.id, ExecutionRun.workspace_id).where(
+                        ExecutionRun.id.in_(ids)
+                    )
+                )
+            ).all()
+        by_id = {row[0]: row[1] for row in rows}
+        return [(run_id, by_id[run_id]) for run_id in ids]
 
     return _f
 
