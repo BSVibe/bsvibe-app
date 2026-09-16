@@ -28,8 +28,14 @@
 오토마운터가 붙잡고 안 놓는다. 호스트에는 마켓플레이스가 **실제로 설치돼 있었고**
 (`~/.claude/plugins/marketplaces/...`) **기록된 경로만 틀렸다.**
 
-조치: `installLocation` 을 실제 호스트 경로로 수정. 백업은 진단 세션 scratchpad
-(`known_marketplaces.json.bak`). **워커 재시작 불필요**(설정 파일이라 즉시 반영).
+조치: `installLocation` 을 실제 호스트 경로
+(`~/.claude/plugins/marketplaces/claude-plugins-official`)로 수정.
+**워커 재시작 불필요**(설정 파일이라 즉시 반영).
+
+되돌려야 하면 위 코드블록의 옛 값을 그대로 쓰면 된다 — **별도 백업 파일은 없다.**
+(초판은 "백업은 진단 세션 scratchpad" 라고 적었는데, scratchpad 는 세션과 함께 사라지므로
+그건 곧 **없는 파일을 가리키는 포인터**가 된다. 이 세션이 #977 에서 고친 것과 같은 모양이라
+여기서 바로 없앴다.)
 
 ### 검증 — 제거 실험
 
