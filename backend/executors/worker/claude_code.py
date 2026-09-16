@@ -78,12 +78,6 @@ def _subprocess_env_with_bearer() -> dict[str, str]:
 # Without a raised limit ``readline()`` raises ``LimitOverrunError`` mid-run.
 _STREAM_LIMIT = 16 * 1024 * 1024
 
-#: Headless permission settings for the confined run (see ``_build_cmd``). Auto-
-#: allow Bash so the verify step (uv/pytest) runs without prompts; file edits are
-#: handled by ``--permission-mode acceptEdits`` and stay confined to the cwd
-#: (the per-task workspace) because the blanket bypass is no longer set.
-_CONFINED_SETTINGS = json.dumps({"permissions": {"allow": ["Bash"]}})
-
 #: The CLI keeps an **auto-memory** store keyed by the working directory, and it is
 #: injected into the turn's context. ``--setting-sources ""`` does not reach it: that
 #: flag governs settings files (CLAUDE.md, skills — measured: the host's 184 user
@@ -337,13 +331,37 @@ class ClaudeCodeExecutor:
         workspace = context.get("workspace_dir") or "."
         system = context.get("system") or ""
         model = context.get("model") or None
-        # Absent → an agent run (back-compat: a task dispatched by an older
-        # backend carries no flag, and the coding loop must never silently lose
-        # its tools).
+        # Absent → an agent run. NOT for back-compat any more: a task that means
+        # "chat" says so, and anything else is an agent run that must prove it has
+        # BSVibe's tools (below).
         agentic = context.get("agentic", True) is not False
         # T2b-4 — the run's MCP config (BSVibe's tools, run-scoped token) and the exact tool
-        # names we sanction. Absent → the pre-redesign agentic shape.
+        # names we sanction.
         mcp_config = str(context.get("mcp_config") or "")
+        if agentic and not mcp_config:
+            # There is no third executor shape. BSVibe relays EVERY execution between the
+            # LLM worker and the user — including when the worker runs on the user's own
+            # machine, which is not a licence to hand the CLI that machine.
+            #
+            # This used to fall through to a local agent run: no ``--disallowedTools`` (every
+            # native tool live), Bash allowed outright, and only WRITES confined to the cwd —
+            # so it could read the founder's entire filesystem. It was reachable ONLY by this
+            # absence, which is why the absence is refused rather than handled.
+            #
+            # The producer is already strict — ``_work_tool_surface`` refuses a run-less
+            # agentic task rather than mint a workspace-wide token — so reaching here means
+            # version skew or a malformed dispatch. Both must fail loudly: a silent downgrade
+            # to an unisolated run is the outcome this refusal exists to prevent.
+            logger.error("claude_code_agentic_without_bsvibe_tools")
+            yield ExecutionChunk(
+                done=True,
+                error=(
+                    "aborted: an agent run must act through BSVibe's tools, and this task "
+                    "carries no MCP surface. BSVibe relays every execution — there is no "
+                    "local agent run to fall back to."
+                ),
+            )
+            return
         allowed_tools = [str(t) for t in (context.get("allowed_tools") or [])]
         # The config carries the run-scoped bearer token, so it reaches the CLI as a
         # 0600 FILE rather than on argv, where ``ps`` shows it to anything running as
@@ -481,15 +499,6 @@ class ClaudeCodeExecutor:
                 # through BSVibe's tools). The host's auto-memory store walked in behind
                 # that claim — see :data:`_NO_AUTO_MEMORY`.
                 *_NO_AUTO_MEMORY,
-            ]
-        elif agentic:
-            # An agent run: edits auto-apply headlessly but ONLY inside the cwd
-            # (the per-task clone), and Bash is allowed so the verify step runs.
-            cmd_args += [
-                "--permission-mode",
-                "acceptEdits",
-                "--settings",
-                _CONFINED_SETTINGS,
             ]
         else:
             # A chat turn: no tools, no MCP, and as little host harness as the CLI

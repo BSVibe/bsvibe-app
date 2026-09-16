@@ -72,10 +72,18 @@ def test_the_cli_never_keeps_its_own_hands() -> None:
     from backend.dispatch import adapter
     from backend.executors import dispatch as executor_dispatch
     from backend.executors.worker import claude_code
+    from backend.executors.worker import main as worker_main
 
+    # ``worker.main`` was NOT in this tuple, and that is where the last copy lived:
+    # it read ``native_tools`` off the task into the executor context while nothing
+    # produced or consumed it — a dead key whose comment still promised "keep the
+    # CLI's OWN tools alongside BSVibe's platform tools", the one thing that must
+    # never be true. The guard named three modules and the instance survived in the
+    # fourth, so this list is the thing to keep honest: it is a FILE SET, and every
+    # module that touches the dispatch payload belongs in it.
     leaks = [
         mod.__name__
-        for mod in (adapter, executor_dispatch, claude_code)
+        for mod in (adapter, executor_dispatch, claude_code, worker_main)
         if "native_tools" in inspect.getsource(mod)
     ]
     assert not leaks, f"native_tools 가 아직 살아 있다: {leaks}"
