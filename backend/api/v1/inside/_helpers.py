@@ -26,9 +26,14 @@ _OBSERVATION_BODY_CHARS = 8192
 
 
 # Deterministic settle-note footer the SettleWorker appends after the LLM
-# narrative (see backend/workers/settle_worker.py ``_observation_body``). These
-# are machine metadata, not content — the inspector shows the founder the
-# narrative, so the footer (a trailing block) is trimmed off.
+# narrative (``backend/knowledge/infrastructure/workers/settle_worker.py``,
+# ``_observation_body``). These are machine metadata, not content — the inspector
+# shows the founder the narrative, so the footer (a trailing block) is trimmed off.
+#
+# This tuple is a hand-kept copy of that producer's shape, so the two can drift
+# apart silently (the trimmer would just stop trimming and the founder would see
+# ``Run: <uuid>``). The coupling is pinned end-to-end in
+# ``tests/api/test_settle_footer_trimming_matches_the_producer.py``.
 _SETTLE_FOOTER_PREFIXES = ("Product:", "Intent:", "## Artifacts", "Verified:", "Run:")
 
 

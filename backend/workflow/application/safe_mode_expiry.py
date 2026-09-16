@@ -54,8 +54,9 @@ logger = structlog.get_logger(__name__)
 SAFE_MODE_EXPIRED_EVENT_TYPE = "safe_mode.expired"
 """The audit event_type for the per-batch sweep record.
 
-Stable wire string. Mirrors the ``backend/supervisor/audit/events.py``
-``DEFAULT_EVENT_TYPE`` convention (``<domain>.<action>``); any future
+Stable wire string. Mirrors the ``DEFAULT_EVENT_TYPE`` convention that
+``backend/workflow/application/audit_events.py`` sets (``<domain>.<action>`` —
+``execution.run.started``, ``execution.decision.pending``, …); any future
 audit-side subscriber matches on this exact string.
 """
 
