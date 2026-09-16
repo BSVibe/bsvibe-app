@@ -307,7 +307,9 @@ async def test_handle_task_client_attach_missing_dir_fails_not_falls_back(tmp_pa
     assert "client_attach" in (state["results"][0]["error_message"] or "")
 
 
-async def test_handle_task_cleans_up_local_temp_dir_after_success() -> None:
+async def test_handle_task_keeps_the_sandbox_cwd_after_success() -> None:
+    """The worker used to ``rmtree`` a per-task temp dir here. Both are gone —
+    the cwd is one fixed reused directory (see ``test_sandbox_cwd_is_fixed``)."""
     executor = _WorkspaceCapturingExecutor()
     state: dict[str, Any] = {}
     async with _client(state) as client:
@@ -318,14 +320,14 @@ async def test_handle_task_cleans_up_local_temp_dir_after_success() -> None:
             headers={"X-Worker-Token": "WORKER-TOKEN"},
             redis=None,
         )
-    # The temp dir the executor saw is gone (cleaned in finally).
     assert executor.seen_workspace is not None
-    assert not os.path.exists(executor.seen_workspace)
+    assert os.path.isdir(executor.seen_workspace)
 
 
-async def test_handle_task_cleans_up_local_temp_dir_on_executor_error() -> None:
-    # Even when the executor raises mid-stream, the worker's local temp dir must
-    # be removed (cleanup lives in a finally, not only the happy path).
+async def test_handle_task_keeps_the_sandbox_cwd_on_executor_error() -> None:
+    # The error path must still run the ``finally`` (stream closed, result
+    # POSTed) — and must NOT delete the shared cwd. Keeping this case is the
+    # point: it is the branch that used to carry the rmtree.
     executor = _WorkspaceCapturingExecutor(fail=True)
     state: dict[str, Any] = {}
     async with _client(state) as client:
@@ -337,7 +339,7 @@ async def test_handle_task_cleans_up_local_temp_dir_on_executor_error() -> None:
             redis=None,
         )
     assert executor.seen_workspace is not None
-    assert not os.path.exists(executor.seen_workspace)
+    assert os.path.isdir(executor.seen_workspace)
     # The error was reported as a failed result, not a crash.
     assert state["results"][0]["success"] is False
 
@@ -815,7 +817,7 @@ async def test_handle_task_cancellation_skips_result_post(tmp_path: Any) -> None
                 client=client,
                 headers={"X-Worker-Token": "WORKER-TOKEN"},
                 redis=None,
-                workspace_root=str(tmp_path),
+                sandbox_cwd=str(tmp_path),
             )
 
     task = asyncio.create_task(_run())
@@ -858,7 +860,7 @@ async def test_handle_task_registers_in_flight_for_cancel_lookup(tmp_path: Any) 
                 client=client,
                 headers={"X-Worker-Token": "WORKER-TOKEN"},
                 redis=None,
-                workspace_root=str(tmp_path),
+                sandbox_cwd=str(tmp_path),
             )
         )
         await coro_task
@@ -1038,7 +1040,7 @@ async def test_cancel_all_running_tasks_cancels_pending_handlers(tmp_path: Any) 
                 client=client,
                 headers={"X-Worker-Token": "WORKER-TOKEN"},
                 redis=None,
-                workspace_root=str(tmp_path),
+                sandbox_cwd=str(tmp_path),
             )
         )
         for _ in range(50):
