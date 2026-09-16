@@ -84,6 +84,22 @@ _STREAM_LIMIT = 16 * 1024 * 1024
 #: (the per-task workspace) because the blanket bypass is no longer set.
 _CONFINED_SETTINGS = json.dumps({"permissions": {"allow": ["Bash"]}})
 
+#: The CLI keeps an **auto-memory** store keyed by the working directory, and it is
+#: injected into the turn's context. ``--setting-sources ""`` does not reach it: that
+#: flag governs settings files (CLAUDE.md, skills — measured: the host's 184 user
+#: skills load as 0), while auto-memory is keyed by cwd.
+#:
+#: Measured against the real CLI (2026-09-16) from a cwd with a populated store, asking
+#: only "do you have notes about BSVibe / a prod SHA? quote them": the chat turn and the
+#: agentic turn BOTH quoted the operator's private notes verbatim; both answered "NONE"
+#: with this flag. Since #973 every ``server_sandbox`` task shares ONE cwd, so that is one
+#: store shared across tasks and TENANTS — and agent runs write to it, not just read it.
+#:
+#: ``--settings`` still applies under ``--setting-sources ""`` (measured), and it leaves
+#: auth alone. ``--bare`` also closes it but answers "Not logged in" (rc=1): it accepts
+#: only ANTHROPIC_API_KEY / apiKeyHelper, and the worker is on the CLI-credential fallback.
+_NO_AUTO_MEMORY: tuple[str, ...] = ("--settings", json.dumps({"autoMemoryEnabled": False}))
+
 #: A CHAT turn is a plain completion — the same thing a LiteLLM account does when
 #: the caller passes no tools. Getting there takes four flags, each learned against
 #: the real CLI (prod 2026-07-13, "현 프로젝트 상황 설명해줘"):
@@ -95,7 +111,30 @@ _CONFINED_SETTINGS = json.dumps({"permissions": {"allow": ["Bash"]}})
 #: * ``--strict-mcp-config`` + an empty ``--mcp-config`` — the worker host has MCP
 #:   servers configured; those are tools too.
 #: * ``--setting-sources ""`` — do not load the operator's CLAUDE.md / skills. That
-#:   harness belongs to an agent run, not to a chat completion.
+#:   harness belongs to an agent run, not to a chat completion. It does load 0 of the
+#:   host's 184 user skills — measured, so this half of the claim is real.
+#:
+#: What these flags DO NOT buy, measured with ``--debug-file`` on the live authenticated
+#: path (2026-09-16, #978) — the claim used to read "no host harness", full stop:
+#:
+#: * host config is still READ AND WRITTEN: the turn rewrites ``~/.claude.json``
+#:   atomically, scans ``~/.claude/plugins/cache``, stats ``~/.claude/skills`` and
+#:   ``~/.claude/commands``, and starts fs watchers on ``~/.claude/settings.json`` and
+#:   ``settings.local.json`` (following the symlink to the operator's own settings)
+#: * managed settings (``/Library/Application Support/ClaudeCode/``) load regardless
+#: * the auto-memory store loads — see :data:`_NO_AUTO_MEMORY`, the one leak here we CAN
+#:   close without breaking auth
+#:
+#: CONTENT isolation holds; FILESYSTEM REACH does not — and #965 lived in that gap. A
+#: devcontainer path in the host's plugin registry hung every prod run for a day: the CLI
+#: never *used* that config, it only *resolved the path*, onto an autofs mount that never
+#: answered. So "0 plugins loaded" is not evidence of isolation.
+#:
+#: ``--safe-mode`` and ``--restricted`` were measured against this and close NONE of the
+#: paths above (identical debug output, line for line). ``--bare`` does close them and
+#: breaks auth ("Not logged in", rc=1). There is no auth-preserving flag that closes the
+#: rest; a harness change (a config dir of BSVibe's own, with the credential placed in it)
+#: is the only lever left, and it is #978's open question — not a flag we forgot.
 #: * ``--system-prompt`` (REPLACE, not append; see :meth:`_build_cmd`) — Claude
 #:   Code's default system prompt announces the working directory, so even with every
 #:   tool denied the model still "knew" it sat in an empty temp dir and said so.
@@ -263,6 +302,7 @@ _CHAT_FLAGS: tuple[str, ...] = (
     '{"mcpServers":{}}',
     "--setting-sources",
     "",
+    *_NO_AUTO_MEMORY,
 )
 
 
@@ -396,7 +436,7 @@ class ClaudeCodeExecutor:
         mcp_config_path: str = "",
         allowed_tools: list[str] | None = None,
     ) -> list[str]:
-        # An AGENT RUN inherits the host operator's harness (CLAUDE.md / skills /
+        # A LOCAL AGENT RUN inherits the host operator's harness (CLAUDE.md / skills /
         # memory) by design — but the agent's native file writes must stay inside
         # the per-task workspace. ``--dangerously-skip-permissions`` disabled ALL
         # guards including the working-directory confinement, so an agent that
@@ -437,6 +477,10 @@ class ClaudeCodeExecutor:
                 _NATIVE_TOOLS,
                 "--setting-sources",
                 "",
+                # This path declares its own isolation (natives denied, state reached only
+                # through BSVibe's tools). The host's auto-memory store walked in behind
+                # that claim — see :data:`_NO_AUTO_MEMORY`.
+                *_NO_AUTO_MEMORY,
             ]
         elif agentic:
             # An agent run: edits auto-apply headlessly but ONLY inside the cwd
@@ -448,7 +492,8 @@ class ClaudeCodeExecutor:
                 _CONFINED_SETTINGS,
             ]
         else:
-            # A chat turn: no tools, no MCP, no host harness (:data:`_CHAT_FLAGS`).
+            # A chat turn: no tools, no MCP, and as little host harness as the CLI
+            # lets us drop — which is less than it looks (:data:`_CHAT_FLAGS`).
             cmd_args += list(_CHAT_FLAGS)
         if system:
             # An agent run APPENDS to Claude Code's harness prompt (it needs that
