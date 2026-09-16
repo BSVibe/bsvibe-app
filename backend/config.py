@@ -317,19 +317,21 @@ class Settings(BaseSettings):
     # selects the no-sink ``LoggingRelay`` (drain + ack, no remote delivery).
     audit_relay_url: str = ""
 
-    # Execution settings — agent loop budgets per Workflow §3 + memory
-    # ``bsnexus-budget-handoff-design``. Operator may tune for local-LLM
-    # vs frontier-model deployments; defaults match Cycle 7-14 dogfood
+    # The agent loop's round ceiling. Operator may tune for local-LLM vs
+    # frontier-model deployments; the default matches Cycle 7-14 dogfood
     # telemetry on qwen3-coder:30b.
+    #
+    # This is the ONLY budget knob. It used to head a block of four per-stage
+    # budgets (prepare / verify / summarize) plus a soft-pressure headroom, from
+    # the BSNexus multi-stage handoff design — but only this one was ever wired,
+    # and the stages the others named do not exist in the loop (measured: zero
+    # hits for those stage names in ``backend/workflow/application/``). The
+    # design that replaced them is per-RUN and agent-declared: an agent narrows
+    # this ceiling via ``declare_verification`` (``round_budget.py`` —
+    # ``min(declared, ceiling)``, never widening). The four inert knobs sat
+    # directly under this live one under a comment about tuned defaults, so
+    # nothing distinguished them from it.
     execution_work_round_budget: int = 48
-    execution_prepare_round_budget: int = 3
-    execution_verify_round_budget: int = 1
-    execution_summarize_round_budget: int = 2
-    # Soft-pressure handoff trigger: how many rounds before the
-    # ``work`` budget cap the agent should be nudged toward summarize.
-    execution_soft_pressure_headroom: int = 6
-    # Decomposer cycle cap — caps planning/decomposer.py CoT depth.
-    decomposer_cycle_cap: int = 14
 
     # Executor-pool dispatch (executor-pool Lift 5b). A run whose resolved
     # ModelAccount is ``provider='executor'`` dispatches a task to an external
