@@ -1,4 +1,4 @@
-"""Subpackage-wide HOME redirect for the worker test suite (Lift E8 Bug 3).
+"""Package-wide HOME redirect for the executor test suite (Lift E8 Bug 3).
 
 The worker's credential layer (``backend.executors.worker.credentials``) writes
 two real files on the host:
@@ -14,8 +14,17 @@ exactly what happened during the qazasa123 dogfood that surfaced E8.
 
 This autouse fixture redirects both override env vars
 (``BSVIBE_HOME`` + ``XDG_CONFIG_HOME``) to a per-test tmp dir for the whole
-``tests/executors/worker/`` subpackage so any current OR future test that
-defaults to a home-dir path lands under tmp instead. Tests that intentionally
+``tests/executors/`` package so any current OR future test that defaults to a
+home-dir path lands under tmp instead.
+
+Moved UP one level (from ``worker/``) after #973: ``handle_task`` now resolves a
+default sandbox cwd under ``$BSVIBE_HOME`` and ``os.makedirs`` it, so a test that
+calls it without an explicit ``sandbox_cwd`` creates that directory for real.
+``tests/executors/test_dispatch_deadline_reaches_the_worker.py`` sat just OUTSIDE
+the old fixture's reach and did exactly that — measured: an empty
+``~/.bsvibe/sandbox-cwd`` appeared in the founder's home on a plain test run.
+Before #973 the same call made a throwaway temp dir, so the blast radius was nil;
+the default path is what moved it into scope. Tests that intentionally
 target a specific path still pass an explicit ``path=`` — the fixture only
 shields the default-resolution path.
 """
