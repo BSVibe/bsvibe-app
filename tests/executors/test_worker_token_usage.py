@@ -338,8 +338,6 @@ async def test_the_drain_loop_carries_executor_usage_to_the_result_post() -> Non
         stream_chan="c",
         redis=None,
         task_id=str(uuid.uuid4()),
-        local_workspace=None,
-        cleanup_workspace=False,
     )
     assert metered.usage_prompt_tokens == 900
     assert metered.usage_completion_tokens == 80
@@ -352,8 +350,6 @@ async def test_the_drain_loop_carries_executor_usage_to_the_result_post() -> Non
         stream_chan="c",
         redis=None,
         task_id=str(uuid.uuid4()),
-        local_workspace=None,
-        cleanup_workspace=False,
     )
     assert silent.usage_prompt_tokens == 0
     # The distinction that keeps a re-opened hole audible instead of silent.

@@ -44,10 +44,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import signal
 import sys
-import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -57,7 +55,11 @@ import structlog
 
 from backend.executors.worker import opencode_server
 from backend.executors.worker.claude_auth import ensure_claude_bearer
-from backend.executors.worker.config import WorkerSettings, get_worker_settings
+from backend.executors.worker.config import (
+    WorkerSettings,
+    default_sandbox_cwd,
+    get_worker_settings,
+)
 from backend.executors.worker.credentials import (
     CredentialsNotFound,
     load_host_credentials,
@@ -96,18 +98,23 @@ _HTTP_TIMEOUT_S = 30.0
 _RUNNING_TASKS: dict[str, asyncio.Task[None]] = {}
 
 
-async def _finalize_task(
-    stream: Any, local_workspace: str, *, task_id: Any, cleanup_workspace: bool = True
-) -> None:
-    """Close the executor stream, then remove the work dir.
+async def _finalize_task(stream: Any, *, task_id: Any) -> None:
+    """Close the executor stream. There is no directory to clean up.
 
-    ``cleanup_workspace`` is False for a ``client_attach`` run (#692): the cwd is
-    the USER's own directory, so the worker must NEVER delete it — it only closes
-    the stream. For server_sandbox the throwaway temp dir is removed as before.
+    The worker used to ``rmtree`` a per-task temp dir here. Both the dir and the
+    cleanup are gone: nothing reads or writes that directory — it exists only
+    because a CLI subprocess needs *a* cwd — so the worker now reuses ONE fixed
+    directory (see :func:`handle_task`) and never deletes it. ``client_attach``
+    (#692) was already exempt, which is why this used to take a flag.
 
-    T3 — there is nothing left to capture. The agent no longer writes into this directory:
-    it acts through BSVibe's tools over MCP, which write to the run's SERVER-SIDE worktree.
-    The dir exists only because a CLI subprocess needs a cwd.
+    The tidy-looking ``rmtree`` also hid what it did NOT clean: the CLI keys its
+    per-project state on the cwd PATH, so a unique dir per task left a permanent
+    entry behind in ``~/.claude/projects``. Measured on the prod worker host
+    (2026-09-16): **972 of 994** entries there were ``bsvibe-task-*`` — one per
+    task ever run, kept forever, while the temp dirs themselves read as cleaned.
+
+    T3 — there is nothing left to capture. The agent acts through BSVibe's tools
+    over MCP, which write to the run's SERVER-SIDE worktree.
 
     What used to live here — walk the dir, base64 every file, ship them back on
     ``POST /workers/result`` — is the model that produced the audit's whole code-corruption
@@ -122,8 +129,6 @@ async def _finalize_task(
             await aclose()
         except Exception:  # noqa: BLE001, S110 — cleanup best-effort
             pass
-    if cleanup_workspace:
-        shutil.rmtree(local_workspace, ignore_errors=True)
 
 
 class _RedisPublisher(Protocol):
@@ -436,20 +441,26 @@ async def handle_task(
     client: httpx.AsyncClient,
     headers: dict[str, str],
     redis: _RedisPublisher | None,
-    workspace_root: str | None = None,
+    sandbox_cwd: str | None = None,
 ) -> None:
     """Execute one polled task, stream chunks (if redis), and POST the result.
 
-    The worker runs each task in a FRESH, isolated local directory it creates
-    here (under ``workspace_root`` if set, else the OS temp dir) and removes in
-    the ``finally``. The ``workspace_dir`` in the dispatched payload is the
-    BACKEND container's run path — a foreign absolute path that does not exist on
-    this (remote) machine — so it is intentionally ignored: the executor's cwd is
-    always the worker-local dir.
+    A server_sandbox task runs in ONE fixed local directory (``sandbox_cwd``,
+    default :func:`default_sandbox_cwd`), created on first use and never deleted.
+    The ``workspace_dir`` in the dispatched payload is the BACKEND container's run
+    path — a foreign absolute path that does not exist on this (remote) machine —
+    so it is intentionally ignored.
 
-    T3: nothing is captured FROM that dir. The agent acts through BSVibe's tools over MCP,
-    which write to the run's server-side worktree — the local dir exists only because a CLI
-    subprocess needs a cwd, and it is simply removed at the end.
+    T3: nothing is written to or captured FROM that directory. The agent acts
+    through BSVibe's tools over MCP, which write to the run's server-side
+    worktree. The directory exists only because a CLI subprocess needs *a* cwd.
+
+    It used to be a fresh ``mkdtemp`` per task, ``rmtree``'d in the ``finally``.
+    That bought no isolation (nothing reads or writes it) and was not free: the
+    CLI keys per-project state on the cwd PATH, so each unique cwd left a
+    permanent ``~/.claude/projects`` entry that the ``rmtree`` never touched —
+    **972 of 994** entries on the prod worker host, 2026-09-16. The cleanup
+    looked tidy, which is why the litter went unnoticed for so long.
     """
     task_id = task["task_id"]
     prompt = task.get("prompt") or ""
@@ -522,10 +533,16 @@ async def handle_task(
                 )
             return
         local_workspace = user_dir
-        cleanup_workspace = False
     else:
-        local_workspace = tempfile.mkdtemp(prefix="bsvibe-task-", dir=workspace_root or None)
-        cleanup_workspace = True
+        # ONE fixed directory, reused by every server_sandbox task on this worker
+        # and never deleted. Nothing reads or writes it — the CLI just needs *a*
+        # cwd — so a fresh dir per task bought no isolation and cost a permanent
+        # ``~/.claude/projects`` entry apiece (the CLI keys that state on the cwd
+        # PATH, and the old ``rmtree`` never touched it: 972 of 994 entries on the
+        # prod host, 2026-09-16). Concurrent tasks share it safely for the same
+        # reason nothing needed it to be unique.
+        local_workspace = sandbox_cwd or str(default_sandbox_cwd())
+        os.makedirs(local_workspace, exist_ok=True)  # noqa: ASYNC240 — one idempotent stat+mkdir
     context: dict[str, Any] = {
         "task_id": task_id,
         # server_sandbox → the worker-local temp dir; client_attach → the user's
@@ -578,8 +595,6 @@ async def handle_task(
                     stream_chan=stream_chan,
                     redis=redis,
                     task_id=task_id,
-                    local_workspace=local_workspace,
-                    cleanup_workspace=cleanup_workspace,
                 ),
                 deadline_s,
             )
@@ -652,8 +667,6 @@ async def _stream_and_collect(
     stream_chan: str,
     redis: _RedisPublisher | None,
     task_id: str,
-    local_workspace: str,
-    cleanup_workspace: bool = True,
 ) -> _StreamOutcome:
     """Drain the executor's chunk stream, then finalize.
 
@@ -704,9 +717,7 @@ async def _stream_and_collect(
         if redis is not None:
             await _publish(redis, stream_chan, {"delta": "", "done": True, "error": error})
     finally:
-        await _finalize_task(
-            stream, local_workspace, task_id=task_id, cleanup_workspace=cleanup_workspace
-        )
+        await _finalize_task(stream, task_id=task_id)
     if not reported_usage:
         # Make the hole audible instead of shipping a zero that reads as a
         # measurement. An executor whose CLI stopped emitting usage (a flag or
@@ -787,7 +798,7 @@ async def run_once(
                 client=client,
                 headers=headers,
                 redis=redis,
-                workspace_root=settings.workspace_root or None,
+                sandbox_cwd=settings.sandbox_cwd or None,
             )
         except asyncio.CancelledError:
             # Lift E14 — cancel propagated from the poll-loop cancel-action

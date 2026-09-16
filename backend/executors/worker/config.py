@@ -8,8 +8,10 @@ separate from the backend's :class:`backend.config.Settings`.
 
 from __future__ import annotations
 
+import os
 import socket
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -46,12 +48,16 @@ class WorkerSettings(BaseSettings):
     # Bounded local concurrency — how many tasks run in parallel.
     max_parallel_tasks: int = 3
 
-    # Root under which the worker creates a fresh, isolated per-task working
-    # directory. Empty → the OS default temp location (``tempfile.mkdtemp``).
-    # The backend dispatches its own container run path in the task payload, but
-    # that absolute path is meaningless on this (remote) machine — the worker
-    # always runs each task in a local dir it creates here and removes after.
-    workspace_root: str = ""
+    # The ONE directory every server_sandbox task uses as its cwd. Empty →
+    # :func:`default_sandbox_cwd`. Not a "root": nothing is created under it and
+    # nothing is deleted. The backend dispatches its own container run path in the
+    # task payload, but that absolute path is meaningless on this (remote)
+    # machine, so the worker always uses this local directory instead.
+    #
+    # It exists only because a CLI subprocess needs *a* cwd — nothing reads or
+    # writes it. See :func:`backend.executors.worker.main.handle_task` for why it
+    # is no longer a fresh temp dir per task.
+    sandbox_cwd: str = ""
 
     # Streaming chunks back to the backend via Redis pub/sub (the same Redis the
     # backend dispatch substrate uses). Empty disables streaming — executors
@@ -128,3 +134,16 @@ class WorkerSettings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:
     return WorkerSettings()
+
+
+def default_sandbox_cwd() -> Path:
+    """Return ``$BSVIBE_HOME/sandbox-cwd`` (or ``~/.bsvibe/sandbox-cwd``).
+
+    Same ``BSVIBE_HOME`` convention as the credential paths, so the worker test
+    suite's home redirect shields this too. Deliberately NOT under the OS temp
+    dir: this directory is meant to persist, and deliberately NOT inside the
+    deploy checkout, where a stray untracked file blocks autodeploy.
+    """
+    base = os.environ.get("BSVIBE_HOME")
+    root = Path(base) if base else Path.home() / ".bsvibe"
+    return root / "sandbox-cwd"
