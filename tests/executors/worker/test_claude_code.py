@@ -270,9 +270,12 @@ async def test_chat_turn_runs_without_tools(monkeypatch: pytest.MonkeyPatch) -> 
     # REPLACE the system prompt, never append.
     assert argv[argv.index("--system-prompt") + 1] == "ctx"
     assert "--append-system-prompt" not in argv
-    # Nothing to permit: no edit mode, no Bash allow-list.
+    # Nothing to permit: no edit mode, no Bash allow-list. ``--settings`` is present
+    # now (it is how auto-memory is turned off, see below) so the proposition is stated
+    # directly instead of through the absence of the flag: whatever it carries, it
+    # grants nothing.
     assert "--permission-mode" not in argv
-    assert "--settings" not in argv
+    assert "permissions" not in json.loads(argv[argv.index("--settings") + 1])
 
 
 async def test_agent_run_keeps_its_tools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -670,3 +673,91 @@ async def test_init_guard_passes_when_exactly_our_tools_are_exposed() -> None:
     allowed = ["mcp__bsvibe__bsvibe_work_file_read", "mcp__bsvibe__bsvibe_work_file_list"]
 
     assert cc._unsanctioned_abort(_init(list(allowed)), "{'mcpServers':{}}", allowed) is None
+
+
+# ── auto-memory: the CLI's per-cwd store is host state, and it IS injected ───
+#
+# ``--setting-sources ""`` stops the operator's CLAUDE.md and skills — MEASURED, and
+# it really works: the host's 184 user skills load as 0. It does NOT stop the CLI's
+# **auto-memory**, which is keyed by cwd, not by settings source. Measured against the
+# real CLI (2026-09-16), one question — "do you have notes about BSVibe / Bot Fight
+# Mode / a prod SHA? quote them" — asked four ways from a cwd whose auto-memory store
+# is populated:
+#
+#   chat turn, flags as shipped                     → quoted the operator's private
+#                                                     notes verbatim (prod SHAs, the
+#                                                     security-gate status, infra)
+#   chat turn + ``--settings autoMemoryEnabled``    → "NONE"
+#   agentic turn, flags as shipped                  → quoted them verbatim
+#   agentic turn + ``--settings autoMemoryEnabled`` → "NONE"
+#
+# Why this is not merely untidy: #973 collapsed every ``server_sandbox`` task into ONE
+# fixed cwd. Auto-memory is keyed by cwd, so that is now ONE store shared by every task
+# and every TENANT on the worker — and agent runs WRITE to it (the pre-#973 per-task dirs
+# on this host hold agent-written memories, e.g. ``project_naive_datetime_utc_bug.md``).
+# The per-task temp dir used to isolate these stores by accident; the cleanup merged them.
+#
+# ``--settings`` is honoured even under ``--setting-sources ""`` (measured), and unlike
+# ``--bare`` it does not touch auth — ``--bare`` answered "Not logged in · Please run
+# /login" (rc=1), and the worker is on the CLI-credential fallback right now.
+
+
+def _auto_memory_off(argv: list[str]) -> bool:
+    """True when this invocation turns the CLI's auto-memory store off."""
+    if "--settings" not in argv:
+        return False
+    return json.loads(argv[argv.index("--settings") + 1]).get("autoMemoryEnabled") is False
+
+
+async def test_chat_turn_does_not_inherit_host_auto_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A chat turn is a plain completion: the host's memory store is not its context."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": False}))
+
+    assert _auto_memory_off(calls[0])
+
+
+async def test_mcp_agent_turn_does_not_inherit_host_auto_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MCP agent path declares its own isolation (``--setting-sources ""``, natives
+    denied, state reached only through BSVibe's tools). Auto-memory is host state that
+    walked in behind that claim."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(
+        ClaudeCodeExecutor().execute(
+            "p",
+            {
+                "system": "ctx",
+                "agentic": True,
+                "mcp_config": {"mcpServers": {"bsvibe": {"url": "https://x"}}},
+                "allowed_tools": ["mcp__bsvibe__bsvibe_work_file_read"],
+            },
+        )
+    )
+
+    assert _auto_memory_off(calls[0])
+
+
+async def test_local_agent_run_still_inherits_the_host_harness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CONTROL for the two above — and the axis is real, not cosmetic.
+
+    A local agent run (no MCP config) inherits the operator's harness ON PURPOSE:
+    :meth:`_build_cmd` says so, and a dogfood incident is recorded against it. Left
+    as-is deliberately; changing it is a product decision, not a leak fix. If this
+    ever flips, the two tests above stop proving anything about a *difference*.
+    """
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": True}))
+
+    assert not _auto_memory_off(calls[0])
