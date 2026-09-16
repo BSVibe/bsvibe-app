@@ -110,19 +110,17 @@ plist 의 실험용 `BSVIBE_WORKER_WORKSPACE_ROOT` **제거 완료**(#973 이 �
 * 자격은 **DB 경유**다 — `bootstrap.py:50` `_DB_PROVIDERS` 에 sentry, env 튜플(slack·notion·discord)에는 **없다**
 * **그런데 `.env.example` 이 그 셋 바로 아래 나란히 올려놨다** ⇒ 채워도 안 되고 왜 안 되는지 알 길이 없다
 
-### A. 죽은 실행 설정 5개 — **살아있는 형제 옆에서 살아있는 척한다**
-```
-execution_work_round_budget: int = 48      # ← 살아 있다 (agent_loop.py:218)
-execution_prepare_round_budget: int = 3    # ← 레포 전체 참조 0
-execution_verify_round_budget: int = 1     # ← 0
-execution_summarize_round_budget: int = 2  # ← 0
-execution_soft_pressure_headroom: int = 6  # ← 0, 개념이 config.py 에만 존재(구현 0줄)
-decomposer_cycle_cap: int = 14             # ← 0
-```
-* 다섯 다 **레포 전체에서 정의 한 줄이 전부**(코드·테스트·deploy·CI·docs·PWA 전수)
-* 주석이 *"defaults match Cycle 7-14 dogfood telemetry"* — **측정된 값인 양** 말한다
-* `decomposer_cycle_cap` 주석은 **존재하지 않는 `planning/decomposer.py`** 를 지목한다
-* ✅ docs 의 `decomposer` 언급은 역사·아키텍처 서술이라 **지워도 거짓이 안 생긴다**(확인함)
+### ~~A. 죽은 실행 설정 5개~~ — ✅ 완료
+`execution_{prepare,verify,summarize}_round_budget` · `execution_soft_pressure_headroom` ·
+`decomposer_cycle_cap` 제거. **대체된 설계의 잔해**였다 — 그 넷이 이름 붙인 단계
+(prepare/verify/summarize)는 `backend/workflow/application/` 에 **0건**이고, 현행은 per-run
+에이전트 선언(`declare_verification` → `min(declared, ceiling)`)이다. `decomposer_cycle_cap` 주석은
+**존재하지 않는 `planning/decomposer.py`** 를 지목하고 있었다.
+
+가드가 일반형으로 남았다 — **`Settings` 의 모든 필드는 선언 외에 읽히는 곳이 있어야 한다**
+(`tests/test_every_setting_is_actually_read.py`). 측정: 76개 중 5개 실패, **allowlist 불필요**.
+⚠️ 그 가드는 `getattr(settings, "name")` 같은 **동적 접근을 문자열로 잡는다** — 속성 접근만 세면
+살아있는 설정 여럿을 죽었다고 오판한다(양성 대조군으로 못 박아 뒀다).
 
 ### C. 없는 경로를 가리키는 주석 2건 (수율 낮음 — **일괄 처리 금지**)
 * `api/v1/inside/_helpers.py` → `see backend/workers/settle_worker.py` (실제: `backend/knowledge/infrastructure/workers/`)
