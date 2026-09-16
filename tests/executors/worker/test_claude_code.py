@@ -24,6 +24,23 @@ from tests.executors.worker._drain import drain
 pytestmark = pytest.mark.asyncio
 
 
+def _agent_ctx(**extra: Any) -> dict[str, Any]:
+    """A VALID agent task — one that carries BSVibe's tools.
+
+    Since the local agent run was deleted, this is the ONLY agent shape there is: an
+    agentic task without an MCP surface is refused before the CLI starts. Tests that
+    are about something else (stream parsing, timeouts, cancellation, env) need a
+    shape that actually runs, and this is it.
+    """
+    ctx: dict[str, Any] = {
+        "agentic": True,
+        "mcp_config": json.dumps({"mcpServers": {"bsvibe": {"type": "http", "url": "https://x"}}}),
+        "allowed_tools": ["mcp__bsvibe__bsvibe_work_file_read"],
+    }
+    ctx.update(extra)
+    return ctx
+
+
 # ── A fake asyncio subprocess emitting canned stdout/stderr ──────────────────
 
 
@@ -131,7 +148,7 @@ async def test_streams_assistant_deltas_then_done(monkeypatch: pytest.MonkeyPatc
     )
     _patch_subprocess(monkeypatch, proc)
 
-    chunks = await _drain(ClaudeCodeExecutor().execute("do it", {"workspace_dir": "."}))
+    chunks = await _drain(ClaudeCodeExecutor().execute("do it", _agent_ctx(workspace_dir=".")))
 
     deltas = [c.delta for c in chunks if c.delta]
     assert deltas == ["Hello ", "world"]
@@ -143,7 +160,7 @@ async def test_drain_aggregates_output(monkeypatch: pytest.MonkeyPatch) -> None:
     proc = _FakeProcess(stdout_lines=[_assistant_line("abc"), _assistant_line("def")])
     _patch_subprocess(monkeypatch, proc)
 
-    result = await drain(ClaudeCodeExecutor().execute("p", {}))
+    result = await drain(ClaudeCodeExecutor().execute("p", _agent_ctx()))
 
     assert result.success is True
     assert result.stdout == "abcdef"
@@ -161,7 +178,7 @@ async def test_blocking_rate_limit_event_then_exit_is_rate_limited(
     _patch_subprocess(monkeypatch, proc)
 
     # retries=0 so the test asserts the classification without sleeping.
-    result = await drain(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", {}))
+    result = await drain(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", _agent_ctx()))
 
     assert result.success is False
     assert "rate limit" in (result.error_message or "").lower()
@@ -175,7 +192,7 @@ async def test_allowed_rate_limit_event_with_exit_is_plain_failure(
     proc = _FakeProcess(stdout_lines=[_rate_limit_line("allowed")], returncode=1)
     _patch_subprocess(monkeypatch, proc)
 
-    result = await drain(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", {}))
+    result = await drain(ClaudeCodeExecutor(rate_limit_retries=0).execute("p", _agent_ctx()))
 
     assert result.success is False
     assert "rate limit" not in (result.error_message or "").lower()
@@ -185,7 +202,7 @@ async def test_command_includes_print_and_stream_json(monkeypatch: pytest.Monkey
     proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
-    await _drain(ClaudeCodeExecutor().execute("p", {"system": "be brief", "model": "sonnet"}))
+    await _drain(ClaudeCodeExecutor().execute("p", _agent_ctx(system="be brief", model="sonnet")))
 
     argv = calls[0]
     assert "--print" in argv
@@ -198,49 +215,34 @@ async def test_command_includes_print_and_stream_json(monkeypatch: pytest.Monkey
     assert "sonnet" in argv
 
 
-async def test_writes_are_confined_to_the_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The executor inherits the host operator's harness (CLAUDE.md / skills /
-    memory) BY DESIGN, but the agent's native file writes must NOT escape the
-    per-task workspace. ``--dangerously-skip-permissions`` disabled ALL guards
-    including the working-directory confinement, so the agent — which learns the
-    host source-repo path from the inherited memory — wrote into the host repo
-    (dogfood leak). The fix: drop the bypass and confine writes to the cwd via
-    ``--permission-mode acceptEdits`` (edits auto-apply, but only inside an
-    allowed dir = the cwd) while still auto-allowing Bash for the verify step.
+async def test_the_agent_has_no_native_writes_to_confine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """This test used to assert that the agent's NATIVE file writes stay inside the
+    per-task workspace: ``--dangerously-skip-permissions`` had disabled every guard
+    including working-directory confinement, so an agent that learned the host
+    source-repo path from the inherited memory wrote into that repo (dogfood leak).
+    The fix then was ``--permission-mode acceptEdits`` — writes auto-apply, but only
+    inside the cwd — plus Bash auto-allowed for the verify step.
+
+    That whole shape is gone. The agent now acts ONLY through BSVibe's tools, so it
+    has no native writes to confine and no native Bash to allow. The proposition is
+    restated at the level that now carries it: the natives are DENIED, and neither
+    the blanket bypass nor the confinement that stood in for it may reappear —
+    ``acceptEdits`` coming back would mean native tools came back with it.
     """
     proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
-    await _drain(ClaudeCodeExecutor().execute("p", {}))
+    await _drain(ClaudeCodeExecutor().execute("p", _agent_ctx()))
 
     argv = calls[0]
-    # The blanket bypass is gone — it was what let writes escape the workspace.
     assert "--dangerously-skip-permissions" not in argv
-    # Edits auto-apply headlessly but stay confined to the working directory.
-    assert "--permission-mode" in argv
-    assert "acceptEdits" in argv
-    # Bash is auto-allowed (the verify step runs uv/pytest) without re-opening
-    # file writes outside the workspace.
-    settings_idx = argv.index("--settings")
-    settings_blob = argv[settings_idx + 1]
-    assert "Bash" in settings_blob
-
-
-# ── chat parity: a chat turn is a plain completion, not an agent run ─────────
-#
-# BSVibe's first principle: an executor account and a LiteLLM account behave
-# IDENTICALLY through the ``chat()`` abstraction. A LiteLLM call with no tools
-# cannot inspect anything — it answers from the prompt. The executor must match.
-#
-# It did not. Every task, chat turns included, ran the full agentic CLI with tool
-# access in an empty per-task temp dir — so a founder asking "현 프로젝트 상황
-# 설명해줘" got an answer ABOUT THAT TEMP DIR ("완전히 비어 있는 임시 디렉토리입니다"),
-# because the agent trusted its own tools over the injected grounding (prod,
-# 2026-07-13). The same agentic boot is why async knowledge answers hit the 300 s
-# executor timeout.
-#
-# ``agentic`` in the task context carries the ``tools`` argument's meaning down to
-# the CLI: tools → agent run; no tools → completion, no tools, nothing to inspect.
+    assert "--permission-mode" not in argv
+    assert "acceptEdits" not in argv
+    # What replaced it: the CLI's own tools are taken away by name.
+    assert "--disallowedTools" in argv
+    assert "--strict-mcp-config" in argv
 
 
 async def test_chat_turn_runs_without_tools(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -278,35 +280,90 @@ async def test_chat_turn_runs_without_tools(monkeypatch: pytest.MonkeyPatch) -> 
     assert "permissions" not in json.loads(argv[argv.index("--settings") + 1])
 
 
-async def test_agent_run_keeps_its_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    """agentic=True → unchanged: the coding agent works in its sandbox."""
+# ── TWO shapes, and there is no third ────────────────────────────────────────
+#
+# Founder's ruling (2026-09-16): the only executors that may exist are the MCP
+# agent run and the chat turn. EVERY execution is BSVibe relaying between the LLM
+# worker and the user — *including when the worker and the user's machine are the
+# same box*. A run on the founder's own hardware is not a licence to hand the CLI
+# that hardware.
+#
+# The local agent run was the third shape, and it was reached by ONE thing: an
+# agentic task whose ``mcp_config`` was missing. It carried no ``--disallowedTools``
+# (every native tool live), allowed Bash outright, and confined only WRITES to the
+# cwd — so it could read the founder's whole filesystem.
+#
+# The producer was already strict: ``_work_tool_surface`` REFUSES a run-less agentic
+# task rather than issue a workspace-wide token. Only the consumer was lenient, and
+# that leniency is what built the unisolated path. So the absence is not handled —
+# it is rejected, and the shape that allowed it is gone.
+
+
+async def test_agentic_without_bsvibe_tools_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No MCP surface → no agent run. NOT a degraded one: the CLI never starts."""
     proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
-    await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": True}))
+    chunks = await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": True}))
+
+    assert calls == [], "the CLI must not be launched at all"
+    assert chunks[-1].done
+    assert "bsvibe" in (chunks[-1].error or "").lower()
+
+
+async def test_missing_agentic_key_is_refused_not_defaulted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A task from an older backend carries neither key. It used to DEFAULT to the
+    agent run with native tools — the exact shape that is now forbidden. Version
+    skew must fail loudly instead of running unisolated."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    chunks = await _drain(ClaudeCodeExecutor().execute("p", {}))
+
+    assert calls == []
+    assert chunks[-1].done and chunks[-1].error
+
+
+async def test_chat_turn_needs_no_bsvibe_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CONTROL: the refusal is aimed at agent runs, not at everything. A chat
+    turn has nothing to reach, so it carries no MCP surface and still runs."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    chunks = await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": False}))
+
+    assert len(calls) == 1
+    assert not chunks[-1].error
+
+
+async def test_agent_run_acts_only_through_bsvibe_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The surviving agent shape: BSVibe's tools, the CLI's own taken away."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(
+        ClaudeCodeExecutor().execute(
+            "p",
+            {
+                "system": "ctx",
+                "agentic": True,
+                "mcp_config": {"mcpServers": {"bsvibe": {"url": "https://x"}}},
+                "allowed_tools": ["mcp__bsvibe__bsvibe_work_file_read"],
+            },
+        )
+    )
 
     argv = calls[0]
-    assert "--disallowedTools" not in argv
-    assert "--strict-mcp-config" not in argv
-    assert "--permission-mode" in argv
-    assert "acceptEdits" in argv
-    # An agent run keeps the host harness: the prompt is APPENDED to it.
+    assert "--strict-mcp-config" in argv
+    assert "--disallowedTools" in argv
+    # The deleted shape's fingerprints — neither may come back.
+    assert "--permission-mode" not in argv
+    assert "acceptEdits" not in argv
+    # An agent run keeps the host harness prompt: OURS is APPENDED to it.
     assert "--append-system-prompt" in argv
     assert "--system-prompt" not in argv
-
-
-async def test_missing_agentic_defaults_to_agent_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Back-compat: a task dispatched by an older backend carries no ``agentic``
-    key. Default to the agent run — the coding loop must never silently lose its
-    tools (that would ship empty diffs)."""
-    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
-    calls = _patch_subprocess(monkeypatch, proc)
-
-    await _drain(ClaudeCodeExecutor().execute("p", {}))
-
-    argv = calls[0]
-    assert "--disallowedTools" not in argv
-    assert "--permission-mode" in argv
 
 
 # ── Failure paths ────────────────────────────────────────────────────────────
@@ -320,7 +377,7 @@ async def test_nonzero_exit_yields_error_chunk(monkeypatch: pytest.MonkeyPatch) 
     )
     _patch_subprocess(monkeypatch, proc)
 
-    chunks = await _drain(ClaudeCodeExecutor().execute("p", {}))
+    chunks = await _drain(ClaudeCodeExecutor().execute("p", _agent_ctx()))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -334,7 +391,7 @@ async def test_bad_json_lines_are_skipped_no_crash(monkeypatch: pytest.MonkeyPat
     )
     _patch_subprocess(monkeypatch, proc)
 
-    chunks = await _drain(ClaudeCodeExecutor().execute("p", {}))
+    chunks = await _drain(ClaudeCodeExecutor().execute("p", _agent_ctx()))
 
     deltas = [c.delta for c in chunks if c.delta]
     assert deltas == ["ok"]
@@ -348,7 +405,7 @@ async def test_missing_binary_yields_error(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _raise)
 
-    chunks = await _drain(ClaudeCodeExecutor().execute("p", {}))
+    chunks = await _drain(ClaudeCodeExecutor().execute("p", _agent_ctx()))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -362,7 +419,7 @@ async def test_timeout_yields_error_chunk(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_subprocess(monkeypatch, proc)
 
     executor = ClaudeCodeExecutor(timeout_seconds=0, total_timeout_seconds=0)
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", _agent_ctx()))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -394,7 +451,7 @@ async def test_rate_limit_retry_then_success(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
     executor = ClaudeCodeExecutor(rate_limit_retries=2, rate_limit_wait_seconds=60)
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", _agent_ctx()))
 
     deltas = [c.delta for c in chunks if c.delta]
     assert deltas == ["recovered"]
@@ -420,7 +477,7 @@ async def test_rate_limit_exhausted_surfaces_terminal_error(
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
     executor = ClaudeCodeExecutor(rate_limit_retries=1, rate_limit_wait_seconds=1)
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", _agent_ctx()))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -454,7 +511,7 @@ async def test_subprocess_env_strips_session_markers_keeps_normal(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
 
-    await _drain(ClaudeCodeExecutor().execute("p", {}))
+    await _drain(ClaudeCodeExecutor().execute("p", _agent_ctx()))
 
     env = envs[0]
     assert "CLAUDE_CODE_SESSION_ID" not in env
@@ -515,7 +572,7 @@ async def test_cancel_kills_subprocess_promptly_no_wait_block(
     monkeypatch.setattr(claude_mod, "_kill_process_group", _fake_group_kill)
 
     executor = ClaudeCodeExecutor(timeout_seconds=3600, total_timeout_seconds=7200)
-    stream = executor.execute("long task", {"workspace_dir": "."})
+    stream = executor.execute("long task", _agent_ctx(workspace_dir="."))
     task = asyncio.create_task(_drain(stream))
 
     for _ in range(50):
@@ -545,7 +602,7 @@ async def test_subprocess_started_in_new_session_for_pgrp_signal(
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _capture_exec)
-    await _drain(ClaudeCodeExecutor().execute("p", {"workspace_dir": "."}))
+    await _drain(ClaudeCodeExecutor().execute("p", _agent_ctx(workspace_dir=".")))
 
     assert spawn_kwargs, "create_subprocess_exec was never called"
     assert spawn_kwargs[0].get("start_new_session") is True, (
@@ -745,19 +802,21 @@ async def test_mcp_agent_turn_does_not_inherit_host_auto_memory(
     assert _auto_memory_off(calls[0])
 
 
-async def test_local_agent_run_still_inherits_the_host_harness(
+async def test_no_executor_shape_inherits_the_host_auto_memory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The CONTROL for the two above — and the axis is real, not cosmetic.
+    """#981 turned auto-memory off on the two shapes that DECLARE isolation and left
+    the local agent run inheriting it, because its docstring called that inheritance
+    deliberate. A control test pinned that difference.
 
-    A local agent run (no MCP config) inherits the operator's harness ON PURPOSE:
-    :meth:`_build_cmd` says so, and a dogfood incident is recorded against it. Left
-    as-is deliberately; changing it is a product decision, not a leak fix. If this
-    ever flips, the two tests above stop proving anything about a *difference*.
+    The founder's ruling deleted the local run outright, so the difference is gone
+    and the control with it: there is no shape left that may inherit the store. That
+    is asserted here directly — the old control could only have gone on passing by
+    describing something that no longer exists.
     """
     proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
-    calls = _patch_subprocess(monkeypatch, proc)
 
-    await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": True}))
-
-    assert not _auto_memory_off(calls[0])
+    for ctx in ({"system": "ctx", "agentic": False}, _agent_ctx(system="ctx")):
+        calls = _patch_subprocess(monkeypatch, proc)
+        await _drain(ClaudeCodeExecutor().execute("p", ctx))
+        assert _auto_memory_off(calls[0]), ctx
