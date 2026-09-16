@@ -118,8 +118,10 @@ class Settings(BaseSettings):
     notion_client_secret: str = ""
     discord_client_id: str = ""
     discord_client_secret: str = ""
-    sentry_client_id: str = ""
-    sentry_client_secret: str = ""
+    # sentry has NO env credential on purpose — like github, its App credentials
+    # live in the DB (``connector_oauth_app_credentials``; install→grant). It was
+    # listed here before that wiring existed and nothing ever read it, so the two
+    # settings were inert while ``.env.example`` still offered them.
 
     # Agent shell_exec timeout (backend.workflow.infrastructure.tools). The
     # executor's ``shell_exec`` tool runs a command in the per-product DinD
