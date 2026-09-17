@@ -36,12 +36,9 @@ authorization_code body (unlike refresh_token). See the constants below.
 
 from __future__ import annotations
 
-import http.server
 import json
 import secrets
-import socket
 import sys
-import threading
 import time
 import urllib.parse
 import urllib.request
@@ -78,23 +75,25 @@ _AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize"
 # authenticate via the worker token, NOT this OAuth scope, so the narrow scope
 # does not lose MCP (verified live: executor tasks completed success=True).
 _CLAUDE_SCOPE = "user:inference"
+
+#: The redirect the real CLI uses — MEASURED 2026-09-17 against `claude
+#: setup-token` (v2.1.268), captured over a pty. The platform's out-of-band
+#: callback page shows the operator a code to paste back; nothing has to listen
+#: anywhere, which is what makes this work over SSH.
+#:
+#: ⚠️ This REPLACED a loopback redirect that was measured to be accepted on
+#: 2026-07-31 — the platform flipped which redirect it takes, and the stale one
+#: made the authorize PAGE fail with "Invalid request format" before any token
+#: call happened. A measurement has a date; re-measure against the real CLI
+#: before assuming this line is still true.
+CLAUDE_REDIRECT_URI = "https://platform.claude.com/oauth/code/callback"
 # Mimic the CLI so Cloudflare's bot filter (error 1010) lets the POST through —
 # identical to claude_auth._http_refresh.
 _USER_AGENT = "claude-cli/2.1.172 (external, cli)"
 # Loopback host for the redirect_uri. MEASURED: ``localhost`` is accepted by the
 # authorize endpoint; the redirect_uri only has to round-trip identically to the
 # token exchange (RFC 8252 loopback — any port).
-_LOOPBACK_HOST = "localhost"
 _DEFAULT_LOGIN_TIMEOUT_S = 300.0
-
-
-def _loopback_redirect(port: int) -> str:
-    return f"http://{_LOOPBACK_HOST}:{port}/callback"
-
-
-#: ``(code, code_verifier, redirect_uri, state) -> token payload`` — the
-#: token-endpoint POST, injectable so tests never touch the network.
-CodeExchanger = Callable[..., dict[str, Any]]
 
 
 class ClaudeLoginError(Exception):
@@ -108,6 +107,11 @@ class ClaudeLoginResult:
     access_token: str
     refresh_token: str
     expires_at_ms: int
+
+
+#: ``(code, code_verifier, redirect_uri, state) -> token payload`` — the
+#: token-endpoint POST, injectable so tests never touch the network.
+CodeExchanger = Callable[..., dict[str, Any]]
 
 
 def make_claude_authorize_url(*, redirect_uri: str, challenge: str, state: str) -> str:
@@ -224,56 +228,6 @@ def _http_exchange_code(
     return payload
 
 
-def _pick_loopback_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((_LOOPBACK_HOST, 0))
-        port: int = s.getsockname()[1]
-    return port
-
-
-def _wait_for_callback(port: int, timeout: float) -> dict[str, str]:
-    captured: dict[str, str] = {}
-    done = threading.Event()
-
-    class _Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 — stdlib API
-            qs = parse_qs(urlparse(self.path).query)
-            for k, v in qs.items():
-                if v:
-                    captured[k] = v[0]
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(
-                b"<html><body><h2>Claude sign-in complete.</h2>"
-                b"<p>You can close this tab and return to the terminal.</p></body></html>"
-            )
-            done.set()
-
-        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-            pass
-
-    server = http.server.HTTPServer((_LOOPBACK_HOST, port), _Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        done.wait(timeout=timeout)
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2.0)
-
-    if not captured:
-        raise ClaudeLoginError(f"timed out waiting for OAuth callback after {timeout:.0f}s")
-    if "error" in captured:
-        raise ClaudeLoginError(
-            f"OAuth error: {captured['error']} — {captured.get('error_description', '')}"
-        )
-    if "code" not in captured:
-        raise ClaudeLoginError(f"OAuth callback missing code: {captured}")
-    return captured
-
-
 def _result_from_payload(payload: dict[str, Any], *, now_ms: int) -> ClaudeLoginResult:
     refresh = payload.get("refresh_token")
     if not refresh:
@@ -297,49 +251,86 @@ def _default_emit(msg: str) -> None:
 
 def _manual_instructions(authorize_url: str) -> str:
     return (
-        "Remote Claude sign-in (manual paste-back) — no loopback server is used.\n"
+        "Remote Claude sign-in (out-of-band paste-back) — nothing listens locally.\n"
         "\n"
         "1. Open this URL on ANY device with a browser and approve:\n"
         "\n"
         f"   {authorize_url}\n"
         "\n"
-        "2. The browser then tries to open a http://localhost:<port>/callback?code=...\n"
-        "   address that FAILS to load — that is expected (nothing listens there).\n"
-        "3. Copy the FULL address from the browser's URL bar (or just the `code`)\n"
-        "   and paste it below, then press Enter:\n"
+        "2. Claude redirects to platform.claude.com, which SHOWS you a code\n"
+        "   (it does not come back to this machine).\n"
+        "3. Copy that code — or the full address — and paste it below, then Enter.\n"
+        "   Do this in THIS run: the PKCE verifier and state are per-run, so a\n"
+        "   second `claude-login` invalidates the URL you just opened.\n"
     )
 
 
 def perform_claude_login(
     *,
     open_browser: Callable[[str], bool] | None = None,
-    wait_for_callback: Callable[[int, float], dict[str, str]] | None = None,
+    read_input: Callable[[], str] = input,
+    emit: Callable[[str], None] = _default_emit,
     exchanger: CodeExchanger | None = None,
-    pick_port: Callable[[], int] | None = None,
     state_factory: Callable[[], str] | None = None,
     now_ms: Callable[[], int] | None = None,
-    timeout_s: float = _DEFAULT_LOGIN_TIMEOUT_S,
 ) -> ClaudeLoginResult:
-    """Loopback PKCE flow — open the browser, capture the localhost callback."""
+    """Local PKCE flow — open the browser, then read the pasted code.
+
+    This USED to bind a loopback server and capture the callback. The platform
+    no longer accepts a loopback ``redirect_uri`` (2026-09-17: the authorize page
+    answers "Invalid request format" before any token call), so there is nothing
+    to capture — the code is shown on ``platform.claude.com`` instead. Keeping a
+    loopback path would only be a trap that fails at the same place.
+
+    The only thing separating this from :func:`perform_claude_login_manual` is
+    that it opens the browser for you.
+    """
     open_fn = open_browser or webbrowser.open
-    wait_fn = wait_for_callback or _wait_for_callback
+    return _paste_back_login(
+        announce=lambda url: (
+            None if open_fn(url) else logger.warning("claude_login_browser_open_failed", url=url)
+        ),
+        read_input=read_input,
+        emit=emit,
+        exchanger=exchanger,
+        state_factory=state_factory,
+        now_ms=now_ms,
+    )
+
+
+def _paste_back_login(
+    *,
+    announce: Callable[[str], Any],
+    read_input: Callable[[], str],
+    emit: Callable[[str], None],
+    exchanger: CodeExchanger | None,
+    state_factory: Callable[[], str] | None,
+    now_ms: Callable[[], int] | None,
+) -> ClaudeLoginResult:
+    """The one real flow: authorize out-of-band, paste the code back, exchange.
+
+    ``state`` is generated here and used at the exchange (the token endpoint
+    validates it), so a mangled pasted ``state`` is a warning rather than a hard
+    failure — the pasted value is only a best-effort client-side CSRF pre-check.
+    """
     exchange_fn = exchanger or _http_exchange_code
-    port = (pick_port or _pick_loopback_port)()
     state = (state_factory or (lambda: secrets.token_urlsafe(16)))()
     now = (now_ms or (lambda: int(time.time() * 1000)))()
 
     verifier, challenge = make_pkce_pair()
-    redirect_uri = _loopback_redirect(port)
     authorize_url = make_claude_authorize_url(
-        redirect_uri=redirect_uri, challenge=challenge, state=state
+        redirect_uri=CLAUDE_REDIRECT_URI, challenge=challenge, state=state
     )
-    if not open_fn(authorize_url):
-        logger.warning("claude_login_browser_open_failed", url=authorize_url)
-    captured = wait_fn(port, timeout_s)
-    if captured.get("state") != state:
-        raise ClaudeLoginError("state mismatch — possible CSRF; aborting")
+    announce(authorize_url)
+    emit(_manual_instructions(authorize_url))
+    parsed = parse_claude_callback_input(read_input())
+    code = parsed["code"]
+    if code is None:  # pragma: no cover — parse_claude_callback_input guarantees a code
+        raise ClaudeLoginError("no `code` in pasted callback input")
+    if parsed["state"] is not None and parsed["state"] != state:
+        logger.warning("claude_login_pasted_state_mismatch")
     payload = exchange_fn(
-        code=captured["code"], code_verifier=verifier, redirect_uri=redirect_uri, state=state
+        code=code, code_verifier=verifier, redirect_uri=CLAUDE_REDIRECT_URI, state=state
     )
     return _result_from_payload(payload, now_ms=now)
 
@@ -349,37 +340,18 @@ def perform_claude_login_manual(
     read_input: Callable[[], str] = input,
     emit: Callable[[str], None] = _default_emit,
     exchanger: CodeExchanger | None = None,
-    pick_port: Callable[[], int] | None = None,
     state_factory: Callable[[], str] | None = None,
     now_ms: Callable[[], int] | None = None,
 ) -> ClaudeLoginResult:
-    """Remote/headless PKCE flow — emit the URL, read a pasted redirect URL / code.
-
-    Uses a loopback ``redirect_uri`` (MEASURED to be accepted; the platform
-    out-of-band redirect is not) but binds NO server — the operator pastes the
-    failed ``http://localhost:<port>/callback?...`` address back. The exchange is
-    done with the ``state`` we generated (the token endpoint validates it), so a
-    mangled pasted ``state`` is a warning, not a hard failure — the pasted value
-    is only a best-effort client-side CSRF pre-check."""
-    exchange_fn = exchanger or _http_exchange_code
-    port = (pick_port or _pick_loopback_port)()
-    state = (state_factory or (lambda: secrets.token_urlsafe(16)))()
-    now = (now_ms or (lambda: int(time.time() * 1000)))()
-
-    verifier, challenge = make_pkce_pair()
-    redirect_uri = _loopback_redirect(port)
-    authorize_url = make_claude_authorize_url(
-        redirect_uri=redirect_uri, challenge=challenge, state=state
+    """Headless variant — identical, minus opening a browser on this machine."""
+    return _paste_back_login(
+        announce=lambda _url: None,
+        read_input=read_input,
+        emit=emit,
+        exchanger=exchanger,
+        state_factory=state_factory,
+        now_ms=now_ms,
     )
-    emit(_manual_instructions(authorize_url))
-    parsed = parse_claude_callback_input(read_input())
-    code = parsed["code"]
-    if code is None:  # pragma: no cover — parse_claude_callback_input guarantees a code
-        raise ClaudeLoginError("no `code` in pasted callback input")
-    if parsed["state"] is not None and parsed["state"] != state:
-        logger.warning("claude_login_pasted_state_mismatch")
-    payload = exchange_fn(code=code, code_verifier=verifier, redirect_uri=redirect_uri, state=state)
-    return _result_from_payload(payload, now_ms=now)
 
 
 def run_claude_login(*, manual: bool, path: Path | None = None, **deps: Any) -> ClaudeLoginResult:
