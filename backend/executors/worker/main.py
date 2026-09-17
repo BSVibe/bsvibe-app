@@ -1348,7 +1348,6 @@ def _cancel_all_running_tasks() -> None:
 
 
 async def _amain() -> None:
-    _ensure_process_group()
     # #970 — BEFORE anything logs, and that includes ``_apply_persisted_config``,
     # which emits ``worker_config_loaded``. It used to run on the line above this
     # one, so every daemon start put exactly one ANSI console line in the file
@@ -1373,6 +1372,12 @@ async def _amain() -> None:
     # points (``python -m backend.executors.worker`` and ``bsvibe-worker run``)
     # converge here, so this is the single place that fixes both.
     configure_logging(level=settings.log_level, service_name="bsvibe-worker")
+    # Both of these log, so both belong AFTER the line above.
+    # ``_ensure_process_group`` emits ``setpgrp_skipped`` at debug — and an
+    # UNCONFIGURED structlog filters nothing, so "it is only debug" is not a
+    # reason it stays out of the file. Becoming the process-group leader has no
+    # ordering relationship to logging config, so it simply moves down.
+    _ensure_process_group()
     settings = _apply_persisted_config(settings)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

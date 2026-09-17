@@ -445,7 +445,19 @@ async def test_the_daemon_configures_logging_before_its_first_log_line(
 
     monkeypatch.setattr(worker_main, "poll_and_execute", _noop)
     monkeypatch.setattr(worker_main, "_connect_redis", lambda _s: None)
-    monkeypatch.setattr(worker_main, "_ensure_process_group", lambda: None)
+    # ``_ensure_process_group`` is deliberately NOT patched out. It logs
+    # (``setpgrp_skipped``), so stubbing it would hide exactly the kind of
+    # pre-configuration call this test exists to catch — which is how the first
+    # version of this fix shipped incomplete.
+    #
+    # But leaving it real is not enough either: under pytest ``os.setpgrp()``
+    # SUCCEEDS, the except branch never runs, and nothing logs — a wire cut
+    # that moved the call back above ``configure_logging`` still passed. The
+    # only line it can emit lives behind a failure, so the failure is forced.
+    def _refuse_setpgrp() -> None:
+        raise OSError("already a session leader")
+
+    monkeypatch.setattr(worker_main.os, "setpgrp", _refuse_setpgrp)
 
     await asyncio.wait_for(worker_main._amain(), timeout=10)
 
