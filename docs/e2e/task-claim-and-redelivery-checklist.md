@@ -58,6 +58,9 @@
 - [x] `claimed_at` 과 `created_at` 의 간격이 **초 단위**다 (분 단위면 폴링이 느린 것)
       → 0.17s · 2.57s · 4.59s · 0.99s
 - [x] 워커 로그에 `task_claimed` 가 태스크마다 **정확히 한 줄**
+      ⚠️ **#970 이후 워커 로그는 JSON 이다.** 아래 형태로 읽어라 —
+      2026-09-17 검증 당시의 콘솔 형식 grep 은 더 이상 안 맞는다:
+      `jq -r 'select(.event|startswith("task_claim")) | "\(.timestamp) \(.event) \(.task_id)"' ~/Library/Logs/bsvibe-worker*.log`
 - [x] 정상 런에 `executor_task_redelivered` 가 **없다**
       ⚠️ **로그는 `bsvibe-prod-worker-1` 에 있다, backend 가 아니다.** awaiter 는
       런 오케스트레이터 쪽에 산다 — backend 컨테이너만 보면 **0건으로 오판한다**
@@ -137,3 +140,6 @@ identity 를 두 프로세스가 나눠 갖고 있어**(#991) 하나만 멈추�
 * **로그는 `bsvibe-prod-worker-1` 에 있다** — awaiter 가 거기 산다. backend 만 보면 0건
 * **워커 identity 는 데몬 수와 다르다** — #991. 행 수가 아니라 신선한 `last_heartbeat` 로 세라
 * **워커를 멈추려면 `kill -STOP`**, `launchctl stop` 이 아니다
+* **#970 이후 워커 로그는 JSON 한 줄이다** — 이 문서의 로그 예시 중 콘솔 형식
+  (`2026-09-17 16:08:46 [info ] task_claimed task_id=…`)은 **2026-09-17 검증 당시의
+  것**이고, 지금 다시 걸면 `jq` 로 읽어야 한다

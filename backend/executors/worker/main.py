@@ -54,7 +54,7 @@ import httpx
 import structlog
 
 from backend.executors.worker import opencode_server
-from backend.executors.worker.claude_auth import ensure_claude_bearer
+from backend.executors.worker.claude_auth import ClaudeBearerResult, resolve_claude_bearer
 from backend.executors.worker.config import (
     WorkerSettings,
     default_sandbox_cwd,
@@ -73,6 +73,7 @@ from backend.executors.worker.executors import (
     select_executor,
 )
 from backend.shared.core.http import redact_url_password
+from backend.shared.core.logging import configure_logging
 
 logger = structlog.get_logger(__name__)
 
@@ -102,6 +103,15 @@ _RUNNING_TASKS: dict[str, asyncio.Task[None]] = {}
 #: handler. 2 = "I claim tasks before running them", which is what makes the
 #: backend willing to redeliver to this worker at all (#965).
 WORKER_PROTOCOL_VERSION = 2
+
+#: How the Claude OAuth keep-alive slows down while the answer cannot change
+#: (#970). The FIRST retry stays at the normal interval — a token may have just
+#: rotated under us — and only a repeated definitive failure backs off.
+_KEEPALIVE_BACKOFF_FACTOR = 2.0
+
+#: Ceiling on that backoff. Unbounded doubling reaches days, and the worker would
+#: then take days to notice a credential the founder had already replaced.
+_KEEPALIVE_BACKOFF_MAX_S = 3600.0
 
 #: task_ids whose wrapper Task :func:`run_once` has spawned and not yet seen
 #: finish. Distinct from :data:`_RUNNING_TASKS`, which ``handle_task`` fills in
@@ -1113,7 +1123,7 @@ async def _claude_auth_keepalive_loop(
     *,
     settings: WorkerSettings,
     stop: asyncio.Event,
-    refresh: Callable[[], str | None] | None = None,
+    resolve: Callable[[], ClaudeBearerResult] | None = None,
 ) -> None:
     """Proactively refresh the worker's OWN Claude OAuth token on a cadence.
 
@@ -1132,25 +1142,57 @@ async def _claude_auth_keepalive_loop(
     token stays alive as long as the worker process runs. It only ever runs for a
     ``claude_code``-capable worker (started conditionally in :func:`poll_and_execute`).
 
-    ``refresh`` is injectable for tests; the default wraps the SYNC
-    :func:`ensure_claude_bearer` (file IO + a possible network refresh under an
-    flock) in :func:`asyncio.to_thread` so it never blocks the event loop — the
-    same pattern :func:`claude_code._subprocess_env_with_bearer` uses. Soft-fail:
-    any unexpected error is logged and the loop continues, never crashing the
-    worker.
+    ``resolve`` is injectable for tests; the default is the SYNC
+    :func:`resolve_claude_bearer` (file IO + a possible network refresh under an
+    flock), run in :func:`asyncio.to_thread` so it never blocks the event loop —
+    the same pattern :func:`claude_code._subprocess_env_with_bearer` uses.
+    Soft-fail: any unexpected error is logged and the loop continues, never
+    crashing the worker.
+
+    #970 — it resolves the full :class:`ClaudeBearerResult` rather than a bare
+    token because the two states this loop must distinguish look identical as
+    ``str | None``: a healthy refresh and a burned credential whose CLI fallback
+    happened to return one. Reading the second as health is what let a dead
+    worker credential log ``claude_auth_keepalive_ok`` every five minutes for
+    nineteen days.
     """
-    refresh = refresh or ensure_claude_bearer
+    resolve = resolve or resolve_claude_bearer
+    base = settings.claude_auth_refresh_interval_s
+    delay = sleep_s = base
     while not stop.is_set():
         try:
-            token = await asyncio.to_thread(refresh)
-            if token:
+            result = await asyncio.to_thread(resolve)
+            if result.definitive_failure:
+                # #970 — the grant is revoked server-side; asking again in 300s
+                # cannot change the answer. Prod asked 6,164 times over nineteen
+                # days. ONE line per attempt, no traceback (the classification
+                # already happened, inside ``resolve``).
+                #
+                # NOT ``keepalive_ok`` even though ``result.token`` is usually
+                # truthy here: that token is borrowed from the interactive CLI,
+                # and reading it as health is exactly what made a dead worker
+                # credential look fine for nineteen days.
+                logger.warning("claude_auth_keepalive_definitive_failure", retry_in_s=delay)
+                # Sleep the CURRENT delay and grow the NEXT one. Growing first
+                # would make the line above a lie (it would say 300 and sleep
+                # 600) and would deny the very first retry its prompt attempt.
+                sleep_s = delay
+                delay = min(delay * _KEEPALIVE_BACKOFF_FACTOR, _KEEPALIVE_BACKOFF_MAX_S)
+            elif result.token:
+                # Reset unconditionally: ``bsvibe-worker claude-login`` writes a
+                # new credential and the worker must return to its normal cadence
+                # on its own. Without this the fix would trade a loud failure for
+                # a silent one — a repaired credential unnoticed for an hour.
+                delay = sleep_s = base
                 logger.debug("claude_auth_keepalive_ok")
             else:
                 # Early-warning: auth is failing NOW, before a task hits it.
+                delay = sleep_s = base
                 logger.warning("claude_auth_keepalive_degraded")
         except Exception:  # noqa: BLE001 — never let the keep-alive die / crash the worker
+            delay = sleep_s = base
             logger.warning("claude_auth_keepalive_error", exc_info=True)
-        await _interruptible_sleep(settings.claude_auth_refresh_interval_s, stop)
+        await _interruptible_sleep(sleep_s, stop)
 
 
 async def _interruptible_sleep(seconds: float, stop: asyncio.Event) -> None:
@@ -1308,6 +1350,19 @@ def _cancel_all_running_tasks() -> None:
 async def _amain() -> None:
     _ensure_process_group()
     settings = _apply_persisted_config(get_worker_settings())
+    # #970 — BEFORE anything logs. Without this the daemon runs on structlog's
+    # UNCONFIGURED default, which is the development pipeline: ``ConsoleRenderer``
+    # with rich exception rendering. A launchd-redirected file then collects ANSI
+    # colour codes and box-drawing characters, and every exception arrives as a
+    # multi-line panel with source context and locals — measured at ~284 lines
+    # apiece, 96.4% of a 264 MB log.
+    #
+    # The volume was only half the cost. The half that actually delayed an
+    # investigation was that the surviving signal could not be grepped or parsed:
+    # an ANSI console dump is the one shape `jq` cannot read. Both daemon entry
+    # points (``python -m backend.executors.worker`` and ``bsvibe-worker run``)
+    # converge here, so this is the single place that fixes both.
+    configure_logging(level=settings.log_level, service_name="bsvibe-worker")
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
 

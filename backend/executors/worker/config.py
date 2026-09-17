@@ -130,6 +130,15 @@ class WorkerSettings(BaseSettings):
     # within the ~600s buffer, so the tick is cheap.
     claude_auth_refresh_interval_s: float = 300.0
 
+    #: Log level for the daemon (``BSVIBE_WORKER_LOG_LEVEL``). #970.
+    #:
+    #: ``info`` rather than ``debug`` because the keep-alive's success line is a
+    #: debug event that fires every 300s forever — 10,629 of them in the file
+    #: that prompted this. A daemon's default verbosity should be what an
+    #: operator wants to read months later, not what a developer wants while
+    #: writing the loop; ``BSVIBE_WORKER_LOG_LEVEL=debug`` gets it back.
+    log_level: str = "info"
+
 
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:

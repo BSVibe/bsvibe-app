@@ -33,6 +33,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -194,6 +195,27 @@ def _is_invalid_grant(exc: BaseException) -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class ClaudeBearerResult:
+    """A token PLUS how it was obtained — #970.
+
+    ``ensure_claude_bearer`` folds every outcome into ``str | None``, and the
+    most important distinction is invisible in that shape: when the worker's own
+    refresh token is burned, the CLI fallback returns a perfectly good token. So
+    a caller measuring "did I get a token" sees success while the credential it
+    exists to maintain is dead. Prod ran nineteen days that way, logging
+    ``claude_auth_keepalive_ok`` every five minutes.
+
+    ``definitive_failure`` is the narrow claim the retry cadence needs: *this
+    will not succeed if asked again*, which for OAuth means ``invalid_grant`` —
+    the grant was revoked server-side. A network error is NOT definitive and
+    must keep the normal cadence.
+    """
+
+    token: str | None
+    definitive_failure: bool = False
+
+
 def ensure_claude_bearer(
     path: Path | None = None,
     *,
@@ -201,6 +223,21 @@ def ensure_claude_bearer(
     refresher: Refresher | None = None,
     cli_path: Path | None = None,
 ) -> str | None:
+    """The token alone — see :func:`resolve_claude_bearer` for the full outcome.
+
+    Kept as the primary entry point because every caller but the keep-alive
+    wants exactly this: a bearer to put in an env var, or ``None``.
+    """
+    return resolve_claude_bearer(path, now_ms=now_ms, refresher=refresher, cli_path=cli_path).token
+
+
+def resolve_claude_bearer(
+    path: Path | None = None,
+    *,
+    now_ms: int | None = None,
+    refresher: Refresher | None = None,
+    cli_path: Path | None = None,
+) -> ClaudeBearerResult:
     """Return a currently-valid Claude OAuth access token, refreshing if needed.
 
     Reads the worker credential file; if the access token is missing or within
@@ -229,15 +266,16 @@ def ensure_claude_bearer(
     oauth = _read_oauth(path)
     if oauth is None:
         # Worker file missing/malformed — borrow the CLI's live token if any.
-        return _resolve_fallback(cli_path, now_ms=now, stale=None)
+        return ClaudeBearerResult(_resolve_fallback(cli_path, now_ms=now, stale=None))
     access = _access_token(oauth)
     if access and now < _expires_at_ms(oauth) - _REFRESH_BUFFER_S * 1000:
-        return access  # still valid — no refresh, no network, CLI not read.
+        # still valid — no refresh, no network, CLI not read.
+        return ClaudeBearerResult(access)
 
     refresh = _refresh_token(oauth)
     if not refresh:
         # Expired/near-expiry with no refresh token — cannot self-refresh.
-        return _resolve_fallback(cli_path, now_ms=now, stale=access or None)
+        return ClaudeBearerResult(_resolve_fallback(cli_path, now_ms=now, stale=access or None))
 
     # Serialise the whole refresh across processes: single-use refresh tokens mean
     # two concurrent refreshers would have one fail with invalid_grant.
@@ -250,7 +288,7 @@ def ensure_claude_bearer(
             oauth = _read_oauth(path) or oauth
             access = _access_token(oauth)
             if access and now < _expires_at_ms(oauth) - _REFRESH_BUFFER_S * 1000:
-                return access
+                return ClaudeBearerResult(access)
             refresh = _refresh_token(oauth) or refresh
             payload = refresher(refresh)
             new_access = str(payload["access_token"])
@@ -259,15 +297,35 @@ def ensure_claude_bearer(
             new_expires_at = now + expires_in * 1000 if expires_in else _expires_at_ms(oauth)
             _persist(path, new_access, new_refresh, new_expires_at)
             logger.info("claude_oauth_refreshed", expires_in=expires_in)
-            return new_access
+            return ClaudeBearerResult(new_access)
     except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError, KeyError) as exc:
-        if _is_invalid_grant(exc):
+        definitive = _is_invalid_grant(exc)
+        if definitive:
             # The refresh token was burned (rotated server-side, our copy stale).
+            #
+            # #970 — ONE line, and no ``exc_info``. The classification above is
+            # the whole diagnosis; a stack trace adds nothing a reader of this
+            # event does not already know. Measured on prod: this branch fired
+            # 6,163 times and the traceback it used to print alongside accounted
+            # for 96.4% of a 264 MB log file — which is what an investigation
+            # then had to read past to find the signal it came for.
             logger.warning("claude_oauth_refresh_invalid_grant")
-        logger.warning("claude_oauth_refresh_failed", exc_info=True)
+        else:
+            # Nobody has classified THIS one, so it keeps its full traceback.
+            # Dropping it here would trade a noisy failure for a mute one.
+            logger.warning("claude_oauth_refresh_failed", exc_info=True)
         # Worker file untouched (refresh token not consumed); borrow the CLI's
         # live token as a last resort before returning the stale worker access.
-        return _resolve_fallback(cli_path, now_ms=now, stale=access or None)
+        return ClaudeBearerResult(
+            _resolve_fallback(cli_path, now_ms=now, stale=access or None),
+            definitive_failure=definitive,
+        )
 
 
-__all__ = ["default_cli_credentials_path", "default_oauth_path", "ensure_claude_bearer"]
+__all__ = [
+    "ClaudeBearerResult",
+    "default_cli_credentials_path",
+    "default_oauth_path",
+    "ensure_claude_bearer",
+    "resolve_claude_bearer",
+]
