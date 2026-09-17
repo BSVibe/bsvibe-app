@@ -1096,16 +1096,18 @@ async def test_claude_auth_keepalive_calls_refresh_and_logs_ok(monkeypatch: Any)
     stop = asyncio.Event()
     calls = {"n": 0}
 
-    def _refresh() -> str | None:
+    def _resolve() -> Any:
+        from backend.executors.worker.claude_auth import ClaudeBearerResult
+
         calls["n"] += 1
         stop.set()  # stop after the first iteration so the loop ends
-        return "FRESH-ACCESS-TOKEN"
+        return ClaudeBearerResult("FRESH-ACCESS-TOKEN")
 
     await asyncio.wait_for(
         worker_main._claude_auth_keepalive_loop(
             settings=_settings(claude_auth_refresh_interval_s=0),
             stop=stop,
-            refresh=_refresh,
+            resolve=_resolve,
         ),
         timeout=5,
     )
@@ -1123,15 +1125,17 @@ async def test_claude_auth_keepalive_logs_degraded_on_none(monkeypatch: Any) -> 
     monkeypatch.setattr(worker_main, "logger", cap)
     stop = asyncio.Event()
 
-    def _refresh() -> str | None:
+    def _resolve() -> Any:
+        from backend.executors.worker.claude_auth import ClaudeBearerResult
+
         stop.set()
-        return None
+        return ClaudeBearerResult(None)
 
     await asyncio.wait_for(
         worker_main._claude_auth_keepalive_loop(
             settings=_settings(claude_auth_refresh_interval_s=0),
             stop=stop,
-            refresh=_refresh,
+            resolve=_resolve,
         ),
         timeout=5,
     )
@@ -1150,18 +1154,20 @@ async def test_claude_auth_keepalive_survives_refresh_exception(monkeypatch: Any
     stop = asyncio.Event()
     calls = {"n": 0}
 
-    def _refresh() -> str | None:
+    def _resolve() -> Any:
+        from backend.executors.worker.claude_auth import ClaudeBearerResult
+
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("token endpoint down")
         stop.set()  # second iteration proves the loop continued past the error
-        return "FRESH"
+        return ClaudeBearerResult("FRESH")
 
     await asyncio.wait_for(
         worker_main._claude_auth_keepalive_loop(
             settings=_settings(claude_auth_refresh_interval_s=0),
             stop=stop,
-            refresh=_refresh,
+            resolve=_resolve,
         ),
         timeout=5,
     )
