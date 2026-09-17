@@ -141,11 +141,11 @@ def test_perform_manual_happy_path_returns_token() -> None:
     assert result.access_token == "sk-ant-oat01-NEWACCESS"
     assert result.refresh_token == "sk-ant-ort01-NEWREFRESH"
     assert result.expires_at_ms == 1_000_000 + 3600 * 1000
-    # The exchange used the pasted code, our verifier, a loopback redirect, and
-    # the GENERATED state (which the token endpoint validates).
+    # The exchange used the pasted code, our verifier, the PLATFORM redirect
+    # (loopback is no longer accepted — see CLAUDE_REDIRECT_URI), and the
+    # GENERATED state (which the token endpoint validates).
     assert rec["code"] == "PASTEDCODE"
-    assert str(rec["redirect_uri"]).startswith("http://localhost:")  # type: ignore[arg-type]
-    assert str(rec["redirect_uri"]).endswith("/callback")  # type: ignore[arg-type]
+    assert rec["redirect_uri"] == "https://platform.claude.com/oauth/code/callback"
     assert rec["state"] == "FIXEDSTATE"
     assert isinstance(rec["code_verifier"], str) and len(rec["code_verifier"]) >= 43  # type: ignore[arg-type]
     # The authorize URL was surfaced to the operator with the measured scope.
@@ -202,45 +202,45 @@ def test_perform_manual_missing_refresh_token_raises() -> None:
 # --------------------------------------------------------------------------- #
 # Loopback flow
 # --------------------------------------------------------------------------- #
-def test_perform_loopback_happy_path() -> None:
+def test_the_browser_flow_opens_the_url_then_takes_a_pasted_code() -> None:
+    """The loopback server is gone — the platform no longer redirects here.
+
+    What is left of the "browser" flow is that it OPENS the URL for you; the
+    code still comes back by paste, same as the headless flow.
+    """
     rec: dict[str, object] = {}
-    captured_state: dict[str, str] = {}
-
-    def _open_browser(url: str) -> bool:
-        captured_state["state"] = parse_qs(urlparse(url).query)["state"][0]
-        return True
-
-    def _wait_for_callback(port: int, timeout: float) -> dict[str, str]:  # noqa: ARG001
-        return {"code": "LOOPCODE", "state": captured_state["state"]}
+    opened: list[str] = []
 
     result = perform_claude_login(
-        open_browser=_open_browser,
-        wait_for_callback=_wait_for_callback,
+        open_browser=lambda url: (opened.append(url), True)[1],
+        read_input=lambda: "BROWSERCODE#ST",
+        emit=lambda _m: None,
         exchanger=_fake_exchanger(rec),
-        pick_port=lambda: 60400,
+        state_factory=lambda: "ST",
         now_ms=lambda: 0,
     )
     assert result.access_token == "sk-ant-oat01-NEWACCESS"
-    assert rec["code"] == "LOOPCODE"
-    assert rec["state"] == captured_state["state"]
-    # Loopback redirect must be the exact localhost:port the callback listened on.
-    assert rec["redirect_uri"] == "http://localhost:60400/callback"
+    assert opened and "platform.claude.com" in opened[0]
+    assert rec["code"] == "BROWSERCODE"
+    assert rec["redirect_uri"] == "https://platform.claude.com/oauth/code/callback"
 
 
-def test_perform_loopback_state_mismatch_raises() -> None:
-    def _open_browser(url: str) -> bool:  # noqa: ARG001
-        return True
+def test_the_browser_flow_survives_a_browser_that_will_not_open() -> None:
+    """A headless box's ``webbrowser.open`` returns False — the operator can
+    still copy the URL out of the printed instructions, so this must NOT abort."""
+    rec: dict[str, object] = {}
+    emitted: list[str] = []
 
-    def _wait_for_callback(port: int, timeout: float) -> dict[str, str]:  # noqa: ARG001
-        return {"code": "C", "state": "ATTACKER"}
-
-    with pytest.raises(ClaudeLoginError, match="state"):
-        perform_claude_login(
-            open_browser=_open_browser,
-            wait_for_callback=_wait_for_callback,
-            exchanger=_fake_exchanger({}),
-            pick_port=lambda: 60400,
-        )
+    result = perform_claude_login(
+        open_browser=lambda _url: False,
+        read_input=lambda: "CODE#ST",
+        emit=emitted.append,
+        exchanger=_fake_exchanger(rec),
+        state_factory=lambda: "ST",
+        now_ms=lambda: 0,
+    )
+    assert result.access_token == "sk-ant-oat01-NEWACCESS"
+    assert emitted and "platform.claude.com" in emitted[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -271,25 +271,18 @@ def test_run_claude_login_persists_flat_0600(tmp_path: Path) -> None:
     assert result.access_token == "sk-ant-oat01-NEWACCESS"
 
 
-def test_run_claude_login_loopback_branch(tmp_path: Path) -> None:
+def test_run_claude_login_browser_branch(tmp_path: Path) -> None:
     target = tmp_path / "claude_oauth.json"
-    captured_state: dict[str, str] = {}
     rec: dict[str, object] = {}
-
-    def _open_browser(url: str) -> bool:
-        captured_state["state"] = parse_qs(urlparse(url).query)["state"][0]
-        return True
-
-    def _wait(port: int, timeout: float) -> dict[str, str]:  # noqa: ARG001
-        return {"code": "LC", "state": captured_state["state"]}
 
     run_claude_login(
         manual=False,
         path=target,
-        open_browser=_open_browser,
-        wait_for_callback=_wait,
+        open_browser=lambda _url: True,
+        read_input=lambda: "LC#ST",
+        emit=lambda _m: None,
         exchanger=_fake_exchanger(rec),
-        pick_port=lambda: 60401,
+        state_factory=lambda: "ST",
         now_ms=lambda: 0,
     )
     assert json.loads(target.read_text())["access_token"] == "sk-ant-oat01-NEWACCESS"
@@ -350,47 +343,3 @@ def test_http_exchange_code_network_error_raises(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(_ur, "urlopen", _boom)
     with pytest.raises(ClaudeLoginError, match="token exchange failed"):
         mod._http_exchange_code(code="C", code_verifier="V", redirect_uri="r", state="s")
-
-
-def test_pick_loopback_port_returns_free_port() -> None:
-    from backend.executors.worker import claude_login as mod
-
-    port = mod._pick_loopback_port()
-    assert isinstance(port, int)
-    assert 1024 < port < 65536
-
-
-def test_wait_for_callback_captures_code() -> None:
-    import threading
-    import time as _time
-    import urllib.request as _ur
-
-    from backend.executors.worker import claude_login as mod
-
-    port = mod._pick_loopback_port()
-
-    def _fire() -> None:
-        # Poll until the one-shot server is up, then hit the callback.
-        for _ in range(50):
-            try:
-                _ur.urlopen(  # noqa: S310
-                    f"http://127.0.0.1:{port}/callback?code=CBCODE&state=CBSTATE", timeout=1
-                ).read()
-                return
-            except OSError:
-                _time.sleep(0.05)
-
-    t = threading.Thread(target=_fire, daemon=True)
-    t.start()
-    captured = mod._wait_for_callback(port, timeout=5.0)
-    t.join(timeout=2.0)
-    assert captured["code"] == "CBCODE"
-    assert captured["state"] == "CBSTATE"
-
-
-def test_wait_for_callback_timeout_raises() -> None:
-    from backend.executors.worker import claude_login as mod
-
-    port = mod._pick_loopback_port()
-    with pytest.raises(ClaudeLoginError, match="timed out"):
-        mod._wait_for_callback(port, timeout=0.3)
