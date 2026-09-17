@@ -59,6 +59,15 @@ class WorkerSettings(BaseSettings):
     # is no longer a fresh temp dir per task.
     sandbox_cwd: str = ""
 
+    #: Where the spawned ``claude`` CLI keeps its own config (#978).
+    #:
+    #: Empty → :func:`default_claude_config_dir` (``~/.bsvibe/claude-config``).
+    #: It is NOT allowed to resolve to the operator's ``~/.claude``: that reach
+    #: is the whole subject — a devcontainer path left in the host's plugin
+    #: config stopped every run in prod (#965), and the CLI never even *used*
+    #: that setting, it only resolved the path.
+    claude_config_dir: str = ""
+
     # Streaming chunks back to the backend via Redis pub/sub (the same Redis the
     # backend dispatch substrate uses). Empty disables streaming — executors
     # still run and results are still POSTed, the backend just falls back to its
@@ -143,6 +152,20 @@ class WorkerSettings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_worker_settings() -> WorkerSettings:
     return WorkerSettings()
+
+
+def default_claude_config_dir() -> Path:
+    """Return ``$BSVIBE_HOME/claude-config`` (or ``~/.bsvibe/claude-config``).
+
+    Sibling of :func:`default_sandbox_cwd`, same ``BSVIBE_HOME`` convention, so
+    the worker test suite's home redirect shields it too.
+
+    The unset case has to be the SAFE one. An operator configures nothing by
+    default, and that is precisely the state #965 happened in.
+    """
+    base = os.environ.get("BSVIBE_HOME")
+    root = Path(base) if base else Path.home() / ".bsvibe"
+    return root / "claude-config"
 
 
 def default_sandbox_cwd() -> Path:

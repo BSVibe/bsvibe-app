@@ -28,11 +28,13 @@ import shutil
 import sys
 import tempfile
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import structlog
 
 from backend.executors.worker.claude_auth import ensure_claude_bearer
+from backend.executors.worker.config import default_claude_config_dir, get_worker_settings
 from backend.executors.worker.executors import (
     ExecutionChunk,
     _kill_process_group,
@@ -70,7 +72,65 @@ def _subprocess_env_with_bearer() -> dict[str, str]:
     bearer = ensure_claude_bearer()
     if bearer:
         env["ANTHROPIC_AUTH_TOKEN"] = bearer
+    _point_the_cli_at_our_own_config_dir(env)
     return env
+
+
+def _point_the_cli_at_our_own_config_dir(env: dict[str, str]) -> None:
+    """#978 — the CLI's config directory must be BSVibe's, not the operator's.
+
+    ``--setting-sources ""`` buys CONTENT isolation and stops there: measured, it
+    takes the host's 184 user skills to 0. It does not stop the CLI **resolving
+    paths** under ``~/.claude``, and that is what stopped prod. In #965 the
+    host's ``plugins/known_marketplaces.json`` pointed at a devcontainer path
+    (``/home/vscode/...``); ``/home`` is an autofs mount here, so the automounter
+    took the CLI and never gave it back. The setting was never *used* — only
+    resolved. Which is why ``plugins: []`` was never evidence of anything.
+
+    Measured with ``--debug-file``, chat and agentic alike: reads under
+    ``~/.claude`` go 10 → **0**, ``~/.claude/plugins`` 2 → **0**, and the turn
+    still authenticates.
+
+    ⚠️ It authenticates *because the bearer above is injected*. A 2026-09-16
+    measurement rejected this redirect as "``Not logged in``" — correctly, for
+    that day: the worker's own OAuth credential was expired, so the CLI was
+    authenticating off the host credential file, which lives inside the very
+    directory being moved. The lifeline survives the redirect only because BOTH
+    credential reads happen in our own Python via ``Path.home()``
+    (:func:`ensure_claude_bearer` → :func:`_cli_fallback_bearer`) and arrive as
+    an env var. Verified end-to-end against a deliberately burned worker
+    credential. **Do not make the bearer conditional on anything.**
+
+    Still reachable afterwards: ``/Library/Application Support/ClaudeCode``
+    (9 probes, unchanged). It does not exist on this host and writing it needs
+    root — a different risk class from ``~/.claude``, which any local tool edits.
+    The claim here is "the config directory is ours", NOT "no host path is read".
+
+    Fail-open, loudly. A filesystem hiccup must not turn into a total executor
+    outage — that would be strictly worse than the status quo this improves on.
+    But a SILENT fallback is the trap where a degraded result becomes a
+    measurement: the harness would quietly be the operator's again with nothing
+    saying so. One greppable line per turn instead.
+    """
+    settings = get_worker_settings()
+    target = (
+        Path(settings.claude_config_dir).expanduser()
+        if settings.claude_config_dir
+        else default_claude_config_dir()
+    )
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Pointing the CLI at a directory that does not exist is worse than not
+        # pointing it anywhere — it would fail to persist and re-derive its own.
+        logger.warning(
+            "claude_config_dir_unavailable",
+            path=str(target),
+            consequence="the CLI falls back to the operator's ~/.claude harness",
+            exc_info=True,
+        )
+        return
+    env["CLAUDE_CONFIG_DIR"] = str(target)
 
 
 # claude_code's JSONL stream can carry a single line past asyncio's default
@@ -454,19 +514,20 @@ class ClaudeCodeExecutor:
         mcp_config_path: str = "",
         allowed_tools: list[str] | None = None,
     ) -> list[str]:
-        # A LOCAL AGENT RUN inherits the host operator's harness (CLAUDE.md / skills /
-        # memory) by design — but the agent's native file writes must stay inside
-        # the per-task workspace. ``--dangerously-skip-permissions`` disabled ALL
-        # guards including the working-directory confinement, so an agent that
-        # learned the host source-repo path from the inherited memory wrote into
-        # that repo (dogfood leak). Instead: ``--permission-mode acceptEdits``
-        # auto-applies edits headlessly but ONLY inside an allowed dir (the cwd =
-        # the per-task clone), and the settings allow Bash so the verify step
-        # (uv/pytest) still runs without re-opening writes outside the workspace.
+        # ⚠️ This comment described a LOCAL AGENT RUN that "inherits the host
+        # operator's harness (CLAUDE.md / skills / memory) BY DESIGN". **#984
+        # deleted that branch** — the founder's decision was that the only two
+        # executor shapes are MCP and chat, and that a worker running on the
+        # founder's hardware is not a licence to hand the CLI that hardware. The
+        # sentence outlived the code it described and said the exact OPPOSITE of
+        # what both branches below now do (``--setting-sources ""``), which is
+        # how a reader ends up trusting an isolation that is not there.
         #
-        # A CHAT TURN has no tools at all (:data:`_CHAT_DENIED_TOOLS`) — that is
+        # Neither branch inherits anything now. An agent run reaches state ONLY
+        # through BSVibe's MCP tools; a CHAT TURN has no tools at all — that is
         # what makes an executor account behave identically to a LiteLLM one,
-        # which is BSVibe's first principle.
+        # which is BSVibe's first principle. Both get the BSVibe-owned config
+        # directory from :func:`_point_the_cli_at_our_own_config_dir`.
         cmd_args = [
             self._cmd,
             "--print",
