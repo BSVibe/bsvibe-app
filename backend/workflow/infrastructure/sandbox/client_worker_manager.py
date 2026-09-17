@@ -191,21 +191,41 @@ class ClientWorkerSandboxSession:
                 execution_target="client_attach",
             )
             task_id = task.id
+            # The caller's own env WINS: the verification stack passes the boot
+            # command exactly what it means to boot with, and a product default
+            # must not quietly override that intent.
+            #
+            # Bound to a name (#965) because the redelivery closure below must
+            # send the IDENTICAL environment. Computing it twice would put the
+            # merge rule in two places, and the copy that drifts would only ever
+            # be exercised on the rare retry path.
+            exec_env = {**self._env, **(env or {})} or None
             await dispatch.dispatch_task(
                 self._redis,
                 session=session,
                 task=task,
                 worker_id=worker_id,
                 action="exec",
-                # The caller's own env WINS: the verification stack passes the boot
-                # command exactly what it means to boot with, and a product default
-                # must not quietly override that intent.
-                env={**self._env, **(env or {})} or None,
+                env=exec_env,
             )
             # Commit before awaiting — the worker reports on a SEPARATE session
             # over HTTP; under PG READ COMMITTED an uncommitted row is invisible
             # to it, so it could never flip the task terminal.
             await session.commit()
+
+            # #965 — retry path. The closure is the only way this can work: the
+            # exec env holds the product's verification secrets and is kept OFF
+            # the row and out of the command string on purpose, so nothing that
+            # reads the database later could reconstruct this dispatch.
+            async def _redeliver(remaining_s: float) -> None:
+                await dispatch.redispatch_task(
+                    self._redis,
+                    task=task,
+                    worker_id=worker_id,
+                    action="exec",
+                    env=exec_env,
+                    timeout_s=remaining_s,
+                )
 
             try:
                 completed = await dispatch.await_completion(
@@ -213,6 +233,7 @@ class ClientWorkerSandboxSession:
                     session=session,
                     task_id=task_id,
                     timeout_s=timeout_s + _AWAIT_SLACK_S,
+                    redeliver=_redeliver,
                     session_factory=self._session_factory,
                 )
             except dispatch.TaskTimeout as exc:

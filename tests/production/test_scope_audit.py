@@ -79,6 +79,7 @@ WORKSPACELESS_ALLOWLIST: dict[str, str] = {
     "POST /api/v1/workers/heartbeat": "worker-token authed; scoped by worker identity",
     "POST /api/v1/workers/poll": "worker-token authed; scoped by worker identity",
     "POST /api/v1/workers/result": "worker-token authed; scoped by worker identity",
+    "POST /api/v1/workers/claim": "worker-token authed; scoped by worker identity — the claim's conditional UPDATE requires worker_id to match (#965), the same H1 binding as /result, and every refusal returns the identical `claimed: false`",
     # --- Public webhook ingress ----------------------------------------------
     "POST /api/webhooks/{connector}/{webhook_token}": "public webhook ingress; workspace resolved from the per-connector webhook token, not a session",
     # --- Membership-scoped multi-workspace surface (§3) -----------------------

@@ -726,12 +726,26 @@ class ExecutorAdapter:
         # we'd block the full timeout.
         await session.commit()
 
+        # #965 — the retry path. Kept as a closure over what was just dispatched
+        # because ``mcp`` cannot be rebuilt later: its token is minted per
+        # dispatch and is not persisted anywhere. ``remaining_s`` is what is left
+        # of THIS wait, never the original budget.
+        async def _redeliver(remaining_s: float) -> None:
+            await dispatch.redispatch_task(
+                self.redis,
+                task=task,
+                worker_id=worker.id,
+                mcp=mcp,
+                timeout_s=remaining_s,
+            )
+
         try:
             completed = await dispatch.await_completion(
                 self.redis,
                 session=session,
                 task_id=task.id,
                 timeout_s=effective_timeout_s,
+                redeliver=_redeliver,
                 # Drive-session-release — the awaited executor turn can run for
                 # many minutes. With a ``session_factory`` wired, each DB poll
                 # runs in a short session that is closed before the next wait, so

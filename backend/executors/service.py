@@ -189,6 +189,7 @@ async def record_heartbeat(
     worker: WorkerRow,
     *,
     in_flight: int = 0,
+    protocol_version: int | None = None,
 ) -> WorkerRow:
     """Mark ``worker`` online and stamp ``last_heartbeat`` to now.
 
@@ -198,10 +199,21 @@ async def record_heartbeat(
     the dispatch path never XADDs onto a stream the worker has paused
     polling. Default 0 keeps the call-site invariant for callers that
     don't have a count (older worker shape over the wire).
+
+    #965 — ``protocol_version`` is the ``X-BSVibe-Worker-Protocol`` header, the
+    redelivery gate's input. ``None`` means the worker sent no header, which is
+    exactly what every build predating the claim protocol does; leaving the
+    stored value untouched keeps it at its DDL default of 1 and thus excluded
+    from redelivery. Writing 1 here instead would be the same value today but
+    would silently DOWNGRADE a worker that had announced 2 and then sent one
+    header-less request (a proxy stripping it, a partial rollback) — turning a
+    transport detail into a protocol regression.
     """
     worker.status = "online"
     worker.last_heartbeat = datetime.now(UTC)
     worker.last_in_flight = in_flight
+    if protocol_version is not None:
+        worker.protocol_version = protocol_version
     await session.flush()
     return worker
 

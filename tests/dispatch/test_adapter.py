@@ -1608,3 +1608,78 @@ class TestRenderPrompt:
             ]
         )
         assert rendered == "user: q1\n\nassistant: a1\n\nuser: q2"
+
+
+class TestRedeliveryWiring:
+    """#965 — what the adapter's retry closure actually sends.
+
+    Added because a wire-cut exposed a hole: swapping ``remaining_s`` for the
+    ORIGINAL budget in this closure left the whole suite green. The F10
+    assertion lived on ``await_completion``'s computation, one hop away from the
+    call site that could get it wrong, so it proved nothing about this file.
+    """
+
+    async def test_the_retry_sends_the_remaining_budget_not_the_original(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``timeout_s`` runs from the moment the WORKER starts.
+
+        Re-sending the original number would hand the second attempt a fresh
+        full budget, so it would still be running long after this adapter had
+        given up and failed the run — the exact "worker outlives its awaiter"
+        symptom the deadline was introduced to end.
+        """
+        redis = await _make_redis()
+        workspace_id = uuid.uuid4()
+        settings = get_settings().model_copy(update={"executor_task_timeout_s": 300.0})
+
+        async def _invoke_redeliver(*_a: Any, **kwargs: Any) -> Any:
+            """Stand in for the wait, and take the one shot it would have taken."""
+            redeliver = kwargs.get("redeliver")
+            assert redeliver is not None, (
+                "the adapter awaited without a retry path — an acked-into-the-void "
+                "dispatch would sit here until the timeout with nothing to recover it"
+            )
+            await redeliver(120.0)
+            raise dispatch.TaskTimeout("test forced timeout")
+
+        monkeypatch.setattr(dispatch, "await_completion", _invoke_redeliver)
+
+        sent: list[dict[str, Any]] = []
+        real_redispatch = dispatch.redispatch_task
+
+        async def _spy(*args: Any, **kwargs: Any) -> Any:
+            sent.append(dict(kwargs))
+            return await real_redispatch(*args, **kwargs)
+
+        monkeypatch.setattr(dispatch, "redispatch_task", _spy)
+
+        async with shared_file_sessionmaker() as sf:
+            async with sf() as setup:
+                worker = await _seed_worker(
+                    setup, workspace_id=workspace_id, capabilities=["claude_code"]
+                )
+                account = _executor_account(workspace_id, worker.id)
+                setup.add(account)
+                await setup.commit()
+
+            async with sf() as adapter_session:
+                adapter = ExecutorAdapter(
+                    account=account,
+                    workspace_id=workspace_id,
+                    account_id=account.account_id,
+                    model_account_id=account.id,
+                    session=adapter_session,
+                    settings=settings,
+                    redis=redis,
+                    timeout_s=300.0,
+                )
+                with pytest.raises(ExecutorAdapterUnavailable):
+                    await adapter.chat(system="x", messages=[{"role": "user", "content": "y"}])
+
+        assert sent, "the retry closure never reached redispatch_task"
+        assert sent[0]["timeout_s"] == 120.0, (
+            f"sent {sent[0]['timeout_s']} instead of the 120.0s remaining — the "
+            "retry would outlive the awaiter that asked for it"
+        )
+        assert sent[0]["worker_id"] == worker.id
