@@ -87,6 +87,11 @@ _CLAUDE_SCOPE = "user:inference"
 #: call happened. A measurement has a date; re-measure against the real CLI
 #: before assuming this line is still true.
 CLAUDE_REDIRECT_URI = "https://platform.claude.com/oauth/code/callback"
+
+#: Entropy for the authorize ``state``. 32 bytes → 43 urlsafe chars, matching
+#: what ``claude setup-token`` sends. The endpoint validates the length: 16
+#: bytes (22 chars) is rejected outright — see :func:`_paste_back_login`.
+_STATE_BYTES = 32
 # Mimic the CLI so Cloudflare's bot filter (error 1010) lets the POST through —
 # identical to claude_auth._http_refresh.
 _USER_AGENT = "claude-cli/2.1.172 (external, cli)"
@@ -314,7 +319,11 @@ def _paste_back_login(
     failure — the pasted value is only a best-effort client-side CSRF pre-check.
     """
     exchange_fn = exchanger or _http_exchange_code
-    state = (state_factory or (lambda: secrets.token_urlsafe(16)))()
+    # 32 bytes, not 16: MEASURED 2026-09-17 that the authorize endpoint refuses
+    # the shorter one with "Invalid request format" before any token call.
+    # Three URLs, identical in all eight parameters except this, opened in a
+    # logged-in browser: real CLI (43 chars) OK · ours (22) REFUSED · ours (43) OK.
+    state = (state_factory or (lambda: secrets.token_urlsafe(_STATE_BYTES)))()
     now = (now_ms or (lambda: int(time.time() * 1000)))()
 
     verifier, challenge = make_pkce_pair()
