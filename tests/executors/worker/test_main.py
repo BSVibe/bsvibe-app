@@ -1630,6 +1630,12 @@ _EXPECTED_POST_SITES = {
     ("run_once", "'/api/v1/workers/heartbeat'"),
     ("run_once", "'/api/v1/workers/poll'"),
     ("_post_result", "_RESULT_PATH"),
+    # #965 — takes delivery of a task; it reports no RESULT, so the
+    # check-the-response rule this guard protects does not apply to it. Its own
+    # error handling is the inverse and deliberately so: a refusal is obeyed
+    # (fail-closed) while a transport error is ignored (fail-open), because
+    # "I could not ask who owns this" is not an answer about ownership.
+    ("_claim", "'/api/v1/workers/claim'"),
 }
 
 

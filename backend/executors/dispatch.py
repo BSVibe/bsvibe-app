@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
@@ -89,6 +89,23 @@ _TERMINAL_STATUSES = ("done", "failed")
 # was somehow missed). Short enough that a missed signal resolves in seconds, not
 # at ``timeout_s`` (which is the executor-task timeout, ~1800s by default).
 _AWAIT_POLL_INTERVAL_S = 2.0
+
+#: Re-send one task's dispatch, given the seconds left of the awaiter's budget.
+#: Supplied by the caller because only the caller still holds the ephemeral
+#: parts of the payload (the run-scoped MCP token, an exec task's ``env``).
+RedeliverFn = Callable[[float], Awaitable[None]]
+
+#: Protocol version a worker must announce (``X-BSVibe-Worker-Protocol``) before
+#: the backend will redeliver anything to it. Version 1 — the default, and what
+#: every build predating #965 reports by sending no header at all — does not
+#: claim, so its unclaimed rows cannot be read as lost.
+_CLAIM_PROTOCOL_VERSION = 2
+
+#: How long an awaited task may sit ``dispatched`` and unclaimed before the
+#: awaiter re-sends it. Comfortably above the worker's poll cadence: the point
+#: is to catch a task that was acked into the void, not to race a worker that is
+#: about to pick it up on its next tick.
+_REDELIVER_AFTER_S = 30.0
 
 
 class TaskTimeout(Exception):
@@ -414,48 +431,20 @@ async def create_task(
     return task
 
 
-async def dispatch_task(
-    redis: _RedisDispatch,
-    *,
-    session: AsyncSession,
+def _build_dispatch_payload(
     task: ExecutorTaskRow,
-    worker_id: uuid.UUID,
-    mcp: dict[str, Any] | None = None,
-    action: str = "execute",
-    env: Mapping[str, str] | None = None,
-    timeout_s: float | None = None,
-) -> str:
-    """XADD ``task`` onto the worker's stream + mark it ``dispatched``.
+    *,
+    action: str,
+    mcp: dict[str, Any] | None,
+    env: Mapping[str, str] | None,
+    timeout_s: float | None,
+) -> dict[str, Any]:
+    """The flat-strings stream payload for one dispatch of ``task``.
 
-    The payload is flat strings only (the Redis Streams constraint). The DB row
-    is flipped to ``status="dispatched"`` with ``worker_id`` set in the SAME
-    session (the caller commits). Returns the stream entry id.
-
-    ``env`` — environment for an ``exec`` command, carried BESIDE the command
-    rather than inside it. A product's declared verification secrets travel this
-    way because the command string is persisted verbatim on
-    ``executor_tasks.prompt`` and published on a stream nobody trims: a value
-    interpolated into it (``-e PASSWORD=hunter2``) is a value written to the
-    database and kept in Redis for good. Named-only in the command
-    (``-e NAME``), valued only here. Same reasoning as ``mcp`` below, and
-    likewise NOT persisted on the row.
-
-    ``action`` (#692 in-place verify) — ``"execute"`` (default) is a coding-agent
-    turn; ``"exec"`` tells the worker to run ``task.prompt`` as ONE shell command
-    in ``task.workspace_dir`` and report its exit code (the deterministic gate
-    channel the derived verifier needs — see
-    ``backend/executors/worker/main.py::_handle_exec_task``). Every other caller
-    keeps the agent-run default untouched.
-
-    ``timeout_s`` (#965) — **how long the awaiting caller will actually wait.**
-    The wait is per caller (``frame`` 300s, ``judge`` 300s, ``agent_loop.act``
-    the 3600s settings default), while the worker applies one fixed deadline to
-    everything it runs, so without this the worker outlives its awaiter on every
-    short caller. Prod symptom: a hung framing turn held the worker's only slot
-    for eight minutes after the backend had already failed the run — and a
-    saturated worker stops polling, so nothing else reached it either. Omitted
-    from the payload when ``None`` (Streams reject it, and an older worker
-    keeps its own default).
+    Extracted (#965) so :func:`dispatch_task` and :func:`redispatch_task` cannot
+    drift: a redelivery that sent a subtly different payload than the original
+    would be the worst kind of bug to chase, since it only ever appears on the
+    retry path that is itself rare.
     """
     payload: dict[str, Any] = {
         "task_id": str(task.id),
@@ -501,6 +490,53 @@ async def dispatch_task(
     # crafted variable name.
     if env:
         payload["exec_env"] = json.dumps(dict(env))
+    return payload
+
+
+async def dispatch_task(
+    redis: _RedisDispatch,
+    *,
+    session: AsyncSession,
+    task: ExecutorTaskRow,
+    worker_id: uuid.UUID,
+    mcp: dict[str, Any] | None = None,
+    action: str = "execute",
+    env: Mapping[str, str] | None = None,
+    timeout_s: float | None = None,
+) -> str:
+    """XADD ``task`` onto the worker's stream + mark it ``dispatched``.
+
+    The payload is flat strings only (the Redis Streams constraint). The DB row
+    is flipped to ``status="dispatched"`` with ``worker_id`` set in the SAME
+    session (the caller commits). Returns the stream entry id.
+
+    ``env`` — environment for an ``exec`` command, carried BESIDE the command
+    rather than inside it. A product's declared verification secrets travel this
+    way because the command string is persisted verbatim on
+    ``executor_tasks.prompt`` and published on a stream nobody trims: a value
+    interpolated into it (``-e PASSWORD=hunter2``) is a value written to the
+    database and kept in Redis for good. Named-only in the command
+    (``-e NAME``), valued only here. Same reasoning as ``mcp`` below, and
+    likewise NOT persisted on the row.
+
+    ``action`` (#692 in-place verify) — ``"execute"`` (default) is a coding-agent
+    turn; ``"exec"`` tells the worker to run ``task.prompt`` as ONE shell command
+    in ``task.workspace_dir`` and report its exit code (the deterministic gate
+    channel the derived verifier needs — see
+    ``backend/executors/worker/main.py::_handle_exec_task``). Every other caller
+    keeps the agent-run default untouched.
+
+    ``timeout_s`` (#965) — **how long the awaiting caller will actually wait.**
+    The wait is per caller (``frame`` 300s, ``judge`` 300s, ``agent_loop.act``
+    the 3600s settings default), while the worker applies one fixed deadline to
+    everything it runs, so without this the worker outlives its awaiter on every
+    short caller. Prod symptom: a hung framing turn held the worker's only slot
+    for eight minutes after the backend had already failed the run — and a
+    saturated worker stops polling, so nothing else reached it either. Omitted
+    from the payload when ``None`` (Streams reject it, and an older worker
+    keeps its own default).
+    """
+    payload = _build_dispatch_payload(task, action=action, mcp=mcp, env=env, timeout_s=timeout_s)
     msg_id = await redis.xadd(
         worker_stream(worker_id),
         payload,
@@ -516,6 +552,45 @@ async def dispatch_task(
         task_id=str(task.id),
         worker_id=str(worker_id),
         executor_type=task.executor_type,
+    )
+    return str(msg_id)
+
+
+async def redispatch_task(
+    redis: _RedisDispatch,
+    *,
+    task: ExecutorTaskRow,
+    worker_id: uuid.UUID,
+    mcp: dict[str, Any] | None = None,
+    action: str = "execute",
+    env: Mapping[str, str] | None = None,
+    timeout_s: float | None = None,
+) -> str:
+    """XADD ``task`` onto the worker's stream AGAIN — the #965 retry path.
+
+    Deliberately does NOT touch the DB. The row is already ``dispatched`` to
+    this worker and re-flipping it would be a no-op write on a session the
+    awaiter is holding open across a long wait; the only thing missing is the
+    stream entry. ``claimed_at`` stays NULL until a worker actually claims,
+    which is the whole point — the receipt is the worker's to give.
+
+    Callers pass the same ``mcp`` / ``env`` they dispatched with (they still
+    hold them; neither is persisted) and the REMAINING seconds of their own
+    budget for ``timeout_s`` — the worker measures that from when it starts, so
+    re-sending the original would let the retry outlive the caller waiting on it.
+    """
+    payload = _build_dispatch_payload(task, action=action, mcp=mcp, env=env, timeout_s=timeout_s)
+    msg_id = await redis.xadd(
+        worker_stream(worker_id),
+        payload,
+        maxlen=WORKER_STREAM_MAXLEN,
+        approximate=True,
+    )
+    logger.info(
+        "executor_task_redispatched",
+        task_id=str(task.id),
+        worker_id=str(worker_id),
+        timeout_s=timeout_s,
     )
     return str(msg_id)
 
@@ -668,6 +743,99 @@ async def record_result(
     except Exception:  # noqa: BLE001 — publish is a wake hint, the DB row is truth
         logger.warning("executor_result_publish_failed", task_id=str(task_id), exc_info=True)
     return task
+
+
+async def claim_task(
+    session: AsyncSession,
+    *,
+    task_id: uuid.UUID,
+    worker_id: uuid.UUID,
+) -> bool:
+    """Record that ``worker_id`` took delivery of ``task_id``. ``True`` iff it won.
+
+    ONE atomic conditional UPDATE. The predicate carries the whole design:
+
+    * ``id`` — the task asked for;
+    * ``worker_id`` — the H1 binding, mirroring :func:`record_result`. Without
+      it any live worker token claims another tenant's task, and the rightful
+      worker's own claim then fails: a cross-tenant run-completion DoS that
+      leaves no result recorded anywhere;
+    * ``status == "dispatched"`` — a task that already reported must not be
+      started by a late redelivery;
+    * ``claimed_at IS NULL`` — **the duplicate guard.** A second copy of a task
+      someone is already running matches zero rows. It is structural, not a time
+      window, so a turn that legitimately runs for an hour is never at risk —
+      the property a lease-and-heartbeat design can only approximate.
+
+    Every refusal returns ``False``, the same shape as an unknown task, so a
+    prober cannot tell "not yours" from "already claimed" from "no such task".
+    """
+    result = cast(
+        CursorResult[Any],
+        await session.execute(
+            update(ExecutorTaskRow)
+            .where(
+                ExecutorTaskRow.id == task_id,
+                ExecutorTaskRow.worker_id == worker_id,
+                ExecutorTaskRow.status == "dispatched",
+                ExecutorTaskRow.claimed_at.is_(None),
+            )
+            .values(claimed_at=datetime.now(UTC))
+        ),
+    )
+    claimed = result.rowcount == 1
+    if claimed:
+        logger.info("executor_task_claimed", task_id=str(task_id), worker_id=str(worker_id))
+    else:
+        # Not an error: the ordinary reason is a redelivered copy losing to the
+        # copy already running, which is the mechanism working.
+        logger.info("executor_task_claim_refused", task_id=str(task_id), worker_id=str(worker_id))
+    return claimed
+
+
+async def _is_unreceived(session: AsyncSession, task_id: uuid.UUID) -> bool:
+    """Is this task positively known NEVER to have been picked up?
+
+    True only when the row is still ``dispatched`` with ``claimed_at IS NULL``
+    **and** its worker speaks the claim protocol. That last clause is the
+    fail-closed half: a worker on :data:`_CLAIM_PROTOCOL_VERSION` minus one
+    never claims, so its unclaimed rows are ambiguous rather than lost, and
+    redelivering to it would execute the task twice (``run_once`` there has no
+    dedupe — its ``_RUNNING_TASKS`` map is read only on the cancel path).
+
+    Kept here rather than at the call sites so a caller cannot forget the gate.
+    """
+    row = (
+        await session.execute(
+            select(
+                ExecutorTaskRow.status, ExecutorTaskRow.claimed_at, ExecutorTaskRow.worker_id
+            ).where(ExecutorTaskRow.id == task_id)
+        )
+    ).first()
+    if row is None:
+        return False
+    status, claimed_at, worker_id = row
+    if status != "dispatched" or claimed_at is not None or worker_id is None:
+        return False
+    version = (
+        await session.execute(select(WorkerRow.protocol_version).where(WorkerRow.id == worker_id))
+    ).scalar_one_or_none()
+    return version is not None and version >= _CLAIM_PROTOCOL_VERSION
+
+
+async def _is_unreceived_isolated(
+    task_id: uuid.UUID,
+    *,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+) -> bool:
+    """:func:`_is_unreceived` under the same short-session discipline as the
+    other awaiter reads — it runs inside the poll loop and must not hold a
+    pooled connection across the next wait."""
+    if session_factory is None:
+        return await _is_unreceived(session, task_id)
+    async with session_factory() as short:
+        return await _is_unreceived(short, task_id)
 
 
 async def _read_terminal(session: AsyncSession, task_id: uuid.UUID) -> ExecutorTaskRow | None:
@@ -834,6 +1002,42 @@ async def _fail_orphaned_dispatched_row(
     return flipped
 
 
+async def _maybe_redeliver(
+    task_id: uuid.UUID,
+    *,
+    redeliver: RedeliverFn,
+    deadline: float,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+) -> None:
+    """Re-send ``task_id`` iff it is positively unreceived. Called at most once.
+
+    One shot in both directions, which is why the caller sets its flag BEFORE
+    calling rather than from the outcome. An already-claimed row has nothing to
+    reconsider — a claimed row never becomes unclaimed — and re-asking every tick
+    would double this awaiter's query rate for the whole turn (an hour-long
+    ``act`` turn polls ~1800 times). An unclaimed one has had its grace period,
+    so the retry goes out now; a second would just pile another copy onto the
+    worker's stream.
+
+    A send that raises is swallowed: the original dispatch may still land, and
+    killing the wait over a failed *retry* would turn a recoverable gap into a
+    certain failure.
+    """
+    if not await _is_unreceived_isolated(task_id, session=session, session_factory=session_factory):
+        return
+    remaining_s = deadline - asyncio.get_event_loop().time()
+    if remaining_s <= 0:
+        return
+    logger.info(
+        "executor_task_redelivered", task_id=str(task_id), remaining_s=round(remaining_s, 1)
+    )
+    try:
+        await redeliver(remaining_s)
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.warning("executor_task_redeliver_failed", task_id=str(task_id), exc_info=True)
+
+
 async def await_completion(
     redis: _RedisDispatch,
     *,
@@ -841,6 +1045,8 @@ async def await_completion(
     task_id: uuid.UUID,
     timeout_s: float,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
+    redeliver: RedeliverFn | None = None,
+    redeliver_after_s: float = _REDELIVER_AFTER_S,
 ) -> ExecutorTaskRow:
     """Wait for ``task:{id}:done``, with a periodic DB poll as a safety net.
 
@@ -860,9 +1066,30 @@ async def await_completion(
     keeps the legacy behaviour (the bound ``session`` is used, and its
     connection is held across the wait — acceptable only for callers that do not
     park on a long turn).
+
+    ``redeliver`` (#965) — re-send this task's dispatch, called ONCE with the
+    **seconds left of this awaiter's own budget** if the row is still sitting
+    ``dispatched`` and unclaimed after ``redeliver_after_s``.
+
+    Redelivery lives here, in the awaiter, rather than in a background sweeper
+    because a sweeper cannot rebuild the payload: the run-scoped MCP token is
+    minted at dispatch time and an exec task's ``env`` secrets are deliberately
+    never persisted (see :func:`dispatch_task`), so a sweeper could only work by
+    writing secrets to the database. Both call sites XADD and await on the next
+    statement, so the awaiter still holds everything it sent.
+
+    Two consequences worth stating. The remaining budget is what goes out —
+    ``timeout_s`` is measured from the moment the worker starts, so re-sending
+    the original would let the second attempt outlive this wait. And a task
+    whose awaiter has itself died is never redelivered, which is correct rather
+    than a gap: nobody is waiting for that result, so reviving it would occupy a
+    worker slot to report into the void.
+
+    ``None`` (the default) keeps the pre-#965 behaviour exactly.
     """
     started = asyncio.get_event_loop().time()
     polls = 0
+    redelivery_settled = False
     # Fast path: the result may already be terminal (worker beat the awaiter).
     early = await _read_terminal_isolated(task_id, session=session, session_factory=session_factory)
     if early is not None:
@@ -897,6 +1124,22 @@ async def await_completion(
             )
             if row is not None:
                 return row
+            # #965 — at most once, and only for a row positively known never to
+            # have been picked up. Re-sending on every tick would pile copies of
+            # one task onto the worker's stream.
+            if (
+                redeliver is not None
+                and not redelivery_settled
+                and asyncio.get_event_loop().time() - started >= redeliver_after_s
+            ):
+                redelivery_settled = True
+                await _maybe_redeliver(
+                    task_id,
+                    redeliver=redeliver,
+                    deadline=deadline,
+                    session=session,
+                    session_factory=session_factory,
+                )
     except Exception:  # noqa: BLE001 — a pub/sub hiccup degrades to the DB poll
         logger.warning("executor_await_pubsub_failed", task_id=str(task_id), exc_info=True)
         # Degrade to a pure DB poll for the remaining budget.

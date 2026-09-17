@@ -274,6 +274,7 @@ async def heartbeat(
     worker: Annotated[WorkerRow, Depends(get_current_worker)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     body: Annotated[HeartbeatBody | None, Body()] = None,
+    protocol_version: Annotated[int | None, Header(alias="X-BSVibe-Worker-Protocol")] = None,
 ) -> HeartbeatResponse:
     """Record a worker heartbeat — sets status online + stamps last_heartbeat.
 
@@ -282,11 +283,69 @@ async def heartbeat(
     :attr:`WorkerRow.last_in_flight` for capacity-aware dispatch. An
     empty body (older worker shape) defaults to ``in_flight=0`` so the
     back-compat path remains functional.
+
+    #965 — ``X-BSVibe-Worker-Protocol`` announces which worker↔backend protocol
+    this build speaks, and is persisted onto :attr:`WorkerRow.protocol_version`
+    so the redelivery gate can consult it long after the request.
+
+    It is a HEADER on purpose. :class:`HeartbeatBody` is ``extra="forbid"``, so
+    a new body field would make an OLDER backend 422 every heartbeat from a
+    newer worker — taking the whole worker offline to buy a version number. A
+    header is ignored by a backend that does not know it. Nor could this be
+    ``capabilities``: that is sent only at registration, so it describes
+    whatever build registered, not the one running now.
+
+    Absent (every worker predating the claim protocol) leaves the stored value
+    alone, so it stays at its DDL default of 1 — the fail-closed reading, which
+    excludes that worker from redelivery entirely.
     """
     body = body or HeartbeatBody()
-    await service.record_heartbeat(session, worker, in_flight=body.in_flight)
+    await service.record_heartbeat(
+        session, worker, in_flight=body.in_flight, protocol_version=protocol_version
+    )
     await session.commit()
     return HeartbeatResponse(status="ok")
+
+
+class WorkerClaimBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: uuid.UUID
+
+
+class WorkerClaimResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claimed: bool
+
+
+@public_router.post("/claim", response_model=WorkerClaimResponse)
+async def claim_task(
+    body: WorkerClaimBody,
+    worker: Annotated[WorkerRow, Depends(get_current_worker)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> WorkerClaimResponse:
+    """Take delivery of a dispatched task — #965. ``claimed=false`` means don't run it.
+
+    The delivery hop cannot tell loss from slowness on its own: this endpoint's
+    sibling ``/poll`` XACKs before its response is built (``consume_once``'s
+    handler there only appends to a list, so it cannot fail and leave the entry
+    pending), and it never passes ``min_idle_ms``, so a response lost in flight
+    leaves nothing pending to redeliver and nothing recorded. Every such run sat
+    in ``dispatched`` until its awaiter's timeout.
+
+    :func:`dispatch.claim_task` resolves that with one conditional UPDATE. A
+    ``false`` is not an error — the ordinary case is a redelivered copy losing
+    to the copy already running, which is the mechanism working. It is also what
+    the worker must obey: it has no dedupe of its own.
+
+    Refusals are indistinguishable by design (unknown / not yours / already
+    claimed / already terminal all return ``false``), the same shape as
+    ``/result``, so a prober learns nothing about another tenant's tasks.
+    """
+    claimed = await dispatch.claim_task(session, task_id=body.task_id, worker_id=worker.id)
+    await session.commit()
+    return WorkerClaimResponse(claimed=claimed)
 
 
 @public_router.post("/poll")

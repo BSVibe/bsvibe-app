@@ -97,6 +97,24 @@ _HTTP_TIMEOUT_S = 30.0
 #: worker process) so plain Python dict access is safe.
 _RUNNING_TASKS: dict[str, asyncio.Task[None]] = {}
 
+#: Protocol this build speaks — announced on every request as
+#: ``X-BSVibe-Worker-Protocol`` and persisted by the backend's heartbeat
+#: handler. 2 = "I claim tasks before running them", which is what makes the
+#: backend willing to redeliver to this worker at all (#965).
+WORKER_PROTOCOL_VERSION = 2
+
+#: task_ids whose wrapper Task :func:`run_once` has spawned and not yet seen
+#: finish. Distinct from :data:`_RUNNING_TASKS`, which ``handle_task`` fills in
+#: only after it starts and which the cancel path owns.
+#:
+#: This is the rung that keeps the claim's fail-open safe. A claim that ERRORS
+#: (500, timeout) tells us nothing about ownership, so the task is run anyway —
+#: degrading "I could not ask" into "someone else has it" would let one backend
+#: blip discard real work silently. But that same fail-open would double-execute
+#: a duplicate if the backend were unreachable for both copies. Rejecting a
+#: task already in flight HERE needs no network at all.
+_INFLIGHT_TASK_IDS: set[str] = set()
+
 
 async def _finalize_task(stream: Any, *, task_id: Any) -> None:
     """Close the executor stream. There is no directory to clean up.
@@ -747,6 +765,36 @@ async def _publish(redis: _RedisPublisher, channel: str, payload: dict[str, Any]
 # ── One poll-loop tick ──────────────────────────────────────────────────────────
 
 
+async def _claim(client: httpx.AsyncClient, headers: dict[str, str], task_id: str) -> bool:
+    """Take delivery of ``task_id`` with the backend. ``False`` = do not run it.
+
+    The two negative answers are NOT the same and are handled oppositely:
+
+    * a **refusal** (``claimed: false``) is a positive statement that another
+      copy owns this task — obeyed, because ``run_once`` would otherwise start a
+      second execution of something already running;
+    * an **error** (transport failure, 5xx, or the 404 every backend older than
+      #965 returns) says nothing about ownership. Reading it as a refusal would
+      let one backend blip silently discard real work, with no record on either
+      side. So the task runs, and the in-flight set below is what keeps that
+      fail-open from doubling a duplicate.
+    """
+    try:
+        res = await client.post("/api/v1/workers/claim", headers=headers, json={"task_id": task_id})
+    except Exception:  # noqa: BLE001 — transport failure is not a refusal
+        logger.warning("task_claim_failed", task_id=task_id, exc_info=True)
+        return True
+    if res.status_code == 404:
+        logger.info("task_claim_unsupported", task_id=task_id)
+        return True
+    if res.status_code >= 400:
+        logger.warning("task_claim_error", task_id=task_id, status=res.status_code)
+        return True
+    claimed = bool(res.json().get("claimed"))
+    logger.info("task_claimed" if claimed else "task_claim_refused", task_id=task_id)
+    return claimed
+
+
 async def run_once(
     *,
     client: httpx.AsyncClient,
@@ -814,6 +862,14 @@ async def run_once(
         except Exception:  # noqa: BLE001 — one task's failure must not kill the loop
             logger.exception("task_execution_error", task_id=task.get("task_id"))
 
+    async def _claim_then_run(task: dict[str, Any], task_id: str) -> None:
+        try:
+            if not await _claim(client, headers, task_id):
+                return
+            await _run(task)
+        finally:
+            _INFLIGHT_TASK_IDS.discard(task_id)
+
     for task in tasks:
         # Lift E14 — backend-initiated cancels arrive on the SAME poll
         # stream as new executes (the ExecutorAdapter XADDs the cancel
@@ -847,7 +903,16 @@ async def run_once(
                 asyncio_cancel_returned=cancelled,
             )
             continue
-        in_flight.add(asyncio.create_task(_run(task)))
+        task_id = str(task.get("task_id") or "")
+        if task_id and task_id in _INFLIGHT_TASK_IDS:
+            # #965 — the worker did NOT do this before: ``_RUNNING_TASKS`` was
+            # read only on the cancel path above, so a duplicate execute message
+            # spawned a second run of the same task. Measured on this file.
+            logger.info("task_duplicate_dropped", task_id=task_id)
+            continue
+        if task_id:
+            _INFLIGHT_TASK_IDS.add(task_id)
+        in_flight.add(asyncio.create_task(_claim_then_run(task, task_id)))
     return in_flight
 
 
@@ -968,7 +1033,15 @@ async def poll_and_execute(
     """
     token = await _acquire_worker_token(client, settings)
     executors = _wire_executors()
-    headers = {"X-Worker-Token": token}
+    headers = {
+        "X-Worker-Token": token,
+        # #965 — announce the claim protocol on EVERY request. Not in the
+        # heartbeat body: that model is ``extra="forbid"``, so a new field there
+        # would make an older backend 422 every heartbeat and take this worker
+        # offline. Not ``capabilities`` either — that is sent once at
+        # registration and so describes whatever build registered, not this one.
+        "X-BSVibe-Worker-Protocol": str(WORKER_PROTOCOL_VERSION),
+    }
     in_flight: set[asyncio.Task[None]] = set()
     stop = stop or asyncio.Event()
 

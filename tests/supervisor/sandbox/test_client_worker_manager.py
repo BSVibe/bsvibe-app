@@ -764,3 +764,65 @@ async def test_a_non_timeout_failure_still_names_its_exit_code(
     assert "nope.toml" in message
     assert "exit" in message
     assert "polls" not in message, f"타임아웃도 아닌데 폴 수를 실었다: {message!r}"
+
+
+# --------------------------------------------------------------------------
+# #965 — the client_attach retry path, asserted AT this call site
+# --------------------------------------------------------------------------
+#
+# A wire-cut found this hop unguarded: deleting ``redeliver=_redeliver`` from
+# this module left the whole suite green, because the redelivery tests all live
+# on ``await_completion`` and on the OTHER caller. Two call sites dispatch and
+# await, and a guard on one says nothing about the other.
+#
+# This path matters more than the adapter's, not less: the verification stack's
+# secrets travel in ``env``, deliberately kept off the row and out of the command
+# string. That is precisely why a background sweeper could never serve this
+# caller, and why the retry has to be a closure the caller owns.
+
+
+async def test_the_exec_retry_resends_the_same_env_with_the_remaining_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.executors import dispatch as dispatch_mod
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    sent: list[dict[str, Any]] = []
+
+    async def _invoke_redeliver(*_a: Any, **kw: Any) -> Any:
+        redeliver = kw.get("redeliver")
+        assert redeliver is not None, (
+            "this caller awaited with no retry path — an exec acked into the void "
+            "sits here for the full budget and the gate reports a false timeout"
+        )
+        await redeliver(11.0)
+        raise dispatch_mod.TaskTimeout(
+            "forced", task_id=kw.get("task_id"), polls=1, last_status="dispatched", elapsed_s=1.0
+        )
+
+    async def _spy(*_a: Any, **kw: Any) -> str:
+        sent.append(dict(kw))
+        return "1-0"
+
+    async with shared_file_sessionmaker() as factory:
+        await _seed_worker(factory, workspace_id=workspace_id)
+        box = _make_session(
+            redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
+        )
+        monkeypatch.setattr(dispatch_mod, "await_completion", _invoke_redeliver)
+        monkeypatch.setattr(dispatch_mod, "redispatch_task", _spy)
+        await box.exec("true", timeout_s=1.0, shell=True, env={"SECRET": "s3cr3t"})
+
+    assert sent, "the retry closure never reached redispatch_task"
+    assert sent[0]["timeout_s"] == 11.0, (
+        f"sent {sent[0]['timeout_s']} rather than the 11.0s remaining — the retry "
+        "would still be running after this gate had already failed"
+    )
+    assert sent[0]["action"] == "exec", "an exec task redelivered as an agent run"
+    assert (sent[0]["env"] or {}).get("SECRET") == "s3cr3t", (
+        "the retry dropped the caller's env — the command would re-run without "
+        "the credentials it needs and fail for a reason that looks like the "
+        "product's, not ours"
+    )
+    await redis.aclose()

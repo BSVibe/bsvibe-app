@@ -262,6 +262,10 @@ async def test_adapter_session_factory_opens_fresh_session_per_chat() -> None:
                 task_id: Any,
                 timeout_s: Any,
                 session_factory: Any = None,
+                # #965 — the stub stands in for the real signature; a narrower
+                # one turns any new keyword into a TypeError that reads as a
+                # product bug rather than a stale double.
+                **_kw: Any,
             ) -> Any:
                 saw_sessions.append(session)
                 return _Completed()
@@ -391,6 +395,10 @@ async def test_adapter_without_session_factory_falls_back_to_bound_session() -> 
                 task_id: Any,
                 timeout_s: Any,
                 session_factory: Any = None,
+                # #965 — the stub stands in for the real signature; a narrower
+                # one turns any new keyword into a TypeError that reads as a
+                # product bug rather than a stale double.
+                **_kw: Any,
             ) -> Any:
                 saw_sessions.append(session)
                 return _Completed()

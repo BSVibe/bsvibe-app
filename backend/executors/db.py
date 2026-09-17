@@ -64,6 +64,24 @@ class WorkerRow(Base):
     # treated as "no signal — let it through" so a stale-shape worker is
     # never capacity-excluded just because it never reported.
     last_in_flight: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    # #965 — which worker↔backend protocol this build speaks. Stamped on every
+    # heartbeat from the ``X-BSVibe-Worker-Protocol`` header.
+    #
+    # A HEADER, not a heartbeat-body field, because ``HeartbeatBody`` is
+    # ``extra="forbid"``: a new body field would make an OLDER backend 422 every
+    # heartbeat from a newer worker, taking the whole worker offline. And it
+    # cannot be ``capabilities`` — that is sent only at registration
+    # (:func:`worker.main.register`), so it says nothing about the build
+    # running right now.
+    #
+    # Gate for redelivery. Version 1 (the default, and what a worker predating
+    # the claim protocol leaves in place) never claims, so its unclaimed rows
+    # are ambiguous — "lost" or "running" — and such a worker has no dedupe of
+    # its own (``run_once`` spawns every execute message it receives). Excluding
+    # it preserves exactly today's behaviour rather than risking a double run.
+    protocol_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     token_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -143,6 +161,22 @@ class ExecutorTaskRow(Base):
         String(32), nullable=False, default="server_sandbox", server_default="server_sandbox"
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    # #965 — when a worker positively took delivery of this task.
+    #
+    # NULL on a ``dispatched`` row means the task was handed to the stream and
+    # NOBODY has been observed to pick it up. That distinction did not exist
+    # before: the delivery hop XACKs inside ``POST /workers/poll`` BEFORE the
+    # HTTP response is built (its ``consume_once`` handler only appends to a
+    # list, so it cannot fail and leave the entry pending), and the poll never
+    # passes ``min_idle_ms``, so a lost response left no pending entry and no
+    # trace anywhere. Every such run sat in ``dispatched`` until its awaiter's
+    # timeout, indistinguishable from a turn that was simply slow.
+    #
+    # Stamped by an atomic conditional UPDATE (:func:`dispatch.claim_task`), so
+    # the second claim of a task matches zero rows. Duplicate protection comes
+    # from that WHERE rather than from a timer — which is why a turn that
+    # legitimately runs for an hour is never a redelivery candidate.
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 게이트 1 후속 — the turn's LLM token usage as the worker's CLI reported it.
