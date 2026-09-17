@@ -445,6 +445,7 @@ async def test_the_daemon_configures_logging_before_its_first_log_line(
 
     monkeypatch.setattr(worker_main, "poll_and_execute", _noop)
     monkeypatch.setattr(worker_main, "_connect_redis", lambda _s: None)
+
     # ``_ensure_process_group`` is deliberately NOT patched out. It logs
     # (``setpgrp_skipped``), so stubbing it would hide exactly the kind of
     # pre-configuration call this test exists to catch — which is how the first
