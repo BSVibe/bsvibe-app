@@ -18,29 +18,46 @@
 
 ## 배포 전 — 베이스라인 (안 재면 개선을 주장할 수 없다)
 
-- [ ] 세 로그 파일의 **크기와 줄 수**를 기록한다
+> ✅ **2026-09-17 배포에서 걸었다.** prod `9258f51`. 미실행 항목은 §미실행 에.
+
+- [x] 세 로그 파일의 **크기와 줄 수**를 기록한다
       `ls -l ~/Library/Logs/bsvibe-worker*.log; wc -l ~/Library/Logs/bsvibe-worker*.log`
       → 2026-09-17 실측: **253M + 259M + 264M**, 264M 파일이 **1,817,107줄**
-- [ ] 그중 **트레이스백/박스 문자 비율**을 기록한다 → 실측 **96.4%**
-- [ ] `claude_oauth_refresh_failed` · `claude_oauth_refresh_invalid_grant` 건수
+- [x] 그중 **트레이스백/박스 문자 비율**을 기록한다 → 실측 **96.4%**
+- [x] `claude_oauth_refresh_failed` · `claude_oauth_refresh_invalid_grant` 건수
       → 실측 **6,164 / 6,163** (= 실패의 99.98%가 invalid_grant)
 
 ## 배포 후 — 형식
 
-- [ ] 워커 3개 kickstart → 시작 시각 확인
-- [ ] 새로 찍힌 줄이 **JSON 한 줄**이고 **ANSI 이스케이프가 없다**
-      `tail -3 ~/Library/Logs/bsvibe-worker.out.log | cat -v | grep -c '\^\['` → **0**
-- [ ] `jq` 로 파싱된다 — 이게 이번 변경의 진짜 값이다
-      `tail -50 ~/Library/Logs/bsvibe-worker.out.log | jq -r .event | sort | uniq -c`
-- [ ] 모든 줄에 `"service": "bsvibe-worker"` 가 있다 (다른 서비스와 섞여도 갈라낼 수 있다)
-- [ ] `claude_auth_keepalive_ok` 가 **안 보인다**(레벨 info). `BSVIBE_WORKER_LOG_LEVEL=debug`
-      로 띄우면 **다시 보인다** — 이게 양성 대조군이다. 안 보이면 설정이 안 읽힌 것
+- [x] 워커 3개 kickstart → 시작 시각 확인 → 17:48:58
+- [x] 새로 찍힌 줄이 **JSON 한 줄**이고 **ANSI 이스케이프가 없다**
+      → 재기동 이후 **11줄 전부 JSON, ANSI 0, 박스/트레이스백 0**
+      ⚠️ **`tail -N` 으로 세지 마라.** 옛 형식 줄까지 딸려 들어와 오염된다 —
+      이번에 실제로 한 번 오판했다. **`worker_starting` 마커 이후만** 세라
+- [x] `jq` 로 파싱된다 — 이게 이번 변경의 진짜 값이다
+      → `task_claimed` 2 · `task_received` 2 · `executor_turn_started` 2 ·
+      `executor_turn_first_event` 2 · `task_completed` 2 · `worker_starting` 1
+- [x] 모든 줄에 `"service": "bsvibe-worker"` 가 있다
+- [x] `claude_auth_keepalive_ok` 가 **안 보인다**(레벨 info). **양성 대조군 통과**:
+      `info`→숨김, `debug`→보임. `BSVIBE_WORKER_LOG_LEVEL=debug` 로 설정값이
+      `'debug'` 로 바뀌는 것까지 확인 — 설정이 실제로 읽힌다
+      ⚠️ 형식 전환 지점이 로그에 그대로 보인다: `worker_config_loaded`(옛 콘솔
+      형식) **직후부터** JSON. `configure_logging` 이 `settings` 해석 뒤라 그 한 줄만
+      옛 형식으로 남는다 — 정상이다
 
 ## 동작 — 소음이 실제로 줄었다
 
 - [ ] 런을 하나 태우고 **하루 뒤** 로그 증가분을 잰다. 배포 전 하루치와 비교
-- [ ] 예외가 나는 줄이 **한 줄**이다 — `"exception"` 필드 안에 문자열로 들어간다
+      → **미실행**(표본 부족). 재기동 후 런 한 사이클 증가분은 세 워커 합 **2,488B**
+      였고, 이전엔 `claude_oauth_refresh_failed` **한 건이 1,909B** 였다.
+      그래도 이건 짧은 창이라 하루치로 다시 재야 한다
+- [x] 예외가 나는 줄이 **한 줄**이다 — `"exception"` 필드 안에 문자열로 들어간다
       (유닛 실측: 14줄·1909B → **1줄·277B**, ANSI 제거. prod 스택은 더 깊어 감소폭이 더 크다)
+
+> ⚠️ **미실행**: 확정 실패 시나리오(아래 ⭐)는 **워커 크리덴셜을 일부러 태워야** 보이는데,
+> 그건 prod 인증을 만지는 일이라 이번 배포에서는 안 걸었다. 단위 쪽은 전선 절단 7건으로
+> 전부 덮여 있고, `#978` 검증 중 **폴백 경로 자체는 실측으로 확인**했다
+> (워커 크리덴셜을 태운 상태에서 `claude_oauth_cli_fallback_used` → 정상 응답).
 
 ## 동작 — 확정 실패 ⭐
 
