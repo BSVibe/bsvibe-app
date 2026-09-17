@@ -161,6 +161,21 @@ def parse_claude_callback_input(text: str) -> dict[str, str | None]:
     return {"code": stripped, "state": None}
 
 
+def _error_body(exc: urllib.error.HTTPError) -> str:
+    """The response body of a failed exchange, or a marker when there is none.
+
+    Best-effort by contract: this runs while raising a more useful error, so it
+    must never raise one of its own. An unreadable body degrades to a marker —
+    "no body" is itself a fact worth printing, and silence here would put us back
+    where we started.
+    """
+    try:
+        raw = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:  # noqa: BLE001 — diagnostics only, never raise from the raiser
+        return "<body unreadable>"
+    return raw or "<no body>"
+
+
 def _http_exchange_code(
     *, code: str, code_verifier: str, redirect_uri: str, state: str
 ) -> dict[str, Any]:
@@ -194,7 +209,15 @@ def _http_exchange_code(
     try:
         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:  # noqa: S310
             payload = json.loads(resp.read().decode())
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError) as exc:
+    except urllib.error.HTTPError as exc:
+        # ``str(HTTPError)`` is "HTTP Error 400: Bad Request" and DROPS the body —
+        # but the body is the only place the reason lives, and the reasons call
+        # for different actions: ``invalid_grant`` (the code was already used or
+        # expired — start over), ``invalid_request`` (a mismatched field, almost
+        # always the redirect_uri of a DIFFERENT run), ``unauthorized_client``.
+        # A founder hit a bare 400 with no way to tell those apart.
+        raise ClaudeLoginError(f"token exchange failed: {exc} — {_error_body(exc)}") from exc
+    except (urllib.error.URLError, OSError, ValueError) as exc:
         raise ClaudeLoginError(f"token exchange failed: {exc}") from exc
     if not isinstance(payload, dict) or not payload.get("access_token"):
         raise ClaudeLoginError(f"token exchange returned no access_token: {payload}")
