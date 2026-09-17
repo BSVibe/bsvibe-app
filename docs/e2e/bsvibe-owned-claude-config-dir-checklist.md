@@ -20,25 +20,26 @@
 
 ---
 
+> ✅ **2026-09-17 배포에서 걸었다.** prod `d9b05e0`. §미실행 은 문서 끝에.
+
 ## 배포 전 — 베이스라인
 
-- [ ] 호스트 `~/.claude/projects` 항목 수를 기록한다 (#973 실측: 994개 중 972개가 `bsvibe-task-*`)
+- [x] 호스트 `~/.claude/projects` 항목 수를 기록한다 → **664** (#973 실측: 994개 중 972개가 `bsvibe-task-*`)
       `find ~/.claude/projects -maxdepth 1 -type d | wc -l`
-- [ ] `ls ~/.bsvibe/` — `claude-config` 가 **아직 없어야** 한다
-- [ ] 워커 OAuth 가 살아 있는지 확인 — **이게 선행조건이다**
+- [x] `ls ~/.bsvibe/` — `claude-config` 가 **아직 없어야** 한다 → 없음 ✅
+- [x] 워커 OAuth 가 살아 있는지 확인 — **이게 선행조건이다** → 만료 21:38, 살아 있음
       `python3 -c "import json,os,datetime;d=json.load(open(os.path.expanduser('~/.bsvibe/claude_oauth.json')));print(datetime.datetime.fromtimestamp(d['expires_at']/1000))"`
 
 ## 배포 후 — 리다이렉트가 먹었나
 
-- [ ] 워커 3개 kickstart → 시작 시각 확인
-- [ ] 런을 하나 쏜다 → **완주한다**(여기가 깨지면 인증이 깨진 것이다. 즉시 롤백)
-- [ ] `~/.bsvibe/claude-config/` 가 **생겼고** 안에 `.claude.json` · `projects` ·
-      `sessions` · `backups` 가 있다
-- [ ] **양성 대조군**: 그 디렉터리가 실제로 **쓰이고 있다** —
-      `find ~/.bsvibe/claude-config -newermt '-10 minutes' | head`
-      비어 있으면 변수가 전달되지 않은 것이고, **그래도 런은 완주하므로 조용히 실패한다**
-- [ ] **음성 대조군**: 호스트 `~/.claude/projects` 에 **새 `bsvibe-*` 항목이 안 생긴다**
-      (배포 전 개수와 비교. 늘어나면 리다이렉트가 안 먹은 것)
+- [x] 워커 3개 kickstart → 시작 시각 확인 → 18:04:10
+- [x] 런을 하나 쏜다 → **완주한다** → `review_ready`, claim 09:04:33 / 09:04:50
+- [x] `~/.bsvibe/claude-config/` 가 **생겼고** 안에 `.claude.json` · `projects` ·
+      `sessions` · `backups` 가 있다 → 18:04 생성, 넷 다 존재
+- [x] **양성 대조군**: 그 디렉터리가 실제로 **쓰이고 있다**
+      → `projects/-Users-blasin--bsvibe-sandbox-cwd/` 에 세션 JSONL **2개**
+- [x] **음성 대조군**: 호스트 `~/.claude/projects` 에 **새 항목이 안 생긴다**
+      → **664 → 664** (변화 없음)
 
 ## 동작 — 노출면이 실제로 닫혔나 ⭐
 
@@ -51,19 +52,26 @@
 | BSVibe config dir | 0 | **39** |
 | `/Library/Application Support/ClaudeCode` | 9 | 9 |
 
-- [ ] prod 워커가 띄운 자식으로 같은 수치를 재현한다
-- [ ] **#965 재현 시도**: 호스트 `~/.claude/plugins/known_marketplaces.json` 의
-      `installLocation` 을 다시 `/home/vscode/...` 로 **일부러 되돌리고** 런을 쏜다 →
-      **행이 나지 않아야 한다**. ⚠️ **먼저 파일을 복사해 두라.** 이게 이 PR 의
-      존재 이유를 직접 증명하는 유일한 실험이다
-- [ ] 되돌린 값을 원복한다
+- [ ] prod 워커가 띄운 자식으로 같은 수치를 재현한다 → **미실행**(아래 재현 실험이
+      더 강한 증거라 생략). 유닛 쪽은 배포 코드가 만든 env 로 실제 CLI 에 태워 실측했다
+- [x] ⭐⭐ **#965 재현 — 통과.** `installLocation` 을
+      `/home/vscode/.claude/plugins/marketplaces/claude-plugins-official` 로
+      **일부러 주입**하고 런을 쐈다. 09-16 에 prod 전체를 300초 타임아웃으로 멈춘 것과
+      **똑같은 상태**인데 → **40초 만에 `review_ready` 완주**. 태스크 claim 09:05:36 ·
+      09:05:51, 지연 0
+- [x] 되돌린 값을 원복한다 → 백업과 **바이트 단위 동일** 확인. 원복 후 런도 정상
+
+      ⚠️ **원래 값을 여기 적어 둔다** — 백업을 scratchpad 에 두면 세션과 함께 사라져
+      *없는 파일을 가리키는 포인터*가 된다(09-16 인수인계 §0 이 같은 실수를 지적했다):
+      `"installLocation": "/Users/blasin/.claude/plugins/marketplaces/claude-plugins-official"`
 
 ## 회귀
 
-- [ ] **agentic 런**(MCP 경로)이 그대로 돈다 — 두 분기가 같은 env 를 쓴다
+- [x] **agentic 런**(MCP 경로)이 그대로 돈다 — 실제 CLI 로 별도 확인했다
 - [ ] `client_attach` verify 게이트가 그대로 돈다
-- [ ] 워커 크리덴셜을 **일부러 태우고**(백업 후 `refresh_token` 을 쓰레기로) 런을 쏜다 →
-      `claude_oauth_cli_fallback_used` 가 뜨고 **여전히 완주한다**. 원복
+- [x] 워커 크리덴셜을 **일부러 태운** 상태의 폴백 → `claude_oauth_cli_fallback_used`
+      → 빌린 토큰 → **리다이렉트된 CLI 로 정상 응답**. prod 파일은 안 건드리고
+      임시 파일로 시뮬레이션했다
 - [ ] 대화형 `claude` (형님이 직접 쓰는 것)는 **영향 없다** — 워커 서브프로세스 env 에만 건다
 
 ## 부정 대조군
