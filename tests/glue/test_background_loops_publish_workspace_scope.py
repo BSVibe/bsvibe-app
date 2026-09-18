@@ -20,7 +20,7 @@ publish 되는지는 서로 다른 두 행을 처리시켜야만 드러난다.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -212,3 +212,137 @@ async def test_notify_worker_publishes_each_rows_workspace(sf) -> None:
     assert set(sender.ambient) == {ws_a, ws_b}, (
         f"행의 워크스페이스와 다르다. ambient={sender.ambient}"
     )
+
+
+# ── the remaining background loops ───────────────────────────────────────────
+#
+# Each loop gets its OWN test. The probe is the same shape every time: patch the
+# tenant-touching call INSIDE the loop body and record the ambient contextvar at
+# that moment. If the loop published a scope, the probe sees it; if not, it sees
+# None — which is exactly what the unguarded delivery loop showed before the fix.
+#
+# Two workspaces everywhere, for the same reason as above: one workspace cannot
+# distinguish "published the row's workspace" from "published a constant".
+
+
+async def _two_workspaces(sf_: async_sessionmaker[AsyncSession]) -> tuple[uuid.UUID, uuid.UUID]:
+    a, b = uuid.uuid4(), uuid.uuid4()
+    async with sf_() as s:
+        for ws in (a, b):
+            s.add(WorkspaceRow(id=ws, name=f"ws-{ws.hex[:6]}", timezone="UTC", language="en"))
+        await s.commit()
+    return a, b
+
+
+async def test_daily_brief_worker_publishes_each_workspace(sf, monkeypatch) -> None:
+    from backend.workflow.infrastructure.workers import daily_brief_worker as mod
+
+    ws_a, ws_b = await _two_workspaces(sf)
+    seen: list[uuid.UUID | None] = []
+
+    async def _probe(self: Any, session: Any, workspace: Any, now_utc: Any) -> bool:
+        del self, session, workspace, now_utc
+        seen.append(current_workspace_id.get())
+        return False
+
+    monkeypatch.setattr(mod.DailyBriefWorker, "_brief_workspace", _probe)
+    await mod.DailyBriefWorker(session_factory=sf).run_once()
+
+    assert len(seen) == 2, f"두 워크스페이스를 돌지 않았다: {seen}"
+    assert set(seen) == {ws_a, ws_b}, f"행의 워크스페이스가 publish 되지 않았다: {seen}"
+
+
+async def test_auth_dependency_worker_publishes_each_workspace(sf, monkeypatch) -> None:
+    from backend.workflow.infrastructure.workers import auth_dependency_worker as mod
+
+    ws_a, ws_b = await _two_workspaces(sf)
+    seen: list[uuid.UUID | None] = []
+
+    async def _probe(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        seen.append(current_workspace_id.get())
+
+    monkeypatch.setattr(mod, "emit_notification", _probe)
+    worker = mod.AuthDependencyWorker(session_factory=sf)
+    await worker._announce(  # noqa: SLF001 — the loop under test
+        mod.UserKeySourceStatus(ok=False, source="jwks_url", detail="probe"),
+        recovered=False,
+    )
+
+    assert len(seen) == 2, f"두 워크스페이스를 돌지 않았다: {seen}"
+    assert set(seen) == {ws_a, ws_b}, f"행의 워크스페이스가 publish 되지 않았다: {seen}"
+
+
+async def test_intake_worker_publishes_each_triggers_workspace(sf, monkeypatch) -> None:
+    from backend.workflow.infrastructure.intake.db import TriggerEventRow
+    from backend.workflow.infrastructure.workers import intake_worker as mod
+
+    ws_a, ws_b = await _two_workspaces(sf)
+    async with sf() as s:
+        for i, ws in enumerate((ws_a, ws_b)):
+            s.add(
+                TriggerEventRow(
+                    workspace_id=ws,
+                    source="test",
+                    trigger_kind="webhook",
+                    idempotency_key=f"k{i}",
+                    payload={},
+                )
+            )
+        await s.commit()
+
+    seen: list[uuid.UUID | None] = []
+
+    async def _probe(session: Any, trig: Any) -> Any:
+        del session, trig
+        seen.append(current_workspace_id.get())
+        from backend.workflow.application.stages.intake import ReceiveOutcome
+
+        return ReceiveOutcome(filtered_out=True, reason="probe")
+
+    monkeypatch.setattr(mod, "receive", _probe)
+    await mod.IntakeWorker(session_factory=sf).drain_once()
+
+    assert len(seen) == 2, f"두 트리거를 돌지 않았다: {seen}"
+    assert set(seen) == {ws_a, ws_b}, f"행의 워크스페이스가 publish 되지 않았다: {seen}"
+
+
+async def test_merge_watch_worker_publishes_each_rows_workspace(sf, monkeypatch) -> None:
+    from backend.workflow.infrastructure.github.db import GithubMergeWatchRow
+    from backend.workflow.infrastructure.workers import merge_watch_worker as mod
+
+    ws_a, ws_b = await _two_workspaces(sf)
+    async with sf() as s:
+        for i, ws in enumerate((ws_a, ws_b)):
+            s.add(
+                GithubMergeWatchRow(
+                    workspace_id=ws,
+                    run_id=uuid.uuid4(),
+                    deliverable_id=uuid.uuid4(),
+                    repo="o/r",
+                    pr_number=i + 1,
+                    branch=f"b{i}",
+                    next_poll_at=datetime.now(tz=UTC),
+                    deadline_at=datetime.now(tz=UTC) + timedelta(hours=1),
+                )
+            )
+        await s.commit()
+
+    seen: list[uuid.UUID | None] = []
+
+    async def _probe(self: Any, snap: Any, now: Any) -> None:
+        del self, snap, now
+        seen.append(current_workspace_id.get())
+
+    monkeypatch.setattr(mod.MergeWatchWorker, "_process", _probe)
+
+    # ``_process`` is patched out, so the resolver is never called — it only
+    # has to satisfy the constructor.
+    async def _never(*a: Any, **k: Any) -> Any:  # pragma: no cover
+        raise AssertionError("client_resolver must not be reached")
+
+    worker = mod.MergeWatchWorker(session_factory=sf, client_resolver=_never)
+    await worker.drain_once()
+
+    assert len(seen) == 2, f"두 행을 돌지 않았다: {seen}"
+    assert set(seen) == {ws_a, ws_b}, f"행의 워크스페이스가 publish 되지 않았다: {seen}"

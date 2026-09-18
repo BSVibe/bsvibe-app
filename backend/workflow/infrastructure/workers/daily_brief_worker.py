@@ -46,6 +46,7 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.copy import DAILY_BRIEF_LINK, notification_copy
 from backend.notifications.db import DEFAULT_MATRIX, NotificationPrefsRow
@@ -131,7 +132,12 @@ class DailyBriefWorker(BaseWorker):
         produced = 0
         async with self._session_factory() as session:
             for workspace in await self._active_workspaces(session):
-                if await self._brief_workspace(session, workspace, now_utc):
+                # #959 — one workspace per iteration, so publish it: layer 2
+                # (ORM auto-filter) and layer 3 (RLS GUC) both read this
+                # contextvar, and the brief reads that workspace's runs.
+                with workspace_scope(workspace.id):
+                    briefed = await self._brief_workspace(session, workspace, now_utc)
+                if briefed:
                     produced += 1
             await session.commit()
         return produced

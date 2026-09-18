@@ -65,6 +65,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.scoping import workspace_scope
 from backend.storage.github_repo_lock import GithubRepoBusy, github_repo_lock
 from backend.workers.base import BaseWorker
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
@@ -409,7 +410,12 @@ class MergeWatchWorker(BaseWorker):
         processed = 0
         for snap in snapshots:
             try:
-                await self._process(snap, now)
+                # #959 — one watched PR, one tenant. The state machine below
+                # reads that workspace's run + deliverable rows, so layers 2
+                # and 3 need the contextvar published. The claim above (the
+                # reservation UPDATE) stays workspace-blind on purpose.
+                with workspace_scope(snap.workspace_id):
+                    await self._process(snap, now)
             except GithubRepoBusy:
                 # Lost the per-repo merge lock to a sibling — leave the row
                 # reserved and retry next tick (mirror the ProductWorkspaceBusy
