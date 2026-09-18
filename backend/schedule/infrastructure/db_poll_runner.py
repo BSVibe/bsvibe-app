@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.schedule.application.emitter import ScheduleTrigger
 from backend.schedule.channels import WORKSPACE_SCHEDULES
 from backend.schedule.domain.advancer import CronScheduleAdvancer, ScheduleAdvancer
@@ -107,7 +108,13 @@ class DbPollScheduleRunner:
             )
             fired = 0
             for sched in rows:
-                if await self._fire_one(session, repo, sched, effective_now):
+                # #959 — one schedule, one tenant. The session is shared across
+                # the batch, so `after_begin` armed the RLS GUC once (empty) and
+                # never re-arms; publishing only the contextvar would leave the
+                # GUC pinned to the previous schedule's workspace.
+                async with workspace_session_scope(session, sched.workspace_id):
+                    fired_one = await self._fire_one(session, repo, sched, effective_now)
+                if fired_one:
                     fired += 1
             await session.commit()
             return fired

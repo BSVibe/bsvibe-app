@@ -79,6 +79,8 @@ from backend.common.settle_kinds import (
     NEGATIVE_PATTERN_SETTLE_KIND,
     founder_authored_text,
 )
+from backend.data.rls import workspace_session_scope
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.knowledge.extraction.worth_remembering import (
     RememberableKnowledge,
@@ -947,8 +949,15 @@ class SettleWorker(BaseWorker):
             promoted_ids: set[uuid.UUID] = set()
             for row in rows:
                 settlement = _to_settlement(row)
+                # #959 — one activity, one tenant. The session is shared across
+                # the batch AND commits mid-loop, so `after_begin` re-arms the
+                # RLS GUC every iteration with whatever workspace is current.
+                # Publishing only the contextvar would leave the GUC pinned to
+                # the PREVIOUS row's workspace and the next tenant's reads come
+                # back EMPTY — a wrong result, not an error.
                 try:
-                    node_ref = await self._sink.absorb(settlement)
+                    async with workspace_session_scope(session, row.workspace_id):
+                        node_ref = await self._sink.absorb(settlement)
                 except Exception:  # noqa: BLE001 — record + leave un-drained for retry
                     logger.exception(
                         "settle_worker_absorb_failed",
@@ -1019,45 +1028,49 @@ class SettleWorker(BaseWorker):
         if self._promoter_factory is None:
             return
         for workspace_id in sorted(workspace_ids, key=str):
-            policy = policies.get(workspace_id, _WorkspacePolicy(True))
-            async with self._session_factory() as lease_session:
-                acquired = await try_workspace_promote_lock(lease_session, workspace_id)
-                if not acquired:
-                    logger.info(
-                        "settle_worker_promotion_skipped_busy",
-                        workspace_id=str(workspace_id),
-                    )
-                    continue
-                try:
-                    promoter = self._promoter_factory(
-                        workspace_id=workspace_id,
-                        safe_mode=policy.safe_mode,
-                    )
-                    if promoter is None:
+            with workspace_scope(workspace_id):
+                policy = policies.get(workspace_id, _WorkspacePolicy(True))
+                # #959 — plain scope is correct HERE: the session (and therefore the
+                # transaction `after_begin` arms) is opened INSIDE it, so layer 3 is
+                # published for the right tenant without an explicit GUC write.
+                async with self._session_factory() as lease_session:
+                    acquired = await try_workspace_promote_lock(lease_session, workspace_id)
+                    if not acquired:
+                        logger.info(
+                            "settle_worker_promotion_skipped_busy",
+                            workspace_id=str(workspace_id),
+                        )
                         continue
-                    result = await promoter.promote()
-                except Exception:  # noqa: BLE001 — promotion is derived; never break the drain
-                    logger.exception(
-                        "settle_worker_promotion_failed",
-                        workspace_id=str(workspace_id),
-                        safe_mode=policy.safe_mode,
-                    )
-                    continue
-                else:
-                    logger.info(
-                        "settle_worker_promotion_complete",
-                        workspace_id=str(workspace_id),
-                        safe_mode=policy.safe_mode,
-                    )
-                    # Lift 2: a promote that CREATED an active concept produced
-                    # fresh body the settle runtime won't embed on its own.
-                    # Reconcile only then — the no-new-concept pass (the common
-                    # case, and every Safe-Mode pass) stays a cheap no-op rather
-                    # than a full vault scan. Soft-fail: never reverts the
-                    # promotion the drain just logged complete.
-                    await self._reconcile_after_promotion(result, workspace_id)
-                finally:
-                    await release_workspace_promote_lock(lease_session, workspace_id)
+                    try:
+                        promoter = self._promoter_factory(
+                            workspace_id=workspace_id,
+                            safe_mode=policy.safe_mode,
+                        )
+                        if promoter is None:
+                            continue
+                        result = await promoter.promote()
+                    except Exception:  # noqa: BLE001 — promotion is derived; never break the drain
+                        logger.exception(
+                            "settle_worker_promotion_failed",
+                            workspace_id=str(workspace_id),
+                            safe_mode=policy.safe_mode,
+                        )
+                        continue
+                    else:
+                        logger.info(
+                            "settle_worker_promotion_complete",
+                            workspace_id=str(workspace_id),
+                            safe_mode=policy.safe_mode,
+                        )
+                        # Lift 2: a promote that CREATED an active concept produced
+                        # fresh body the settle runtime won't embed on its own.
+                        # Reconcile only then — the no-new-concept pass (the common
+                        # case, and every Safe-Mode pass) stays a cheap no-op rather
+                        # than a full vault scan. Soft-fail: never reverts the
+                        # promotion the drain just logged complete.
+                        await self._reconcile_after_promotion(result, workspace_id)
+                    finally:
+                        await release_workspace_promote_lock(lease_session, workspace_id)
 
     async def _reconcile_after_promotion(self, result: object, workspace_id: uuid.UUID) -> None:
         """Embed freshly created concepts. Gated + soft-fail (Lift 2)."""
