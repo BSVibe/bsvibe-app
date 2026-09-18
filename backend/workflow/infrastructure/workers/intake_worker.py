@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.config import Settings, get_settings
-from backend.data.scoping import workspace_scope
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import load_workspace_language
 from backend.notifications.copy import TRIGGERED_LINK, notification_copy
 from backend.notifications.emit import emit_notification
@@ -161,7 +161,7 @@ class IntakeWorker(BaseWorker):
                 # and layer 3 (RLS GUC) both read this contextvar; without
                 # it BOTH are no-ops and everything Receive touches runs
                 # unfiltered. The claim above stays workspace-blind.
-                with workspace_scope(trig.workspace_id):
+                async with workspace_session_scope(session, trig.workspace_id):
                     outcome = await receive(session, trig)
                     if outcome.filtered_out:
                         # Mark the trigger row so it isn't reprocessed forever,

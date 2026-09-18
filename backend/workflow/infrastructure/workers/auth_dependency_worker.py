@@ -26,7 +26,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.data.scoping import workspace_scope
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.copy import (
     AUTH_DOWN_LINK,
@@ -135,7 +135,7 @@ class AuthDependencyWorker(BaseWorker):
                 # #959 — one workspace per iteration. The copy/prefs
                 # lookups and the notification emit below all read this
                 # tenant's rows, so publish it for layers 2 and 3.
-                with workspace_scope(ws.id):
+                async with workspace_session_scope(session, ws.id):
                     if recovered:
                         copy = auth_recovered_copy(ws.language)
                         body = copy.body

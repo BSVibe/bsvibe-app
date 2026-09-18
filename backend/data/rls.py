@@ -43,13 +43,15 @@ backend so unit tests don't blow up. The migration similarly skips its
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy import event, text
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from sqlalchemy.orm import Session, SessionTransaction
 
-from backend.data.scoping import current_workspace_id
+from backend.data.scoping import current_workspace_id, workspace_scope
 
 _GUC_NAME = "app.current_workspace_id"
 
@@ -79,6 +81,24 @@ async def set_workspace_guc(conn: AsyncConnection, workspace_id: uuid.UUID) -> N
         text(f"SELECT set_config('{_GUC_NAME}', :value, true)"),
         {"value": str(workspace_id)},
     )
+
+
+async def clear_workspace_guc(conn: AsyncConnection) -> None:
+    """Return the GUC to the fail-OPEN empty value for the rest of the txn.
+
+    The policy reads ``current_setting(guc, true) IS NULL OR = '' OR col = it``,
+    so an EMPTY guc is permissive and a guc set to the WRONG workspace is
+    fail-CLOSED. That asymmetry is why this exists: a loop that publishes
+    workspace A and then queries workspace B **in the same transaction** gets
+    zero rows back — silently, as a wrong count rather than an error.
+
+    Measured 2026-09-18: without this, the daily-brief loop reported the second
+    workspace's shipped count as 0 on PostgreSQL (CI), while SQLite — which has
+    no RLS at all — stayed green locally.
+    """
+    if not _is_pg(conn):
+        return
+    await conn.execute(text(f"SELECT set_config('{_GUC_NAME}', '', true)"))
 
 
 def set_workspace_guc_sync(conn: Connection, workspace_id: uuid.UUID) -> None:
@@ -112,6 +132,36 @@ def _publish_workspace_guc(
     if workspace_id is None:
         return
     set_workspace_guc_sync(connection, workspace_id)
+
+
+@asynccontextmanager
+async def workspace_session_scope(
+    session: AsyncSession, workspace_id: uuid.UUID
+) -> AsyncIterator[None]:
+    """Publish ``workspace_id`` to BOTH layers for this session's live txn.
+
+    :func:`backend.data.scoping.workspace_scope` alone sets only the contextvar
+    (layer 2). Layer 3's GUC is armed by the ``after_begin`` listener, which
+    fires ONCE per transaction — so a loop that opens its transaction before the
+    first iteration (any ``async with session_factory()`` wrapping a ``for``)
+    has already armed it with an EMPTY workspace and never re-arms.
+
+    Empty is fail-open, so that alone is only a missing guard. The damage is on
+    the NEXT iteration: once any transaction re-begins while workspace A is
+    scoped, workspace B's queries in that transaction match a GUC of A and come
+    back **empty** — a wrong count, not an error.
+
+    So this publishes the GUC explicitly (the same thing ``api/deps.py`` and
+    ``mcp/server.py`` do after resolving a request's workspace) and clears it on
+    the way out, leaving the transaction fail-open for whatever runs next.
+    """
+    with workspace_scope(workspace_id):
+        conn = await session.connection()
+        await set_workspace_guc(conn, workspace_id)
+        try:
+            yield
+        finally:
+            await clear_workspace_guc(await session.connection())
 
 
 _listener_installed = False

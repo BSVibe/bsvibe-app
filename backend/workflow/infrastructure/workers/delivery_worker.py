@@ -63,7 +63,7 @@ import structlog
 from sqlalchemy import Select, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.data.scoping import workspace_scope
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.shared.wire_kinds import SCHEDULE_KIND_PRODUCT_TICK
 from backend.workers.base import BaseWorker
@@ -438,7 +438,7 @@ class DeliveryWorker(BaseWorker):
                 # crosses tenants. Released on the way out (including on a
                 # raise), so the next claim is tenant-blind again.
                 try:
-                    with workspace_scope(row.workspace_id):
+                    async with workspace_session_scope(session, row.workspace_id):
                         workspace_safe_mode = await _workspace_safe_mode(session, row.workspace_id)
                         output_mode = await _run_output_mode(session, row.run_id)
                         autonomous_origin = await _run_autonomous_origin(session, row.run_id)
