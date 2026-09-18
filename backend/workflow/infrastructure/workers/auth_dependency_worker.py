@@ -26,6 +26,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.copy import (
     AUTH_DOWN_LINK,
@@ -131,30 +132,34 @@ class AuthDependencyWorker(BaseWorker):
         async with self._sf() as session:
             workspaces = (await session.execute(select(WorkspaceRow))).scalars().all()
             for ws in workspaces:
-                if recovered:
-                    copy = auth_recovered_copy(ws.language)
-                    body = copy.body
-                else:
-                    copy = notification_copy("auth_down", ws.language)
-                    body = f"{copy.body} ({status.detail})" if status.detail else copy.body
-                await emit_notification(
-                    session,
-                    workspace_id=ws.id,
-                    event="auth_down",
-                    # Date-bucketed: one alert per workspace per day while the
-                    # outage lasts. The UNIQUE dedupe_key makes the repeat a
-                    # DB-level no-op rather than a decision this worker has to
-                    # remember across restarts.
-                    dedupe_key=f"auth_down:{ws.id}:{state}:{self._today()}",
-                    payload={
-                        "title": copy.title,
-                        "body": body,
-                        "link": AUTH_DOWN_LINK,
-                        "recovered": recovered,
-                        "source": status.source,
-                    },
-                    producer_id=PRODUCER_ID,
-                )
+                # #959 — one workspace per iteration. The copy/prefs
+                # lookups and the notification emit below all read this
+                # tenant's rows, so publish it for layers 2 and 3.
+                async with workspace_session_scope(session, ws.id):
+                    if recovered:
+                        copy = auth_recovered_copy(ws.language)
+                        body = copy.body
+                    else:
+                        copy = notification_copy("auth_down", ws.language)
+                        body = f"{copy.body} ({status.detail})" if status.detail else copy.body
+                    await emit_notification(
+                        session,
+                        workspace_id=ws.id,
+                        event="auth_down",
+                        # Date-bucketed: one alert per workspace per day while the
+                        # outage lasts. The UNIQUE dedupe_key makes the repeat a
+                        # DB-level no-op rather than a decision this worker has to
+                        # remember across restarts.
+                        dedupe_key=f"auth_down:{ws.id}:{state}:{self._today()}",
+                        payload={
+                            "title": copy.title,
+                            "body": body,
+                            "link": AUTH_DOWN_LINK,
+                            "recovered": recovered,
+                            "source": status.source,
+                        },
+                        producer_id=PRODUCER_ID,
+                    )
             await session.commit()
         return len(workspaces)
 

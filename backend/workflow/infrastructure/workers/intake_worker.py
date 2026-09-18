@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.config import Settings, get_settings
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import load_workspace_language
 from backend.notifications.copy import TRIGGERED_LINK, notification_copy
 from backend.notifications.emit import emit_notification
@@ -156,94 +157,99 @@ class IntakeWorker(BaseWorker):
         emitted_workspace_ids: list[str] = []
         async with self._session_factory() as session:
             async for trig in self._claim_batch(session):
-                outcome = await receive(session, trig)
-                if outcome.filtered_out:
-                    # Mark the trigger row so it isn't reprocessed forever,
-                    # and so an operator can audit "trigger landed but
-                    # rejected by which filter".
-                    trig.payload = {
-                        **(trig.payload or {}),
-                        RECEIVE_FILTERED_KEY: filtered_out_record(
-                            filters={},
-                            reason=outcome.reason or "filter_rejected",
+                # #959 — one trigger, one tenant. Layer 2 (ORM auto-filter)
+                # and layer 3 (RLS GUC) both read this contextvar; without
+                # it BOTH are no-ops and everything Receive touches runs
+                # unfiltered. The claim above stays workspace-blind.
+                async with workspace_session_scope(session, trig.workspace_id):
+                    outcome = await receive(session, trig)
+                    if outcome.filtered_out:
+                        # Mark the trigger row so it isn't reprocessed forever,
+                        # and so an operator can audit "trigger landed but
+                        # rejected by which filter".
+                        trig.payload = {
+                            **(trig.payload or {}),
+                            RECEIVE_FILTERED_KEY: filtered_out_record(
+                                filters={},
+                                reason=outcome.reason or "filter_rejected",
+                            ),
+                        }
+                        flag_modified(trig, "payload")
+                        logger.info(
+                            "intake_worker_trigger_filtered",
+                            trigger_event_id=str(trig.id),
+                            workspace_id=str(trig.workspace_id),
+                            source=trig.source,
+                            reason=outcome.reason,
+                        )
+                        count += 1
+                        continue
+
+                    now = datetime.now(tz=UTC)
+                    # L-P1: propagate product_id from the trigger (set either by
+                    # ``receive()`` resolving a webhook's ResourceBinding, or by
+                    # the direct path resolving the founder's selected product).
+                    # The Request row carries it forward so AgentRunner can mint
+                    # the ExecutionRun with the same binding — no more NULL run.
+                    request_id = uuid.uuid4()
+                    request_repo = SqlAlchemyRequestRepository(session)
+                    await request_repo.enqueue(
+                        RequestRow(
+                            id=request_id,
+                            workspace_id=trig.workspace_id,
+                            trigger_event_id=trig.id,
+                            product_id=outcome.product_id,
+                            status=RequestStatus.OPEN,
+                            payload=dict(outcome.request_payload),
+                            created_at=now,
+                            updated_at=now,
                         ),
-                    }
-                    flag_modified(trig, "payload")
+                        producer_id="worker:intake_worker",
+                    )
+                    # ORIGINALS (형님 지시 2026-08-31) — 형님이 쓴 지시문을 여기서,
+                    # 런이 존재하기도 전에 그대로 떨군다. 정착(settle)에 매달면 절반을
+                    # 잃는다: prod 실측 런 231건 중 116건이 끝내 정착하지 않았다.
+                    # 키가 ``request_id`` 인 이유도 실측이다 — request 13개가 런을
+                    # 2~3개씩 낳으므로 run_id 로 잡으면 같은 지시문이 중복된다.
+                    await self._record_request_original(
+                        workspace_id=trig.workspace_id,
+                        request_id=request_id,
+                        payload=outcome.request_payload,
+                    )
+                    # Notifier N3 — an autonomous/external trigger just started work.
+                    # Queue a ``triggered`` notification in THIS transaction (confirmed
+                    # iff the Request commits); a founder-direct run is excluded. The
+                    # push title/body are localized to the workspace's
+                    # ``workspaces.language`` (KO/EN) by the copy catalog; the trigger
+                    # ``source`` rides through the localized sentence verbatim.
+                    if trig.trigger_kind in _TRIGGERED_KINDS:
+                        language = await load_workspace_language(session, trig.workspace_id)
+                        copy = notification_copy("triggered", language, source=trig.source)
+                        await emit_notification(
+                            session,
+                            workspace_id=trig.workspace_id,
+                            product_id=trig.product_id,
+                            event="triggered",
+                            dedupe_key=f"triggered:{request_id}",
+                            payload={
+                                "title": copy.title,
+                                "body": copy.body,
+                                "link": TRIGGERED_LINK,
+                                "run_id": None,
+                            },
+                            producer_id="worker:intake_worker",
+                        )
                     logger.info(
-                        "intake_worker_trigger_filtered",
+                        "intake_worker_request_created",
                         trigger_event_id=str(trig.id),
                         workspace_id=str(trig.workspace_id),
                         source=trig.source,
-                        reason=outcome.reason,
+                        product_id=(
+                            str(outcome.product_id) if outcome.product_id is not None else None
+                        ),
                     )
+                    emitted_workspace_ids.append(str(trig.workspace_id))
                     count += 1
-                    continue
-
-                now = datetime.now(tz=UTC)
-                # L-P1: propagate product_id from the trigger (set either by
-                # ``receive()`` resolving a webhook's ResourceBinding, or by
-                # the direct path resolving the founder's selected product).
-                # The Request row carries it forward so AgentRunner can mint
-                # the ExecutionRun with the same binding — no more NULL run.
-                request_id = uuid.uuid4()
-                request_repo = SqlAlchemyRequestRepository(session)
-                await request_repo.enqueue(
-                    RequestRow(
-                        id=request_id,
-                        workspace_id=trig.workspace_id,
-                        trigger_event_id=trig.id,
-                        product_id=outcome.product_id,
-                        status=RequestStatus.OPEN,
-                        payload=dict(outcome.request_payload),
-                        created_at=now,
-                        updated_at=now,
-                    ),
-                    producer_id="worker:intake_worker",
-                )
-                # ORIGINALS (형님 지시 2026-08-31) — 형님이 쓴 지시문을 여기서,
-                # 런이 존재하기도 전에 그대로 떨군다. 정착(settle)에 매달면 절반을
-                # 잃는다: prod 실측 런 231건 중 116건이 끝내 정착하지 않았다.
-                # 키가 ``request_id`` 인 이유도 실측이다 — request 13개가 런을
-                # 2~3개씩 낳으므로 run_id 로 잡으면 같은 지시문이 중복된다.
-                await self._record_request_original(
-                    workspace_id=trig.workspace_id,
-                    request_id=request_id,
-                    payload=outcome.request_payload,
-                )
-                # Notifier N3 — an autonomous/external trigger just started work.
-                # Queue a ``triggered`` notification in THIS transaction (confirmed
-                # iff the Request commits); a founder-direct run is excluded. The
-                # push title/body are localized to the workspace's
-                # ``workspaces.language`` (KO/EN) by the copy catalog; the trigger
-                # ``source`` rides through the localized sentence verbatim.
-                if trig.trigger_kind in _TRIGGERED_KINDS:
-                    language = await load_workspace_language(session, trig.workspace_id)
-                    copy = notification_copy("triggered", language, source=trig.source)
-                    await emit_notification(
-                        session,
-                        workspace_id=trig.workspace_id,
-                        product_id=trig.product_id,
-                        event="triggered",
-                        dedupe_key=f"triggered:{request_id}",
-                        payload={
-                            "title": copy.title,
-                            "body": copy.body,
-                            "link": TRIGGERED_LINK,
-                            "run_id": None,
-                        },
-                        producer_id="worker:intake_worker",
-                    )
-                logger.info(
-                    "intake_worker_request_created",
-                    trigger_event_id=str(trig.id),
-                    workspace_id=str(trig.workspace_id),
-                    source=trig.source,
-                    product_id=(
-                        str(outcome.product_id) if outcome.product_id is not None else None
-                    ),
-                )
-                emitted_workspace_ids.append(str(trig.workspace_id))
-                count += 1
             await session.commit()
         # AFTER the commit (the row is durable) emit a wake-up per new Request.
         # Gated + soft-fail inside the helper — a no-op in DB-polling mode.

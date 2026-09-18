@@ -63,6 +63,7 @@ import structlog
 from sqlalchemy import Select, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.shared.wire_kinds import SCHEDULE_KIND_PRODUCT_TICK
 from backend.workers.base import BaseWorker
@@ -429,43 +430,51 @@ class DeliveryWorker(BaseWorker):
             # deliberately out of scope for this fix.
             delivered_ids: list[uuid.UUID] = []
             for row in rows:
+                # #959 — everything below belongs to exactly ONE tenant, so
+                # publish it: layer 2 (the ORM auto-filter) and layer 3 (the
+                # RLS GUC) both read this contextvar. Without it BOTH are
+                # no-ops and these queries run unfiltered in the DB. The claim
+                # above stays workspace-blind on purpose — a queue poller
+                # crosses tenants. Released on the way out (including on a
+                # raise), so the next claim is tenant-blind again.
                 try:
-                    workspace_safe_mode = await _workspace_safe_mode(session, row.workspace_id)
-                    output_mode = await _run_output_mode(session, row.run_id)
-                    autonomous_origin = await _run_autonomous_origin(session, row.run_id)
-                    if resolve_output_mode_gate(
-                        workspace_safe_mode=workspace_safe_mode,
-                        output_mode=output_mode,
-                        autonomous_origin=autonomous_origin,
-                    ):
-                        # Gate says QUEUE — hold for founder approval instead of
-                        # dispatching (D3: per-Run output_mode == "safe", OR the
-                        # workspace global override is on). The /api/v1/safemode
-                        # routes drive it the rest of the way. ``run_id`` (B12a)
-                        # threads the originating run onto the queue item so the
-                        # founder can approve all of a run's accumulated partial
-                        # Deliver events as ONE transaction (Workflow §1.2).
-                        await queue.enqueue(
-                            workspace_id=row.workspace_id,
-                            deliverable_id=row.deliverable_id,
-                            run_id=row.run_id,
-                        )
-                        logger.info(
-                            "delivery_worker_enqueued_safe_mode",
-                            event_id=str(row.id),
-                            deliverable_id=str(row.deliverable_id),
-                        )
-                    else:
-                        await dispatch_delivery(
-                            self._dispatcher,
-                            workspace_id=row.workspace_id,
-                            deliverable_id=row.deliverable_id,
-                            artifact_type=row.artifact_type,
-                            # B12b — capture compensation_handle onto the
-                            # Deliverable so the retract endpoint can later
-                            # revert through @p.compensate.
-                            session_factory=self._session_factory,
-                        )
+                    async with workspace_session_scope(session, row.workspace_id):
+                        workspace_safe_mode = await _workspace_safe_mode(session, row.workspace_id)
+                        output_mode = await _run_output_mode(session, row.run_id)
+                        autonomous_origin = await _run_autonomous_origin(session, row.run_id)
+                        if resolve_output_mode_gate(
+                            workspace_safe_mode=workspace_safe_mode,
+                            output_mode=output_mode,
+                            autonomous_origin=autonomous_origin,
+                        ):
+                            # Gate says QUEUE — hold for founder approval instead of
+                            # dispatching (D3: per-Run output_mode == "safe", OR the
+                            # workspace global override is on). The /api/v1/safemode
+                            # routes drive it the rest of the way. ``run_id`` (B12a)
+                            # threads the originating run onto the queue item so the
+                            # founder can approve all of a run's accumulated partial
+                            # Deliver events as ONE transaction (Workflow §1.2).
+                            await queue.enqueue(
+                                workspace_id=row.workspace_id,
+                                deliverable_id=row.deliverable_id,
+                                run_id=row.run_id,
+                            )
+                            logger.info(
+                                "delivery_worker_enqueued_safe_mode",
+                                event_id=str(row.id),
+                                deliverable_id=str(row.deliverable_id),
+                            )
+                        else:
+                            await dispatch_delivery(
+                                self._dispatcher,
+                                workspace_id=row.workspace_id,
+                                deliverable_id=row.deliverable_id,
+                                artifact_type=row.artifact_type,
+                                # B12b — capture compensation_handle onto the
+                                # Deliverable so the retract endpoint can later
+                                # revert through @p.compensate.
+                                session_factory=self._session_factory,
+                            )
                 except Exception:  # noqa: BLE001 — record + move on
                     # Failure path: row.id NOT added to delivered_ids, so the
                     # DELETE below leaves this event in place for the next tick.
