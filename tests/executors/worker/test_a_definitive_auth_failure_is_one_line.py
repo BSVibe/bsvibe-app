@@ -347,12 +347,18 @@ async def test_a_backed_off_tick_does_not_reprint_the_whole_story(
 
 
 async def test_the_worker_daemon_configures_its_logging(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_amain`` must configure logging before anything can log.
+    """``_amain`` must configure logging, and configure it to emit JSON.
 
     Both daemon entry points (``python -m backend.executors.worker`` and
     ``bsvibe-worker run``) converge here, so this is the one place that covers
     both. Asserted as "it was called, and with JSON" rather than by inspecting
     structlog's global state, which other tests in this suite mutate.
+
+    ⚠️ This says nothing about WHEN. It cannot: two "it happened" observations
+    have no order between them. It once opened with "before anything can log"
+    and was green for exactly that reason while the daemon logged a line first
+    on every start. Ordering is asserted by
+    ``test_the_daemon_configures_logging_before_its_first_log_line`` below.
     """
     from backend.executors.worker import main as worker_main
 
@@ -379,4 +385,95 @@ async def test_the_worker_daemon_configures_its_logging(monkeypatch: pytest.Monk
     )
     assert calls[0].get("json_output") is not False, (
         f"a daemon's log must be machine-readable, got {calls[0]}"
+    )
+
+
+# ── the ordering the test above claims but does not measure ───────────────────
+#
+# ``test_the_worker_daemon_configures_its_logging`` opens with "must configure
+# logging BEFORE anything can log" and then asserts only two things: that
+# ``configure_logging`` was called at all, and that it was not called with
+# ``json_output=False``. Neither one can tell "configured first" from
+# "configured after N lines had already gone out on the development default".
+#
+# It was green on prod 2026-09-17 while the daemon emitted, every single start:
+#
+#     2026-09-17 18:04:10 [info     ] worker_config_loaded  sources={...}
+#
+# — console format, ANSI, because ``_apply_persisted_config`` (which logs
+# ``worker_config_loaded``) runs on the line ABOVE ``configure_logging``. One
+# line per start is nothing. The exposure is the failure case: if
+# ``_apply_persisted_config`` raises, that traceback renders on the unconfigured
+# rich default — a 284-line panel at exactly the moment the daemon is telling
+# you why it will not start, which is the shape #970 exists to remove.
+#
+# The assertion below is on ORDER, and it keeps a positive control: a run in
+# which nothing logged at all would satisfy "nothing logged before configure"
+# vacuously, and that must not count as a pass.
+
+
+async def test_the_daemon_configures_logging_before_its_first_log_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing may reach the logger before ``configure_logging`` returns.
+
+    Recorded as ONE interleaved sequence rather than two counters, because the
+    proposition is relative order — two separate "it happened" flags cannot
+    express it, which is exactly how the sibling test above stayed green.
+    """
+    from backend.executors.worker import main as worker_main
+
+    sequence: list[str] = []
+
+    def _spy_configure(**_kw: Any) -> None:
+        sequence.append("configure_logging")
+
+    class _OrderingLogger:
+        """Appends ``log:<event>`` for any level, in call order."""
+
+        def __getattr__(self, level: str) -> Any:
+            def _record(event: str = "", **_kw: Any) -> None:
+                sequence.append(f"log:{event}")
+
+            return _record
+
+    monkeypatch.setattr(worker_main, "configure_logging", _spy_configure)
+    monkeypatch.setattr(worker_main, "logger", _OrderingLogger())
+
+    async def _noop(**_kw: Any) -> None:
+        return None
+
+    monkeypatch.setattr(worker_main, "poll_and_execute", _noop)
+    monkeypatch.setattr(worker_main, "_connect_redis", lambda _s: None)
+
+    # ``_ensure_process_group`` is deliberately NOT patched out. It logs
+    # (``setpgrp_skipped``), so stubbing it would hide exactly the kind of
+    # pre-configuration call this test exists to catch — which is how the first
+    # version of this fix shipped incomplete.
+    #
+    # But leaving it real is not enough either: under pytest ``os.setpgrp()``
+    # SUCCEEDS, the except branch never runs, and nothing logs — a wire cut
+    # that moved the call back above ``configure_logging`` still passed. The
+    # only line it can emit lives behind a failure, so the failure is forced.
+    def _refuse_setpgrp() -> None:
+        raise OSError("already a session leader")
+
+    monkeypatch.setattr(worker_main.os, "setpgrp", _refuse_setpgrp)
+
+    await asyncio.wait_for(worker_main._amain(), timeout=10)
+
+    # Positive control — if startup logged nothing, the ordering assertion below
+    # would pass without measuring anything at all.
+    assert any(step.startswith("log:") for step in sequence), (
+        "startup emitted no log line, so this test proved nothing about ordering; "
+        f"sequence={sequence}"
+    )
+    assert "configure_logging" in sequence, "configure_logging was never called"
+
+    first_log = next(i for i, step in enumerate(sequence) if step.startswith("log:"))
+    configured = sequence.index("configure_logging")
+    assert configured < first_log, (
+        "the daemon logged on structlog's UNCONFIGURED default (developer "
+        "ConsoleRenderer + rich tracebacks) before configuring itself. "
+        f"{sequence[first_log]} came first; sequence={sequence}"
     )

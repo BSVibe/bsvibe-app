@@ -1348,9 +1348,18 @@ def _cancel_all_running_tasks() -> None:
 
 
 async def _amain() -> None:
-    _ensure_process_group()
-    settings = _apply_persisted_config(get_worker_settings())
-    # #970 — BEFORE anything logs. Without this the daemon runs on structlog's
+    # #970 — BEFORE anything logs, and that includes ``_apply_persisted_config``,
+    # which emits ``worker_config_loaded``. It used to run on the line above this
+    # one, so every daemon start put exactly one ANSI console line in the file
+    # while the ordering test stayed green (it asserted *that* configure_logging
+    # ran, never *when*). One line is nothing; the traceback that line's function
+    # would render if it raised is the 284-line panel #970 exists to remove, at
+    # the moment the daemon is explaining why it cannot start.
+    # ``_apply_persisted_config`` resolves name/server_url/capabilities/labels
+    # only — it never touches ``log_level`` — so reading settings first and
+    # layering the persisted file after configuration changes no resolved value.
+    settings = get_worker_settings()
+    # Without this the daemon runs on structlog's
     # UNCONFIGURED default, which is the development pipeline: ``ConsoleRenderer``
     # with rich exception rendering. A launchd-redirected file then collects ANSI
     # colour codes and box-drawing characters, and every exception arrives as a
@@ -1363,6 +1372,13 @@ async def _amain() -> None:
     # points (``python -m backend.executors.worker`` and ``bsvibe-worker run``)
     # converge here, so this is the single place that fixes both.
     configure_logging(level=settings.log_level, service_name="bsvibe-worker")
+    # Both of these log, so both belong AFTER the line above.
+    # ``_ensure_process_group`` emits ``setpgrp_skipped`` at debug — and an
+    # UNCONFIGURED structlog filters nothing, so "it is only debug" is not a
+    # reason it stays out of the file. Becoming the process-group leader has no
+    # ordering relationship to logging config, so it simply moves down.
+    _ensure_process_group()
+    settings = _apply_persisted_config(settings)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
 
