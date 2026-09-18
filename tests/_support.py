@@ -195,15 +195,21 @@ async def shared_file_sessionmaker() -> AsyncIterator[async_sessionmaker[AsyncSe
     polling the DB and a worker committing a result) can run concurrently
     without sharing one ``AsyncSession``/connection, which is not concurrency
     safe (``This session is in 'prepared' state`` / commit-in-progress
-    collisions). WAL + a busy timeout let a reader and a writer coexist. The
-    temp dir is left for the OS to reap; the engine is disposed on exit.
+    collisions). WAL + a busy timeout let a reader and a writer coexist.
+
+    The temp dir is REMOVED on exit (#997). It used to be "left for the OS to
+    reap", which measured false: 18,739 of them (1.9 GB) had accumulated on the
+    dev host, the oldest 33 days old. Removal happens AFTER ``engine.dispose()``
+    so the WAL/SHM sidecars are closed first.
     """
+    import shutil  # noqa: PLC0415
     import tempfile  # noqa: PLC0415
     from pathlib import Path  # noqa: PLC0415
 
     from sqlalchemy import event  # noqa: PLC0415
 
-    db_path = Path(tempfile.mkdtemp(prefix="bsvibe-shared-test-")) / "test.db"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="bsvibe-shared-test-"))
+    db_path = tmp_dir / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", future=True)
 
     @event.listens_for(engine.sync_engine, "connect")
@@ -219,6 +225,8 @@ async def shared_file_sessionmaker() -> AsyncIterator[async_sessionmaker[AsyncSe
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
         await engine.dispose()
+        # AFTER dispose — the WAL and SHM sidecars are still open before it.
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def fake_current_user(
