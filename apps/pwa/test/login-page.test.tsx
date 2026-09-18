@@ -134,4 +134,10 @@ describe("LoginPage", () => {
     expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
     expect(replace).not.toHaveBeenCalled();
   });
+
+  it("offers a route to sign-up — otherwise /signup is unreachable", () => {
+    render(<LoginPage />);
+    const link = screen.getByRole("link", { name: /create an account|계정 만들기/i });
+    expect(link.getAttribute("href")).toBe("/signup");
+  });
 });
