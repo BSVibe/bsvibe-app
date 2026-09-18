@@ -44,6 +44,7 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.channels import SAFE_MODE_QUEUE_ITEMS
 from plugin.audit.store import OutboxStore
@@ -148,7 +149,11 @@ class SafeModeExpirySweepRunner:
         )
         expired: list[uuid.UUID] = []
         for row in due:
-            ok = await queue.mark_expired(workspace_id=row.workspace_id, item_id=row.id)
+            # #959 — one queue item, one tenant. The session is shared across the
+            # batch, so `after_begin` armed the RLS GUC once and never re-arms;
+            # the contextvar alone would leave it pinned to the previous row.
+            async with workspace_session_scope(session, row.workspace_id):
+                ok = await queue.mark_expired(workspace_id=row.workspace_id, item_id=row.id)
             if ok:
                 expired.append(row.id)
         return expired

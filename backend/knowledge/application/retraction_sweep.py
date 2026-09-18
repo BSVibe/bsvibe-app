@@ -31,6 +31,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.scoping import workspace_scope
 from backend.knowledge.application.retraction_service import RetractionService, TombstoneWriter
 from backend.knowledge.infrastructure.ontology_db import OntologyCorrection
 
@@ -76,21 +77,25 @@ class RetractionSweepRunner:
 
         applied_total = 0
         for workspace_id in workspaces:
-            try:
-                async with session_factory() as session:
-                    service = RetractionService(
-                        session=session, writer=await self._writer_factory(workspace_id)
+            # #959 — the session is opened INSIDE this scope, so
+            # `after_begin` arms layer 3 for the right tenant and a
+            # plain contextvar scope is sufficient here.
+            with workspace_scope(workspace_id):
+                try:
+                    async with session_factory() as session:
+                        service = RetractionService(
+                            session=session, writer=await self._writer_factory(workspace_id)
+                        )
+                        applied = await service.apply_pending(workspace_id=workspace_id)
+                        if applied:
+                            await session.commit()
+                            applied_total += applied
+                except Exception:  # noqa: BLE001 — one bad workspace must not stop the sweep
+                    logger.warning(
+                        "retraction_sweep_workspace_failed",
+                        workspace_id=str(workspace_id),
+                        exc_info=True,
                     )
-                    applied = await service.apply_pending(workspace_id=workspace_id)
-                    if applied:
-                        await session.commit()
-                        applied_total += applied
-            except Exception:  # noqa: BLE001 — one bad workspace must not stop the sweep
-                logger.warning(
-                    "retraction_sweep_workspace_failed",
-                    workspace_id=str(workspace_id),
-                    exc_info=True,
-                )
         if applied_total:
             logger.info(
                 "retraction_sweep_applied",
