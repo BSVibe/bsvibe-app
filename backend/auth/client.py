@@ -22,7 +22,25 @@ logger = structlog.get_logger(__name__)
 
 
 class SupabaseAuthError(Exception):
-    """Supabase rejected the request (bad credentials, invalid code, ...)."""
+    """Supabase rejected the request (bad credentials, invalid code, ...).
+
+    Carries GoTrue's own ``status`` + ``error_code`` because **the HTTP status
+    alone is not the reason**. Signup in particular fails for causes the caller
+    must treat differently: a disabled provider is a closed door, a rate limit
+    is "try later", a validation failure is the user's to fix. Collapsing them
+    lost that (PR #1004) and the resulting message — *"signup is not available
+    for this instance"* — **fooled its own author**: a 2026-09-18 prod probe
+    read it as "email signup is off" when GoTrue had actually answered
+    ``429 over_email_send_rate_limit``, i.e. signup was ON and had gotten as far
+    as sending the confirmation mail.
+    """
+
+    def __init__(
+        self, message: str, *, status: int | None = None, error_code: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.error_code = error_code
 
 
 class SupabaseSession(BaseModel):
@@ -158,8 +176,34 @@ class SupabaseAuthClient:
             payload["redirect_to"] = redirect_to
         resp = await self._http.post(url, json=payload, headers=self._headers())
         if resp.status_code >= 400:
-            logger.warning("supabase_signup_failed", status=resp.status_code)
-            raise SupabaseAuthError(f"supabase signup failed ({resp.status_code})")
+            # Read GoTrue's own reason. The body is not guaranteed to be JSON
+            # (a gateway can answer HTML), so parsing must never be the thing
+            # that fails. ``msg`` is logged — NOT returned — because it can echo
+            # the submitted address back.
+            error_code: str | None = None
+            msg: str | None = None
+            try:
+                body = resp.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict):
+                raw_code = body.get("error_code")
+                error_code = str(raw_code) if raw_code else None
+                raw_msg = body.get("msg") or body.get("message")
+                msg = str(raw_msg) if raw_msg else None
+            logger.warning(
+                "supabase_signup_failed",
+                status=resp.status_code,
+                error_code=error_code,
+                # Logging only the status is what made the 2026-09-18
+                # investigation slow — the reason was in the body all along.
+                detail=msg,
+            )
+            raise SupabaseAuthError(
+                f"supabase signup failed ({resp.status_code})",
+                status=resp.status_code,
+                error_code=error_code,
+            )
         body = resp.json()
         # Tokens present → the account is live now (Confirm email OFF).
         if body.get("access_token"):

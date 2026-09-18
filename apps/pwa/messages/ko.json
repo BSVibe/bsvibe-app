@@ -40,6 +40,8 @@
     "signInSubtitle": "워크스페이스로 계속",
     "signUpError": "계정을 만들지 못했어요. 다시 시도해 주세요.",
     "signUpHeading": "계정 만들기",
+    "signUpRateLimited": "시도가 너무 잦아요. 몇 분 뒤에 다시 해 주세요.",
+    "signUpRejected": "이메일 또는 비밀번호가 거절됐어요. 확인하고 다시 시도해 주세요.",
     "signUpSubtitle": "이메일과 비밀번호로 시작하세요.",
     "signUpUnavailable": "이메일 가입은 아직 열려 있지 않아요. Google 또는 GitHub 로 계속하세요.",
     "signingIn": "로그인 중…",

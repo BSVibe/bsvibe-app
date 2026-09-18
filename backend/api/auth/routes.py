@@ -186,6 +186,49 @@ async def password_reset(payload: PasswordResetRequest, supabase: SupabaseDep) -
         pass
 
 
+#: GoTrue ``error_code`` values that mean the door itself is shut — the only
+#: ones the caller cannot fix by changing their input or waiting.
+_SIGNUP_CLOSED_CODES: frozenset[str] = frozenset({"signup_disabled", "email_provider_disabled"})
+
+
+def _signup_http_error(exc: SupabaseAuthError) -> HTTPException:
+    """Turn GoTrue's reason into an answer the caller can act on.
+
+    PR #1004 mapped EVERY rejection to 403 "signup is not available", which
+    told users a fixable problem was a permanent one. It also misled its own
+    author: a prod probe read that 403 as "email signup is disabled" when the
+    real cause was ``over_email_send_rate_limit`` — signup was enabled and had
+    already reached the confirmation-mail step.
+
+    ⚠️ The default is deliberately NOT 403. An unknown reason must not claim
+    the door is closed; 502 says "the IdP refused and we don't know why", which
+    is honest and keeps the closed-door message rare enough to be believed.
+    """
+    code = (exc.error_code or "").lower()
+    if code in _SIGNUP_CLOSED_CODES:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="signup is not available for this instance",
+        )
+    if exc.status == 429 or "rate_limit" in code:
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many signup attempts — please try again in a few minutes",
+        )
+    if exc.status is not None and 400 <= exc.status < 500:
+        # Validation, weak password, already-registered — the caller's to fix.
+        # The IdP's own wording is NOT forwarded: it can echo the submitted
+        # address back to whoever asked.
+        return HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="that email or password was rejected — check them and try again",
+        )
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail="the identity provider refused the signup",
+    )
+
+
 @router.post("/signup")
 async def signup(
     payload: SignUpRequest, supabase: SupabaseDep, session: SessionDep
@@ -208,10 +251,7 @@ async def signup(
             payload.email, payload.password, payload.redirect_to
         )
     except SupabaseAuthError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="signup is not available for this instance",
-        ) from exc
+        raise _signup_http_error(exc) from exc
     if result.session is not None:
         await _bootstrap(session, result.session)
     return SignUpResponse(

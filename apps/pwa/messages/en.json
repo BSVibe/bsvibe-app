@@ -40,6 +40,8 @@
     "signInSubtitle": "Continue to your workspace",
     "signUpError": "Could not create the account. Please try again.",
     "signUpHeading": "Create your account",
+    "signUpRateLimited": "Too many attempts. Please try again in a few minutes.",
+    "signUpRejected": "That email or password was rejected. Check them and try again.",
     "signUpSubtitle": "Start with email and a password.",
     "signUpUnavailable": "Email sign-up is not open yet. Use Google or GitHub to continue.",
     "signingIn": "Signing in…",

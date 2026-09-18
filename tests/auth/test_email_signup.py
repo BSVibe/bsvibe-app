@@ -149,8 +149,17 @@ async def test_signup_route_does_not_bootstrap_while_confirmation_is_pending(
 async def test_signup_route_surfaces_a_legible_refusal_when_signups_are_disabled(
     client, fake_supabase
 ) -> None:
-    """지금 prod 가 이 상태다. 500 이면 서버 버그로 오진된다."""
-    fake_supabase.signup_error = SupabaseAuthError("signups disabled")
+    """가입이 **실제로** 꺼진 경우에만 403 이다.
+
+    ⚠️ 이 테스트는 원래 이유 없는 `SupabaseAuthError` 를 던져 403 을 기대했다 —
+    즉 *"뭐든 거절되면 문이 닫힌 것"* 이라는 결함을 그대로 못박고 있었다. 그리고
+    그 결함이 2026-09-18 에 나를 속였다(403 을 보고 "가입이 꺼져 있다"고 했는데
+    실제로는 레이트리밋이었고 가입은 켜져 있었다). 이유를 명시하도록 바꿨다 —
+    이유별 분기는 `test_signup_error_reasons.py` 가 덮는다.
+    """
+    fake_supabase.signup_error = SupabaseAuthError(
+        "signups disabled", status=422, error_code="signup_disabled"
+    )
 
     r = await client.post(
         "/api/auth/signup",
