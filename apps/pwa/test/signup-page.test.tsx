@@ -89,4 +89,37 @@ describe("SignupPage", () => {
     const link = screen.getByRole("link", { name: /sign in|로그인/i });
     expect(link.getAttribute("href")).toBe("/login");
   });
+
+  // ── the reason must survive to the screen ──────────────────────────────────
+  //
+  // The first version matched `/not available|403|signup/i` on the message —
+  // and "signup" appears in almost every error this endpoint can produce, so
+  // nearly everything read as "sign-up isn't open". That is the same defect the
+  // backend had (PR #1004), mirrored on the client.
+
+  it("shows the closed-door message ONLY for a real 403", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    signUp.mockRejectedValue(new ApiError(403, "POST /api/auth/signup → 403"));
+    render(<SignupPage />);
+    await fillAndSubmit();
+    expect((await screen.findByRole("alert")).textContent).toMatch(/not open|열려 있지 않/i);
+  });
+
+  it("does NOT claim the door is closed on a rate limit", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    signUp.mockRejectedValue(new ApiError(429, "POST /api/auth/signup → 429"));
+    render(<SignupPage />);
+    await fillAndSubmit();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).not.toMatch(/not open|열려 있지 않/i);
+  });
+
+  it("tells the user to fix their input on a 400", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    signUp.mockRejectedValue(new ApiError(400, "POST /api/auth/signup → 400"));
+    render(<SignupPage />);
+    await fillAndSubmit();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).not.toMatch(/not open|열려 있지 않/i);
+  });
 });

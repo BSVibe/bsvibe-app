@@ -2,6 +2,7 @@
 
 import { AuthBrand } from "@/components/auth/AuthBrand";
 import { signUp } from "@/lib/api/auth";
+import { ApiError } from "@/lib/api/client";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -47,10 +48,12 @@ export default function SignupPage() {
       }
       router.replace("/brief");
     } catch (err) {
-      // A 403 means the project has email sign-up switched off — the shipped
-      // default. Say what to do instead rather than showing a failure.
-      const unavailable = err instanceof Error && /not available|403|signup/i.test(err.message);
-      setError(unavailable ? t("signUpUnavailable") : t("signUpError"));
+      // Branch on the STATUS, not on words in the message. The first version
+      // matched /not available|403|signup/i — and "signup" appears in nearly
+      // every error this endpoint produces, so almost everything read as
+      // "sign-up isn't open". That is the backend's PR #1004 defect mirrored
+      // here, and on the backend it fooled its own author.
+      setError(t(signupErrorKey(err)));
     } finally {
       setBusy(false);
     }
@@ -145,4 +148,18 @@ export default function SignupPage() {
       </div>
     </main>
   );
+}
+
+/** Which message a signup failure deserves.
+ *
+ *  403 is the ONLY closed door — the backend reserves it for GoTrue's
+ *  `signup_disabled`. 429 is "try later" and 4xx is the caller's to fix;
+ *  calling either of those a closed door tells the user a fixable problem is
+ *  permanent, which is exactly what the first version did. */
+function signupErrorKey(err: unknown): string {
+  if (!(err instanceof ApiError)) return "signUpError";
+  if (err.status === 403) return "signUpUnavailable";
+  if (err.status === 429) return "signUpRateLimited";
+  if (err.status >= 400 && err.status < 500) return "signUpRejected";
+  return "signUpError";
 }
