@@ -49,6 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.channels import Channel
 from backend.config import get_settings
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import (
     ProductRow,
     ResourceBindingRow,
@@ -256,7 +257,12 @@ class NotifyWorker(BaseWorker):
                 return 0
             processed = 0
             for row in rows:
-                await self._deliver_row(session, row)
+                # #959 — one row, one tenant. Layer 2 (ORM auto-filter) and
+                # layer 3 (RLS GUC) both read this contextvar; without it the
+                # prefs / binding / quiet-hours lookups inside ``_deliver_row``
+                # run unfiltered. The claim above stays workspace-blind.
+                with workspace_scope(row.workspace_id):
+                    await self._deliver_row(session, row)
                 processed += 1
             await session.commit()
             return processed
