@@ -57,6 +57,7 @@ WORKSPACELESS_ALLOWLIST: dict[str, str] = {
     # --- Public auth surface: bootstraps identity; no workspace exists yet ---
     "POST /api/auth/login": "login → ensure_user_bootstrapped creates the user + first workspace; pre-workspace",
     "POST /api/auth/oauth/{provider}/callback": "OAuth login/bootstrap; pre-workspace, mounted outside the v1 auth gate",
+    "POST /api/auth/signup": "email signup → bootstraps identity BEFORE any workspace exists, same premise as login. It bootstraps ONLY when GoTrue returns a session (Confirm email OFF); while a confirmation is pending it writes nothing at all, so an unproven address cannot claim a workspace",
     # --- Embedded OAuth Authorization Server: global protocol endpoints ------
     "GET /api/oauth/authorize": "embedded OAuth AS authorize; global protocol endpoint, not tenant data",
     "GET /api/oauth/clients/by-client-id/{client_id}": "public DCR client lookup; global registration metadata",

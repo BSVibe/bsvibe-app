@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session
 from backend.auth.client import (
+    SignUpResult,
     SupabaseAuthClient,
     SupabaseAuthError,
     SupabaseSession,
@@ -71,6 +72,30 @@ class PasswordResetRequest(BaseModel):
 
     email: str = Field(min_length=3, max_length=320)
     redirect_to: str | None = None
+
+
+class SignUpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=320)
+    # GoTrue enforces the project's own minimum; this only rejects the empty
+    # string so an obviously-blank submit never reaches the IdP.
+    password: str = Field(min_length=1)
+    redirect_to: str | None = None
+
+
+class SignUpResponse(BaseModel):
+    """Either a live session, or "check your mail" — never both.
+
+    ``session`` is ``None`` exactly when ``confirmation_required`` is true. The
+    client must branch on it: signing the user in on a pending confirmation
+    would hand out a workspace before the address is proven.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    session: SupabaseSession | None = None
+    confirmation_required: bool = False
 
 
 # Social providers the workspace supports (Supabase must have each configured).
@@ -159,6 +184,39 @@ async def password_reset(payload: PasswordResetRequest, supabase: SupabaseDep) -
         # Swallow: the caller must not learn whether the email exists or whether
         # GoTrue rejected it. The recovery email path is best-effort.
         pass
+
+
+@router.post("/signup")
+async def signup(
+    payload: SignUpRequest, supabase: SupabaseDep, session: SessionDep
+) -> SignUpResponse:
+    """Create an account with email + password.
+
+    ⚠️ This ships INERT: the Supabase project currently disables email signups,
+    so GoTrue answers *"Signups not allowed for this instance"* and this returns
+    403. That is the honest shape — a closed door, not a server fault. Opening it
+    is a console setting, deliberately outside this repo.
+
+    The user row is bootstrapped ONLY when a session comes back. On a pending
+    confirmation the address is not yet proven, and creating the row then would
+    let anyone claim a workspace under someone else's email.
+    """
+    if payload.redirect_to is not None:
+        _validate_redirect_to(payload.redirect_to)
+    try:
+        result: SignUpResult = await supabase.sign_up(
+            payload.email, payload.password, payload.redirect_to
+        )
+    except SupabaseAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="signup is not available for this instance",
+        ) from exc
+    if result.session is not None:
+        await _bootstrap(session, result.session)
+    return SignUpResponse(
+        session=result.session, confirmation_required=result.confirmation_required
+    )
 
 
 @router.post("/refresh")

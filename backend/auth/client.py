@@ -53,6 +53,27 @@ def _session_from_gotrue(body: dict[str, Any]) -> SupabaseSession:
     )
 
 
+class SignUpResult(BaseModel):
+    """Outcome of a ``/auth/v1/signup`` call.
+
+    GoTrue answers signup in TWO shapes and the difference is not an error
+    case — it is the project's "Confirm email" setting:
+
+    * OFF → ``{access_token, refresh_token, user:{...}}`` — same shape as login
+    * ON  → the **user object at top level**, no tokens at all
+
+    So a caller cannot just be handed a session. Collapsing the second shape
+    into "failure" would report a perfectly good signup as broken, and
+    :func:`_session_from_gotrue` does exactly that (it looks for ``body["user"]``
+    and raises "missing user id" when the user IS the body).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    session: SupabaseSession | None = None
+    confirmation_required: bool = False
+
+
 class SupabaseAuthClient:
     """Thin wrapper over the GoTrue REST endpoints."""
 
@@ -117,6 +138,34 @@ class SupabaseAuthClient:
             }
         )
         return f"{self._base_url}/auth/v1/authorize?{query}"
+
+    async def sign_up(
+        self, email: str, password: str, redirect_to: str | None = None
+    ) -> SignUpResult:
+        """Create an account via ``/auth/v1/signup``.
+
+        Returns :class:`SignUpResult` rather than a session because the response
+        shape depends on the project's "Confirm email" setting — see that class.
+
+        A non-2xx is a real refusal and must stay loud: the common one is
+        *"Signups not allowed for this instance"* (email signup disabled in the
+        Supabase console), which is the state this ships in. Swallowing it would
+        make a closed door look like a server fault.
+        """
+        url = f"{self._base_url}/auth/v1/signup"
+        payload: dict[str, Any] = {"email": email, "password": password}
+        if redirect_to is not None:
+            payload["redirect_to"] = redirect_to
+        resp = await self._http.post(url, json=payload, headers=self._headers())
+        if resp.status_code >= 400:
+            logger.warning("supabase_signup_failed", status=resp.status_code)
+            raise SupabaseAuthError(f"supabase signup failed ({resp.status_code})")
+        body = resp.json()
+        # Tokens present → the account is live now (Confirm email OFF).
+        if body.get("access_token"):
+            return SignUpResult(session=_session_from_gotrue(body), confirmation_required=False)
+        # No tokens → a confirmation mail is out. The user id rides at top level.
+        return SignUpResult(session=None, confirmation_required=True)
 
     async def send_password_reset(self, email: str, redirect_to: str | None = None) -> None:
         """Ask GoTrue to email a recovery link (``/auth/v1/recover``).

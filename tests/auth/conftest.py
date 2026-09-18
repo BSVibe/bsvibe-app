@@ -43,6 +43,10 @@ class FakeSupabaseClient:
     # When set, ``send_password_reset`` raises it (simulates GoTrue rejecting
     # the recover request) so the route's leak-safe 204 path can be exercised.
     reset_error: Exception | None = None
+    signup_calls: list[tuple[str, str | None]] = field(default_factory=list)
+    # Mirrors the two GoTrue signup shapes plus the closed-door case.
+    signup_confirmation_required: bool = False
+    signup_error: Exception | None = None
 
     def _session(self) -> object:
         from backend.auth.client import SupabaseSession
@@ -76,6 +80,18 @@ class FakeSupabaseClient:
     def build_authorize_url(self, provider: str, redirect_to: str, code_challenge: str) -> str:
         self.authorize_calls.append((provider, redirect_to, code_challenge))
         return f"https://fake-supabase/auth/v1/authorize?provider={provider}"
+
+    async def sign_up(self, email: str, password: str, redirect_to: str | None = None) -> object:
+        from backend.auth.client import SignUpResult
+
+        del password
+        self.signup_calls.append((email, redirect_to))
+        if self.signup_error is not None:
+            raise self.signup_error
+        if self.signup_confirmation_required:
+            return SignUpResult(session=None, confirmation_required=True)
+        self.email = email
+        return SignUpResult(session=self._session(), confirmation_required=False)
 
     async def send_password_reset(self, email: str, redirect_to: str | None = None) -> None:
         self.reset_calls.append((email, redirect_to))
