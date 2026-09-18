@@ -189,6 +189,14 @@ export default function LoginPage() {
             {busy ? t("signingIn") : t("continue")}
           </button>
         </form>
+
+        {/* Without this the /signup route exists but nothing reaches it. */}
+        <p className="login__note">
+          {t("newHere")}{" "}
+          <Link className="login__back" href="/signup">
+            {t("createOne")}
+          </Link>
+        </p>
       </div>
     </main>
   );

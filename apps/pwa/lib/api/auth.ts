@@ -58,6 +58,45 @@ export async function login(email: string, password: string): Promise<void> {
   await persistSupabaseSession(session);
 }
 
+/** What `signUp` resolved to — a live session, or "check your mail".
+ *
+ *  These are mutually exclusive: `confirmationRequired` is true exactly when
+ *  the backend returned no session. The caller MUST branch on it rather than
+ *  assume a sign-in happened. */
+export interface SignUpResult {
+  confirmationRequired: boolean;
+}
+
+/** Create an account with email + password.
+ *
+ *  The backend answers in two shapes depending on the Supabase project's
+ *  "Confirm email" setting (PR #1004): a live session, or a pending
+ *  confirmation with NO session. Only the first signs anyone in — while a
+ *  confirmation is pending the address is not proven and the backend
+ *  deliberately created no user row, so persisting a session here would be a
+ *  lie the rest of the app would believe.
+ *
+ *  `redirect_to` is OUR origin, not a caller-supplied URL: the backend
+ *  validates it against the CORS allow-list and rejects anything else, which
+ *  is what keeps the confirmation link out of an open-redirect. */
+export async function signUp(email: string, password: string): Promise<SignUpResult> {
+  const result = await apiFetch<{
+    session: SupabaseSession | null;
+    confirmation_required: boolean;
+  }>("/api/auth/signup", {
+    method: "POST",
+    body: JSON.stringify({
+      email,
+      password,
+      redirect_to: `${window.location.origin}/login`,
+    }),
+  });
+  if (result.session) {
+    await persistSupabaseSession(result.session);
+  }
+  return { confirmationRequired: result.confirmation_required };
+}
+
 /** base64url (no padding) of raw bytes — the PKCE encoding (RFC 7636). */
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = "";
