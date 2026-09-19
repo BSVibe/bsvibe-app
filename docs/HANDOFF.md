@@ -24,9 +24,10 @@
 |---|---|
 | 이슈 **#1000** | codex 두 칸 실측 완료 — 요청 본문 `tools` 배열 **직접 캡처** · `CODEX_HOME` 2×2 |
 | 이슈 **#1000** | 본문의 "잠복 구멍" 절 **취소**(측정으로 반증) · 체크박스 2개 닫음 |
+| 이슈 **#1000** | **opencode allowlist 실측 — 통과.** 형님 쿼터를 한 토큰도 안 썼다 |
 | 이 문서 | §Ⅵ·§Ⅷ 의 같은 오진 정정 |
 
-**코드 변경 0.** 오늘은 재는 세션이었다.
+**코드 변경 0.** 오늘은 재는 세션이었다 — 그리고 **재는 데 모델을 한 번도 안 썼다.**
 
 ## §Ⅰ — 🚨 정정: **`supports_remote_tools` 에 잠복 구멍은 없다**
 
@@ -114,41 +115,69 @@
 ⚠️ **안 잰 것**: auth.json **사본은 토큰 갱신 때 썩는다.** 심링크로 공유하면 갱신이
 **호스트 파일로 되돌아 쓴다** — 그 방향은 안 쟀다.
 
-## §Ⅳ — opencode: 공짜로 얻은 것, 막힌 것
+## §Ⅳ — ⭐ opencode: **두 칸 다 통과** (쿼터 0)
 
-데몬에 **툴 덤프 엔드포인트가 있다**(모델 호출 없이):
+형님이 *"로컬 모델로만"* 이라고 하셔서 ollama 를 붙이려다,
+**모델을 아예 안 쓰는 길**을 찾았다 — codex 와 같은 수법으로
+`@ai-sdk/openai-compatible` 프로바이더의 `baseURL` 을 **로컬 캡처 서버**로 주면
+opencode 가 보내는 요청 본문의 `tools` 배열을 그대로 받아 적는다.
 
-```
-GET /experimental/tool/ids  → invalid, question, bash, read, glob, grep, edit,
-                              write, task, webfetch, todowrite, websearch, skill, apply_patch
-```
+| `tools` 맵 | 모델에게 간 툴 |
+|---|---|
+| (키 생략) | **11** — `bash, edit, glob, grep, question, read, skill, task, todowrite, webfetch, write` |
+| `{"*": false}` | **0** |
+| `{"*": false, "read": true}` | **1** — `read` ✅ **allowlist 된다** |
+| MCP 붙인 대조군 | **13** — 네이티브 11 + `probemcp_codex`, `probemcp_codex-reply` |
+| `{"*": false, "probemcp_codex": true}` | **1** — 네이티브 전멸, **우리 것만** ✅ |
+| `{"*": false, "probemcp*": true}` | **2** — 글롭도 먹는다 |
 
-문서상 이 목록은 **빌트인 + MCP 툴을 함께** 준다 ⇒ **①(MCP 표면 부여)도 공짜로 검증 가능.**
+MCP 툴은 **`<서버이름>_<툴이름>`** 으로 표면에 들어온다.
+⇒ 계약이 요구하는 *"자기 툴을 뺏고 우리 것만"* 이 **opencode 엔 그대로 성립한다.**
 
-❌ **allowlist 방향은 못 쟀다.** OpenAPI 상 `tools` 는 `map<string, boolean>` 이고
-`"*"` 와 개별 이름의 **우선순위가 스키마에 없다.** 실제 턴이 필요하다(= 형님 모델 쿼터).
-`Config.tools` · `AgentConfig.tools` 도 같은 모양 — **설정 층**에서 거는 방향도 후보다.
+### 🚨 그런데 **키 순서가 결과를 바꾼다**
+
+| 맵 | 결과 |
+|---|---|
+| `{"*": false, "read": true}` | **1** |
+| `{"read": true, "*": false}` | **0** |
+| `{"probemcp_codex": true, "*": false}` | **0** |
+
+**3/3 재현.** 뒤에 오는 키가 앞을 덮는다 ⇒ **`"*": false` 가 첫 키여야 한다.**
+
+⚠️ 파이썬 dict 는 **삽입 순서를 보존**하고 그대로 JSON 이 된다.
+`{"bsvibe_work_file_read": True, ..., "*": False}` 처럼 **자연스러운 순서**로 쓰면
+**에러 없이 툴이 0개**가 된다. 그때 모델은 "툴이 없다"고 답하고,
+그건 `{"*": false}` 만 준 chat 턴과 **구분이 안 된다.**
+⇒ 배선 테스트는 **맵의 키 순서까지** 단언해야 한다.
+
+### 안 잰 것
+
+* **원격(HTTP) MCP 가 아니라 stdio 대역**으로 쟀다(`codex mcp-server`).
+  `mcp add --url --header` 자체는 이미 ✅ 였지만, **원격 MCP 툴도 같은 이름 규칙을 타는지**는 안 봤다
+* 우리 실제 토큰·엔드포인트로 붙여본 것은 아니다
 
 ## §Ⅴ — 형님 손에 있는 것
 
-1. **opencode allowlist 실측 승인** — `{"*": false}` + 이름으로 켜기를 확인하려면
-   실제 턴 하나가 필요하다. 형님 쿼터를 쓰므로 안 돌렸다
-2. Supabase Authentication → Users 의 미확인 테스트 계정 `qazasa123+confirm@gmail.com` 삭제(잔재)
-3. **#935 시크릿 로테이션** — #957(KMS key-id)이 선행
-4. **#937 잔여** — 재부팅 cold-boot 테스트(sudo)
-5. 이월: **#1003** 텔레그램 그룹방 승인 모델 결정 · Notion 아카이브(09-16·09-17·09-18)
+1. Supabase Authentication → Users 의 미확인 테스트 계정 `qazasa123+confirm@gmail.com` 삭제(잔재)
+2. **#935 시크릿 로테이션** — #957(KMS key-id)이 선행
+3. **#937 잔여** — 재부팅 cold-boot 테스트(sudo)
+4. 이월: **#1003** 텔레그램 그룹방 승인 모델 결정 · Notion 아카이브(09-16·09-17·09-18)
 
 ## §Ⅵ — 다음 세션 시작점
 
-1. **#1000 opencode 두 칸** — allowlist 방향(①은 `/experimental/tool/ids` 로 공짜) ·
-   agentic 런이 `tools` 키를 생략하는 지점(`opencode.py:212` 독스트링이 그대로 적어 뒀다)
+1. **⭐ #1000 opencode 배선** — 측정은 끝났고 남은 건 코드다:
+   (a) `build_work_tool_dispatch` 에 opencode 모양 — MCP 는 **설정 층**, 툴 제한은 **메시지 층**(`tools` 맵)
+   (b) `_build_message_body` 가 agentic 일 때도 `tools` 를 넣는다 — **`{"*": False}` 를 먼저**, 우리 이름을 뒤에
+      (`opencode.py:212` 독스트링이 지금 이 구멍을 그대로 적어 뒀다)
+   (c) `_REMOTE_TOOL_EXECUTORS` 에 opencode 추가
+   ⚠️ 테스트가 **키 순서**를 단언해야 한다 — 순서가 틀리면 툴 0개인데 **아무것도 안 빨개진다**
 2. **#964** settle 스코프 나머지(트랜잭션 분할 선행) · **#954** 미계상 토큰 · **#949** 파리티 잔여 4건
 3. codex 를 실제로 올릴 거면 **`view_image` 가 남는 것을 계약이 받아들일지**가 먼저다 —
    플래그를 더 찾는 문제가 아니다(74개 다 껐다)
 
 ### 검증 안 된 것 (정직하게)
 
-* **opencode allowlist 전부** — 스키마만 봤다
+* **opencode 원격 MCP 툴의 이름 규칙** — stdio 대역으로만 쟀다
 * **auth.json 심링크 방향**(갱신이 호스트로 되돌아 쓰는지) — 안 쟀다
 * codex `apply_patch` 가 gpt-5.5 에만 붙는 이유는 **모델 카탈로그**로 추정일 뿐, 안 팠다
 * 어제 문서의 미검증 항목(#1005·#1006 런타임 테스트 4곳 · #970 하루치 · #965 부정 대조군 2건 ·
@@ -156,6 +185,19 @@ GET /experimental/tool/ids  → invalid, question, bash, read, glob, grep, edit,
 
 ## §Ⅶ — 이 세션에서 값을 한 규율
 
+* **📡⭐⭐ "쿼터를 쓴다"가 측정을 막으면, 재는 자리를 한 홉 앞으로 옮겨라.**
+  opencode allowlist 는 *"실제 턴이 필요하다"* 고 적어 형님께 승인을 여쭸는데 —
+  **모델이 답할 필요가 없었다.** 우리가 알고 싶던 건 모델의 대답이 아니라
+  **모델에게 무엇이 갔는가**였고, 그건 **요청 본문**에 있다.
+  로컬 HTTP 서버를 프로바이더 `baseURL` 로 물리면 codex·opencode 둘 다
+  **토큰 0으로** 툴 표면을 준다. ⇒ *"모델에게 물어보지 마라"* 는 규율의 다음 칸은
+  **"모델을 부르지도 마라"** 다 — 답이 전선 위에 이미 있다.
+* **🔑⭐ 맵의 키 순서가 의미를 바꾸는데 스키마엔 안 적혀 있다.**
+  opencode 의 `tools` 는 `map<string,bool>` 이라고만 문서화돼 있다. 실제로는
+  **뒤 키가 앞을 덮어서** `{"*": false, "read": true}` 는 1개, 뒤집으면 **0개**다.
+  파이썬 dict 는 순서를 보존하므로 이건 **코드에서 조용히 재현된다** — 에러도 없고
+  모델은 그냥 "툴이 없다"고 말한다. ⇒ **순서에 의미가 있는 자료구조는 테스트가
+  순서를 단언해야 한다.** 내용만 단언하면 영원히 초록이다.
 * **🔍⭐⭐ `grep` 이 준 한 줄은 그 경로가 어디까지 덮는지 말해주지 않는다.**
   게이트는 `tools` 에, 분기는 `agentic` 에 이름이 걸려 있었고 —
   **`agentic = bool(tools)` 로 파생된다**는 한 줄을 안 보고 "경로가 둘"로 읽었다.
