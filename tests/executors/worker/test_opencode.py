@@ -114,7 +114,7 @@ async def test_executes_via_http_yields_text_then_done() -> None:
     serve = _FakeServe(text="hello world")
     executor = _executor_with(serve)
 
-    chunks = await _drain(executor.execute("do it", {"workspace_dir": "."}))
+    chunks = await _drain(executor.execute("do it", {"agentic": False, "workspace_dir": "."}))
 
     deltas = [c.delta for c in chunks if c.delta]
     assert deltas == ["hello world"]
@@ -129,7 +129,7 @@ async def test_collect_aggregates_output() -> None:
     serve = _FakeServe(text="abcdef")
     executor = _executor_with(serve)
 
-    result = await drain(executor.execute("p", {}))
+    result = await drain(executor.execute("p", {"agentic": False}))
     assert result.success is True
     assert result.stdout == "abcdef"
     assert result.error_message is None
@@ -151,7 +151,12 @@ async def test_message_body_uses_system_alongside_parts_not_inside() -> None:
     await _drain(
         executor.execute(
             "the user prompt",
-            {"system": "BE BRIEF", "model": "anthropic/claude", "workspace_dir": "."},
+            {
+                "agentic": False,
+                "system": "BE BRIEF",
+                "model": "anthropic/claude",
+                "workspace_dir": ".",
+            },
         )
     )
 
@@ -189,29 +194,40 @@ async def test_chat_turn_disables_all_tools() -> None:
     assert body["tools"] == {"*": False}
 
 
-async def test_agent_run_keeps_its_tools() -> None:
-    """agentic=True → unchanged: no ``tools`` key, so the coding agent keeps its
-    full tool set to act in its sandbox."""
+async def test_an_agent_run_no_longer_keeps_its_own_tools() -> None:
+    """#1000 — an agent run without BSVibe's MCP surface is REFUSED, not run natively.
+
+    Until #1000 this executor omitted the ``tools`` key for an agent run, so opencode kept
+    all eleven of its own — in a sandbox directory shared by every task on the worker. The
+    contract is now claude_code's: BSVibe's tools or nothing. What an agent run WITH the
+    surface sends is pinned in ``test_opencode_remote_tools.py``.
+    """
     serve = _FakeServe(text="ok")
     executor = _executor_with(serve)
 
-    await _drain(executor.execute("p", {"system": "ctx", "agentic": True, "workspace_dir": "."}))
+    result = await drain(
+        executor.execute("p", {"system": "ctx", "agentic": True, "workspace_dir": "."})
+    )
 
-    body = serve.message_requests[0]
-    assert "tools" not in body
+    assert result.success is False
+    assert result.error_message and "BSVibe's tools" in result.error_message
+    assert serve.message_requests == [], "no turn may be sent with opencode's own tools live"
 
 
-async def test_missing_agentic_defaults_to_agent_run() -> None:
+async def test_missing_agentic_still_means_agent_run() -> None:
     """Back-compat: a task from an older backend carries no ``agentic`` key.
-    Default to the agent run — a coding loop that silently lost its tools would
-    ship empty diffs."""
+
+    The DEFAULT is unchanged (agent run, because a coding loop that silently became a
+    toolless chat turn would ship empty diffs) — but since #1000 that default now leads to
+    the refusal above rather than to a run with opencode's own hands.
+    """
     serve = _FakeServe(text="ok")
     executor = _executor_with(serve)
 
-    await _drain(executor.execute("p", {"workspace_dir": "."}))
+    result = await drain(executor.execute("p", {"workspace_dir": "."}))
 
-    body = serve.message_requests[0]
-    assert "tools" not in body
+    assert result.success is False
+    assert serve.message_requests == []
 
 
 async def test_message_body_model_splits_opencode_go_vendor_prefix() -> None:
@@ -223,7 +239,7 @@ async def test_message_body_model_splits_opencode_go_vendor_prefix() -> None:
     serve = _FakeServe(text="ok")
     executor = _executor_with(serve)
 
-    await _drain(executor.execute("p", {"model": "opencode-go/qwen3.6-plus"}))
+    await _drain(executor.execute("p", {"agentic": False, "model": "opencode-go/qwen3.6-plus"}))
 
     assert serve.message_requests[0]["model"] == {
         "providerID": "opencode-go",
@@ -238,7 +254,7 @@ async def test_message_body_omits_model_when_no_slash_separator() -> None:
     serve = _FakeServe(text="ok")
     executor = _executor_with(serve)
 
-    await _drain(executor.execute("p", {"model": "qwen3.6-plus"}))
+    await _drain(executor.execute("p", {"agentic": False, "model": "qwen3.6-plus"}))
 
     assert "model" not in serve.message_requests[0]
 
@@ -246,7 +262,7 @@ async def test_message_body_omits_model_when_no_slash_separator() -> None:
 async def test_message_body_omits_model_when_not_provided() -> None:
     serve = _FakeServe(text="ok")
     executor = _executor_with(serve)
-    await _drain(executor.execute("p", {"system": "S"}))
+    await _drain(executor.execute("p", {"agentic": False, "system": "S"}))
     body = serve.message_requests[0]
     assert "model" not in body
 
@@ -254,7 +270,7 @@ async def test_message_body_omits_model_when_not_provided() -> None:
 async def test_message_body_omits_system_when_empty() -> None:
     serve = _FakeServe(text="ok")
     executor = _executor_with(serve)
-    await _drain(executor.execute("p", {}))
+    await _drain(executor.execute("p", {"agentic": False}))
     body = serve.message_requests[0]
     # An empty system field is omitted rather than sent as "".
     assert body.get("system", "") == ""  # accept "" or absent
@@ -280,7 +296,7 @@ async def test_session_create_passes_workspace_dir_as_directory_query() -> None:
     executor = _executor_with(serve)
 
     ws = "/var/folders/xx/bsvibe-task-deadbeef"
-    await _drain(executor.execute("p", {"workspace_dir": ws}))
+    await _drain(executor.execute("p", {"agentic": False, "workspace_dir": ws}))
 
     assert serve.session_request_urls, "executor must have called POST /session"
     url = serve.session_request_urls[0]
@@ -304,7 +320,7 @@ async def test_session_create_omits_directory_when_workspace_dir_missing() -> No
     serve = _FakeServe(text="ok")
     executor = _executor_with(serve)
 
-    await _drain(executor.execute("p", {}))
+    await _drain(executor.execute("p", {"agentic": False}))
 
     assert serve.session_request_urls, "executor must have called POST /session"
     from urllib.parse import parse_qs, urlparse
@@ -320,7 +336,7 @@ async def test_non_2xx_yields_error_chunk() -> None:
     serve = _FakeServe(status=500)
     executor = _executor_with(serve)
 
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", {"agentic": False}))
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
     assert "500" in chunks[-1].error or "boom" in chunks[-1].error.lower()
@@ -334,7 +350,7 @@ async def test_missing_serve_url_singleton_yields_clear_error() -> None:
     serve = _FakeServe()
     executor = OpenCodeExecutor(http_transport=serve.transport())
 
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", {"agentic": False}))
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
     assert "opencode serve" in chunks[-1].error.lower()
@@ -353,7 +369,9 @@ async def test_cancel_aborts_session_and_propagates(monkeypatch: pytest.MonkeyPa
     serve.message_delay_s = 5.0  # block long enough for cancel to land
     executor = _executor_with(serve)
 
-    task = asyncio.create_task(_drain(executor.execute("long prompt", {"system": "S"})))
+    task = asyncio.create_task(
+        _drain(executor.execute("long prompt", {"agentic": False, "system": "S"}))
+    )
     # Let the HTTP call begin.
     for _ in range(50):
         if serve.session_requests:
@@ -408,7 +426,7 @@ async def test_connection_refused_triggers_one_respawn_then_succeeds(
 
     monkeypatch.setattr(opencode_server, "ensure_serve_running", _fake_ensure)
 
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", {"agentic": False}))
 
     deltas = [c.delta for c in chunks if c.delta]
     assert deltas == ["recovered"]
@@ -433,7 +451,7 @@ async def test_persistent_connection_refused_surfaces_terminal_error(
 
     monkeypatch.setattr(opencode_server, "ensure_serve_running", _fake_ensure)
 
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", {"agentic": False}))
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
     assert "connection" in chunks[-1].error.lower() or "refused" in chunks[-1].error.lower()
@@ -536,7 +554,7 @@ async def test_execute_recovers_when_corruption_only_in_server_log(
     monkeypatch.setattr(opencode_server, "lookup_server_error", _fake_lookup)
     monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
 
-    chunks = await _drain(executor.execute("p", {"workspace_dir": "."}))
+    chunks = await _drain(executor.execute("p", {"agentic": False, "workspace_dir": "."}))
 
     deltas = [c.delta for c in chunks if c.delta]
     assert deltas == ["healed"]
@@ -578,7 +596,7 @@ async def test_execute_does_not_recover_when_ref_log_is_not_corruption(
     monkeypatch.setattr(opencode_server, "lookup_server_error", _fake_lookup)
     monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
 
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", {"agentic": False}))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -621,7 +639,7 @@ async def test_execute_recovers_from_sqlite_corruption_then_retries(
 
     monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
 
-    chunks = await _drain(executor.execute("p", {"workspace_dir": "."}))
+    chunks = await _drain(executor.execute("p", {"agentic": False, "workspace_dir": "."}))
 
     deltas = [c.delta for c in chunks if c.delta]
     assert deltas == ["healed"]
@@ -659,7 +677,7 @@ async def test_execute_surfaces_error_when_recovery_retry_still_fails(
 
     monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
 
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", {"agentic": False}))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -682,7 +700,7 @@ async def test_execute_does_not_recover_on_ordinary_http_error(
 
     monkeypatch.setattr(opencode_server, "restart_serve_after_corruption", _fake_restart)
 
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", {"agentic": False}))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -707,6 +725,6 @@ async def test_no_subprocess_exec_used(monkeypatch: pytest.MonkeyPatch) -> None:
 
     serve = _FakeServe(text="ok")
     executor = _executor_with(serve)
-    await _drain(executor.execute("p", {}))
+    await _drain(executor.execute("p", {"agentic": False}))
 
     assert spawn_calls == []

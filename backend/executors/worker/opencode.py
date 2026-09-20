@@ -40,7 +40,9 @@ this lift exists to close. :func:`test_no_subprocess_exec_used` enforces that.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -92,6 +94,14 @@ class OpenCodeExecutor:
         workspace_dir = context.get("workspace_dir") or ""
         timeout_s = self._settings.opencode_request_timeout_s
 
+        # #1000 — an agent run acts through BSVibe's tools and none of opencode's own.
+        try:
+            mcp_plan, run_tools = _plan_agent_surface(context) if agentic else (None, None)
+        except _AgentSurfaceRefused as refusal:
+            logger.error("opencode_agentic_without_bsvibe_tools", reason=str(refusal))
+            yield ExecutionChunk(done=True, error=str(refusal))
+            return
+
         url = opencode_server.get_serve_url()
         if not url:
             # The worker daemon never started the serve subprocess. Surface
@@ -106,7 +116,7 @@ class OpenCodeExecutor:
             )
             return
 
-        body = self._build_message_body(prompt, system, model, agentic)
+        body = self._build_message_body(prompt, system, model, agentic, run_tools)
 
         # Mutable holder so the inner helper can publish the session_id back
         # to the cancel handler the moment it is created — without this, a
@@ -118,7 +128,7 @@ class OpenCodeExecutor:
         try:
             try:
                 resp = await self._call_with_respawn(
-                    client, body, session_holder, workspace_dir=workspace_dir
+                    client, body, session_holder, workspace_dir=workspace_dir, mcp=mcp_plan
                 )
             except asyncio.CancelledError:
                 sid = session_holder.get("id")
@@ -143,7 +153,7 @@ class OpenCodeExecutor:
                 logger.warning("opencode_sqlite_corruption_recovering", error=str(exc))
                 try:
                     resp = await self._recover_and_retry(
-                        body, session_holder, timeout_s, workspace_dir=workspace_dir
+                        body, session_holder, timeout_s, workspace_dir=workspace_dir, mcp=mcp_plan
                     )
                 except (
                     httpx.HTTPError,
@@ -156,21 +166,13 @@ class OpenCodeExecutor:
                     )
                     return
         finally:
-            if abort_task is not None:
-                try:
-                    await asyncio.shield(abort_task)
-                except asyncio.CancelledError:
-                    # Our outer task is being cancelled — the shielded
-                    # abort task continues running on the loop until it
-                    # lands (or its 5 s internal timeout fires).
-                    pass
-                except Exception:  # noqa: BLE001 — cleanup best-effort
-                    logger.warning(
-                        "opencode_session_abort_failed",
-                        session_id=session_holder.get("id"),
-                        exc_info=True,
-                    )
-            await client.aclose()
+            await self._teardown(
+                client,
+                abort_task=abort_task,
+                session_holder=session_holder,
+                mcp=mcp_plan,
+                workspace_dir=workspace_dir,
+            )
 
         text = _extract_text(resp)
         if text:
@@ -185,7 +187,12 @@ class OpenCodeExecutor:
     # ── Internals ───────────────────────────────────────────────────────────
 
     def _build_message_body(
-        self, prompt: str, system: str, model: str | None, agentic: bool
+        self,
+        prompt: str,
+        system: str,
+        model: str | None,
+        agentic: bool,
+        run_tools: dict[str, bool] | None = None,
     ) -> dict[str, Any]:
         """Assemble the ``POST /session/{id}/message`` body.
 
@@ -202,7 +209,11 @@ class OpenCodeExecutor:
         opencode's message schema takes a ``tools`` map of tool-name → bool; the
         ``"*"`` wildcard turns EVERY tool off so the model answers from the prompt
         instead of exploring its empty temp dir (verified live, opencode 1.17.3).
-        An agent run omits the key and keeps its full tool set.
+
+        #1000 — an AGENT run carries the same wildcard plus BSVibe's tool names, so it
+        acts through our surface and none of opencode's own (it used to omit the key and
+        keep all eleven natives). :func:`_run_tools_map` builds that map; the wildcard is
+        FIRST because a later key overrides an earlier one.
         """
         body: dict[str, Any] = {
             "parts": [{"type": "text", "text": prompt}],
@@ -210,6 +221,8 @@ class OpenCodeExecutor:
         }
         if not agentic:
             body["tools"] = {"*": False}
+        elif run_tools is not None:
+            body["tools"] = run_tools
         if system:
             body["system"] = system
         if model and "/" in model:
@@ -249,6 +262,7 @@ class OpenCodeExecutor:
         session_holder: dict[str, str],
         *,
         workspace_dir: str = "",
+        mcp: tuple[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Create a session + post the message. On ConnectError → re-spawn once + retry.
 
@@ -258,12 +272,16 @@ class OpenCodeExecutor:
         sid to abort server-side.
         """
         try:
+            await self._register_run_mcp(client, mcp, workspace_dir)
             sid = await self._create_session(client, workspace_dir=workspace_dir)
             session_holder["id"] = sid
             return await self._post_message(client, sid, body)
         except httpx.ConnectError as exc:
             logger.warning("opencode_serve_dead_retrying", error=str(exc))
             await opencode_server.ensure_serve_running(self._settings)
+            # A re-spawned daemon has none of our registrations — the surface lives in the
+            # daemon's memory, not on disk. Register again or the retry runs toolless.
+            await self._register_run_mcp(client, mcp, workspace_dir)
             sid = await self._create_session(client, workspace_dir=workspace_dir)
             session_holder["id"] = sid
             return await self._post_message(client, sid, body)
@@ -296,6 +314,7 @@ class OpenCodeExecutor:
         timeout_s: float,
         *,
         workspace_dir: str = "",
+        mcp: tuple[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Quarantine the corrupt SQLite store + restart serve, then retry once.
 
@@ -313,8 +332,106 @@ class OpenCodeExecutor:
         session_holder.clear()
         async with self._client(new_url, timeout_s) as client:
             return await self._call_with_respawn(
-                client, body, session_holder, workspace_dir=workspace_dir
+                client, body, session_holder, workspace_dir=workspace_dir, mcp=mcp
             )
+
+    async def _teardown(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        abort_task: asyncio.Task[None] | None,
+        session_holder: dict[str, str],
+        mcp: tuple[str, dict[str, Any]] | None,
+        workspace_dir: str,
+    ) -> None:
+        """Land the cancel abort, drop the run's MCP registration, close the client."""
+        if abort_task is not None:
+            try:
+                await asyncio.shield(abort_task)
+            except asyncio.CancelledError:
+                # Our outer task is being cancelled — the shielded abort task continues
+                # running on the loop until it lands (or its 5 s internal timeout fires).
+                pass
+            except Exception:  # noqa: BLE001 — cleanup best-effort
+                logger.warning(
+                    "opencode_session_abort_failed",
+                    session_id=session_holder.get("id"),
+                    exc_info=True,
+                )
+        # #1000 — drop the run's MCP registration. It holds a live connection carrying a
+        # token scoped to a run that is over, and the daemon keeps a directory's servers for
+        # its whole lifetime — so leaving them behind accumulates one spent credential per
+        # task in a directory every later task also uses.
+        if mcp is not None:
+            await self._disconnect_run_mcp(client, mcp[0], workspace_dir)
+        await client.aclose()
+
+    async def _register_run_mcp(
+        self,
+        client: httpx.AsyncClient,
+        mcp: tuple[str, dict[str, Any]] | None,
+        workspace_dir: str,
+    ) -> None:
+        """Register the run's MCP server on the LIVE daemon (#1000).
+
+        ``POST /mcp?directory=`` and not a ``opencode.json`` in the workspace, because the
+        daemon caches a directory's MCP config for its whole lifetime: with the file route,
+        a second run in the same directory keeps using the FIRST run's ``Authorization``
+        header — measured against opencode 1.17.3, and an explicit disconnect+connect did
+        NOT refresh it. The worker's ``server_sandbox`` directory is one fixed path shared
+        by every task and every tenant, so that stale header would be another run's
+        run-scoped token. ``POST /mcp`` overrides the cached entry, and the token never
+        touches the disk of a directory the next tenant also reads.
+
+        A registration that did not connect is TERMINAL. The message body turns opencode's
+        own tools off, so a missing surface leaves the model with nothing at all — and an
+        agent with no tools does not report that it has none, it fabricates (the claude_code
+        guard exists because one did, and the run was recorded as a success).
+
+        How far this verifies, precisely. ``connected`` means opencode completed
+        ``initialize`` + ``tools/list`` against our server BEFORE the session is created, so
+        the exact race that produced the claude_code incident (the CLI racing its own MCP
+        connect, the model getting zero tools) cannot happen here. It does NOT check the
+        surface tool by tool: opencode 1.17.3 has no init-event equivalent —
+        ``/experimental/tool`` and ``/experimental/tool/ids`` list only the NATIVE tools and
+        return the same answer in a directory that has an MCP server as in one that does not
+        (measured). So a server that connects but advertises FEWER tools than the dispatch
+        sanctioned is not detectable from here; claude_code's absence half has no opencode
+        counterpart. The excess half needs none — ``{"*": false}`` removes every native by
+        construction, verified off the request body opencode sends the model.
+        """
+        if mcp is None:
+            return
+        name, config = mcp
+        params = {"directory": workspace_dir} if workspace_dir else None
+        res = await client.post("/mcp", json={"name": name, "config": config}, params=params)
+        if res.status_code >= 300:
+            raise OpenCodeHttpError(
+                f"POST /mcp (BSVibe's MCP surface) returned {res.status_code}: "
+                f"{_truncate(res.text)}"
+            )
+        data = res.json()
+        status = None
+        if isinstance(data, dict):
+            entry = data.get(name)
+            if isinstance(entry, dict):
+                status = entry.get("status")
+        if status != "connected":
+            raise OpenCodeHttpError(
+                f"BSVibe's MCP surface did not connect (server {name!r}, status "
+                f"{status!r}) — refusing to run an agent with no tools"
+            )
+        logger.info("opencode_run_mcp_registered", server=name, directory=workspace_dir)
+
+    async def _disconnect_run_mcp(
+        self, client: httpx.AsyncClient, name: str, workspace_dir: str
+    ) -> None:
+        """Best-effort teardown of the run's MCP registration (#1000)."""
+        params = {"directory": workspace_dir} if workspace_dir else None
+        try:
+            await client.post(f"/mcp/{name}/disconnect", params=params)
+        except Exception:  # noqa: BLE001 — cleanup best-effort, the run is already done
+            logger.warning("opencode_run_mcp_disconnect_failed", server=name, exc_info=True)
 
     async def _post_message(
         self, client: httpx.AsyncClient, session_id: str, body: dict[str, Any]
@@ -348,6 +465,120 @@ class OpenCodeExecutor:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+#: opencode surfaces an MCP tool to the model as ``<server-name>_<tool-name>`` — measured
+#: for a REMOTE (HTTP) server, not just the stdio ones (opencode 1.17.3, request-body
+#: capture). OpenAI-compatible providers cap a tool name at 64 characters and BSVibe's
+#: longest work tool is 32, so the server name has to stay well under the difference.
+_MCP_SERVER_NAME_MAX = 31
+
+
+class _AgentSurfaceRefused(RuntimeError):
+    """An agent run cannot be shaped — the message is the reason the task is refused."""
+
+
+def _plan_agent_surface(
+    context: dict[str, Any],
+) -> tuple[tuple[str, dict[str, Any]], dict[str, bool]]:
+    """What an agent run sends: the MCP server to register, and the tools map (#1000).
+
+    An agent run acts through BSVibe's tools, over MCP, with a run-scoped token — the
+    contract claude_code has carried since #553, refused here the same way. There is no
+    third executor shape, so a task that carries no surface is NOT downgraded to a local
+    run with opencode's own hands in a sandbox directory every other task also uses.
+    Reaching that refusal means version skew or a malformed dispatch; both must be loud.
+
+    The registration is named for THIS task. Every ``server_sandbox`` task on the worker
+    shares one directory (``main.py``) and opencode scopes an MCP registration to the
+    directory, so one fixed name would be overwritten by whichever concurrent task
+    registered last — and every session in that directory would then be offered the other
+    task's surface, carrying the other run's token.
+    """
+    mcp_config = str(context.get("mcp_config") or "")
+    allowed_tools = [str(t) for t in (context.get("allowed_tools") or [])]
+    if not (mcp_config and allowed_tools):
+        raise _AgentSurfaceRefused(
+            "aborted: an agent run must act through BSVibe's tools, and this task carries "
+            "no MCP surface. BSVibe relays every execution — there is no local agent run "
+            "to fall back to."
+        )
+    remote = _remote_mcp_config(mcp_config)
+    if remote is None:
+        raise _AgentSurfaceRefused(
+            "aborted: the task's MCP surface is not a config this executor can hand "
+            "opencode (no server URL in ``mcp_config``)."
+        )
+    server_name = _run_mcp_server_name(str(context.get("task_id") or ""))
+    return (server_name, remote), _run_tools_map(server_name, allowed_tools)
+
+
+def _run_mcp_server_name(task_id: str) -> str:
+    """A name for THIS task's MCP registration — never a fixed one (#1000).
+
+    Every ``server_sandbox`` task on the worker shares one directory, and opencode scopes
+    a registration to the directory. Under a fixed name, concurrent tasks overwrite each
+    other's entry and every session in that directory is offered whichever one landed last
+    — i.e. another task's run-scoped token. The task id makes each one its own.
+    """
+    digest = re.sub(r"[^0-9a-z]", "", task_id.lower())[:12]
+    if not digest:
+        # No task id (a caller outside ``handle_task``): a random name is still unique,
+        # which is the property that matters. Never fall back to a shared constant.
+        digest = uuid.uuid4().hex[:12]
+    return f"bsvibe{digest}"[:_MCP_SERVER_NAME_MAX]
+
+
+def _remote_mcp_config(mcp_config: str) -> dict[str, Any] | None:
+    """Translate the dispatched MCP surface into opencode's ``remote`` server shape.
+
+    The dispatch mints ONE surface (``build_work_tool_dispatch``) in claude's
+    ``{"mcpServers": {...}}`` spelling. The wire shape is the CLI's business, so the
+    translation lives here rather than branching the dispatch per executor: same URL, same
+    ``Authorization`` header, opencode's key names. ``None`` when the config carries no
+    usable server — the caller refuses rather than running with a half-built surface.
+    """
+    try:
+        data = json.loads(mcp_config)
+    except (TypeError, ValueError):
+        return None
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    if not isinstance(servers, dict) or not servers:
+        return None
+    entry = servers.get("bsvibe")
+    if not isinstance(entry, dict):
+        entry = next((v for v in servers.values() if isinstance(v, dict)), None)
+    if not isinstance(entry, dict):
+        return None
+    url = entry.get("url")
+    if not isinstance(url, str) or not url:
+        return None
+    raw_headers = entry.get("headers")
+    headers = (
+        {str(k): str(v) for k, v in raw_headers.items()} if isinstance(raw_headers, dict) else {}
+    )
+    return {"type": "remote", "url": url, "enabled": True, "headers": headers}
+
+
+def _run_tools_map(server_name: str, allowed_tools: list[str]) -> dict[str, bool]:
+    """``{"*": False}`` FIRST, then exactly BSVibe's tools under opencode's naming.
+
+    🚨 The order is the contract, not a style choice. opencode's schema documents ``tools``
+    as ``map<string, bool>`` and says nothing about precedence; measured, a LATER key
+    overrides an earlier one, so ``{"read": true, "*": false}`` yields ZERO tools — with no
+    error. Python dicts preserve insertion order and that order reaches opencode verbatim,
+    so writing the natural ``{**ours, "*": False}`` would silently disarm the agent, and the
+    model would answer exactly as it does on a tools-off chat turn.
+
+    The allowlist is enumerated rather than globbed (``bsvibe…_*``) for the reason the
+    claude_code path gives: the sanctioned set is the one the dispatch named, and a glob
+    would also hand over anything our MCP server grows later.
+    """
+    tools: dict[str, bool] = {"*": False}
+    for dispatched in allowed_tools:
+        bare = dispatched.split("__")[-1] if dispatched.startswith("mcp__") else dispatched
+        tools[f"{server_name}_{bare}"] = True
+    return tools
 
 
 class OpenCodeHttpError(RuntimeError):

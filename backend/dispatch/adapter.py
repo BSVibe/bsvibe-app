@@ -145,11 +145,19 @@ class ModelAccountAdapter(Protocol):
 #: result on a deletion (parity audit, 2026-07-14).
 #:
 #: ``claude_code`` is verified against the real binary: it accepts an HTTP MCP server with
-#: auth headers and restricts the model to exactly the tools we allow. The others are not —
-#: and a CLI's contract is not something to guess (that is how wrappers rot). Until each is
-#: verified, agentic work routed to it is REFUSED rather than quietly run in the old shape:
-#: "which account did I route?" must not change what the product does.
-_REMOTE_TOOL_EXECUTORS: frozenset[str] = frozenset({"claude_code"})
+#: auth headers and restricts the model to exactly the tools we allow. ``opencode`` is too
+#: (#1000, opencode 1.17.3): its serve daemon takes a remote MCP server with arbitrary
+#: headers, and the message's ``tools`` map strips every native tool and leaves exactly the
+#: ones we name — both read off the request body opencode sends the model, not off what the
+#: model says about itself.
+#:
+#: ``codex`` is NOT. Measured in the same pass: its execution, agent-spawn and web-search
+#: tools can all be disabled, but ``view_image`` survives every combination of all 74
+#: feature flags — so "exactly the tools we allow" does not hold, and finding more flags is
+#: not the open question (they were all tried). Until a CLI is verified, agentic work routed
+#: to it is REFUSED rather than quietly run in the old shape: "which account did I route?"
+#: must not change what the product does.
+_REMOTE_TOOL_EXECUTORS: frozenset[str] = frozenset({"claude_code", "opencode"})
 
 
 #: The tools an executor agent may use — BSVibe's, over MCP. The CLI is given exactly these

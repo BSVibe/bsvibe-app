@@ -147,7 +147,7 @@ Gate = Ok(...) | NotApplicable(reason) | Failed(reason)
 3. **상태는 런에 산다, 레지스트리에 살지 않는다.** `declared_contract` / `declared_knowledge` / `grounded_paths` / `written_paths` — MCP transport는 요청마다 새 레지스트리를 짓기 때문에, 루프가 그것을 못 보면 *"작업은 다 하고 커밋까지 했는데 검증 선언을 안 했다"* 는 거짓 결론이 난다 (실제로 발생 중).
 4. **샌드박스 매니저는 싱글턴이다.** `build_sandbox_manager()`를 요청마다 부르면 컨테이너 캐시가 비어 있어서 **매 툴 호출이 `docker rm -f` 후 재생성**한다 — 300초 타임아웃의 정체이자, 같은 제품의 병렬 런을 죽이는 원인.
 5. **executor 시스템 프롬프트는 T2 현실을 말해야 한다.** 현행 `_E30_TOOL_GUIDE_HEADER`는 *"Use your OWN tools — Read/Edit/Write/Bash … BSVibe does NOT call tools on your behalf"* 라고 **정반대를 지시**하고, 참조 툴 이름도 접두사가 없어 하나도 안 맞는다.
-6. **chat 턴은 모든 executor에서 툴이 꺼진다.** `claude_code`만 고쳐졌고 `codex`/`opencode`는 `agentic` 플래그를 읽지도 않는다 — chat 모양 호출자(frame/judge/ingest)가 그쪽으로 가면 여전히 agentic CLI가 뜬다.
+6. **chat 턴은 모든 executor에서 툴이 꺼진다.** ~~`claude_code`만 고쳐졌고 `codex`/`opencode`는 `agentic` 플래그를 읽지도 않는다~~ — **셋 다 읽는다**(`claude_code.py` · `codex.py` · `opencode.py`, 각 `execute()` 첫머리). `opencode` 는 chat 턴에 `tools: {"*": false}` 를 보내고, `codex` 는 **툴을 끌 수 없어 chat 턴을 거절**한다(#1000 실측: 74개 feature 를 다 꺼도 `apply_patch`·`view_image` 가 남는다). 그리고 #1000 이후 **agent 런도 마찬가지로 자기 툴을 뺏긴다** — `claude_code`·`opencode` 는 BSVibe MCP 표면만 갖고, `codex` 로 가는 agentic 작업은 dispatch 에서 거절된다.
 7. **워커 로컬 클론 + scrape-back 경로는 삭제한다.** 굶어 있을 뿐 장전돼 있고, `LocalFilesystemArtifactStore`의 루트가 **서버 런 워크트리와 같은 디렉터리**라 발동 시 truncated 파일을 0바이트로 서버에 덮어쓴다.
 
 **테스트 규율**: MCP 툴 delegation 테스트의 fake registry를 **진짜 `ToolRegistry`로 교체**한다. 지금은 인자를 기록만 하고 핸들러를 안 불러서 `file_edit`의 인자명 불일치가 통과했다.

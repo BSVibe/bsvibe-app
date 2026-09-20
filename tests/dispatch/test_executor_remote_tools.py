@@ -36,11 +36,26 @@ def test_claude_code_can_carry_bsvibes_tools() -> None:
     assert supports_remote_tools("claude_code") is True
 
 
-@pytest.mark.parametrize("executor", ["codex", "opencode"])
-def test_the_others_cannot_yet(executor: str) -> None:
-    """Until each one's MCP shape is verified against the real binary — not guessed — it
-    cannot carry BSVibe's tools. Guessing a CLI's contract is how wrappers rot."""
-    assert supports_remote_tools(executor) is False
+def test_opencode_can_too_since_1000() -> None:
+    """Verified the same way, against opencode 1.17.3's own wire (#1000).
+
+    ``POST /mcp`` takes a remote server with our ``Authorization`` header, and the
+    message's ``tools`` map — ``{"*": false}`` first, then our names — leaves the model
+    exactly BSVibe's tools and none of opencode's eleven natives. Both numbers come from
+    capturing the request body opencode sent its model provider, not from asking the model.
+    """
+    assert supports_remote_tools("opencode") is True
+
+
+def test_codex_still_cannot() -> None:
+    """Measured, not assumed (#1000): ``view_image`` survives all 74 feature flags.
+
+    Execution, agent-spawn and web-search all switch off, so codex is close — but "exactly
+    the tools we allow" is the contract, and one tool we cannot take away breaks it. The
+    open question is a product one (does the contract accept a residual reader?), not a
+    hunt for another flag.
+    """
+    assert supports_remote_tools("codex") is False
 
 
 class _Account:
@@ -64,7 +79,7 @@ def _adapter(executor_type: str, *, redis: Any = object()) -> ExecutorAdapter:
     )
 
 
-@pytest.mark.parametrize("executor", ["codex", "opencode"])
+@pytest.mark.parametrize("executor", ["codex"])
 async def test_agentic_work_on_an_unsupported_executor_is_refused(executor: str) -> None:
     """The founder routed a coding run to an executor that cannot be given BSVibe's tools.
 
