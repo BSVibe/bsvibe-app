@@ -9,6 +9,7 @@ separate from the backend's :class:`backend.config.Settings`.
 from __future__ import annotations
 
 import os
+import re
 import socket
 from functools import lru_cache
 from pathlib import Path
@@ -109,7 +110,29 @@ class WorkerSettings(BaseSettings):
     # The auto-recovery path quarantines that store + restarts serve. Leave
     # this blank to derive the path from XDG/HOME; set it only when opencode's
     # data dir is relocated (``BSVIBE_WORKER_OPENCODE_DATA_DIR``).
+    #
+    # ⚠️ This setting only RESOLVES a path — it does not steer the daemon. It
+    # names where opencode's own XDG data dir is, so the recovery path and the
+    # log reader can find it. What the daemon actually uses is
+    # ``opencode_db_path`` below.
     opencode_data_dir: str = ""
+
+    #: Where the spawned ``opencode serve`` keeps its SQLite store (#1016).
+    #:
+    #: Empty → :func:`default_opencode_db_path` (``~/.bsvibe/opencode/<name>/opencode.db``).
+    #: It must NOT resolve to ``~/.local/share/opencode``: that is the founder's
+    #: interactive opencode store, and sharing it means the founder merely
+    #: STARTING opencode can stop prod — a newer binary migrates the schema and
+    #: the worker's every message insert then fails. That is not hypothetical;
+    #: it happened on 2026-09-21.
+    #:
+    #: The handle is ``OPENCODE_DB`` (the database only) rather than
+    #: ``XDG_DATA_HOME`` (the whole data dir) on purpose: ``auth.json`` — the
+    #: provider credential — lives in that dir, and a split that costs the
+    #: worker its login is not a fix. Measured against opencode 1.17.3: an
+    #: absolute ``OPENCODE_DB`` is used verbatim, and the shared store is left
+    #: untouched (mtime unchanged across the probe).
+    opencode_db_path: str = ""
 
     # Worker-managed Claude OAuth credential file (env:
     # ``BSVIBE_WORKER_CLAUDE_OAUTH_PATH``). The ``claude_code`` executor reads it
@@ -166,6 +189,29 @@ def default_claude_config_dir() -> Path:
     base = os.environ.get("BSVIBE_HOME")
     root = Path(base) if base else Path.home() / ".bsvibe"
     return root / "claude-config"
+
+
+def default_opencode_db_path(worker_name: str) -> Path:
+    """Return ``$BSVIBE_HOME/opencode/<worker>/opencode.db`` (#1016).
+
+    Per-worker, because two daemons on one host would otherwise bite the same
+    SQLite file — the admin worker and the e2e worker both run here.
+
+    The filename stays ``opencode.db`` so :func:`quarantine_opencode_db` can
+    take the parent directory and keep moving the WAL/SHM sidecars with it.
+
+    ``worker_name`` comes from the operator (``BSVIBE_WORKER_NAME``) and lands
+    in a path, so it is reduced to ONE safe segment — a name like
+    ``../../etc`` must not reach outside the BSVibe root.
+
+    Same ``BSVIBE_HOME`` convention as :func:`default_claude_config_dir`, and
+    for the same reason: the unset case has to be the SAFE one, because
+    configuring nothing is the state prod actually runs in.
+    """
+    base = os.environ.get("BSVIBE_HOME")
+    root = Path(base) if base else Path.home() / ".bsvibe"
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", worker_name).strip(".-") or "worker"
+    return root / "opencode" / safe / "opencode.db"
 
 
 def default_sandbox_cwd() -> Path:

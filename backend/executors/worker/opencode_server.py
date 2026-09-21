@@ -39,7 +39,7 @@ from pathlib import Path
 import httpx
 import structlog
 
-from backend.executors.worker.config import WorkerSettings
+from backend.executors.worker.config import WorkerSettings, default_opencode_db_path
 from backend.executors.worker.executors import (
     _kill_process_group,
     sanitized_subprocess_env,
@@ -172,10 +172,20 @@ async def start_opencode_serve(
         str(settings.opencode_serve_port),
     ]
     env = sanitized_subprocess_env()
+    db_path = opencode_db_path(settings)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    # #1016 — the store is BSVibe's, not the founder's. Without this the daemon
+    # resolves ``<xdg>/opencode.db``, the very file the founder's interactive
+    # opencode uses: a newer binary there migrates the schema and every message
+    # insert in the worker then fails. We pin the DATABASE only; opencode's data
+    # dir (and the ``auth.json`` provider credential in it) stays shared on
+    # purpose — a split that costs the worker its login is not a fix.
+    env["OPENCODE_DB"] = str(db_path)
     logger.info(
         "opencode_serve_starting",
         host=settings.opencode_serve_host,
         port=settings.opencode_serve_port,
+        db_path=str(db_path),
     )
 
     process = await asyncio.create_subprocess_exec(
@@ -310,6 +320,18 @@ def opencode_data_dir(settings: WorkerSettings | None = None) -> Path:
     return base / "opencode"
 
 
+def opencode_db_path(settings: WorkerSettings | None = None) -> Path:
+    """Resolve the SQLite store the worker's daemon uses (#1016).
+
+    Unlike :func:`opencode_data_dir`, this is not a guess about someone else's
+    layout — it is the value we PIN via ``OPENCODE_DB`` when spawning, so the
+    daemon and the recovery path cannot disagree about which file is ours.
+    """
+    if settings is not None and settings.opencode_db_path:
+        return Path(settings.opencode_db_path).expanduser()
+    return default_opencode_db_path(settings.name if settings is not None else "worker")
+
+
 def quarantine_opencode_db(data_dir: Path, *, suffix: str) -> list[Path]:
     """Move ``opencode.db`` (+ its WAL/SHM sidecars) aside, return the new paths.
 
@@ -398,7 +420,10 @@ async def restart_serve_after_corruption(settings: WorkerSettings) -> str:
     set_serve_daemon(None)
     clear_serve_url()
 
-    quarantine_opencode_db(opencode_data_dir(settings), suffix=_corruption_suffix())
+    # The store we PINNED, not the one opencode would have picked on its own —
+    # quarantining ``<xdg>/opencode.db`` would move a file nobody uses and leave
+    # the broken one in place, while trampling the founder's history (#1016).
+    quarantine_opencode_db(opencode_db_path(settings).parent, suffix=_corruption_suffix())
 
     daemon = await start_opencode_serve(settings)
     set_serve_url(daemon.url)
@@ -472,6 +497,7 @@ __all__ = [
     "get_serve_url",
     "lookup_server_error",
     "opencode_data_dir",
+    "opencode_db_path",
     "quarantine_opencode_db",
     "restart_serve_after_corruption",
     "set_serve_daemon",
