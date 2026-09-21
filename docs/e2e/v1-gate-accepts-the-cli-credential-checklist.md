@@ -60,14 +60,30 @@
 > import-linter **6 kept / 0 broken** · mypy 깨끗.
 > 절단 5(행 만료)는 **MCP 쪽 테스트까지** 같이 빨개졌다 — 검증기가 실제로 공유라는 증거다.
 
-## 배포 후 — prod 실측 (형님 계정 불필요, 내 CLI 세션으로)
+## 배포 후 — prod 실측 ✅ (2026-09-21 15:00 KST)
 
-- [ ] 배포 확인: prod 커밋 SHA + **컨테이너 재생성 시각**
-- [ ] `bsvibe refresh` → `bsvibe products list` **200** (이슈의 재현 명령 그대로)
-- [ ] `bsvibe runs list` · `bsvibe deliverables list` 도 200
-- [ ] **PWA 가 멀쩡하다** — 로그인 상태로 제품 목록/런 목록이 그대로 뜬다(회귀 가드의 진짜 표면)
-- [ ] `/api/v1/oauth/pats` 가 여전히 200 (게이트 밖 라우터를 안 깨뜨렸다)
-- [ ] `/mcp` 가 여전히 붙는다 (같은 토큰 클래스, 다른 표면)
+> prod **`a3c12fb`** · 컨테이너 재생성 `14:59:15` · autodeploy 로그 `Done — deployed a3c12fb 14:59:17`
+
+- [x] 배포 확인: prod SHA **`a3c12fb`**(`/api/health`) + 컨테이너 **재생성 시각** 14:59:15
+- [x] `bsvibe refresh` → `bsvibe products list` **200** — 이슈의 재현 명령 그대로,
+      제품 2건이 돌아왔다(`requests` · `toolkit`). **고치기 전엔 401 이던 그 호출이다**
+- [x] `bsvibe runs list` · `bsvibe deliverables list` 도 **200**
+- [x] `/api/v1/oauth/pats` 여전히 200 (게이트 밖 라우터를 안 깨뜨렸다)
+- [x] `/mcp` 여전히 붙는다 — `bsvibe_workspace_get` 이 워크스페이스 `5fa3494c` 를 답했다
+- [x] ⭐ **발급자 분기가 prod 에 살아 있다는 양성/음성 대조군 쌍** (읽기 전용):
+
+  | 보낸 것 | prod 응답 | 무엇을 증명하나 |
+  |---|---|---|
+  | Supabase 클래스(가짜 서명, `iss=…supabase.co/auth/v1`) | `JWKS resolution failed: Unable to find a signing key…` | **Supabase 검증기가 그대로** 답한다 ⇒ `USER_JWT_*` 는 안 바뀌었고 PWA 신뢰 루트 무손상 |
+  | 우리 발급자 클래스(가짜 서명, `iss=https://api.bsvibe.dev`) | `invalid access token` | **새 액세스 토큰 경로**가 답한다 |
+  | 진짜 CLI 토큰 | **200 + 데이터** | 그 경로가 끝까지 통한다 |
+
+- [ ] ⚠️ **PWA 로 실제 로그인한 세션의 v1 왕복** — 이 한 칸만 안 걸었다.
+      **내가 못 하는 이유**: prod 에서 진짜 Supabase 세션을 만들려면 `POST /api/auth/login`
+      을 쳐야 하는데 그건 identity 를 **bootstrap 하는 쓰기**다(없으면 워크스페이스까지 만든다).
+      *진단용 호출은 읽기 전용이어야 한다.* 게다가 Keychain 의 형님 크리덴셜을 읽어야 한다.
+      ⇒ **형님이 PWA 를 한 번 열면 닫힌다.** 그 전까지는 위 음성 대조군 + 유닛
+      `test_session_jwt_still_reaches_a_v1_route` 의 **합성 증거**로만 서 있다.
 
 ## 안 잰 것 / 이월
 
