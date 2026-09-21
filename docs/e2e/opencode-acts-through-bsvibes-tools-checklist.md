@@ -56,7 +56,31 @@
       `{"*":false, ours:true}` → **1개, 네이티브 0** ✅ · **키 순서 뒤집으면 0개, 에러 없음** ✅
 - [x] **claude_code 최소 런**(`fbe9f905`) → `review_ready`. 워커 신원 교체가 dispatch 를
       안 깼다는 실증 — opencode 칸은 아니지만 이 배포의 회귀 위험은 여기 있었다
-- [ ] opencode 계정으로 **agentic 런 1회** — `review_ready` 까지 완주
+- [x] **opencode agentic 런을 실제로 돌렸다**(런 `b0429ba3`, 02:16). 태스크 3개가 전부
+      opencode 로 디스패치되고 **각자 자기 이름으로** MCP 를 등록했다 —
+      `bsvibe5c66e9c8b384` · `bsvibef241738b58c9` · `bsvibe5a7cd7ad4153`,
+      전부 **같은 디렉터리** `/Users/blasin/.bsvibe/sandbox-cwd` ⇒ **음성 대조군 통과**
+      (고정 이름이었으면 서로 덮었다)
+- [x] 🚨 **그 런이 거짓말을 했다** — 형님 opencode 계정 **잔액 없음**을 opencode 가
+      **HTTP 200 + `parts: []` + `info.error`** 로 돌려줬고, 실행기가 **빈 성공**으로 읽었다.
+      태스크 3개 `done`/출력 0, 런은 **`review_ready`**, **딜리버러블까지 발행**됐다.
+      → **#1019 로 고침.** 같은 런을 다시 쏘니(`dde232cf`) 태스크 3개 전부 **`failed`**,
+      런도 **`failed`**, 사유가 그대로 적힌다:
+      `opencode turn failed — APIError (HTTP 402): Upstream request failed: Insufficient account funds`
+- [x] ⭐ **모델이 실제로 우리 툴을 호출했다 — 로컬 모델로, 공짜로**(런 `e96ff6d5`, 03:02).
+      형님 제안대로 ollama `qwen3-coder:30b` 를 워커 샌드박스 디렉터리 설정에 물렸다.
+      opencode 세션의 tool 파트가 증거다:
+
+      ```
+      TOOL bsvibee96ff6d58242_bsvibe_work_file_read | status: completed
+        output: {"result": "# bsvibe-app\n\nBSVibe AI agent OS — unified monorepo …"}
+      ```
+
+      **모델이 opencode 네이티브 `read` 가 아니라 우리 런 스코프 이름으로 불렀고**, opencode 가
+      그걸 **우리 서버에 실행**했고, prod `README.md` 내용이 돌아왔다. 계약의 마지막 칸이다.
+      ⚠️ **모델 품질 주의**: 툴 실행은 정확했는데 **마지막 답변 텍스트가 툴콜 JSON 을 그대로
+      에코**했다(프로즈가 아니라). 배선이 아니라 로컬 모델의 한계다 — 런은 `review_ready` 로
+      갔지만 내용은 쓸 만하지 않다
 - [ ] 워커 로그에 `opencode_run_mcp_registered` 가 그 런의 task_id 로 찍힌다
 - [ ] 백엔드 MCP 액세스 로그에 그 런의 토큰으로 `bsvibe_work_*` 호출이 찍힌다
       (= 표면이 장식이 아니라 **실제로 쓰인다**)
