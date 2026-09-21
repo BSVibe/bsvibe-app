@@ -75,6 +75,7 @@
 | capability | 새 워커 **`4192fdd4`** = `claude_code` + **`opencode`**, 온라인. 옛 행 `2525b5dd` 는 revoke |
 | 모델 계정 | **`mac-mini-e2e (opencode)`** = `executor/opencode` 생김 |
 | 라이브 데몬 실측 | **prod 워커의 데몬에서 직접** 쟀다 — 이름 규칙 ✅ · allowlist 1개 ✅ · **키 순서 뒤집으면 0개** ✅ |
+| 스모크 | 최소 런 `fbe9f905` → **`review_ready`**(84초). 워커 신원을 갈았는데 dispatch 가 멀쩡하다는 실증 — 옛 행을 revoke 해도 **pin 은 fall-through** 한다(`dispatch.py` 의 freshness 게이트) |
 
 ### 🚨 그 과정에서 두 번 미끄러졌다 (둘 다 남긴다)
 

@@ -54,6 +54,8 @@
       옛 행 `2525b5dd` revoke
 - [x] **prod 워커의 데몬에서 직접 재측정**(토큰 0): 이름 규칙 `<서버>_<툴>` ✅ ·
       `{"*":false, ours:true}` → **1개, 네이티브 0** ✅ · **키 순서 뒤집으면 0개, 에러 없음** ✅
+- [x] **claude_code 최소 런**(`fbe9f905`) → `review_ready`. 워커 신원 교체가 dispatch 를
+      안 깼다는 실증 — opencode 칸은 아니지만 이 배포의 회귀 위험은 여기 있었다
 - [ ] opencode 계정으로 **agentic 런 1회** — `review_ready` 까지 완주
 - [ ] 워커 로그에 `opencode_run_mcp_registered` 가 그 런의 task_id 로 찍힌다
 - [ ] 백엔드 MCP 액세스 로그에 그 런의 토큰으로 `bsvibe_work_*` 호출이 찍힌다
