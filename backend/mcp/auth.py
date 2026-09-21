@@ -4,36 +4,26 @@ The MCP endpoint at ``/mcp`` requires ``Authorization: Bearer <jwt>``.
 The JWT is the ES256 access token issued by the embedded OAuth server
 (Lift D1, :mod:`backend.identity.oauth_service`).
 
-Verification chain:
+The verification chain lives in Identity, with the issuer:
+:func:`backend.identity.access_tokens.verify_access_token_with_row` checks the
+JWKS signature AND the ``jti`` row behind it (revocation + the row's
+``expires_at``, which is the authority on lifetime). Every surface that accepts
+one of these tokens calls that one function, so the MCP transport and the REST
+gate cannot drift apart on what they trust. This module only adapts the result
+into an :class:`McpPrincipal`.
 
-1. ``jwt.decode`` against the JWKS — proves the token was signed by
-   THIS process's private key (or a key in the same rotation set).
-2. Database lookup of the ``jti`` claim against
-   :class:`OAuthAccessTokenRow` — proves the token has not been revoked
-   (``revoked_at IS NULL``) AND has not expired beyond its DB-recorded
-   ``expires_at`` (``NULL`` there means never expires — the PAT shape).
-
-Step 2's expiry check is not redundant with the JWT's ``exp``. The row is
-the authority: a PAT carries no ``exp`` at all, and shortening any token's
-lifetime in the database has to take effect without reissuing the JWT.
-
-A failure at either step raises :class:`McpAuthError`; the transport
-maps it to a 401 with the RFC 6750 + RFC 9728 ``WWW-Authenticate``
-header so MCP clients (Claude Code, IDE plugins) can discover the
-authorization server via the resource-metadata document.
+A failure raises :class:`McpAuthError`; the transport maps it to a 401 with the
+RFC 6750 + RFC 9728 ``WWW-Authenticate`` header so MCP clients (Claude Code,
+IDE plugins) can discover the authorization server via the resource-metadata
+document.
 """
 
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
-
 import structlog
-from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.identity.oauth_db import OAuthAccessTokenRow, aware_utc
-from backend.identity.oauth_jwt import verify_access_token
+from backend.identity.access_tokens import AccessTokenError, verify_access_token_with_row
 from backend.mcp.api import McpPrincipal
 
 logger = structlog.get_logger(__name__)
@@ -62,49 +52,17 @@ async def resolve_principal_from_bearer(
     underlying cause for operators.
     """
     try:
-        claims = verify_access_token(token, issuer=issuer)
-    except InvalidTokenError as exc:
-        logger.info("mcp_auth_jwt_invalid", error=str(exc))
+        verified = await verify_access_token_with_row(token=token, issuer=issuer, session=session)
+    except AccessTokenError as exc:
         raise McpAuthError("invalid_token") from exc
-
-    try:
-        jti = uuid.UUID(claims["jti"])
-        user_id = uuid.UUID(claims["sub"])
-        workspace_id = uuid.UUID(claims["wsp"])
-    except (KeyError, TypeError, ValueError) as exc:
-        logger.info("mcp_auth_jwt_malformed_claims", error=str(exc))
-        raise McpAuthError("invalid_token") from exc
-
-    row = await session.get(OAuthAccessTokenRow, jti)
-    if row is None:
-        logger.info("mcp_auth_jti_not_found", jti=str(jti))
-        raise McpAuthError("invalid_token")
-    if row.revoked_at is not None:
-        logger.info("mcp_auth_token_revoked", jti=str(jti))
-        raise McpAuthError("invalid_token")
-    if row.expires_at is not None and aware_utc(row.expires_at) <= datetime.now(UTC):
-        logger.info("mcp_auth_token_expired", jti=str(jti))
-        raise McpAuthError("invalid_token")
-
-    scopes_raw = claims.get("scope") or ""
-    scopes = frozenset(s for s in str(scopes_raw).split() if s)
-
-    # T2 — a dispatched executor task's token names ONE run; the work tools bind to it and
-    # refuse a token without it. A malformed claim is treated as absent (no run scope), never
-    # as a different run.
-    run_raw = claims.get("run_id")
-    try:
-        run_id = uuid.UUID(str(run_raw)) if run_raw else None
-    except (ValueError, AttributeError, TypeError):
-        run_id = None
 
     return McpPrincipal(
-        user_id=user_id,
-        workspace_id=workspace_id,
-        client_id=str(claims.get("client_id", "")),
-        scopes=scopes,
-        jti=jti,
-        run_id=run_id,
+        user_id=verified.user_id,
+        workspace_id=verified.workspace_id,
+        client_id=verified.client_id,
+        scopes=verified.scopes,
+        jti=verified.jti,
+        run_id=verified.run_id,
     )
 
 

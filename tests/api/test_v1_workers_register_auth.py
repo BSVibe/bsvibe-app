@@ -19,6 +19,7 @@ import backend.executors.db  # noqa: F401
 import backend.identity.db  # noqa: F401
 import backend.identity.workspaces_db  # noqa: F401
 from backend.api.v1 import workers_register_auth as auth_mod
+from backend.identity.access_tokens import AccessTokenError
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow
 
@@ -49,6 +50,21 @@ def test_extract_bearer_returns_token_for_bearer() -> None:
     assert auth_mod.extract_bearer("Bearer abc.def.ghi") == "abc.def.ghi"
 
 
+def _make_the_access_token_path_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the ES256 branch to miss so the Supabase branch is what's under test.
+
+    Since #1017 the verifier is the shared
+    :func:`backend.identity.access_tokens.verify_access_token_with_row` — the
+    same one the MCP transport and the v1 gate call — so a miss is an
+    ``AccessTokenError``, not a raw ``InvalidTokenError``.
+    """
+
+    async def _miss(*_a: object, **_k: object) -> None:
+        raise AccessTokenError("invalid_token")
+
+    monkeypatch.setattr(auth_mod, "verify_access_token_with_row", _miss)
+
+
 async def test_resolve_raises_for_garbage_bearer(db) -> None:
     async with db() as s:
         with pytest.raises(auth_mod.BearerAuthError):
@@ -71,11 +87,7 @@ async def test_resolve_succeeds_for_supabase_jwt(db, monkeypatch: pytest.MonkeyP
         await s.commit()
 
     # Make the MCP path miss + the Supabase path succeed.
-    monkeypatch.setattr(
-        auth_mod,
-        "verify_access_token",
-        lambda *a, **k: (_ for _ in ()).throw(__import__("jwt").exceptions.InvalidTokenError("no")),
-    )
+    _make_the_access_token_path_miss(monkeypatch)
 
     fake_claims = {"sub": sub, "exp": 9999999999, "iat": 0}
     monkeypatch.setattr(auth_mod, "verify_user_jwt", lambda *a, **k: fake_claims)
@@ -95,11 +107,7 @@ async def test_resolve_fails_when_no_workspace_membership(
         s.add(UserRow(id=uuid.uuid4(), supabase_user_id=sub, email="x@x"))
         await s.commit()
 
-    monkeypatch.setattr(
-        auth_mod,
-        "verify_access_token",
-        lambda *a, **k: (_ for _ in ()).throw(__import__("jwt").exceptions.InvalidTokenError("no")),
-    )
+    _make_the_access_token_path_miss(monkeypatch)
     monkeypatch.setattr(
         auth_mod,
         "verify_user_jwt",

@@ -216,11 +216,14 @@ def create_app() -> FastAPI:
     # no bsvibe session), mounted outside the auth-gated v1 router like the
     # other public callbacks.
     app.include_router(connector_oauth_public_router, prefix="/api/v1")
-    # Personal access tokens — /api/v1/oauth/pats. Mounted outside the auth-gated
-    # v1 router because that gate accepts only a Supabase session JWT, and a PAT
-    # must also be mintable from a browserless host holding an ES256 access token
-    # (``bsvibe login --manual`` → ``bsvibe pat create``). The routes are NOT
-    # public: each authenticates via ``resolve_pat_principal``.
+    # Personal access tokens — /api/v1/oauth/pats. Mounted outside the v1 router
+    # because these routes carry their OWN authorization rule: minting a
+    # credential needs ``mcp:admin``, which the v1 gate's method-shaped scope
+    # check does not ask for. (Until #1017 the reason was different — the v1
+    # gate accepted only a Supabase session JWT and a PAT has to be mintable
+    # from a browserless host holding an ES256 access token. The gate accepts
+    # both classes now, so only the escalation rule keeps these separate.)
+    # The routes are NOT public: each authenticates via ``resolve_pat_principal``.
     app.include_router(oauth_pats_router, prefix="/api/v1")
     app.include_router(v1_router, prefix="/api")
 
