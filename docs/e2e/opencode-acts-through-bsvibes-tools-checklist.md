@@ -12,9 +12,9 @@
 
 ---
 
-> ✅ **2026-09-21, 머지 전에 로컬 실측으로 걸었다.** opencode 1.17.3 · 실제
-> `opencode serve` 데몬 · 실제 `OpenCodeExecutor` · 실제 `build_work_tool_dispatch`.
-> 아직 **prod 배포 후**로 남은 칸은 §배포 후 에 있다.
+> ✅ **2026-09-21 머지 전 로컬 실측 + 배포 후 prod 워커 데몬 실측.** opencode 1.17.3 ·
+> 실제 `opencode serve` · 실제 `OpenCodeExecutor` · 실제 `build_work_tool_dispatch`.
+> 남은 것은 **런 하나**뿐이다(§배포 후).
 
 ## 사전 측정 — 설계가 성립하는지 (전부 실측)
 
@@ -45,9 +45,17 @@
       `…_bsvibe_work_shell_exec`. opencode 네이티브 **0개** ✅
 - [x] 런 종료 후 등록이 사라진다(`disconnect`)
 
-## 배포 후 — prod 에서 확인할 것 (아직 안 함)
+## 배포 후 — prod
 
-- [ ] 워커 kickstart → **프로세스 시작 시각**으로 새 코드 확인
+- [x] prod `e7fefff` 배포(10:19) · 워커 **10:28:57** 재시작(프로세스 시작 시각 확인)
+      ⚠️ plist PATH 를 고쳤으므로 kickstart 가 아니라 **bootout + bootstrap** 이어야 했다 —
+      kickstart 만 했을 때는 **옛 PATH 의 opencode 1.15.12** 가 떴다
+- [x] 워커 capability 에 opencode 추가(`4192fdd4`) · 모델 계정 `executor/opencode` 생성 ·
+      옛 행 `2525b5dd` revoke
+- [x] **prod 워커의 데몬에서 직접 재측정**(토큰 0): 이름 규칙 `<서버>_<툴>` ✅ ·
+      `{"*":false, ours:true}` → **1개, 네이티브 0** ✅ · **키 순서 뒤집으면 0개, 에러 없음** ✅
+- [x] **claude_code 최소 런**(`fbe9f905`) → `review_ready`. 워커 신원 교체가 dispatch 를
+      안 깼다는 실증 — opencode 칸은 아니지만 이 배포의 회귀 위험은 여기 있었다
 - [ ] opencode 계정으로 **agentic 런 1회** — `review_ready` 까지 완주
 - [ ] 워커 로그에 `opencode_run_mcp_registered` 가 그 런의 task_id 로 찍힌다
 - [ ] 백엔드 MCP 액세스 로그에 그 런의 토큰으로 `bsvibe_work_*` 호출이 찍힌다
@@ -55,6 +63,17 @@
 - [ ] **음성 대조군**: 같은 워커의 다음 런이 **다른 서버 이름**으로 등록된다
       (공유 디렉터리에서 이름이 겹치면 앞 런의 토큰을 물려받는다 — 이게 이 설계의 이유)
 - [ ] 런 종료 후 `GET /mcp?directory=<sandbox>` 에 그 이름이 `disabled` 로 남는다
+
+## 🚨 배포 중에 배운 것 (이 체크리스트 밖이었다)
+
+* **`launchctl kickstart -k` 는 plist 를 다시 읽지 않는다.** PATH 를 고치고 kickstart 만 하면
+  **옛 PATH** 로 뜬다 — 그래서 측정한 적 없는 **1.15.12** 가 올라왔다
+* **워커의 opencode SQLite 스토어가 형님 대화형 opencode 와 같다**(`~/.local/share/opencode`).
+  내 1.17.3 프로브가 스토어를 마이그레이트해서 1.15.12 워커가
+  `NOT NULL constraint failed: session_message.seq` 로 죽었다 — **우리 코드가 이미 적어 둔 시그니처**다.
+  버전을 맞춰 풀었을 뿐 공유는 그대로다 → 이슈 **#1016**
+* **`bsvibe-worker register` 는 호스트 CLI 신원**(다른 워크스페이스)을 쓴다. `workers_list` 로
+  확인하기 전까지는 성공처럼 보인다 — 그리고 로컬 `worker.token` 을 이미 덮어쓴 뒤다
 
 ## 안 잰 것 (정직하게)
 
