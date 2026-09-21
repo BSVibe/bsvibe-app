@@ -52,23 +52,60 @@
 
 전체 스위트 **6424 passed** · import-linter 6/6 · ruff · mypy 깨끗.
 
-## 배포 후 — prod 실측
+## 배포 후 — prod 실측 ✅ (2026-09-21 17:00 KST)
 
-- [ ] 배포 확인: prod SHA + 컨테이너 재생성 시각
-- [ ] 워커 재시작: `launchctl kickstart -k gui/501/com.bsvibe.worker-mac-mini-e2e`
-      → **프로세스 시작 시각**으로 확인
-- [ ] 워커 로그의 `opencode_serve_starting` 에 **`db_path=~/.bsvibe/opencode/<worker>/opencode.db`**
-- [ ] 그 경로에 `opencode.db` 가 **실제로 생겼는가** · `~/.local/share/opencode/opencode.db` 의
-      **mtime 이 안 움직였는가** (같은 세 파일로 비교할 것 — 위의 거짓 경보 참고)
-- [ ] opencode 런 하나가 `review_ready` 까지 간다 (인증이 안 깨졌다는 증거 = `auth.json` 공유가 통한다)
-- [ ] ⭐ **양성 대조군**: 호스트 셸에서 `opencode` 를 띄워 둔 채 워커 런을 돌려 **멀쩡한지** 본다.
-      이게 이 이슈의 진짜 수용 조건이다 — 지금은 형님이 띄우기만 해도 워커가 멈춘다
-- [ ] admin 워커의 `opencode_serve_startup_failed` 가 달라지는지 확인(#970 로그 노이즈와 겹친다)
+> prod **`6787b7e`** · autodeploy `Done — deployed 6787b7e 17:00:13` ·
+> 워커 2대 재시작 **17:00:27 / 17:00:28**(프로세스 시작 시각으로 확인)
+
+- [x] 배포 확인: `/api/health` → `6787b7e`
+- [x] 워커 재시작: `launchctl kickstart -k gui/501/com.bsvibe.worker-{mac-mini-e2e,admin}`
+      → 새 pid 97566 / 97585, 시작 시각 17:00:2x
+- [x] ⭐ **로그가 before/after 를 직접 보여준다** — 옛 줄엔 `db_path` 가 **아예 없고**, 새 줄엔 있다:
+      ```
+      02:57:28Z {"event":"opencode_serve_starting","host":"127.0.0.1","port":0}          ← 전
+      08:00:28Z {"event":"opencode_serve_starting", …,"db_path":"…/mac-mini-e2e/opencode.db"}  ← 후
+      08:00:28Z {"event":"opencode_serve_starting", …,"db_path":"…/admin-test-exec/opencode.db"}
+      ```
+- [x] 두 워커가 **각자의 스토어**를 물었다 — `~/.bsvibe/opencode/{mac-mini-e2e,admin-test-exec}/`
+- [x] 🎁 **덤: admin 워커의 serve 가 이제 뜬다.** 마지막 `opencode_serve_disabled` 는 02:45:59Z 이고
+      재시작 후엔 **없다**. #970 로그 노이즈 중 한 줄이 원인째 사라졌다
+- [x] 🚨⭐ **inode 대조 — 물리적으로 다른 파일 셋**:
+      `61395957`(형님) · `106765961`(admin) · `106765957`(e2e)
+- [x] ⭐ **양성 대조군**: 호스트 셸에서 `opencode serve` 를 공유 스토어로 띄운 채
+      → 워커 데몬 둘 **그대로 살아 있고**(시작 시각 불변), 워커 스토어 **mtime·크기 무변화**
+- [x] 공유 스토어(`~/.local/share/opencode/opencode.db` +sidecars)는 워커 재시작 2대와
+      모든 프로브를 거쳐 **mtime·크기 전부 불변**
+
+### ⚠️ 이 대조군이 오늘 약한 이유 (정직하게)
+
+호스트 셸과 워커가 지금 **둘 다 1.17.3** 이다 — 치명적이게 만들던 **버전 스큐가 없다.**
+그래서 *"띄워도 멀쩡하다"* 만으로는 약하고, 위의 **inode/파일 무변화**가 진짜 증거다
+(공유 자체가 없어졌으므로 버전이 갈라져도 닿을 수 없다).
+
+### ✅ 원래 터졌던 그 지점을 직접 쳤다 — 메시지 insert
+
+라우팅 규칙 생성이 권한 분류기에 막혀(=prod 설정 쓰기) **prod 를 건드리지 않고**
+같은 조건을 재현했다: 워커와 동일한 `opencode.json`(ollama) + `OPENCODE_DB` 로 스크래치 데몬.
+
+| 잰 것 | 결과 |
+|---|---|
+| 세션 생성 | ✅ `ses_f3d01b8fbffe22Y5kzlIe4wxuf` |
+| **`session_message` insert** | ✅ **2행**, `seq` = 1, 2 |
+| **`seq IS NULL` 행** | **0** — *`NOT NULL constraint failed: session_message.seq` 가 바로 이 컬럼이었다* |
+| 공유 스토어 | 무변화 |
+
+⇒ `OPENCODE_DB` 로 가른 스토어가 **원래 죽던 그 쓰기를 받아낸다.**
+
+- [ ] **워커를 통한 end-to-end opencode 런**은 못 걸었다.
+      **내가 못 하는 이유**: opencode 로 보내려면 prod 에 run-routing 규칙을 만들어야 하는데
+      그 쓰기가 권한 분류기에 막혔다(정당한 차단 — prod 설정 변경이다). 우회하지 않았다.
+      ⇒ 형님이 허용해 주거나 PWA 에서 규칙 하나 만들면 걸 수 있다. 다만 위의 insert 실측이
+      그 런에서 확인하려던 **바로 그 실패 지점**을 이미 덮는다.
 
 ## 안 잰 것 / 이월
 
 - [ ] **임시 조치를 되돌릴지**: 워커 plist PATH 앞의 `~/.opencode/bin`(1.17.3 고정)은
-      스토어가 갈린 지금 **더 이상 필요 없을 수 있다.** 다만 #1014 의 측정이 1.17.3 기준이라
+      스토어가 갈린 지금 **더 이상 필요 없다** — 공유가 없어졌으므로 버전이 갈라져도 닿지 않는다. 다만 #1014 의 측정이 1.17.3 기준이라
       버전을 바꾸는 건 별건이다. **이 PR 은 plist 를 건드리지 않는다**
 - [ ] `log` 디렉터리와 `auth.json` 은 **여전히 공유**다(의도). 로그가 섞이는 것의 실害는 안 쟀다
 - [ ] 기존 공유 스토어에 남은 워커 세션 이력은 **버려진다**(새 스토어가 빈 채로 시작). 복구 안 한다
