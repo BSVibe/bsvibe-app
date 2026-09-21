@@ -14,6 +14,13 @@ webhooks / OAuth callbacks, worker-token routes, deployment-global operator
 config, and the membership-scoped ``/workspaces`` surface) are explicitly
 allow-listed WITH A REASON below. The test also fails if the allow-list rots
 (an entry no longer matching an actually-unscoped DB route).
+
+⚠️ Since #1017 "touches the DB" is a WIDER net than "queries tenant data":
+authentication itself needs a session, because an access token is verified
+against its ``jti`` row. So an authenticated route that reads nothing but
+static, code-derived data now lands here too. That makes the audit stricter,
+not weaker — but it means a new allow-list entry is not necessarily a route
+that touches tenant rows. Say which it is in the reason.
 """
 
 from __future__ import annotations
@@ -92,6 +99,12 @@ WORKSPACELESS_ALLOWLIST: dict[str, str] = {
     "GET /api/v1/workspaces/{workspace_id}": "membership-gated read (_owned_workspace → active_for_user_in_workspace); 404 for non-members",
     "PATCH /api/v1/workspaces/{workspace_id}": "membership-gated update (_owned_workspace); 404 for non-members",
     "DELETE /api/v1/workspaces/{workspace_id}": "membership-gated soft-delete (_owned_workspace); 404 for non-members",
+    # --- Authenticated, but reads NO rows: static data derived from code -----
+    # These two take no session of their own. They appear here only because
+    # since #1017 the auth gate opens one (an access token is verified against
+    # its jti row). There is no tenant data to scope.
+    "GET /api/v1/connectors/catalog": "the connector catalog is derived from PluginMeta in code — no DB read at all; the route's only session comes from the auth gate",
+    "GET /api/v1/run-routing/callers": "the static known-caller list comes from list_all_callers() in code — no DB read at all; the route's only session comes from the auth gate",
 }
 
 

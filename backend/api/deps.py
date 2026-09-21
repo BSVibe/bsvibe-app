@@ -1,10 +1,16 @@
 """FastAPI dependencies for v1 routes.
 
-Authentication resolves the verified Supabase principal via
-:func:`backend.shared.authz.deps.get_current_user` (raw ES256 JWT, JWKS).
-That principal's Supabase subject is mapped to a first-class ``UserRow`` and,
-through ``MembershipRow``, to the workspace the request operates within
-(Workflow §3). :func:`get_workspace_id` publishes that workspace into the
+Authentication resolves the caller through :func:`get_current_principal`,
+which accepts BOTH credential classes BSVibe issues — the PWA's session JWT
+and the ES256 access token ``bsvibe login`` stores (see
+:mod:`backend.api.bearer_auth` for why the gate has to know both, and why
+retargeting ``USER_JWT_JWKS_URL`` is not the fix).
+
+A session-JWT principal is mapped by its Supabase subject to a first-class
+``UserRow`` and, through ``MembershipRow``, to the workspace the request
+operates within (Workflow §3). An access-token principal instead NAMES its
+workspace in the token's ``wsp`` claim; the membership is verified but does not
+choose the tenant. :func:`get_workspace_id` publishes that workspace into the
 :data:`backend.data.scoping.current_workspace_id` contextvar so the global
 ORM auto-filter (defense layer 2) scopes every SELECT.
 
@@ -18,11 +24,17 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
+)
+
+from backend.api.bearer_auth import (
+    ApiPrincipal,
+    extract_bearer,
+    resolve_api_principal,
 )
 
 # Importing scoping installs the do_orm_execute auto-filter listener.
@@ -30,26 +42,29 @@ from backend.data.engine import create_app_engine
 from backend.data.rls import set_workspace_guc
 from backend.data.scoping import set_current_workspace_id
 from backend.identity.db import MembershipRow, UserRow
+from backend.identity.infrastructure.repositories.membership_repository_sql import (
+    SqlAlchemyMembershipRepository,
+)
 from backend.identity.roles import role_satisfies
 from backend.identity.service import (
     active_membership_for_user,
     get_user_by_supabase_id,
     resolve_workspace_id,
 )
-from backend.shared.authz.deps import get_current_user
 from backend.shared.authz.types import User
 from backend.storage.artifact_store import ArtifactStore
 
-# Re-export so routes / tests refer to one canonical auth dependency.
-CurrentUser = Annotated[User, Depends(get_current_user)]
-
 __all__ = [
+    "ApiPrincipal",
+    "CurrentPrincipal",
     "CurrentUser",
     "get_account_id",
     "get_artifact_store",
     "get_current_membership",
+    "get_current_principal",
     "get_current_user",
     "get_current_user_row",
+    "request_principal",
     "get_db_session",
     "get_db_session_factory",
     "get_output_language",
@@ -127,6 +142,54 @@ def get_artifact_store() -> ArtifactStore:
 
 
 # ---------------------------------------------------------------------------
+# Authentication — one gate, both credential classes (#1017)
+# ---------------------------------------------------------------------------
+async def get_current_principal(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+    session: Annotated[AsyncSession, Depends(get_db_session)] = ...,  # type: ignore[assignment]
+) -> ApiPrincipal:
+    """Resolve the caller from whichever credential class they presented.
+
+    The HTTP method is passed through because an access token's scope gate is
+    method-shaped: ``mcp:read`` reads, ``mcp:write`` changes things. A session
+    JWT carries no scopes and is unaffected.
+    """
+    principal = await resolve_api_principal(
+        extract_bearer(authorization), method=request.method, session=session
+    )
+    # Published on the request, not threaded through every downstream dep, so
+    # that ``get_current_user`` stays the ONE override seam the suites use.
+    # Overriding it replaces this whole dependency subtree; the workspace
+    # resolution below then falls back to membership order exactly as it did
+    # before there were two credential classes.
+    request.state.api_principal = principal
+    return principal
+
+
+CurrentPrincipal = Annotated[ApiPrincipal, Depends(get_current_principal)]
+
+
+async def get_current_user(principal: CurrentPrincipal) -> User:
+    """The authenticated principal's identity, credential class aside."""
+    return principal.user
+
+
+def request_principal(request: Request) -> ApiPrincipal | None:
+    """The principal :func:`get_current_principal` published, if it ran.
+
+    ``None`` when a test has overridden the auth seam — the caller then has an
+    identity but no token-named workspace, which is the pre-#1017 shape.
+    """
+    principal = getattr(request.state, "api_principal", None)
+    return principal if isinstance(principal, ApiPrincipal) else None
+
+
+# Re-export so routes / tests refer to one canonical auth dependency.
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+# ---------------------------------------------------------------------------
 # Identity → workspace resolution
 # ---------------------------------------------------------------------------
 async def get_current_user_row(
@@ -149,17 +212,27 @@ async def get_current_user_row(
 
 
 async def get_workspace_id(
+    request: Request,
     user: CurrentUser,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> uuid.UUID:
     """Resolve + publish the caller's active workspace (defense layers 1+2).
 
-    Maps the Supabase subject → ``UserRow`` → active ``Membership`` →
-    ``workspace_id``, sets the request-context contextvar (so the ORM
-    auto-filter engages), and returns the id for routes that need it as a
-    value. 403 when the caller has no active membership.
+    For a session JWT: Supabase subject → ``UserRow`` → active ``Membership`` →
+    ``workspace_id``. For an access token the workspace is the one the token
+    NAMES (its ``wsp`` claim, already checked against an active membership by
+    :func:`backend.api.bearer_auth.resolve_access_token`) — resolving it from
+    membership order instead would silently put the CLI in a different tenant
+    than the credential it presented.
+
+    Either way this sets the request-context contextvar (so the ORM auto-filter
+    engages) and returns the id for routes that need it as a value. 403 when
+    the caller has no active membership.
     """
-    workspace_id = await resolve_workspace_id(session, supabase_user_id=user.id)
+    principal = request_principal(request)
+    workspace_id = principal.workspace_id if principal is not None else None
+    if workspace_id is None:
+        workspace_id = await resolve_workspace_id(session, supabase_user_id=user.id)
     if workspace_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -202,17 +275,30 @@ async def get_output_language(
 # authentication via Supabase JWT and isolation via workspace_id scoping).
 # ---------------------------------------------------------------------------
 async def get_current_membership(
+    request: Request,
     user: CurrentUser,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> MembershipRow:
     """Resolve the caller's active ``Membership`` in their resolved workspace.
 
-    Also publishes the workspace into the scoping contextvar so a route that
-    depends only on this (e.g. via :func:`require_role`) still gets the ORM
-    auto-filter. 403 when the caller has no active membership.
+    Mirrors :func:`get_workspace_id`'s split: an access token's membership is
+    read in the workspace the token names, a session JWT's is the caller's
+    first active one. Also publishes the workspace into the scoping contextvar
+    so a route that depends only on this (e.g. via :func:`require_role`) still
+    gets the ORM auto-filter. 403 when the caller has no active membership.
     """
-    row = await get_user_by_supabase_id(session, user.id)
-    membership = await active_membership_for_user(session, row.id) if row is not None else None
+    principal = request_principal(request)
+    if (
+        principal is not None
+        and principal.workspace_id is not None
+        and principal.user_row_id is not None
+    ):
+        membership = await SqlAlchemyMembershipRepository(session).active_for_user_in_workspace(
+            principal.user_row_id, principal.workspace_id
+        )
+    else:
+        row = await get_user_by_supabase_id(session, user.id)
+        membership = await active_membership_for_user(session, row.id) if row is not None else None
     if membership is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

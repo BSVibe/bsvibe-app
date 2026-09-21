@@ -28,12 +28,10 @@ from dataclasses import dataclass
 
 import structlog
 from fastapi.security.utils import get_authorization_scheme_param
-from jwt.exceptions import InvalidTokenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
-from backend.identity.oauth_db import OAuthAccessTokenRow
-from backend.identity.oauth_jwt import verify_access_token
+from backend.identity.access_tokens import AccessTokenError, verify_access_token_with_row
 from backend.identity.service import resolve_workspace_id
 from backend.shared.authz.auth import AuthError, parse_user_token, verify_user_jwt
 from backend.shared.authz.settings import get_settings as get_authz_settings
@@ -72,37 +70,33 @@ def extract_bearer(authorization: str | None) -> str | None:
 async def _try_mcp_access_token(
     bearer: str, session: AsyncSession, errors: list[str]
 ) -> ResolvedRegisterPrincipal | None:
-    """Verify ``bearer`` as an ES256 MCP access token. ``None`` on shape miss."""
+    """Verify ``bearer`` as an ES256 MCP access token. ``None`` on shape miss.
+
+    Verification is :func:`~backend.identity.access_tokens.verify_access_token_with_row`,
+    the same function the MCP transport and the v1 gate call. This path used to
+    roll its own chain and had drifted: it checked ``revoked_at`` but never the
+    row's ``expires_at``, so a token whose lifetime had been shortened in the
+    database could still register a worker (#1017).
+    """
     try:
-        claims = verify_access_token(bearer, issuer=get_settings().oauth_issuer)
-    except InvalidTokenError as exc:
-        errors.append(f"mcp_token: {exc}")
+        verified = await verify_access_token_with_row(
+            token=bearer, issuer=get_settings().oauth_issuer, session=session
+        )
+    except AccessTokenError as exc:
+        errors.append(f"mcp_token: {exc.reason}")
         return None
-    try:
-        jti = uuid.UUID(claims["jti"])
-        workspace_id = uuid.UUID(claims["wsp"])
-    except (KeyError, TypeError, ValueError) as exc:
-        errors.append(f"mcp_token_claims: {exc}")
-        return None
-    row = await session.get(OAuthAccessTokenRow, jti)
-    if row is None:
-        errors.append("mcp_token: jti not found")
-        return None
-    if row.revoked_at is not None:
-        errors.append("mcp_token: revoked")
-        return None
-    scopes_raw = claims.get("scope") or ""
-    scopes = frozenset(s for s in str(scopes_raw).split() if s)
     # Register is a write operation — require mcp:write for MCP tokens.
-    if "mcp:write" not in scopes:
+    if not verified.has_scope("mcp:write"):
         errors.append("mcp_token: missing mcp:write scope")
         return None
     logger.info(
         "worker_register_auth_mcp_token",
-        workspace_id=str(workspace_id),
-        jti=str(jti),
+        workspace_id=str(verified.workspace_id),
+        jti=str(verified.jti),
     )
-    return ResolvedRegisterPrincipal(workspace_id=workspace_id, auth_kind="mcp_access_token")
+    return ResolvedRegisterPrincipal(
+        workspace_id=verified.workspace_id, auth_kind="mcp_access_token"
+    )
 
 
 async def _try_supabase_jwt(
