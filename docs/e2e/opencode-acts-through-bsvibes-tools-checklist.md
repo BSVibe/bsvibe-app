@@ -56,7 +56,19 @@
       `{"*":false, ours:true}` → **1개, 네이티브 0** ✅ · **키 순서 뒤집으면 0개, 에러 없음** ✅
 - [x] **claude_code 최소 런**(`fbe9f905`) → `review_ready`. 워커 신원 교체가 dispatch 를
       안 깼다는 실증 — opencode 칸은 아니지만 이 배포의 회귀 위험은 여기 있었다
-- [ ] opencode 계정으로 **agentic 런 1회** — `review_ready` 까지 완주
+- [x] **opencode agentic 런을 실제로 돌렸다**(런 `b0429ba3`, 02:16). 태스크 3개가 전부
+      opencode 로 디스패치되고 **각자 자기 이름으로** MCP 를 등록했다 —
+      `bsvibe5c66e9c8b384` · `bsvibef241738b58c9` · `bsvibe5a7cd7ad4153`,
+      전부 **같은 디렉터리** `/Users/blasin/.bsvibe/sandbox-cwd` ⇒ **음성 대조군 통과**
+      (고정 이름이었으면 서로 덮었다)
+- [x] 🚨 **그 런이 거짓말을 했다** — 형님 opencode 계정 **잔액 없음**을 opencode 가
+      **HTTP 200 + `parts: []` + `info.error`** 로 돌려줬고, 실행기가 **빈 성공**으로 읽었다.
+      태스크 3개 `done`/출력 0, 런은 **`review_ready`**, **딜리버러블까지 발행**됐다.
+      → **#1019 로 고침.** 같은 런을 다시 쏘니(`dde232cf`) 태스크 3개 전부 **`failed`**,
+      런도 **`failed`**, 사유가 그대로 적힌다:
+      `opencode turn failed — APIError (HTTP 402): Upstream request failed: Insufficient account funds`
+- [ ] **모델이 실제로 우리 툴을 호출**하는 것까지 — **opencode 계정 잔액이 있어야 한다**(형님).
+      배선·박탈·격리·이름 규칙은 위에서 전부 증명됐고, 남은 건 모델이 한 번 도는 것뿐이다
 - [ ] 워커 로그에 `opencode_run_mcp_registered` 가 그 런의 task_id 로 찍힌다
 - [ ] 백엔드 MCP 액세스 로그에 그 런의 토큰으로 `bsvibe_work_*` 호출이 찍힌다
       (= 표면이 장식이 아니라 **실제로 쓰인다**)
