@@ -71,13 +71,21 @@ class CodexExecutor:
         system = context.get("system") or ""
         model = context.get("model") or None
         # INV-7 #6 — a chat turn (frame/judge/ingest: no BSVibe tools) must run with the
-        # executor's OWN tools OFF and answer in a single turn. ``codex exec`` cannot: its
-        # shell/exec tool is intrinsic and NO flag disables it (verified against codex 0.130.0's
-        # own binary — the knobs are ``--sandbox``, ``--ask-for-approval``, ``--model``,
-        # ``--config``; ``--sandbox read-only`` only blocks WRITES, the model still runs read
-        # commands to explore). Left agentic, it would inspect the empty per-task temp dir and
-        # answer "the directory is empty" — the exact bug this invariant kills. With no honest
-        # tools-off mode, REFUSE loudly (mirroring the adapter's ``ExecutorAdapterUnavailable``
+        # executor's OWN tools OFF and answer in a single turn. ``codex exec`` cannot.
+        #
+        # 🚨 CORRECTED (#1000, 2026-09-19). This comment used to say the exec tool "is
+        # intrinsic and NO flag disables it". That is FALSE, and was false against the very
+        # version it cited: ``--disable shell_tool`` (or ``-c features.shell_tool=false``)
+        # removes it — A/B with a positive control, and confirmed by dumping the ``tools``
+        # array codex sends its model provider. What expired was not the verdict's condition
+        # but its ENUMERATION: the knobs were listed from what had been tried, so a knob
+        # nobody tried stayed "nonexistent" across a version that never changed.
+        #
+        # The refusal stands on the re-measurement, with a different reason. Disabling all
+        # 74 features still leaves ``apply_patch`` (a WRITE tool) and ``view_image``; no
+        # flag combination removes ``view_image`` at all, and which of them remains varies
+        # by MODEL. So codex has no honest tools-off mode — it has a smaller one — and a
+        # chat turn is REFUSED loudly (mirroring the adapter's ``ExecutorAdapterUnavailable``
         # T2a refusal) rather than silently run agentic. Absent key → agent run (back-compat:
         # a task from an older backend carries no flag, and a coding loop must never silently
         # lose its tools).
@@ -86,8 +94,8 @@ class CodexExecutor:
             yield ExecutionChunk(
                 done=True,
                 error=(
-                    "codex cannot serve a chat turn: `codex exec` has no mode that disables its "
-                    "shell/exec tool, so it would inspect its empty workspace instead of "
+                    "codex cannot serve a chat turn: even with every feature flag disabled "
+                    "it keeps `apply_patch` and `view_image`, so it can still act instead of "
                     "answering from the prompt. Route chat-shaped work to an executor that can "
                     "turn its tools off (claude_code, opencode) or to a LiteLLM account."
                 ),
