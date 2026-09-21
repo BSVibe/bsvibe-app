@@ -94,6 +94,10 @@
 `opencode.py` 가 이미 적어 둔 바로 그 시그니처다. plist PATH 로 워커를 **1.17.3** 에 맞춰 풀었다
 (스토어가 이미 그 스키마고, #1014 측정도 1.17.3 기준). **증상만 없앤 것** ⇒ 이슈 **#1016**.
 
+> 💾 **롤백용 백업**: `~/backups/worker-plists-2026-09-21/` 에 두 plist · `config.json` ·
+> `worker.token` · `credentials.json` 의 **변경 전** 사본이 있다. 단 `worker.token` 백업은
+> **revoke 된 옛 워커**의 것이라 되돌려도 인증이 안 된다 — 되돌릴 일이 생기면 재등록이 필요하다.
+
 > 🧭 **`launchctl kickstart -k` 는 plist 를 다시 읽지 않는다.** PATH 를 고치고 kickstart 만 하면
 > 프로세스는 **옛 PATH** 로 뜬다 — 그래서 1.15.12 가 올라왔다. plist 변경은 `bootout` + `bootstrap`.
 
