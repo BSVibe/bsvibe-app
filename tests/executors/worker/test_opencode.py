@@ -42,6 +42,9 @@ class _FakeServe:
     def __init__(self, *, text: str = "ok", status: int = 200) -> None:
         self.text = text
         self.status = status
+        # When set, the exact JSON the daemon returns for ``/message`` — lets a test pin a
+        # live response shape (e.g. a provider error inside a 200) instead of the happy one.
+        self.message_response: dict[str, Any] | None = None
         self.session_requests: list[bytes] = []
         # Lift E35 — also capture the raw URL of each ``POST /session`` so tests
         # can assert the ``?directory=`` query param (the fix for opencode binding
@@ -71,6 +74,8 @@ class _FakeServe:
                 self.message_requests.append(body)
                 if self.status != 200:
                     return httpx.Response(self.status, text="boom")
+                if self.message_response is not None:
+                    return httpx.Response(200, json=self.message_response)
                 return httpx.Response(
                     200,
                     json={
@@ -728,3 +733,69 @@ async def test_no_subprocess_exec_used(monkeypatch: pytest.MonkeyPatch) -> None:
     await _drain(executor.execute("p", {"agentic": False}))
 
     assert spawn_calls == []
+
+
+# ── a provider failure is NOT a successful empty turn ───────────────────────
+#
+# Measured in prod (2026-09-21, run ``b0429ba3``): the founder's opencode account had no
+# credit, so every turn came back **HTTP 200** with ``parts: []`` and the real failure
+# tucked into ``info.error`` — ``Upstream request failed: Insufficient account funds``.
+# The executor read the (absent) text parts, yielded ``done`` with no error, and THREE
+# agentic tasks were recorded ``done`` with empty output. The run then flipped to
+# ``review_ready``: an agent that never ran, reported as a finished review.
+
+
+def _error_response(message: str = "Upstream request failed: Insufficient account funds") -> dict:
+    """The live shape: 200, no parts, the failure inside ``info.error``."""
+    return {
+        "parts": [],
+        "info": {
+            "role": "assistant",
+            "error": {
+                "name": "APIError",
+                "data": {"message": message, "statusCode": 402, "isRetryable": False},
+            },
+            "tokens": {"input": 0, "output": 0},
+        },
+    }
+
+
+async def test_a_provider_error_inside_a_200_is_terminal_not_an_empty_success() -> None:
+    serve = _FakeServe(text="unused")
+    serve.message_response = _error_response()
+    executor = _executor_with(serve)
+
+    result = await drain(executor.execute("p", {"agentic": False}))
+
+    assert result.success is False, "a turn the provider refused must NOT be reported as done"
+    assert result.error_message and "Insufficient account funds" in result.error_message, (
+        f"the reason the provider gave must reach the caller, got {result.error_message!r}"
+    )
+
+
+async def test_the_error_survives_even_when_some_text_came_back() -> None:
+    """A partial answer plus an error is still a failed turn — not a short success."""
+    serve = _FakeServe(text="unused")
+    resp = _error_response("Upstream request failed: rate limited")
+    resp["parts"] = [{"type": "text", "text": "partial..."}]
+    serve.message_response = resp
+    executor = _executor_with(serve)
+
+    result = await drain(executor.execute("p", {"agentic": False}))
+
+    assert result.success is False
+    assert "rate limited" in (result.error_message or "")
+
+
+async def test_an_empty_but_error_free_turn_still_succeeds() -> None:
+    """Only ``info.error`` means failure. An agent that acted through tools and said
+    nothing is a legitimate empty turn — treating THAT as an error would break the
+    agentic path this guard is meant to protect."""
+    serve = _FakeServe(text="unused")
+    serve.message_response = {"parts": [], "info": {"tokens": {"input": 3, "output": 0}}}
+    executor = _executor_with(serve)
+
+    result = await drain(executor.execute("p", {"agentic": False}))
+
+    assert result.success is True
+    assert result.error_message is None
