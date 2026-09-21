@@ -2,6 +2,8 @@
 
 **워커**: 호스트 2개 — **autodeploy 안 된다.** 배포마다
 `launchctl kickstart -k gui/501/com.bsvibe.worker-{admin,mac-mini-e2e}` 후 **프로세스 시작 시각**으로 확인
+⚠️ **plist 자체를 고쳤으면 kickstart 로는 안 먹는다** — `launchctl bootout gui/501/<label>` 후
+`launchctl bootstrap gui/501 ~/Library/LaunchAgents/<label>.plist`. kickstart 는 plist 를 다시 읽지 않는다.
 ⚠️ **`com.bsvibe.worker` 는 이제 없다** — #991 로 내렸다. 옛 kickstart 명령을 그대로 쓰면 없는 서비스를 친다.
 **열린 작업은 이 문서가 아니라 GitHub 이슈에 있다.** 열린 PR·워크트리는 `gh pr list` / `git worktree list`.
 
@@ -64,24 +66,49 @@
 * **라이브 E2E**: 진짜 데몬 × 진짜 `OpenCodeExecutor` × 진짜 `build_work_tool_dispatch`
   → 모델에게 간 툴 = **우리 것뿐, 네이티브 0개**
 
-## §Ⅲ — 🚨 **prod 에서는 아직 한 번도 못 돈다** (실측)
+## §Ⅲ — ✅ 배포했고, opencode 워커를 **올렸다**
 
-`bsvibe_workers_list`: 살아 있는 워커는 **`mac-mini-e2e` 하나뿐이고 capability 가 `claude_code` 뿐**이다.
-`opencode` 를 가진 `dogfood-mac` 은 **마지막 하트비트 2026-07-20**(두 달 전).
-워커 plist 의 PATH 에 **`~/.opencode/bin` 이 없다** — `detect_capabilities()` 는 PATH 프로브다.
+| | |
+|---|---|
+| prod | **`e7fefff`** (10:19 autodeploy, 컨테이너 재생성 확인) |
+| 워커 | 10:28:57 재시작(plist **reload** — kickstart 는 plist 를 다시 안 읽는다) |
+| capability | 새 워커 **`4192fdd4`** = `claude_code` + **`opencode`**, 온라인. 옛 행 `2525b5dd` 는 revoke |
+| 모델 계정 | **`mac-mini-e2e (opencode)`** = `executor/opencode` 생김 |
+| 라이브 데몬 실측 | **prod 워커의 데몬에서 직접** 쟀다 — 이름 규칙 ✅ · allowlist 1개 ✅ · **키 순서 뒤집으면 0개** ✅ |
 
-⇒ **머지해도 prod 동작은 변하지 않는다**(오늘도 opencode agentic 은 dispatch 에서 거절된다).
-체크리스트의 §배포 후 칸은 **opencode 워커를 올리기 전에는 걸 수 없다.**
-그건 형님 머신에 **CLI 하나와 긴 수명 데몬 하나를 더 올리는 결정**이라 §Ⅳ 로 올린다.
+### 🚨 그 과정에서 두 번 미끄러졌다 (둘 다 남긴다)
+
+**① 재등록이 엉뚱한 워크스페이스로 갔다.** `bsvibe-worker register` 는 호스트 CLI 세션
+(`~/.config/bsvibe/credentials.json`)의 신원을 쓰는데, 그건 **워크스페이스 `6515bfc2`** 다 —
+워커가 실제로 일하는 곳은 **`5fa3494c`**(MCP 신원). 새 행이 남의 워크스페이스에 생겼고,
+`worker.token` 이 그 토큰으로 **덮였다**. kickstart 하기 **전에** `workers_list` 에 안 보이는 걸
+보고 백업에서 되돌렸다 — 그대로 재시작했으면 워커가 `5fa3494c` 를 **통째로 떠났다**.
+⇒ 올바른 경로는 **MCP 액세스 토큰**으로 `POST /api/v1/workers/register`.
+⚠️ **잔재**: `6515bfc2` 에 워커 행 `6eacb96d` + 모델 계정 2개. CLI 토큰으로 DELETE 하니 401 —
+그 계정 PWA 에서 지우는 게 맞다(§Ⅳ).
+
+**② 내 프로브가 prod 워커를 멈출 뻔했다 — 스토어가 공유다.** 셸의 opencode **1.17.3** 으로
+프로브를 돌렸는데, 스토어는 `~/.local/share/opencode/` **하나**고 그게 워커 데몬의 스토어다.
+워커(**1.15.12**)가 올라오자 `NOT NULL constraint failed: session_message.seq` —
+`opencode.py` 가 이미 적어 둔 바로 그 시그니처다. plist PATH 로 워커를 **1.17.3** 에 맞춰 풀었다
+(스토어가 이미 그 스키마고, #1014 측정도 1.17.3 기준). **증상만 없앤 것** ⇒ 이슈 **#1016**.
+
+> 🧭 **`launchctl kickstart -k` 는 plist 를 다시 읽지 않는다.** PATH 를 고치고 kickstart 만 하면
+> 프로세스는 **옛 PATH** 로 뜬다 — 그래서 1.15.12 가 올라왔다. plist 변경은 `bootout` + `bootstrap`.
 
 ## §Ⅳ — 형님 손에 있는 것
 
-1. **🆕 opencode 워커를 올릴 것인가** — 올리면 워커 plist PATH 에 `~/.opencode/bin` 추가
-   (+ `opencode serve` 데몬이 상시 뜬다). 안 올리면 #1014 는 **잠복 능력**으로 남는다
-2. Supabase Authentication → Users 의 미확인 테스트 계정 `qazasa123+confirm@gmail.com` 삭제(잔재)
-3. **#935 시크릿 로테이션** — #957(KMS key-id)이 선행
-4. **#937 잔여** — 재부팅 cold-boot 테스트(sudo)
-5. 이월: **#1003** 텔레그램 그룹방 승인 모델 결정 · Notion 아카이브(09-16~09-19)
+1. **🆕 opencode agentic 런 1회** — 라우팅 룰 생성이 자동승인에서 막혔다(전 런에 영향).
+   PWA 에서 `executor/opencode` 로 가는 런을 한 번 돌리면 체크리스트 §배포 후 가 닫힌다.
+   **최소 런 권장**: 파일·커밋 금지, BSVibe 툴로 파일 하나만 읽고 한 문장 보고
+   (= MCP 표면이 장식이 아니라 실제로 쓰인다는 증거)
+2. **🆕 잔재 정리** — 워크스페이스 `6515bfc2` 의 워커 행 `6eacb96d` + 모델 계정 2개(§Ⅲ①).
+   그 계정으로 로그인해 PWA Settings → Workers 에서 revoke
+3. **🆕 #1016** — 워커 opencode 스토어를 BSVibe 소유로 가를지(지금은 형님 대화형 opencode 와 공유)
+4. Supabase Authentication → Users 의 미확인 테스트 계정 `qazasa123+confirm@gmail.com` 삭제(잔재)
+5. **#935 시크릿 로테이션** — #957(KMS key-id)이 선행
+6. **#937 잔여** — 재부팅 cold-boot 테스트(sudo)
+7. 이월: **#1003** 텔레그램 그룹방 승인 모델 결정 · Notion 아카이브(09-16~09-19)
 
 ## §Ⅴ — 다음 세션 시작점
 
@@ -89,8 +116,10 @@
 2. **codex 는 제품 결정이 먼저다** — `view_image` 가 남는 것을 계약이 받아들일지.
    **플래그를 더 찾는 문제가 아니다**(74개 다 껐다). 받아들이면 #1014 와 같은 모양으로 배선하면 된다
    (단 codex 는 헤더가 아니라 **env var** 로 베어러를 받는다 — 어댑터에 codex 전용 모양 필요)
-3. opencode 워커가 올라오면 **체크리스트 §배포 후 6칸**을 걸어라. 그중 **음성 대조군**
+3. **체크리스트 §배포 후 6칸** — 워커는 올라왔고 런 하나만 남았다(§Ⅳ.1). 그중 **음성 대조군**
    (다음 런이 다른 서버 이름으로 등록되는가)이 이 설계의 핵심이다
+4. **#1016** 워커 opencode 스토어 분리 — 지금은 형님이 터미널에서 opencode 를 쓰기만 해도
+   워커가 멈출 수 있다(코드 변경도 배포도 필요 없이)
 
 ### 검증 안 된 것 (정직하게)
 
@@ -119,5 +148,13 @@
   "재등록한다"가 증명 안 된다
 * **📡 토큰 0 측정이 이제 기본 도구다.** 09-19 의 캡처 서버 수법이 이번엔 **사전 설계 검증**에
   그대로 재사용됐다(하네스가 스크래치패드에 남아 있었다). 프로바이더 `baseURL` 만 돌리면 된다
+* **🏢⭐⭐ 같은 호스트의 두 CLI 신원이 다른 워크스페이스를 가리킨다.** `bsvibe-worker register` 는
+  호스트 로그인 신원을 쓰고, MCP 는 다른 신원이다. **`register` 는 upsert 가 아니라 항상 새 행**이라
+  틀린 워크스페이스에 만들고 **로컬 토큰까지 덮는다**. kickstart 전에 `workers_list` 로 확인한 게
+  워커를 통째로 잃는 걸 막았다. ⇒ **신원을 쓰는 명령은 "어느 워크스페이스로 갔나"를 즉시 되재라**
+* **💾⭐⭐ 내 측정 도구가 피험자의 상태를 마이그레이트했다.** 프로브를 스크래치 디렉터리에서 돌려도
+  **SQLite 스토어는 공유**였다. 신버전이 스키마를 올리자 구버전 prod 데몬이 죽었다 — 그리고 그
+  실패 모드는 우리 코드가 **이미 주석으로 적어 둔 것**이었다. ⇒ **읽기 전용 프로브라도 "이게 쓰는
+  상태가 누구 것인지"를 먼저 물어라**(#1016)
 * **🧭 능력을 켜기 전에 "그걸 돌릴 놈이 있나"를 세라.** 배선을 다 끝내고서야 **온라인 워커에
   opencode capability 가 없다**는 걸 봤다. 코드 리뷰로는 안 나온다 — `workers_list` 한 번이다
