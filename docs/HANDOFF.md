@@ -85,8 +85,10 @@
 `worker.token` 이 그 토큰으로 **덮였다**. kickstart 하기 **전에** `workers_list` 에 안 보이는 걸
 보고 백업에서 되돌렸다 — 그대로 재시작했으면 워커가 `5fa3494c` 를 **통째로 떠났다**.
 ⇒ 올바른 경로는 **MCP 액세스 토큰**으로 `POST /api/v1/workers/register`.
-⚠️ **잔재**: `6515bfc2` 에 워커 행 `6eacb96d` + 모델 계정 2개. CLI 토큰으로 DELETE 하니 401 —
-그 계정 PWA 에서 지우는 게 맞다(§Ⅳ).
+✅ **잔재는 정리했다**(같은 날): `6eacb96d` `is_active=false` + 그 워커의 모델 계정 2개 삭제 —
+`revoke_worker` 가 하는 것과 **같은 동작**을 prod DB 에 직접 넣었다. API 로 못 한 이유가 **#1017**.
+⚠️ 그때 `docker exec` 에 **`-i` 가 없어 heredoc 이 psql 에 안 들어갔고**, 출력도 에러도 없이
+**아무 일도 안 일어났다** — 사후 SELECT 로 잡았다. *조용한 성공처럼 보이는 건 성공이 아니다.*
 
 **② 내 프로브가 prod 워커를 멈출 뻔했다 — 스토어가 공유다.** 셸의 opencode **1.17.3** 으로
 프로브를 돌렸는데, 스토어는 `~/.local/share/opencode/` **하나**고 그게 워커 데몬의 스토어다.
@@ -107,9 +109,13 @@
    PWA 에서 `executor/opencode` 로 가는 런을 한 번 돌리면 체크리스트 §배포 후 가 닫힌다.
    **최소 런 권장**: 파일·커밋 금지, BSVibe 툴로 파일 하나만 읽고 한 문장 보고
    (= MCP 표면이 장식이 아니라 실제로 쓰인다는 증거)
-2. **🆕 잔재 정리** — 워크스페이스 `6515bfc2` 의 워커 행 `6eacb96d` + 모델 계정 2개(§Ⅲ①).
-   그 계정으로 로그인해 PWA Settings → Workers 에서 revoke
+2. ~~**🆕 잔재 정리**~~ — ✅ **완료**(2026-09-21). `6eacb96d` `is_active=false` + 모델 계정 2개 삭제.
+   API 로는 못 했다(**#1017**) — `revoke_worker` 와 **같은 동작**을 prod DB 에 직접 적용했다
 3. **🆕 #1016** — 워커 opencode 스토어를 BSVibe 소유로 가를지(지금은 형님 대화형 opencode 와 공유)
+4. **🆕🚨 #1017 — CLI 가 prod 에서 죽어 있다.** `bsvibe products list` 가 401.
+   발급자는 BSVibe-Auth(`iss=api.bsvibe.dev`)인데 API 는 **Supabase JWKS 로만** 검증한다.
+   PWA 는 멀쩡해서 안 보였다. **내가 만든 게 아니다** — 세션이 2일 20시간 만료 상태였고
+   `bsvibe refresh` 전에도 같은 발급자였다
 4. Supabase Authentication → Users 의 미확인 테스트 계정 `qazasa123+confirm@gmail.com` 삭제(잔재)
 5. **#935 시크릿 로테이션** — #957(KMS key-id)이 선행
 6. **#937 잔여** — 재부팅 cold-boot 테스트(sudo)
@@ -153,6 +159,11 @@
   "재등록한다"가 증명 안 된다
 * **📡 토큰 0 측정이 이제 기본 도구다.** 09-19 의 캡처 서버 수법이 이번엔 **사전 설계 검증**에
   그대로 재사용됐다(하네스가 스크래치패드에 남아 있었다). 프로바이더 `baseURL` 만 돌리면 된다
+* **🔑⭐⭐ 베어러 검증기가 둘인데 신뢰 루트가 다르면, 한쪽 성공이 다른 쪽을 보증하지 않는다.**
+  같은 토큰으로 `workers/register` 는 **성공**하고 `DELETE /workers/{id}` 는 **401** 이었다.
+  처음엔 만료로 오진했는데(refresh 하니 register 가 통과해서 더 그럴듯했다), 진짜 이유는
+  **JWKS 신뢰 루트**였다. ⇒ 401 을 만나면 **에러 본문을 끝까지 읽어라** — "invalid bearer" 와
+  "JWKS resolution failed" 는 다른 병이다(**#1017**)
 * **🏢⭐⭐ 같은 호스트의 두 CLI 신원이 다른 워크스페이스를 가리킨다.** `bsvibe-worker register` 는
   호스트 로그인 신원을 쓰고, MCP 는 다른 신원이다. **`register` 는 upsert 가 아니라 항상 새 행**이라
   틀린 워크스페이스에 만들고 **로컬 토큰까지 덮는다**. kickstart 전에 `workers_list` 로 확인한 게
