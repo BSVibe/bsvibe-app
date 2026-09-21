@@ -67,8 +67,20 @@
       → **#1019 로 고침.** 같은 런을 다시 쏘니(`dde232cf`) 태스크 3개 전부 **`failed`**,
       런도 **`failed`**, 사유가 그대로 적힌다:
       `opencode turn failed — APIError (HTTP 402): Upstream request failed: Insufficient account funds`
-- [ ] **모델이 실제로 우리 툴을 호출**하는 것까지 — **opencode 계정 잔액이 있어야 한다**(형님).
-      배선·박탈·격리·이름 규칙은 위에서 전부 증명됐고, 남은 건 모델이 한 번 도는 것뿐이다
+- [x] ⭐ **모델이 실제로 우리 툴을 호출했다 — 로컬 모델로, 공짜로**(런 `e96ff6d5`, 03:02).
+      형님 제안대로 ollama `qwen3-coder:30b` 를 워커 샌드박스 디렉터리 설정에 물렸다.
+      opencode 세션의 tool 파트가 증거다:
+
+      ```
+      TOOL bsvibee96ff6d58242_bsvibe_work_file_read | status: completed
+        output: {"result": "# bsvibe-app\n\nBSVibe AI agent OS — unified monorepo …"}
+      ```
+
+      **모델이 opencode 네이티브 `read` 가 아니라 우리 런 스코프 이름으로 불렀고**, opencode 가
+      그걸 **우리 서버에 실행**했고, prod `README.md` 내용이 돌아왔다. 계약의 마지막 칸이다.
+      ⚠️ **모델 품질 주의**: 툴 실행은 정확했는데 **마지막 답변 텍스트가 툴콜 JSON 을 그대로
+      에코**했다(프로즈가 아니라). 배선이 아니라 로컬 모델의 한계다 — 런은 `review_ready` 로
+      갔지만 내용은 쓸 만하지 않다
 - [ ] 워커 로그에 `opencode_run_mcp_registered` 가 그 런의 task_id 로 찍힌다
 - [ ] 백엔드 MCP 액세스 로그에 그 런의 토큰으로 `bsvibe_work_*` 호출이 찍힌다
       (= 표면이 장식이 아니라 **실제로 쓰인다**)
