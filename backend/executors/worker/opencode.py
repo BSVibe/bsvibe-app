@@ -174,6 +174,18 @@ class OpenCodeExecutor:
                 workspace_dir=workspace_dir,
             )
 
+        # A refused turn comes back **200** with the reason inside ``info.error`` and, in the
+        # live case, no parts at all. Read as text-only, that is an empty success: prod
+        # 2026-09-21 recorded three agentic tasks ``done`` with zero output and flipped the
+        # run to ``review_ready`` while the provider had answered
+        # ``Insufficient account funds`` every time. A turn the provider refused is a FAILED
+        # turn — surface the reason instead of a silent blank.
+        provider_error = _provider_error(resp)
+        if provider_error:
+            logger.error("opencode_provider_error", error=provider_error)
+            yield ExecutionChunk(done=True, error=provider_error)
+            return
+
         text = _extract_text(resp)
         if text:
             yield ExecutionChunk(delta=text)
@@ -649,6 +661,37 @@ def _opencode_extract_usage(resp: dict[str, Any]) -> tuple[int, int] | None:
     )
     completion = usage_int(tokens.get("output")) + usage_int(tokens.get("reasoning"))
     return prompt, completion
+
+
+def _provider_error(resp: dict[str, Any]) -> str | None:
+    """The turn's failure reason when opencode refused it, else ``None``.
+
+    The daemon answers **HTTP 200** and puts the failure in ``info.error``::
+
+        {"parts": [], "info": {"error": {"name": "APIError",
+            "data": {"message": "Upstream request failed: Insufficient account funds",
+                     "statusCode": 402, "isRetryable": false}}}}
+
+    So the HTTP status cannot be the signal, and neither can the text: there is none.
+    Only ``info.error`` distinguishes a refused turn from an agent that acted through its
+    tools and said nothing — which is why the check is exactly that key and nothing wider.
+    """
+    info = resp.get("info")
+    if not isinstance(info, dict):
+        return None
+    err = info.get("error")
+    if not err:
+        return None
+    if not isinstance(err, dict):
+        return f"opencode turn failed: {_truncate(str(err))}"
+    raw_data = err.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    message = data.get("message") or err.get("message") or ""
+    name = err.get("name") or "error"
+    status = data.get("statusCode")
+    suffix = f" (HTTP {status})" if status else ""
+    detail = f": {message}" if message else ""
+    return f"opencode turn failed — {name}{suffix}{_truncate(detail)}"
 
 
 def _extract_text(resp: dict[str, Any]) -> str:
