@@ -93,6 +93,7 @@ from ._builders import (
     build_trello_event,
 )
 from ._context import _build_context, _NoLlm
+from ._destination import effective_delivery_config
 from ._github import (
     GithubDeliveryDeps,
     build_github_workspace_provisioner,
@@ -250,8 +251,13 @@ class ConnectorDeliveryAdapter:
                 )
             )
         for binding in bindings:
+            # ONE name, read twice below — the builder shapes the event from it and
+            # the plugin context runs against it. Re-spelling the merge at either
+            # site is how the event ends up aimed at the binding's room while the
+            # plugin still runs against the account's (#1003).
+            delivery_config = effective_delivery_config(binding)
             try:
-                shaped = binding.builder(content, dict(binding.account.delivery_config))
+                shaped = binding.builder(content, dict(delivery_config))
             except ValueError as exc:
                 # A builder raises ValueError for a misconfigured delivery
                 # target (e.g. slack with no ``channel``, email with no ``to``)
@@ -285,7 +291,7 @@ class ConnectorDeliveryAdapter:
             credentials.update(shaped.extra_credentials)
             ctx = _build_context(
                 credentials=credentials,
-                config=dict(binding.account.delivery_config),
+                config=dict(delivery_config),
             )
             result = await self.dispatcher.dispatch(
                 workspace_id=workspace_id,
@@ -359,6 +365,7 @@ __all__ = [
     "_NoLlm",
     "_build_context",
     "_resolve_bindings",
+    "effective_delivery_config",
     "_split_summary",
     "_summary_only",
     "build_connector_delivery_adapter",

@@ -21,7 +21,8 @@ Two resolvers:
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import structlog
 from sqlalchemy import select
@@ -32,6 +33,7 @@ from backend.extensions.plugin.base import PluginMeta
 from backend.identity.workspaces_db import ProductRow, ResourceBindingRow
 
 from ._builders import OUTBOUND_EVENT_BUILDERS, OutboundEventBuilder
+from ._destination import _selection_by_account
 
 logger = structlog.get_logger(__name__)
 
@@ -41,6 +43,11 @@ class _Binding:
     account: ConnectorAccountRow
     plugin: PluginMeta
     builder: OutboundEventBuilder
+    #: The ``resource_bindings`` row's ``selection`` for THIS product × account —
+    #: see :func:`effective_delivery_config`. ``{}`` when the founder set none,
+    #: and ``{}`` when two bindings for the pair disagreed (ambiguity is dropped,
+    #: never guessed).
+    selection: dict[str, Any] = field(default_factory=dict)
 
 
 async def _resolve_bindings(
@@ -96,22 +103,30 @@ async def _resolve_bindings(
     # (a resource_bindings row). Only these are swept into deliverable delivery.
     # Scoped to THIS product's bindings. ``product_id is None`` yields an empty
     # set — no product, no targets — rather than every binding in the workspace.
-    bound_account_ids: set[uuid.UUID] = (
-        set(
-            (
+    #
+    # ``selection`` rides along — it is this pair's delivery override (#1003),
+    # see :func:`effective_delivery_config`. Selecting only the id is what kept
+    # a slot that prod had already filled from ever reaching the dispatch loop.
+    bound_rows: list[tuple[uuid.UUID, dict[str, Any]]] = (
+        [
+            (account_id, selection or {})
+            for account_id, selection in (
                 await session.execute(
-                    select(ResourceBindingRow.connector_account_id).where(
+                    select(
+                        ResourceBindingRow.connector_account_id,
+                        ResourceBindingRow.selection,
+                    ).where(
                         ResourceBindingRow.workspace_id == workspace_id,
                         ResourceBindingRow.product_id == product_id,
                     )
                 )
-            )
-            .scalars()
-            .all()
-        )
+            ).all()
+        ]
         if product_id is not None
-        else set()
+        else []
     )
+    bound_account_ids: set[uuid.UUID] = {account_id for account_id, _ in bound_rows}
+    selection_by_account = _selection_by_account(bound_rows, workspace_id=workspace_id)
     bindings: list[_Binding] = []
     for row in rows:
         if not row.delivery_config:
@@ -137,7 +152,14 @@ async def _resolve_bindings(
                 workspace_id=str(workspace_id),
             )
             continue
-        bindings.append(_Binding(account=row, plugin=plugin, builder=builder))
+        bindings.append(
+            _Binding(
+                account=row,
+                plugin=plugin,
+                builder=builder,
+                selection=selection_by_account.get(row.id, {}),
+            )
+        )
     return bindings
 
 

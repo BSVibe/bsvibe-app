@@ -114,7 +114,11 @@ async def _seed_verified_deliverable(session: AsyncSession, workspace_id: uuid.U
 
 
 async def _bind_delivery_target(
-    session: AsyncSession, *, workspace_id: uuid.UUID, account_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    selection: dict | None = None,
 ) -> None:
     """Add the EXPLICIT resource_binding that makes ``account_id`` a delivery
     target (FB3 — without it a delivery_config connector is not swept in).
@@ -147,6 +151,7 @@ async def _bind_delivery_target(
             product_id=product_id,
             connector_account_id=account_id,
             resource_id="r1",
+            selection=selection or {},
         )
     )
     await session.commit()
@@ -481,6 +486,7 @@ async def _seed_telegram_connector(
     session: AsyncSession,
     cipher: CredentialCipher,
     workspace_id: uuid.UUID,
+    selection: dict | None = None,
 ) -> None:
     account_id = uuid.uuid4()
     session.add(
@@ -495,7 +501,9 @@ async def _seed_telegram_connector(
         )
     )
     await session.commit()
-    await _bind_delivery_target(session, workspace_id=workspace_id, account_id=account_id)
+    await _bind_delivery_target(
+        session, workspace_id=workspace_id, account_id=account_id, selection=selection
+    )
 
 
 @respx.mock
@@ -924,3 +932,129 @@ async def test_telegram_re_drain_does_not_double_post(
 
     async with sf() as s:
         assert (await s.execute(select(DeliveryEventRow))).first() is None
+
+
+# ── #1003: the binding's own delivery target, proved at the wire ──────────────
+#
+# ``delivery_config`` belongs to the connector ACCOUNT, so two products bound to
+# one telegram bot shipped into the same chat; splitting them meant a second bot.
+# The per-binding slot (``resource_bindings.selection``) already existed and prod
+# had already filled it — the resolver just never loaded it.
+#
+# Two consumers read that config, and they are tested SEPARATELY here because one
+# merge without the other is the failure worth catching: the event would be
+# addressed to the new chat while the plugin still ran against the old config.
+# ``chat_id`` exercises the event builder; ``telegram_api_url`` is read by the
+# telegram plugin off ``ctx.config``, so the URL the request lands on is the
+# plugin-context call site speaking for itself.
+
+
+@respx.mock
+async def test_the_bindings_chat_id_is_where_the_message_lands(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """Account says 555, this product's binding says -100999. It goes to -100999."""
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{TELEGRAM_API}/bot123:bot-token/sendMessage").mock(
+        return_value=httpx.Response(
+            200, json={"ok": True, "result": {"message_id": 42, "chat": {"id": -100999}}}
+        )
+    )
+
+    async with sf() as s:
+        await _seed_telegram_connector(s, cipher, workspace_id, selection={"chat_id": "-100999"})
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    assert route.called
+    body = route.calls.last.request.content.decode()
+    assert '"chat_id": "-100999"' in body or '"chat_id":"-100999"' in body
+    # The account's own value must be GONE, not merely accompanied.
+    assert '"555"' not in body
+
+
+@respx.mock
+async def test_the_plugin_context_sees_the_bindings_config_too(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """The SECOND call site, isolated.
+
+    ``telegram_api_url`` never passes through the event builder — the plugin reads
+    it off ``ctx.config``. So the host the request actually lands on answers one
+    question and only one: did the merged config reach the plugin context? Merging
+    at the builder alone leaves this test red.
+    """
+    workspace_id = uuid.uuid4()
+    other_api = "https://telegram-binding.test"
+    account_route = respx.post(f"{TELEGRAM_API}/bot123:bot-token/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+    )
+    binding_route = respx.post(f"{other_api}/bot123:bot-token/sendMessage").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 2}})
+    )
+
+    async with sf() as s:
+        await _seed_telegram_connector(
+            s, cipher, workspace_id, selection={"telegram_api_url": other_api}
+        )
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    assert binding_route.called, "the plugin ran against the account's config, not the binding's"
+    assert not account_route.called
+
+
+@respx.mock
+async def test_a_binding_with_no_selection_still_lands_on_the_account_target(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> None:
+    """The control. ``selection`` is ``{}`` on almost every row, and an override
+    slot whose empty value moved the destination would break everyone at once."""
+    workspace_id = uuid.uuid4()
+    route = respx.post(f"{TELEGRAM_API}/bot123:bot-token/sendMessage").mock(
+        return_value=httpx.Response(
+            200, json={"ok": True, "result": {"message_id": 42, "chat": {"id": 555}}}
+        )
+    )
+
+    async with sf() as s:
+        await _seed_telegram_connector(s, cipher, workspace_id, selection={})
+        await _seed_verified_deliverable(s, workspace_id)
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf, plugins=list(registry.values()), cipher=cipher
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+
+    assert await worker.drain_once() == 1
+
+    assert route.called
+    body = route.calls.last.request.content.decode()
+    assert '"chat_id": "555"' in body or '"chat_id":"555"' in body
