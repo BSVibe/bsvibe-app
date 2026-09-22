@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.common.connector_redaction import public_binding_selection
 from backend.workflow.domain.verify_secrets import redact_secrets
 
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -211,6 +212,17 @@ class ResourceBindingResponse(BaseModel):
     output_mode: str
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("selection")
+    @classmethod
+    def _redact_selection(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """#1033 — ``selection`` 은 ``delivery_config`` 오버라이드라 같은 키 공간이다.
+
+        list / create / patch **세 라우트**가 전부 이 모델을 거치므로 여기 한 곳이
+        REST 표면 전부를 덮는다. 라우트마다 깎으면 그게 미러가 되고, 이 레포는
+        그 미러가 어긋나 **응답에 라이브 크리덴셜**을 낸 전력이 있다.
+        """
+        return public_binding_selection(value)
 
 
 # --- Product files -----------------------------------------------------------

@@ -29,12 +29,31 @@ from typing import Any
 #: 서명을 계속 검증할 수 있다.
 SECRET_DELIVERY_KEYS = frozenset({"webhook_secret", "signing_secret", "client_secret"})
 
-__all__ = ["SECRET_DELIVERY_KEYS", "public_delivery_config", "token_hint"]
+__all__ = [
+    "SECRET_DELIVERY_KEYS",
+    "public_binding_selection",
+    "public_delivery_config",
+    "token_hint",
+]
 
 
 def public_delivery_config(cfg: dict[str, Any]) -> dict[str, Any]:
     """A copy of ``cfg`` with secret-bearing keys dropped (response-side only)."""
     return {k: v for k, v in cfg.items() if k not in SECRET_DELIVERY_KEYS}
+
+
+#: ``resource_bindings.selection`` 에 쓰는 같은 리댁터 (#1033).
+#:
+#: #1032 가 ``selection`` 을 ``delivery_config`` **오버라이드**로 만들었다 —
+#: ``effective_delivery_config`` 가 ``{**account.delivery_config, **binding.selection}``
+#: 로 병합한다. 그 순간 둘은 **같은 키 공간**이 됐는데 리댁션은 한쪽에만 있었다:
+#: ``delivery_config`` 에 넣으면 가려지는 키가 ``selection`` 에서는 그대로 나갔고,
+#: #1032 이후로는 그 키가 **실제로 배송 설정으로 동작**한다.
+#:
+#: **별칭이지 두 번째 구현이 아니다.** 같은 본문을 한 번 더 쓰는 것이 이 모듈의
+#: 독스트링이 적어 둔 바로 그 사고다 — *"미러라서 한 번 어긋났고, 어긋난 결과가
+#: 응답에 라이브 크리덴셜 노출이었다."* 별칭은 **어긋날 수가 없다.**
+public_binding_selection = public_delivery_config
 
 
 def token_hint(webhook_token: str) -> str:
