@@ -42,6 +42,7 @@ from backend.extensions.plugin.bootstrap import discover_webhook_parsers
 from backend.identity.oauth_keys import ensure_signing_key_is_shareable
 from backend.mcp.lifespan import mcp_lifespan
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.shared.core.access_log import install_access_log_redaction
 from backend.shared.core.http import redact_url_password
 from backend.shared.core.logging import configure_logging
 from plugin.audit import register_audit_subscriber
@@ -59,6 +60,11 @@ def create_app() -> FastAPI:
         pem=settings.oauth_private_key_pem, environment=settings.environment
     )
     configure_logging(level="INFO", service_name="bsvibe-app")
+    # #1027 — some URLs legitimately carry a credential (the SSE stream's
+    # ``?token=``, which EventSource cannot send as a header). uvicorn's access
+    # logger would otherwise write it verbatim, and it did: a still-valid
+    # session JWT sat in an unbounded ``json-file`` log in production.
+    install_access_log_redaction()
     register_audit_subscriber()
     # Lift Q3 / R2c — populate the process-wide WebhookParserRegistry so the
     # public webhook ingress (``/api/webhooks/{connector}/{token}``) can
