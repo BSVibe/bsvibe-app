@@ -108,8 +108,9 @@ async def _resolve_bindings(
     # see :func:`effective_delivery_config`. Selecting only the id is what kept
     # a slot that prod had already filled from ever reaching the dispatch loop.
     bound_rows: list[tuple[uuid.UUID, dict[str, Any]]] = (
-        list(
-            (
+        [
+            (account_id, selection or {})
+            for account_id, selection in (
                 await session.execute(
                     select(
                         ResourceBindingRow.connector_account_id,
@@ -120,7 +121,7 @@ async def _resolve_bindings(
                     )
                 )
             ).all()
-        )
+        ]
         if product_id is not None
         else []
     )
