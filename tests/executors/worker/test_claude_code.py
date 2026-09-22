@@ -820,3 +820,98 @@ async def test_no_executor_shape_inherits_the_host_auto_memory(
         calls = _patch_subprocess(monkeypatch, proc)
         await _drain(ClaudeCodeExecutor().execute("p", ctx))
         assert _auto_memory_off(calls[0]), ctx
+
+
+# ── the claude.ai-connector notice: a warning about a decision we already made ──
+#
+# #970 filed this as "정체 미상" — every worker invocation printed, on stderr:
+#
+#   ⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth
+#     source is set and takes precedence over your claude.ai login · Unset it to
+#     load your organization's connectors
+#
+# The trigger is the FACT of ``ANTHROPIC_AUTH_TOKEN`` being set, not its value —
+# the worker injects it deliberately (:func:`_subprocess_env_with_bearer`), because
+# a launchd-spawned claude cannot read the Keychain. So the notice describes the
+# worker working as designed, and it told two separate investigations that the auth
+# path had gone somewhere unintended.
+#
+# The issue's remaining item was "끌 수 있는지 확인. 못 끄면 정상 동작으로 문서화".
+# It CAN be turned off. Read out of the CLI bundle (2.1.268), the notice is set in
+# the ``api_key_precedence`` branch — and an EARLIER return skips that branch
+# entirely when either ``disableClaudeAiConnectors`` (setting) or
+# ``ENABLE_CLAUDEAI_MCP_SERVERS`` (env) says so. Measured against the real CLI with
+# the worker's own chat flags and a dummy token, each knob flipped BOTH ways:
+#
+#   (no knob)                            → warning            ← positive control
+#   --settings disableClaudeAiConnectors=true  → SILENT
+#   --settings disableClaudeAiConnectors=false → warning       ← control
+#   ENABLE_CLAUDEAI_MCP_SERVERS=0 / =false     → SILENT
+#   ENABLE_CLAUDEAI_MCP_SERVERS=1              → warning       ← control
+#
+# The setting is chosen over the env var because the worker already owns a
+# ``--settings`` blob and the CLI's env is the operator's blast radius.
+#
+# ⚠️ The knob had to be proved harmless to the thing that matters here: BSVibe's own
+# MCP tools. Measured on the real streaming path with a scratch stdio MCP server,
+# with and without the knob, ``system/init`` was identical both times —
+# ``mcp_servers: [{name, status: "connected"}]`` and the server's tool present. That
+# is what the code says too: in the worker's situation the connector lookup ALREADY
+# returned "no connectors"; the knob only changes which early return gets there, and
+# claude.ai connectors are a different namespace from ``--mcp-config`` servers.
+
+
+def _connectors_notice_off(argv: list[str]) -> bool:
+    """True when this invocation suppresses the claude.ai-connector notice."""
+    if "--settings" not in argv:
+        return False
+    return json.loads(argv[argv.index("--settings") + 1]).get("disableClaudeAiConnectors") is True
+
+
+async def test_chat_turn_silences_the_claude_ai_connector_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(ClaudeCodeExecutor().execute("p", {"system": "ctx", "agentic": False}))
+
+    assert _connectors_notice_off(calls[0])
+
+
+async def test_mcp_agent_turn_silences_the_claude_ai_connector_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+    calls = _patch_subprocess(monkeypatch, proc)
+
+    await _drain(ClaudeCodeExecutor().execute("p", _agent_ctx(system="ctx")))
+
+    assert _connectors_notice_off(calls[0])
+
+
+async def test_no_executor_shape_carries_the_connector_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both shapes, asserted together — the two branches build ``--settings``
+    through one constant today, and a test per call site is what keeps a future
+    branch from quietly opting out of it."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+
+    for ctx in ({"system": "ctx", "agentic": False}, _agent_ctx(system="ctx")):
+        calls = _patch_subprocess(monkeypatch, proc)
+        await _drain(ClaudeCodeExecutor().execute("p", ctx))
+        assert _connectors_notice_off(calls[0]), ctx
+
+
+async def test_the_settings_blob_still_carries_auto_memory_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A control for the change that adds the key above: ``--settings`` is ONE blob,
+    so writing a second key into it is exactly how the first one gets dropped."""
+    proc = _FakeProcess(stdout_lines=[_assistant_line("x")])
+
+    for ctx in ({"system": "ctx", "agentic": False}, _agent_ctx(system="ctx")):
+        calls = _patch_subprocess(monkeypatch, proc)
+        await _drain(ClaudeCodeExecutor().execute("p", ctx))
+        assert _auto_memory_off(calls[0]), ctx
