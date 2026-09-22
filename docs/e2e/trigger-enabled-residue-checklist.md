@@ -33,13 +33,12 @@
 - [x] **배포된 백엔드가 광고하는 메뉴**에 죽은 키가 없다 — 컨테이너 안에서
       `build_registry().list_tools()` 를 실제로 읽었다(소스 grep 아님).
       `trigger` 스키마가 `additionalProperties: false`
-- [ ] 🚫 **PWA 는 못 쟀다.** Vercel Production 배포는 `92392bd` 로 success
-      (08:58:15Z)지만, 번들에서 `Trigger on` 이 사라졌는지는 **확인 못 했다**:
-      로그인 페이지가 부르는 청크 11개를 받아 뒤졌더니 죽은 문자열 0건인데
-      **양성 대조군 `Output mode` 도 0건**이었다 ⇒ 그 표면이 애초에 이 청크에
-      없다. **0 이 부재의 증거가 아니다.** 제품 상세는 인증 뒤라 열려면
-      SSO 가 붙은 Playwright(스킬 `playwright-sso-auth-e2e`)가 필요하다.
-      간접 증거만 있다: 그 트리에서 `tsc` · `vitest`(802) · `next build` 통과
+- [x] **PWA — 형님이 직접 확인했다 (2026-09-22).** `/products/bsvibe` 의 커넥터 바인딩
+      2행 모두 `Trigger on` 체크박스 **없음**, `전송 모드` 셀렉트만 남았다.
+      🚫 **내 번들 프로브는 무효였다** — 죽은 문자열 0건인데 **양성 대조군 `Output mode` 도
+      0건**이라 그 표면이 애초에 로그인 페이지 청크에 없었다. 0 이 부재의 증거가 아니다.
+      자동화하려면 SSO 붙은 Playwright 가 필요하다(스킬 `playwright-sso-auth-e2e`)
+      🆕 이 확인에서 **#1042**(세 탭 디자인 개선)가 나왔다
 
 ## C. 안 건드린 것 (의도)
 
