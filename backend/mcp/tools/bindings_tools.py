@@ -22,6 +22,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import select
 
+from backend.common.connector_redaction import public_binding_selection
 from backend.connectors.db import ConnectorAccountRow
 from backend.identity.domain.repositories.resource_binding_repository import OUTPUT_MODES
 from backend.identity.infrastructure.repositories import (
@@ -46,7 +47,8 @@ def _row_to_dict(row: ResourceBindingRow) -> dict[str, Any]:
         "product_id": str(row.product_id),
         "connector_account_id": str(row.connector_account_id),
         "resource_id": row.resource_id,
-        "selection": row.selection,
+        # #1033 — selection 은 delivery_config 의 오버라이드라 같은 키 공간이다.
+        "selection": public_binding_selection(row.selection or {}),
         "trigger": row.trigger,
         "output_mode": row.output_mode,
         "created_at": row.created_at.isoformat() if row.created_at else None,

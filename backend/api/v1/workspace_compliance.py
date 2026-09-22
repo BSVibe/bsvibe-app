@@ -40,6 +40,7 @@ from backend.api.v1._identity_deps import (
     get_workspace_repository,
 )
 from backend.api.v1.inside import build_inside_index, build_inside_storage
+from backend.common.connector_redaction import public_binding_selection
 from backend.config import get_settings
 from backend.identity.db import UserRow
 from backend.identity.domain.repositories import (
@@ -204,6 +205,25 @@ def _processing_record(workspace: WorkspaceRow) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _binding_export_row(b: Any) -> dict[str, Any]:
+    """Art.15/20 export 한 줄.
+
+    🚨 ``selection`` 은 **리댁트하고 나간다** (#1033). #1032 가 그것을
+    ``delivery_config`` 오버라이드로 만들면서 둘이 같은 키 공간이 됐는데, 리댁션은
+    ``delivery_config`` 쪽에만 있었다 — 시크릿이 **정보주체 내보내기 문서**에 실려
+    나가는 경로였다. 세 노출 경로 중 여기가 제일 나쁘다.
+    """
+    return {
+        "id": str(b.id),
+        "product_id": str(b.product_id),
+        "connector_account_id": str(b.connector_account_id),
+        "resource_id": b.resource_id,
+        "selection": public_binding_selection(b.selection or {}),
+        "trigger": b.trigger,
+        "output_mode": b.output_mode,
+    }
+
+
 async def _build_export(
     session: AsyncSession,
     *,
@@ -351,18 +371,7 @@ async def _build_export(
             }
             for pr in product_resources
         ],
-        "resource_bindings": [
-            {
-                "id": str(b.id),
-                "product_id": str(b.product_id),
-                "connector_account_id": str(b.connector_account_id),
-                "resource_id": b.resource_id,
-                "selection": b.selection,
-                "trigger": b.trigger,
-                "output_mode": b.output_mode,
-            }
-            for b in bindings
-        ],
+        "resource_bindings": [_binding_export_row(b) for b in bindings],
         "requests": [
             {
                 "id": str(r.id),
