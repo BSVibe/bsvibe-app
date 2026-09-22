@@ -200,14 +200,36 @@
       새 키 제거 → 새 테스트 3건만 · `autoMemoryEnabled` 제거 → auto-memory 4건 ·
       agentic 호출 지점에서 blob 제거 → **그 분기의 5건**(호출 지점별로 따로 잡힌다)
 
-### 배포 후 — 걸 것
+### 배포 후 — 실측 (prod `ac05dd7`, 2026-09-22)
 
-- [ ] 워커 kickstart → **프로세스 시작 시각**으로 새 코드 확인
-- [ ] 배포된 코드가 만드는 **실제 argv** 를 찍어(`_build_cmd_args`) 그 argv 의
-      `--settings` 에 `disableClaudeAiConnectors` 가 들어 있는지 본다
-- [ ] 그 **argv 그대로** CLI 를 한 번 돌려 stderr 에 경고가 **없음**을 확인하고,
-      같은 argv 에서 **그 키만 뺀** 쌍을 돌려 경고가 **돌아오는지** 확인한다
-      (⚠️ 없음만 재면 내가 뭘 껐는지 증명 못 한다)
-- [ ] 🚨 **실제 agentic 런을 하나 완주**시킨다 — `system/init` 이 `connected` 이고
-      BSVibe 툴이 도착하는지. 로컬 실측이 덮지만 **prod 의 원격 MCP 서버**는 다른 조건이다
-- [ ] chat 턴도 하나 — 두 분기가 각각 배선돼 있다
+- [x] 워커 kickstart → **프로세스 시작 시각 11:47:47** (둘 다). 배포 디렉터리
+      `Works/bsvibe-app/main` 을 먼저 `pull` 했다 — 두 plist 의 `WorkingDirectory` 가 거기다
+- [x] 배포된 코드가 만드는 **실제 argv** 를 찍었다(`_build_cmd`, 메서드 이름이
+      `_build_cmd_args` 가 아니다). **두 분기 모두** 동일:
+      `{"autoMemoryEnabled": false, "disableClaudeAiConnectors": true}`
+- [x] 그 **argv 그대로** 돌린 쌍 — 없음만 재면 내가 뭘 껐는지 증명이 안 되므로 쌍으로 걸었다
+
+      | 잰 것 | stderr |
+      |---|---|
+      | **배포된 argv 그대로** | 경고 **없음** |
+      | 같은 argv, **그 키만 제거** | ⚠️ **경고 복귀** |
+
+- [x] 🚨 **실제 agentic 런 완주** — run `faa6b80c`, 워커 로그
+      `task_claimed 02:49:43` → `executor_turn_first_event elapsed_s=0.934`
+      → `task_completed success=true 02:49:55` (**11.8초**).
+
+      ⭐ **완주만으로는 툴 도착의 증거가 아니다.** 그래서 런의 과제를
+      *"`bsvibe_work_file_read` 로 `docs/HANDOFF.md` 의 첫 줄을 읽고 그대로 인용하라,
+      못 읽었으면 지어내지 말고 못 읽었다고 적어라"* 로 잡았다. 산출물이
+      **`# BSVibe 세션 인수인계 — 2026-09-21 (오후)`** 를 그대로 인용했다 — 그 문자열은
+      **원격 MCP 툴이 실제로 도착해 동작해야만** 나온다. 이게 로컬 stdio 프로브가
+      못 덮던 유일한 조건(**prod 의 원격 MCP 서버**)이다
+- [x] chat 턴 — 배포된 chat argv 로 위의 쌍을 걸었다(그 쌍이 chat 분기다)
+
+> 📌 **부수 발견 — 재부팅하면 #991 이 되살아난다.**
+> `~/Library/LaunchAgents/com.bsvibe.worker.plist` 가 **파일로 남아 있고 `RunAtLoad = true`**
+> 다. 지금은 로드돼 있지 않지만(`Could not find service … com.bsvibe.worker`),
+> LaunchAgents 는 **로그인 시 자동 부트스트랩**되므로 다음 재부팅에 **세 번째 데몬이
+> 돌아온다** — #991 이 내린 바로 그것이다. 옆에 `com.bsvibe.worker.plist.bak` 이 이미
+> 있으므로 같은 방식으로 비활성화하면 된다. **형님 머신의 launchd 구성이라 안 건드렸다.**
+> #937 의 **재부팅 cold-boot 테스트**가 아직 안 걸려서 이게 안 보이고 있었다.
