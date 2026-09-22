@@ -226,10 +226,12 @@
       못 덮던 유일한 조건(**prod 의 원격 MCP 서버**)이다
 - [x] chat 턴 — 배포된 chat argv 로 위의 쌍을 걸었다(그 쌍이 chat 분기다)
 
-> 📌 **부수 발견 — 재부팅하면 #991 이 되살아난다.**
-> `~/Library/LaunchAgents/com.bsvibe.worker.plist` 가 **파일로 남아 있고 `RunAtLoad = true`**
-> 다. 지금은 로드돼 있지 않지만(`Could not find service … com.bsvibe.worker`),
-> LaunchAgents 는 **로그인 시 자동 부트스트랩**되므로 다음 재부팅에 **세 번째 데몬이
-> 돌아온다** — #991 이 내린 바로 그것이다. 옆에 `com.bsvibe.worker.plist.bak` 이 이미
-> 있으므로 같은 방식으로 비활성화하면 된다. **형님 머신의 launchd 구성이라 안 건드렸다.**
-> #937 의 **재부팅 cold-boot 테스트**가 아직 안 걸려서 이게 안 보이고 있었다.
+> 📌 ~~**부수 발견 — 재부팅하면 #991 이 되살아난다.**~~ 🚨 **이 부수 발견은 틀렸다
+> (2026-09-22 정정).** `~/Library/LaunchAgents/com.bsvibe.worker.plist` 가 `RunAtLoad = true`
+> 인 건 맞지만, `launchctl print-disabled gui/501` 에 **이미 `disabled`** 였다 — 그 오버라이드는
+> 재부팅을 넘어 유지되므로 **되살아나지 않았다.**
+>
+> 나는 ① plist 존재 ② 현재 로드 여부만 보고 ③ **disabled 오버라이드를 안 봤다.**
+> `launchctl` 의 그 셋은 **서로 독립**이다. **부재를 주장할 땐 층을 전부 세라.**
+> (파일 자체는 형님 지시로 `~/backups/launchagents-2026-09-22/` 로 옮겼다 — 오진의
+> 원인이었고 `launchctl enable` 한 번이면 되살아나는 상태였기 때문이지, 급해서가 아니다.)

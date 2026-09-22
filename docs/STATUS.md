@@ -675,7 +675,9 @@ HEAD `7633822`.
   compose.prod.yaml --env-file .env.prod -p bsvibe-prod up -d --build
   --force-recreate backend worker`. Postgres + Redis 는 stateful 이라 rebuild
   안 함. PWA prod 는 Vercel auto-deploy.
-- **`com.bsvibe.worker` launchd** loaded on Mac Mini
+- ~~**`com.bsvibe.worker` launchd** loaded on Mac Mini~~ → **#991(2026-09-18)로 내렸고
+  plist 는 2026-09-22 에 치웠다.** 지금 도는 건 `com.bsvibe.worker-{admin,mac-mini-e2e}` 둘이다.
+  아래는 그때의 기록으로 남긴다
   (`~/Library/LaunchAgents/com.bsvibe.worker.plist`) — 함정: example plist 의
   `/Users/{USER}/.local/bin/uv` 경로가 이 호스트에 없어서 `/opt/homebrew/bin/uv`
   로 fix. PATH 에 `/opt/homebrew/bin` + nvm node bin 포함 (codex/opencode/
