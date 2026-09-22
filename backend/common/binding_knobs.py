@@ -28,11 +28,12 @@ class TriggerKnob(BaseModel):
     ``filters`` is a dict of key-equality checks the Receive stage applies to
     the inbound payload; an empty dict acts on everything. No other key is
     accepted (``extra="forbid"``).
-
-    ⚠️ **이 독스트링은 MCP 의 와이어 스키마 설명이 된다** — 에이전트가 읽는
-    메뉴다. 폐기된 키의 내력은 위 모듈 독스트링에 적어라. 여기에 적으면
-    (거절한다고 적더라도) 그 이름이 메뉴로 되돌아간다.
     """
+
+    # ⚠️ 위 클래스 독스트링은 **MCP 의 와이어 스키마 설명이 된다** — 에이전트가
+    # 읽는 메뉴다. 폐기된 키의 내력도, 이 경고 같은 개발자용 메모도 거기 적지
+    # 마라(배포본에서 실측: 이 문장이 실제로 스키마에 실려 나갔다). 주석은
+    # 스키마에 안 실린다. 내력은 모듈 독스트링에.
 
     model_config = ConfigDict(extra="forbid")
 
