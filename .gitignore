@@ -64,4 +64,5 @@ logs/
 var/products/
 var/runs/
 var/bundles/
+var/test-logs/
 apps/pwa/package-lock.json

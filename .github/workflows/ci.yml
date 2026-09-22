@@ -99,6 +99,20 @@ jobs:
       - name: pytest (bsvibe_sdk)
         run: uv run pytest bsvibe_sdk/tests/ -v
 
+      # #950 / #967 — 애플리케이션 구조화 로그를 아티팩트로 올린다.
+      # 이게 없던 동안 CI 로그에는 `event=` 가 **한 줄도** 없었고, 그래서 #950 의
+      # 두 원인(워커가 보고를 안 했다 / 보고가 안 닿았다)을 가르는 신호를 셀 수가
+      # 없었다. 0 을 "안 일어났다"로 읽어 두 번 오진한 뒤에 붙인다.
+      # `if: always()` — 필요한 순간은 정확히 **실패했을 때**다.
+      - name: Upload structured logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-structlog
+          path: var/test-logs/
+          if-no-files-found: error
+          retention-days: 14
+
   pwa:
     runs-on: ubuntu-latest
     defaults:
