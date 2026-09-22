@@ -147,11 +147,14 @@ export interface ProductResourceCreate {
 export const OUTPUT_MODES = ["safe", "direct"] as const;
 export type OutputMode = (typeof OUTPUT_MODES)[number];
 
-/** The trigger knob — `{ enabled, filters }`. Mirrors the backend
- *  `TriggerKnob` schema 1:1 (extra=forbid). `enabled=false` is the safe
- *  default: a fresh binding doesn't auto-fire until the founder flips it on. */
+/** The trigger knob — `{ filters }`. Mirrors the backend `TriggerKnob`
+ *  (extra=forbid): key-equality filters the Receive stage checks, empty = act
+ *  on everything.
+ *
+ *  ⚠️ 이 인터페이스가 11일간 `enabled: boolean` 을 **필수**로 들고 있었다. 백엔드는
+ *  #924 에서 그 키를 지웠고 REST 는 그걸 보내는 요청을 422 로 거절하는데, 이쪽
+ *  주석은 여전히 "Mirrors … 1:1" 이라 적혀 있었다. 미러는 스스로 어긋난 걸 모른다. */
 export interface TriggerKnob {
-  enabled: boolean;
   filters: Record<string, unknown>;
 }
 

@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.common.binding_knobs import TriggerKnob
 from backend.common.connector_redaction import public_binding_selection
 from backend.workflow.domain.verify_secrets import redact_secrets
 
@@ -168,17 +169,9 @@ class ResourceResponse(BaseModel):
 # --- Resource bindings (per-Product × ConnectorAccount 3-knob binding) -------
 
 
-class TriggerKnob(BaseModel):
-    """The trigger knob — ``{"filters": dict}``.
-
-    ``extra="forbid"`` is load-bearing here: an older client still sending
-    ``enabled`` is REFUSED rather than silently storing a value nothing reads,
-    which is the state this field was removed from.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    filters: dict[str, Any] = Field(default_factory=dict)
+# ``TriggerKnob`` 는 :mod:`backend.common.binding_knobs` 가 소유한다 — REST 와 MCP
+# 가 **같은 클래스**를 써야 하기 때문이다. 여기 두면 MCP 가 사본을 들게 되고,
+# 이 레포는 그 사본이 어긋나 죽은 키를 prod 에 써 넣은 전력이 있다.
 
 
 class ResourceBindingCreate(BaseModel):

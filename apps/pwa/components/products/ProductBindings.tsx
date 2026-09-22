@@ -21,19 +21,20 @@ import { useEffect, useState } from "react";
 /**
  * "Connector bindings" — the per-Product × ConnectorAccount 3-knob binding
  * surface (Workflow §3). Each row shows the connector + the connector-side
- * `resource_id`, with two minimal controls for the two most-load-bearing
- * knobs:
+ * `resource_id`, with one control for the knob founders flip day-to-day:
  *
- *   - `trigger.enabled`  ← checkbox  (off by default — a binding doesn't
- *                                     auto-fire until the founder turns it on)
  *   - `output_mode`      ← select    (`safe` | `direct`; `safe` is the default
  *                                     for non-founder triggers, sending the
  *                                     Deliverable to the Safe Mode queue)
  *
- * `selection.filters` and the JSON-shaped `selection` knob aren't surfaced
- * yet — they are connector-shaped (no one UI fits them all) and B10a's
- * scope is to ship the binding + the two boolean/enum knobs founders flip
- * day-to-day. A future B10c surface can layer in the JSON-shape knobs.
+ * 2026-09-22 — 여기 `trigger.enabled` 체크박스가 하나 더 있었다. #924 가
+ * 백엔드에서 그 키를 지운 뒤로 그 컨트롤은 **없는 값을 읽어 항상 꺼짐으로
+ * 보이고**, 켜면 PATCH 가 REST 의 `extra="forbid"` 에 걸려 422 로 튕겨
+ * `changeError` 만 띄웠다. 죽은 노브를 되살리는 대신 컨트롤을 지웠다 —
+ * "반응하나"는 `trigger.filters` 가 이미 말하고, 그건 아직 UI 가 없다(B10c).
+ *
+ * `trigger.filters` 와 JSON 모양의 `selection` 노브는 아직 안 올렸다 — 커넥터마다
+ * 모양이 달라 한 UI 로 안 덮인다.
  *
  * The list/mutate clients (+ the connector list for the Add form's
  * dropdown) are injected so the surface is unit-testable against mocks
@@ -162,14 +163,6 @@ export default function ProductBindings({
     }
   }
 
-  async function toggleTrigger(row: ResourceBinding, next: boolean) {
-    await runRowMutation(row.id, () =>
-      updateBinding(productId, row.id, {
-        trigger: { enabled: next, filters: row.trigger.filters },
-      }),
-    );
-  }
-
   async function setOutputMode(row: ResourceBinding, next: OutputMode) {
     await runRowMutation(row.id, () => updateBinding(productId, row.id, { output_mode: next }));
   }
@@ -214,17 +207,6 @@ export default function ProductBindings({
                   {row.connector_account_id?.slice(0, 8) ?? ""}
                 </span>
               </div>
-
-              <label className="product-bindings__knob">
-                <input
-                  type="checkbox"
-                  checked={row.trigger.enabled}
-                  onChange={(e) => toggleTrigger(row, e.target.checked)}
-                  aria-label={t("triggerEnabled")}
-                  disabled={busyRow === row.id}
-                />
-                <span>{t("triggerEnabled")}</span>
-              </label>
 
               <label className="product-bindings__knob">
                 <span>{t("outputMode")}</span>
