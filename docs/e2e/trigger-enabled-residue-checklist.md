@@ -22,16 +22,24 @@
 - [x] CI 명령 **다섯 + PWA 넷** 전부 로컬 재현: ruff check · ruff format --check ·
       lint-imports · mypy backend/ · pytest(7122 passed) · biome · tsc · vitest · next build
 
-## B. 배포 후 (prod)
+## B. 배포 후 (prod `92392bd`, 컨테이너 재시작 2026-09-22 — 실측 완료)
 
-- [ ] 마이그레이션이 적용됐다 — `alembic_version` = `trigger_default_no_dead_key`
-- [ ] **DDL 기본값**: `information_schema.columns` 의 `resource_bindings.trigger` 기본값에
-      `enabled` 없음
-- [ ] **기존 3행**: `SELECT count(*) FROM resource_bindings WHERE trigger ? 'enabled'` → **0**.
-      ⚠️ 배포 전 값이 **3** 이었음을 같이 적어라 — 분모 없는 0 은 아무것도 말하지 않는다
-- [ ] **살아 있는 절반이 안 죽었다**: 같은 3행의 `trigger->'filters'` 가 그대로다(전부 `{}`)
-- [ ] prod MCP 서버가 광고하는 `bsvibe_bindings_create` 설명에 `enabled` 가 없다
-- [ ] PWA 제품 상세에 `Trigger on` 체크박스가 없고, `Output mode` 는 그대로 동작한다
+- [x] `alembic_version` = `trigger_default_no_dead_key`
+- [x] **DDL 기본값**: `'{"filters": {}}'::jsonb` — 배포 전에는
+      `'{"enabled": false, "filters": {}}'::jsonb` 였다
+- [x] **기존 행**: 죽은 키를 든 행 **3 / 3 → 0 / 3**. 분모를 같이 적는다 —
+      배포 전 기준선을 안 남겼으면 이 0 은 *"원래 없었다"* 와 구분이 안 된다
+- [x] **살아 있는 절반이 안 죽었다**: 세 행 전부 `{"filters": {}}`
+- [x] **배포된 백엔드가 광고하는 메뉴**에 죽은 키가 없다 — 컨테이너 안에서
+      `build_registry().list_tools()` 를 실제로 읽었다(소스 grep 아님).
+      `trigger` 스키마가 `additionalProperties: false`
+- [ ] 🚫 **PWA 는 못 쟀다.** Vercel Production 배포는 `92392bd` 로 success
+      (08:58:15Z)지만, 번들에서 `Trigger on` 이 사라졌는지는 **확인 못 했다**:
+      로그인 페이지가 부르는 청크 11개를 받아 뒤졌더니 죽은 문자열 0건인데
+      **양성 대조군 `Output mode` 도 0건**이었다 ⇒ 그 표면이 애초에 이 청크에
+      없다. **0 이 부재의 증거가 아니다.** 제품 상세는 인증 뒤라 열려면
+      SSO 가 붙은 Playwright(스킬 `playwright-sso-auth-e2e`)가 필요하다.
+      간접 증거만 있다: 그 트리에서 `tsc` · `vitest`(802) · `next build` 통과
 
 ## C. 안 건드린 것 (의도)
 
