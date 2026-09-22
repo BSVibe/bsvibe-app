@@ -43,13 +43,24 @@
 
 전체 스위트 **6432 passed** · import-linter 6/6 · ruff · mypy 깨끗.
 
-## 배포 후 — prod 실측
+## 배포 후 — prod 실측 ✅ (2026-09-22 10:35 KST)
 
-- [ ] 배포 확인: prod SHA + 컨테이너 재생성 시각
-- [ ] PWA 를 한 번 열고 액세스 로그에 `events/stream?token=***` 이 찍히는가
-      (**`ey` 로 시작하는 JWT 가 0건**이어야 한다)
-- [ ] `?limit=***` 처럼 **키는 남는지** 확인 — 디버깅 정보를 잃지 않았다는 양성 대조군
-- [ ] SSE 가 **여전히 붙는지**(리댁션은 로그만 건드리고 인증은 안 건드린다)
+> prod **`9fdb919`** · autodeploy `Done — deployed 9fdb919 10:35:43`
+
+- [x] 배포 확인: `/api/health` → `9fdb919`
+- [x] ⭐ **그 라우트를 직접 쳤다** — 유효한 세션이 필요 없다. 로그 줄만 보면 된다:
+      ```
+      $ curl ".../api/v1/events/stream?token=eyJmYWtl….PROBE1027.sig"   → 401
+      로그: GET /api/v1/events/stream?token=*** HTTP/1.1  401
+      추적 문자열 PROBE1027 이 로그에 남은 횟수: 0
+      ```
+      **추적 마커를 심어서 쟀다** — "안 보인다"가 아니라 "내가 보낸 그것이 없다"를 쟀다
+- [x] 🚨 **JWT 가 그대로 찍힌 줄: 0** (`token=ey`)
+- [x] ⭐ **그 0 이 의미 있다는 대조군**: 쿼리 달린 요청이 **실제로 흐르고 있다** —
+      `POST /api/v1/workers/poll?count=***`. *생산자가 꺼져 있으면 0 은 공짜다*
+      ([[absence-measurement-validity-check]])
+- [x] **키는 남는다** — `count=***` · `token=***`. 디버깅 정보를 안 잃었다
+- [x] 라우트가 **여전히 인증한다** — 프로브가 401 을 받았다(리댁션은 로그만 건드린다)
 
 ## 안 잰 것 / 별건
 
