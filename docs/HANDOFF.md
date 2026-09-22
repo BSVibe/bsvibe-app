@@ -6,7 +6,7 @@
 **프로세스 시작 시각**으로 확인.
 ⚠️ **plist 자체를 고쳤으면 kickstart 로는 안 먹는다** — `launchctl bootout gui/501/<label>` 후
 `launchctl bootstrap gui/501 ~/Library/LaunchAgents/<label>.plist`.
-⚠️ **`com.bsvibe.worker` 는 이제 없다**(#991). 다만 **plist 파일은 남아 있고 되살아난다** — §Ⅳ.1.
+⚠️ **`com.bsvibe.worker` 는 이제 없다**(#991). plist 파일도 2026-09-22 에 치웠다 — §Ⅳ.1.
 **열린 작업은 이 문서가 아니라 GitHub 이슈에 있다.** 열린 PR·워크트리는 `gh pr list` / `git worktree list`.
 
 > 🧭 **이 헤더에 전이적인 것을 적지 마라.** 자기 자신을 가리키는 필드는 이 문서를
@@ -175,17 +175,26 @@ prod 로그의 `executor_turn_first_event` **15/15** 가 `elapsed_s` **0.228~1.5
 
 > 🧭 **각 항목에 "내가 못 하는 이유"가 한 줄로 적혀 있다.** 못 쓰면 그건 내 일이다.
 
-1. **🚨 `~/Library/LaunchAgents/com.bsvibe.worker.plist` 를 치워 주십시오** — 파일이 남아 있고
-   **`RunAtLoad = true`** 다. 지금은 로드돼 있지 않지만(`Could not find service`) LaunchAgents 는
-   **로그인 시 자동 부트스트랩**되므로 **다음 재부팅에 #991 이 내린 세 번째 데몬이 돌아온다.**
-   옆에 `.bak` 이 이미 있으니 같은 방식이면 된다.
-   *못 하는 이유*: 형님 머신의 launchd 구성이라 임의로 안 건드렸다.
-   ⚠️ 이게 안 보이던 이유는 **#937 의 재부팅 cold-boot 테스트가 아직 안 걸려서**다
+1. ~~`com.bsvibe.worker.plist` 를 치워 주십시오~~ → **✅ 했다(형님 지시, 2026-09-22).**
+   `~/backups/launchagents-2026-09-22/` 로 옮겼다(복원 절차 README 포함).
+   살아 있는 워커 2대는 **PID 불변**으로 안 건드렸고, `disabled` 오버라이드는
+   **일부러 남겼다**(누가 plist 를 다시 넣어도 한 겹 더 막힌다).
+
+   🚨 **그런데 내가 댄 근거가 틀렸었다 — 이 정정을 지우지 마라.** 나는 이걸
+   *"재부팅하면 #991 이 되살아난다"* 로 **세 군데**(이 문서 · PR #1031 · 구두 보고)에
+   🚨 급함으로 적었는데, 치우기 직전에 재보니 `launchctl print-disabled gui/501` 에
+   **이미 `disabled`** 였다. 그 오버라이드는 `/var/db/com.apple.xpc.launchd/` 에 저장돼
+   **재부팅을 넘어 유지**된다 ⇒ `RunAtLoad=true` 여도 **애초에 안 올라왔다.**
+
+   **`launchctl` 은 서로 독립인 세 층이다** — ① plist 파일 존재 ② 현재 로드 여부
+   ③ `disabled` 오버라이드. 나는 ①②만 보고 ③을 안 봤다. **부재를 주장할 땐 층을
+   전부 세라**(`print-disabled` 를 빼먹으면 정확히 이 오진이 난다)
 2. **run-routing 규칙 / 바인딩 수정 권한** — 있으면 #1003 의 *"실제로 방을 나눠 보기"* 를 건다.
    *못 하는 이유*: prod 설정 쓰기라 권한 분류기가 막는다(정당). 우회하지 않았다
 3. **opencode 계정 잔액** — 충전하면 워커 설정의 `model` 줄만 지우고 재시작
 4. **Supabase Authentication → Users** 의 미확인 테스트 계정 `qazasa123+confirm@gmail.com` 삭제
-5. **#937 잔여** — 재부팅 cold-boot 테스트(sudo). **§Ⅳ.1 이 이걸 기다리고 있다**
+5. **#937 잔여** — 재부팅 cold-boot 테스트(sudo). ⚠️ ~~§Ⅳ.1 이 이걸 기다린다~~ — 그건
+   내 오진이었다(위). cold-boot 테스트는 **그것과 무관하게** 여전히 열려 있다
 6. **#935 시크릿 로테이션**의 최종 실행 — 코드(#957)는 에이전트 작업, 키 교체는 형님 손
 
 ## §Ⅴ — 다음 세션이 할 것
