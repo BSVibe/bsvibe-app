@@ -151,12 +151,12 @@ async def test_create_list_update_delete_round_trip(
             {
                 "binding_id": binding_id,
                 "output_mode": "direct",
-                "trigger": {"enabled": True, "filters": {"labels": ["bug"]}},
+                "trigger": {"filters": {"labels": ["bug"]}},
             },
             ctx,
         )
     assert updated["output_mode"] == "direct"
-    assert updated["trigger"]["enabled"] is True
+    assert updated["trigger"]["filters"] == {"labels": ["bug"]}
 
     # Delete
     async with db() as s:
@@ -309,3 +309,66 @@ async def test_delete_requires_write_scope(db, workspace_id, user_id, registry, 
             await registry.call_tool(
                 "bsvibe_bindings_delete", {"binding_id": str(uuid.uuid4())}, ctx
             )
+
+
+async def test_the_dead_trigger_knob_is_refused_at_the_dispatcher(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """``trigger.enabled`` 는 #924 에서 지워졌다 — MCP 도 REST 와 같이 거절한다.
+
+    이 테스트가 이전에는 **반대**를 단언했다(``updated["trigger"]["enabled"] is
+    True``). 그래서 REST 가 422 로 막는 키를 MCP 가 저장하는 상태가 초록으로
+    지켜지고 있었고, prod 의 09-18 바인딩이 그 문으로 들어왔다.
+
+    스키마 단위가 아니라 **디스패처**에서 잰다 — 에이전트가 실제로 닿는 홉이고,
+    ``call_tool`` 이 모델 검증을 건너뛰게 바뀌면 스키마 테스트는 초록인 채로
+    구멍이 열린다.
+    """
+    product_id, connector_account_id = seeded
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                scopes=("mcp:read", "mcp:write"),
+            ),
+            session=s,
+        )
+        created = await registry.call_tool(
+            "bsvibe_bindings_create",
+            {
+                "product_id": str(product_id),
+                "connector_account_id": str(connector_account_id),
+                "resource_id": "BSVibe/bsvibe-site",
+            },
+            ctx,
+        )
+    binding_id = created["id"]
+    # 생성 기본값부터 죽은 키가 없다.
+    assert created["trigger"] == {"filters": {}}
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                scopes=("mcp:read", "mcp:write"),
+            ),
+            session=s,
+        )
+        with pytest.raises(ToolError) as exc:
+            await registry.call_tool(
+                "bsvibe_bindings_update",
+                {"binding_id": binding_id, "trigger": {"enabled": True, "filters": {}}},
+                ctx,
+            )
+        assert "enabled" in str(exc.value)
+
+        # 대조군 — 살아 있는 절반은 같은 홉으로 통과한다.
+        ok = await registry.call_tool(
+            "bsvibe_bindings_update",
+            {"binding_id": binding_id, "trigger": {"filters": {"action": "opened"}}},
+            ctx,
+        )
+    assert ok["trigger"] == {"filters": {"action": "opened"}}

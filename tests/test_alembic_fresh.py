@@ -795,3 +795,54 @@ def test_run_cap_backfill_prices_everyone_but_the_operator():
     assert caps[operator_ws] is None, (
         f"the operator's workspace must come off the plan, got {caps[operator_ws]}"
     )
+
+
+def test_trigger_column_default_carries_no_dead_key():
+    """#924 의 나머지 절반 — **DB 가 들고 있던** 기본값.
+
+    ``trigger.enabled`` 는 2026-09-11 에 파이썬 쪽(ORM 기본값 +
+    ``_default_trigger()``)에서만 지워졌다. 컬럼의 ``server_default`` 는 옛 모양
+    그대로 남아, 컬럼을 빼고 INSERT 하는 경로가 하나만 생기면 Postgres 가 죽은
+    키를 다시 써 넣는 상태였다 — **아래 층이 위 층 대신 대답한다.**
+
+    소스 텍스트로는 이걸 못 잰다(마이그레이션 파일은 데이터베이스가 아니다).
+    여기서 재는 것은 ``upgrade head`` 뒤의 **실제 DDL** 이고, 양성 대조군으로
+    downgrade 한 옛 기본값이 되돌아오는 것까지 본다 — 안 그러면 이 검사는
+    한쪽 판정밖에 못 낸다.
+    """
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _column_default() -> str:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(
+                        text(
+                            "SELECT column_default FROM information_schema.columns "
+                            "WHERE table_name='resource_bindings' AND column_name='trigger'"
+                        )
+                    )
+                ).first()
+                assert row is not None, "resource_bindings.trigger is gone"
+                return str(row[0])
+        finally:
+            await engine.dispose()
+
+    live = asyncio.run(_column_default())
+    assert "enabled" not in live, f"the dead knob is still the DDL default: {live}"
+    assert "filters" in live, f"the live half of the knob lost its default: {live}"
+
+    # 양성 대조군 — 옛 기본값이 실제로 이 검사를 빨갛게 만든다.
+    _alembic(["downgrade", "task_claim_receipt"], env_extra=env_extra)
+    assert "enabled" in asyncio.run(_column_default()), (
+        "downgrade didn't restore the old default — this test cannot fail, "
+        "so its green says nothing"
+    )
+
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    assert "enabled" not in asyncio.run(_column_default())

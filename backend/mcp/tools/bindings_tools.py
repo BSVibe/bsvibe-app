@@ -12,6 +12,15 @@ workspace simply isn't there → ``ToolError`` (the MCP analogue of REST's
 
 Scopes follow the existing convention: ``mcp:read`` for list,
 ``mcp:write`` for create / update / delete.
+
+2026-09-22 — ``trigger`` 가 여기서만 ``dict[str, Any]`` 였다. 스스로는
+*"Mirror of ``ResourceBindingCreate`` … accepts it 1:1"* 이라 적어 두고서, REST 가
+``extra="forbid"`` 로 거절하는 ``trigger.enabled``(#924 가 지운 키)를 그대로
+저장했다. prod 의 09-18 바인딩이 삭제 **일주일 뒤에** 그 키를 들고 태어난 경로가
+이것이다 — PWA 는 ``trigger`` 를 안 보내고 REST 는 거절하므로 열려 있던 문은
+여기 하나뿐이었다. 게다가 툴 **설명**이 ``({enabled, filters})`` 를 계속 광고해서,
+메뉴를 믿은 에이전트가 죽은 키를 써 넣었다. 스키마와 설명은 **한 문**의 두 짝이다.
+
 """
 
 from __future__ import annotations
@@ -22,6 +31,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import select
 
+from backend.common.binding_knobs import TriggerKnob
 from backend.common.connector_redaction import public_binding_selection
 from backend.connectors.db import ConnectorAccountRow
 from backend.identity.domain.repositories.resource_binding_repository import OUTPUT_MODES
@@ -109,7 +119,11 @@ class BindingsCreateInput(BaseModel):
     """Mirror of :class:`ResourceBindingCreate` (the REST schema).
 
     The PWA's ``ProductBindings`` form posts the same field set; this tool
-    accepts it 1:1 plus the parent ``product_id`` (a path param in REST).
+    accepts it 1:1 plus the parent ``product_id`` (a path param in REST) —
+    ``trigger`` is the REST :class:`TriggerKnob` itself, not a copy of it.
+
+    ⚠️ 클래스 독스트링은 **와이어 스키마 설명**이다(에이전트가 읽는 메뉴).
+    폐기된 노브의 내력은 모듈 독스트링에 있다.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -118,7 +132,7 @@ class BindingsCreateInput(BaseModel):
     connector_account_id: uuid.UUID
     resource_id: str = Field(min_length=1, max_length=512)
     selection: dict[str, Any] = Field(default_factory=dict)
-    trigger: dict[str, Any] | None = None
+    trigger: TriggerKnob | None = None
     output_mode: str = "safe"
 
 
@@ -136,7 +150,7 @@ async def _h_create(args: BindingsCreateInput, ctx: ToolContext) -> Any:
         connector_account_id=args.connector_account_id,
         resource_id=args.resource_id,
         selection=args.selection,
-        trigger=args.trigger,
+        trigger=args.trigger.model_dump() if args.trigger is not None else None,
         output_mode=args.output_mode,
     )
     await ctx.session.commit()
@@ -154,7 +168,7 @@ class BindingsUpdateInput(BaseModel):
 
     binding_id: uuid.UUID
     selection: dict[str, Any] | None = None
-    trigger: dict[str, Any] | None = None
+    trigger: TriggerKnob | None = None
     output_mode: str | None = None
 
 
@@ -170,7 +184,7 @@ async def _h_update(args: BindingsUpdateInput, ctx: ToolContext) -> Any:
     await repo.update(
         row,
         selection=args.selection,
-        trigger=args.trigger,
+        trigger=args.trigger.model_dump() if args.trigger is not None else None,
         output_mode=args.output_mode,
     )
     await ctx.session.commit()
@@ -225,7 +239,8 @@ def register_bindings_tools(registry: ToolRegistry) -> None:
             description=(
                 "Bind a connector resource to a Product. Mirrors the PWA's "
                 "Add-binding form: selection (connector-shaped scope), trigger "
-                "({enabled, filters}), and output_mode ('safe' queues the "
+                "({filters} — key-equality filters the Receive stage checks; "
+                "empty acts on everything), and output_mode ('safe' queues the "
                 "deliverable for founder approval, 'direct' auto-delivers)."
             ),
             input_schema=BindingsCreateInput,

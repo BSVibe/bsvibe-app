@@ -2,14 +2,18 @@
  * ProductBindings — per-Product × ConnectorAccount 3-knob binding surface
  * (components/products/ProductBindings.tsx).
  *
- * Listing, the two minimal knob controls (`trigger.enabled` checkbox +
- * `output_mode` select), Add form, and Remove. All API clients (+ the
+ * Listing, the `output_mode` select, Add form, and Remove. All API clients (+ the
  * connector list for the Add dropdown) are injected so the surface is
  * unit-testable against mocks without monkey-patching the module — mirrors
  * ProductResources.
  *
  * Mock fixtures mirror the REAL backend response shape 1:1 (ResourceBinding
  * fields) to avoid e2e-mock-shape-drift.
+ *
+ * ⚠️ 2026-09-22 — 그 드리프트가 실제로 있었다. #924 가 `trigger.enabled` 를
+ * 지운 뒤에도 이 픽스처가 그 키를 **넣어 줬고**, 그래서 없는 값을 읽는 체크박스와
+ * REST 가 422 로 거절하는 PATCH 가 11일간 초록이었다. 픽스처는 프로덕션이
+ * **주는 것만** 줘야 한다 — 보류하는 것을 채워 주면 테스트가 실명한다.
  */
 
 import ProductBindings from "@/components/products/ProductBindings";
@@ -34,7 +38,7 @@ function binding(over: Partial<ResourceBinding> = {}): ResourceBinding {
     connector_account_id: CONNECTOR_ID,
     resource_id: "acme/blog",
     selection: {},
-    trigger: { enabled: false, filters: {} },
+    trigger: { filters: {} },
     output_mode: "safe",
     created_at: "2026-05-26T00:00:00Z",
     updated_at: "2026-05-26T00:00:00Z",
@@ -63,15 +67,15 @@ describe("ProductBindings", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the bindings heading and lists bindings with the two knob controls", async () => {
+  it("renders the bindings heading and lists bindings with the output-mode knob", async () => {
     const listBindings = vi.fn().mockResolvedValue([binding()]);
     render(<ProductBindings productId={PRODUCT_ID} listBindings={listBindings} />);
 
     const section = await screen.findByRole("region", { name: /Connector bindings/i });
     expect(within(section).getByText("acme/blog")).toBeInTheDocument();
-    // Trigger checkbox renders + reflects the default `enabled=false`.
-    const trigger = within(section).getByRole("checkbox", { name: /Trigger on/i });
-    expect(trigger).not.toBeChecked();
+    // The dead knob's control is gone — it read a key production stopped
+    // sending and wrote one REST refuses with a 422.
+    expect(within(section).queryByRole("checkbox")).toBeNull();
     // Output mode select reflects `safe`.
     const output = within(section).getByRole("combobox", { name: /Output/i });
     expect(output).toHaveValue("safe");
@@ -89,14 +93,13 @@ describe("ProductBindings", () => {
     expect(await screen.findByText(/Couldn.t load/i)).toBeInTheDocument();
   });
 
-  it("toggles trigger.enabled via PATCH and re-reads", async () => {
-    const listBindings = vi
-      .fn()
-      .mockResolvedValueOnce([binding({ trigger: { enabled: false, filters: {} } })])
-      .mockResolvedValueOnce([binding({ trigger: { enabled: true, filters: {} } })]);
+  it("never sends the dead trigger knob in any mutation", async () => {
+    // The guard that keeps the 422 from coming back. `output_mode` is the one
+    // knob this surface writes; whatever it sends must be a body REST accepts.
+    const listBindings = vi.fn().mockResolvedValue([binding()]);
     const updateBinding = vi
       .fn<(id: string, bid: string, p: ResourceBindingUpdate) => Promise<ResourceBinding>>()
-      .mockResolvedValue(binding({ trigger: { enabled: true, filters: {} } }));
+      .mockResolvedValue(binding({ output_mode: "direct" }));
 
     render(
       <ProductBindings
@@ -106,20 +109,13 @@ describe("ProductBindings", () => {
       />,
     );
 
-    const checkbox = await screen.findByRole("checkbox", { name: /Trigger on/i });
-    await userEvent.click(checkbox);
+    const select = await screen.findByRole("combobox", { name: /Output/i });
+    await userEvent.selectOptions(select, "direct");
 
-    await waitFor(() =>
-      expect(updateBinding).toHaveBeenCalledWith(
-        PRODUCT_ID,
-        "22222222-2222-2222-2222-222222222222",
-        expect.objectContaining({
-          trigger: expect.objectContaining({ enabled: true }),
-        }),
-      ),
-    );
-    // Re-read fired.
-    await waitFor(() => expect(listBindings).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(updateBinding).toHaveBeenCalled());
+    for (const call of updateBinding.mock.calls) {
+      expect(JSON.stringify(call[2])).not.toContain("enabled");
+    }
   });
 
   it("changes output_mode via PATCH and re-reads", async () => {

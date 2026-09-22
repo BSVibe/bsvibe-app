@@ -227,7 +227,6 @@
       "empty": "No connector bindings yet.",
       "addError": "Couldn’t add that binding. Please try again.",
       "changeError": "Couldn’t save that change. Please try again.",
-      "triggerEnabled": "Trigger on",
       "outputMode": "Output",
       "outputModes": {
         "safe": "Safe (queue for approval)",
