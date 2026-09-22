@@ -66,24 +66,36 @@ def test_each_extracted_helper_module_is_importable() -> None:
         importlib.import_module(mod)
 
 
-@pytest.mark.parametrize(
-    "rel_path",
-    [
-        "__init__.py",
-        "_builders.py",
-        "_resolver.py",
-        "_github.py",
-        "_merge_watch.py",
-        "_context.py",
-    ],
+_PKG_ROOT = (
+    Path(__file__).resolve().parents[2] / "backend/workflow/application/delivery/connector_dispatch"
 )
+
+
+def _package_files() -> list[str]:
+    """Every ``.py`` the package actually contains — NOT a list someone maintains.
+
+    This was a hardcoded list of six names, and by 2026-09-22 the package held
+    eight: ``_github_pr.py`` and ``_github_in_place.py`` were added and never
+    added here, so the cap they were supposed to be under was not being applied
+    to them at all. A guard enumerated by hand only ever covers the files whoever
+    wrote it happened to know about; enumerating the directory covers the ones
+    added after.
+    """
+    return sorted(p.name for p in _PKG_ROOT.glob("*.py"))
+
+
+def test_the_loc_cap_covers_every_file_in_the_package() -> None:
+    """The enumeration itself, guarded — an empty or one-item sweep would make
+    every ``test_each_decomposed_file_under_400_loc`` below pass by not running."""
+    names = _package_files()
+    assert "__init__.py" in names
+    assert len(names) >= 8, names
+
+
+@pytest.mark.parametrize("rel_path", _package_files())
 def test_each_decomposed_file_under_400_loc(rel_path: str) -> None:
     """Lift §17.7 cap: each file in the package ≤ 400 LOC."""
-    pkg_root = (
-        Path(__file__).resolve().parents[2]
-        / "backend/workflow/application/delivery/connector_dispatch"
-    )
-    path = pkg_root / rel_path
+    path = _PKG_ROOT / rel_path
     assert path.exists(), f"missing decomposed file: {path}"
     loc = sum(1 for _ in path.open())
     assert loc <= 400, f"{rel_path} is {loc} LOC (> 400 cap)"
