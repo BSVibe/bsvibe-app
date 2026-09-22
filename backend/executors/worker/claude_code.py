@@ -152,7 +152,30 @@ _STREAM_LIMIT = 16 * 1024 * 1024
 #: ``--settings`` still applies under ``--setting-sources ""`` (measured), and it leaves
 #: auth alone. ``--bare`` also closes it but answers "Not logged in" (rc=1): it accepts
 #: only ANTHROPIC_API_KEY / apiKeyHelper, and the worker is on the CLI-credential fallback.
-_NO_AUTO_MEMORY: tuple[str, ...] = ("--settings", json.dumps({"autoMemoryEnabled": False}))
+#:
+#: ``disableClaudeAiConnectors`` — #970. Every invocation printed, on stderr, that
+#: claude.ai connectors were disabled "because ANTHROPIC_API_KEY or another auth source
+#: is set". The worker sets ``ANTHROPIC_AUTH_TOKEN`` on purpose
+#: (:func:`_subprocess_env_with_bearer`), so the notice announced the design — and it
+#: cost two investigations time, each reading it as the auth path having gone somewhere
+#: unintended. Read out of the CLI bundle (2.1.268): the notice is set in the
+#: ``api_key_precedence`` branch, and this setting takes an EARLIER return that skips it.
+#: Measured against the real CLI with the worker's own flags, each knob flipped both
+#: ways (``=false`` keeps the warning, so the knob is what silenced it), and the
+#: streaming path's ``system/init`` was byte-identical with and without it —
+#: ``status: "connected"`` and the MCP server's tools present. It has to be: in the
+#: worker's situation the connector lookup already returned *no connectors*; this only
+#: chooses which early return gets there. claude.ai connectors are a different namespace
+#: from ``--mcp-config`` servers. The setting is preferred over the equivalent
+#: ``ENABLE_CLAUDEAI_MCP_SERVERS`` env var because we already own a ``--settings`` blob,
+#: and the CLI's env is the operator's blast radius.
+#:
+#: ⚠️ ONE blob, so both keys live here. Writing a second ``--settings`` elsewhere in an
+#: argv does not merge — it replaces.
+_FORCED_CLI_SETTINGS: tuple[str, ...] = (
+    "--settings",
+    json.dumps({"autoMemoryEnabled": False, "disableClaudeAiConnectors": True}),
+)
 
 #: A CHAT turn is a plain completion — the same thing a LiteLLM account does when
 #: the caller passes no tools. Getting there takes four flags, each learned against
@@ -176,7 +199,7 @@ _NO_AUTO_MEMORY: tuple[str, ...] = ("--settings", json.dumps({"autoMemoryEnabled
 #:   ``~/.claude/commands``, and starts fs watchers on ``~/.claude/settings.json`` and
 #:   ``settings.local.json`` (following the symlink to the operator's own settings)
 #: * managed settings (``/Library/Application Support/ClaudeCode/``) load regardless
-#: * the auto-memory store loads — see :data:`_NO_AUTO_MEMORY`, the one leak here we CAN
+#: * the auto-memory store loads — see :data:`_FORCED_CLI_SETTINGS`, the one leak here we CAN
 #:   close without breaking auth
 #:
 #: CONTENT isolation holds; FILESYSTEM REACH does not — and #965 lived in that gap. A
@@ -356,7 +379,7 @@ _CHAT_FLAGS: tuple[str, ...] = (
     '{"mcpServers":{}}',
     "--setting-sources",
     "",
-    *_NO_AUTO_MEMORY,
+    *_FORCED_CLI_SETTINGS,
 )
 
 
@@ -558,8 +581,8 @@ class ClaudeCodeExecutor:
                 "",
                 # This path declares its own isolation (natives denied, state reached only
                 # through BSVibe's tools). The host's auto-memory store walked in behind
-                # that claim — see :data:`_NO_AUTO_MEMORY`.
-                *_NO_AUTO_MEMORY,
+                # that claim — see :data:`_FORCED_CLI_SETTINGS`.
+                *_FORCED_CLI_SETTINGS,
             ]
         else:
             # A chat turn: no tools, no MCP, and as little host harness as the CLI

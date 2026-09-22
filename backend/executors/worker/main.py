@@ -573,7 +573,7 @@ async def handle_task(
         # One thing IS keyed on this path and does carry state across tasks: the
         # CLI's auto-memory store. Sharing the cwd shares that store between tasks
         # and TENANTS, and agent runs write to it. The executor turns it off —
-        # :data:`~backend.executors.worker.claude_code._NO_AUTO_MEMORY`, where the
+        # :data:`~backend.executors.worker.claude_code._FORCED_CLI_SETTINGS`, where the
         # measurement is. If that flag ever comes off, this directory stops being
         # inert and "share it safely" stops being true.
         local_workspace = sandbox_cwd or str(default_sandbox_cwd())

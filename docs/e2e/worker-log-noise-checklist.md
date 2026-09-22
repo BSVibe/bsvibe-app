@@ -14,6 +14,17 @@
 > **더 이상 안 보인다**(그게 10,629줄이었다). 되살리려면
 > `BSVIBE_WORKER_LOG_LEVEL=debug`.
 
+> 📏 **2026-09-22 재측정 — 경고 1 은 원인째 사라졌다.** 로테이션 이후 4일치 라이브 로그
+> (`mac-mini-e2e` 311줄 · `admin` 56줄, 09-18 12:22 ~ 09-22 02:05):
+> `claude_oauth_refresh_invalid_grant` **0** · `claude_oauth_refresh_failed` **0** ·
+> 트레이스백 **0** · 비-JSON 줄 **0**.
+> **양성 대조군**: 같은 창에 `claude_oauth_refreshed` **12건**(성공) — 갱신기는 켜져 있고
+> 이제 성공한다. 0 이 "생산자가 꺼져서"가 아니다.
+> 남은 소음 1위는 `server_unreachable`/`http_error 502` 인데 4일 38줄이고 두 워커가
+> **같은 시각**에 찍는다 ⇒ 배포 블립이지 결함 아니다.
+> ⚠️ 탐지기가 지금 코드의 철자와 같은지 먼저 확인했다 —
+> `claude_auth.py` 가 여전히 `claude_oauth_refresh_invalid_grant` 를 쓴다.
+
 ---
 
 ## 배포 전 — 베이스라인 (안 재면 개선을 주장할 수 없다)
@@ -118,7 +129,12 @@
 
 ## §미실행 — 로그 로테이션
 
-- [ ] **245MB(실은 776MB) 단일 파일 로테이션** → **이 PR 에 없다.**
+- [x] ~~**245MB(실은 776MB) 단일 파일 로테이션**~~ → **닫혔다** (#970 코멘트, `_infra` `26bf6cd`).
+  아래 "sudo 필요"라는 전제가 **틀렸다** — launchd 리다이렉트는 `O_APPEND` 라 `copytruncate`
+  는 재시작이 필요 없다. 시간당 user-level(gui/501) 에이전트로 **805M → 64M**, 워커 PID 불변.
+  ⚠️ 아래 문단은 **그 틀린 전제를 남겨 둔 원문**이다 — 왜 두 선택지뿐이라고 믿었는지의 기록.
+
+- [ ] ~~**245MB(실은 776MB) 단일 파일 로테이션** → **이 PR 에 없다.**~~
 
   위의 세 변경이 볼륨의 대부분을 없애지만 **상한을 두지는 않는다.** launchd 가
   `StandardOutPath` 의 fd 를 **열어 쥐고 있어서**, `newsyslog` 가 파일을 옮겨도
@@ -129,7 +145,69 @@
   형님 손) 또는 **② 워커가 스스로 회전 파일에 쓰기**(launchd 리다이렉션을 버리는
   구조 변경). **①이 훨씬 싸지만 sudo 가 필요하다.** #970 에 남겨 둔다.
 
-- [ ] **커넥터 경고 문서화** — `⚠ claude.ai connectors are disabled because
-      ANTHROPIC_API_KEY or another auth source is set` 는 **정상**이다. 워커가 의도적으로
-      `ANTHROPIC_AUTH_TOKEN` 을 주입해서 나오는 것이고 행과 무관하다(#970 코멘트에서
-      이미 확정). 런북에 넣을 자리를 아직 안 정했다
+- [x] ~~**커넥터 경고 문서화**~~ → **문서화가 아니라 껐다.** 아래 §커넥터 경고 참조.
+
+  이 칸이 *"못 끄면 정상 동작으로 문서화"* 라고 적혀 있던 것은 **끌 수 있는지를 안 재서**다.
+  재니 노브가 둘 있었고, 하나는 우리가 **이미 들고 있는 `--settings` blob** 안이었다.
+
+## §커넥터 경고 — 껐다 (2026-09-22)
+
+**대상 PR**: `_FORCED_CLI_SETTINGS` 에 `disableClaudeAiConnectors: true`
+
+매 CLI 호출이 stderr 로 찍던 줄:
+
+```
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source
+  is set and takes precedence over your claude.ai login · Unset it to load your
+  organization's connectors
+```
+
+방아쇠는 `ANTHROPIC_AUTH_TOKEN` 이 **설정되어 있다는 사실**이고, 그건 워커가 **일부러**
+넣는 것이다(launchd 로 뜬 claude 가 Keychain 을 못 읽는다). 즉 이 경고는 **설계대로
+동작 중임을 알리는 경고**였고, 두 번의 조사에서 *"인증 경로가 엉뚱한 가지로 갔다"* 로
+읽혀 시간을 썼다.
+
+### 배포 전 — 실측 (CLI 2.1.268, 워커 자신의 chat 플래그 + 더미 토큰)
+
+> 토큰 **값**은 무관하다고 #970 이 이미 실측했다. 진짜 refresh 토큰은 단발성이라
+> 디버깅으로 태우면 안 되므로 더미를 썼다.
+
+- [x] 번들에서 그 문장의 **가드를 직접 읽었다** — 경고는 `api_key_precedence` 분기에서
+      세팅되고, 그 **앞에 early return** 이 있다(`disableClaudeAiConnectors` 설정 또는
+      `ENABLE_CLAUDEAI_MCP_SERVERS` env). 상상한 철자를 grep 한 게 아니다
+- [x] 노브가 **양방향으로 뒤집힌다** — 한쪽 판정만 내는 검사가 아니다
+
+      | 잰 것 | stderr |
+      |---|---|
+      | (노브 없음) | ⚠️ 나온다 — **양성 대조군** |
+      | `--settings disableClaudeAiConnectors=true` | **없다** |
+      | `--settings disableClaudeAiConnectors=false` | ⚠️ 나온다 — **대조군** |
+      | `ENABLE_CLAUDEAI_MCP_SERVERS=0` / `=false` | **없다** |
+      | `ENABLE_CLAUDEAI_MCP_SERVERS=1` | ⚠️ 나온다 — **대조군** |
+
+      ⇒ 경고를 없앤 것은 **그 노브**다. 내 하네스가 아니다
+- [x] 🚨 **툴 도착이 안 깨진다** — 워커의 가장 치명적 실패 모드가 *"BSVibe 툴이 안 왔다"*이다.
+      스크래치 stdio MCP 서버 + 실제 스트리밍 경로(`--output-format stream-json`)로
+      노브 on/off 를 각각 돌려 `system/init` 을 읽었다:
+      **양쪽 다** `mcp_servers: [{"status": "connected"}]` + 그 서버의 툴 존재.
+      코드도 같은 말을 한다 — 워커 상황에서 커넥터 조회는 **이미** "없음"을 돌려주고 있었고,
+      노브는 **어느 early return 으로 거기 가느냐**만 바꾼다. claude.ai 커넥터는
+      `--mcp-config` 서버와 **다른 네임스페이스**다
+- [x] 첫 이벤트 지연의 원인이 아니다 — #970 이 *"커넥터 로딩이 첫 턴에서 시간을 쓰는지
+      확인된 바 없다"* 고 적었던 칸. prod 로그의 `executor_turn_first_event` **15/15** 가
+      `elapsed_s` **0.228~1.501**(중앙값 0.87). ⇒ 이건 **지연이 아니라 소음**이었다
+- [x] 전선 절단 3건, 전부 컴파일됐고(매번 **35개 실행**) 정확히 의도한 칸만 뒤집혔다:
+      새 키 제거 → 새 테스트 3건만 · `autoMemoryEnabled` 제거 → auto-memory 4건 ·
+      agentic 호출 지점에서 blob 제거 → **그 분기의 5건**(호출 지점별로 따로 잡힌다)
+
+### 배포 후 — 걸 것
+
+- [ ] 워커 kickstart → **프로세스 시작 시각**으로 새 코드 확인
+- [ ] 배포된 코드가 만드는 **실제 argv** 를 찍어(`_build_cmd_args`) 그 argv 의
+      `--settings` 에 `disableClaudeAiConnectors` 가 들어 있는지 본다
+- [ ] 그 **argv 그대로** CLI 를 한 번 돌려 stderr 에 경고가 **없음**을 확인하고,
+      같은 argv 에서 **그 키만 뺀** 쌍을 돌려 경고가 **돌아오는지** 확인한다
+      (⚠️ 없음만 재면 내가 뭘 껐는지 증명 못 한다)
+- [ ] 🚨 **실제 agentic 런을 하나 완주**시킨다 — `system/init` 이 `connected` 이고
+      BSVibe 툴이 도착하는지. 로컬 실측이 덮지만 **prod 의 원격 MCP 서버**는 다른 조건이다
+- [ ] chat 턴도 하나 — 두 분기가 각각 배선돼 있다
