@@ -846,3 +846,88 @@ def test_trigger_column_default_carries_no_dead_key():
 
     _alembic(["upgrade", "head"], env_extra=env_extra)
     assert "enabled" not in asyncio.run(_column_default())
+
+
+def test_telegram_chat_id_is_seeded_into_the_approval_allowlist():
+    """#1046 — 배포 순간 승인이 멈추지 않는다는 보장.
+
+    새 판정은 fail-closed 라 ``authorized_user_ids`` 가 없는 텔레그램 계정은
+    **아무도 승인할 수 없다.** 1:1 에서는 ``chat_id`` 가 곧 그 사람의 user id
+    이므로 그 값을 옮겨 심으면 동작 변화가 0 이고 그룹방만 새로 열린다.
+
+    세 행을 심어 **세 가지 판정**을 한 번에 본다 — 씨 뿌릴 행, 건드리면 안 되는
+    행(이미 목록이 있다), 상관없는 행(github). 하나만 심으면 "전부 덮어쓰기"
+    구현도 통과한다.
+    """
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    # 마이그레이션 직전까지 올린 뒤 행을 심는다 — 그래야 upgrade 가 그 행을 본다
+    _alembic(["upgrade", "trigger_default_no_dead_key"], env_extra=env_extra)
+
+    async def _seed() -> None:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO workspaces "
+                        "(id, name, safe_mode, created_at, updated_at, legal_basis, language) "
+                        "VALUES ('11111111-1111-1111-1111-111111111111', 'ws', true, "
+                        "now(), now(), 'contract', 'ko')"
+                    )
+                )
+                rows = [
+                    ("telegram", '{"chat_id": "8242700007"}'),
+                    ("telegram", '{"chat_id": "42", "authorized_user_ids": ["99"]}'),
+                    ("github", '{"repo": "a/b"}'),
+                ]
+                for i, (connector, cfg) in enumerate(rows):
+                    await conn.execute(
+                        text(
+                            "INSERT INTO connector_accounts "
+                            "(id, workspace_id, connector, webhook_token, "
+                            " signing_secret_ciphertext, delivery_config, is_active, created_at) "
+                            "VALUES (gen_random_uuid(), "
+                            "'11111111-1111-1111-1111-111111111111', :c, :t, 'ct', "
+                            "CAST(:cfg AS json), true, now())"
+                        ),
+                        {"c": connector, "t": f"tok{i}", "cfg": cfg},
+                    )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed())
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    async def _configs() -> list[tuple[str, str]]:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text(
+                            "SELECT connector, delivery_config::text FROM connector_accounts "
+                            "ORDER BY webhook_token"
+                        )
+                    )
+                ).all()
+                return [(r[0], r[1]) for r in rows]
+        finally:
+            await engine.dispose()
+
+    seeded, already, github = asyncio.run(_configs())
+    assert '"authorized_user_ids": ["8242700007"]' in seeded[1], seeded
+    assert '"chat_id": "8242700007"' in seeded[1], "chat_id 를 지우면 안 된다"
+    assert '["99"]' in already[1], f"이미 있는 목록을 덮었다: {already}"
+    assert "authorized_user_ids" not in github[1], f"github 를 건드렸다: {github}"
+
+    # 음성 대조군 — downgrade 하면 심은 키가 사라진다. 이게 없으면 위 단언이
+    # "원래 그랬다"와 구분되지 않는다.
+    _alembic(["downgrade", "trigger_default_no_dead_key"], env_extra=env_extra)
+    after_down = asyncio.run(_configs())
+    assert "authorized_user_ids" not in after_down[0][1], after_down[0]
+
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+    assert '"authorized_user_ids": ["8242700007"]' in asyncio.run(_configs())[0][1]

@@ -79,13 +79,31 @@ class _FakeDispatcher:
         )
 
 
-def _account(ws: uuid.UUID, *, chat_id: str | int = FOUNDER_ID) -> ConnectorAccountRow:
+#: "안 넘겼다" 와 "None 을 넘겼다" 를 갈라야 한다 — 후자는 허용목록이 **없는** 계정이다.
+_UNSET = object()
+
+
+def _account(
+    ws: uuid.UUID,
+    *,
+    chat_id: str | int = FOUNDER_ID,
+    authorized_user_ids: Any = _UNSET,
+) -> ConnectorAccountRow:
+    """기본값은 **`chat_id` 를 허용목록에 담은** 계정 — 마이그레이션이 만드는 모양이다.
+
+    ``authorized_user_ids=None`` 을 넘기면 키가 아예 없는 계정이 된다(fail-closed 확인용).
+    """
+    cfg: dict = {"chat_id": chat_id}
+    if authorized_user_ids is _UNSET:
+        cfg["authorized_user_ids"] = [chat_id]
+    elif authorized_user_ids is not None:
+        cfg["authorized_user_ids"] = authorized_user_ids
     return ConnectorAccountRow(
         workspace_id=ws,
         connector="telegram",
         webhook_token=uuid.uuid4().hex,
         signing_secret_ciphertext="ciphertext",
-        delivery_config={"chat_id": chat_id},
+        delivery_config=cfg,
         is_active=True,
     )
 
@@ -173,11 +191,25 @@ async def test_non_founder_from_id_is_rejected_and_item_stays_pending() -> None:
 
 
 @respx.mock
-async def test_group_chat_tap_is_rejected_and_item_stays_pending() -> None:
-    """A tap in a non-private chat (a group any member could tap) must not
-    approve, even if from.id happened to match."""
-    answer = respx.post(f"{BOT}/answerCallbackQuery").mock(
+async def test_group_chat_tap_by_an_allowlisted_user_approves() -> None:
+    """형님 결정(2026-09-23) — 1:1 과 그룹을 구분하지 않는다.
+
+    이 테스트는 **정확히 반대**를 단언하고 있었다
+    (``test_group_chat_tap_is_rejected_and_item_stays_pending``). 그때의 근거는
+    *"그룹은 아무 멤버나 누를 수 있다"* 였고 그건 지금도 참이다 — 달라진 것은
+    **누가 눌렀는지를 허용목록으로 본다**는 것이다. 슬랙·디스코드가 처음부터
+    그렇게 했고, 그래서 그 둘은 그룹/채널에서 이미 동작했다.
+
+    ⚠️ 채팅 종류는 이제 판정에 안 들어간다. 그걸 다시 넣으면 텔레그램만 또 갈라진다.
+    """
+    respx.post(f"{BOT}/answerCallbackQuery").mock(
         return_value=httpx.Response(200, json={"ok": True, "result": True})
+    )
+    respx.post(f"{BOT}/editMessageText").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {}})
+    )
+    respx.post(f"{BOT}/editMessageReplyMarkup").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {}})
     )
     dispatcher = _FakeDispatcher()
     async with memory_session() as session:
@@ -194,9 +226,64 @@ async def test_group_chat_tap_is_rejected_and_item_stays_pending() -> None:
             dispatcher=dispatcher,
         )
         assert handled is True
+        assert await _status(session, item_id) is SafeModeStatus.APPROVED
+    assert dispatcher.calls, "허용목록에 있는 사람의 그룹 탭이 배송을 안 걸었다"
+
+
+@respx.mock
+async def test_group_chat_tap_by_a_stranger_is_still_rejected() -> None:
+    """음성 대조군 — 그룹이 열렸다고 아무나 승인하면 안 된다.
+
+    위 테스트만 있으면 "전부 승인"으로 바꿔도 초록이다.
+    """
+    answer = respx.post(f"{BOT}/answerCallbackQuery").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": True})
+    )
+    dispatcher = _FakeDispatcher()
+    async with memory_session() as session:
+        ws = uuid.uuid4()
+        item_id, deliverable_id = await _seed(session, ws=ws)
+        handled = await handle_telegram_callback(
+            raw_body=_callback_raw(
+                deliverable_id=str(deliverable_id), from_id=999999, chat_type="group"
+            ),
+            account=_account(ws),
+            session=session,
+            telegram=TELEGRAM,
+            cipher=_FakeCipher(),
+            dispatcher=dispatcher,
+        )
+        assert handled is True
         assert await _status(session, item_id) is SafeModeStatus.PENDING
     assert dispatcher.calls == []
-    assert answer.called
+    assert "권한" in _last_body(answer)["text"]
+
+
+@respx.mock
+async def test_an_account_without_an_allowlist_authorizes_nobody() -> None:
+    """FAIL-CLOSED — 허용목록이 없으면 **형님 본인도** 승인 못 한다.
+
+    마이그레이션이 기존 계정에 `chat_id` 를 심는 이유가 이것이다. 안 심으면
+    배포 순간 승인이 멈춘다.
+    """
+    answer = respx.post(f"{BOT}/answerCallbackQuery").mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": True})
+    )
+    dispatcher = _FakeDispatcher()
+    async with memory_session() as session:
+        ws = uuid.uuid4()
+        item_id, deliverable_id = await _seed(session, ws=ws)
+        handled = await handle_telegram_callback(
+            raw_body=_callback_raw(deliverable_id=str(deliverable_id), from_id=FOUNDER_ID),
+            account=_account(ws, authorized_user_ids=None),
+            session=session,
+            telegram=TELEGRAM,
+            cipher=_FakeCipher(),
+            dispatcher=dispatcher,
+        )
+        assert handled is True
+        assert await _status(session, item_id) is SafeModeStatus.PENDING
+    assert dispatcher.calls == []
     assert "권한" in _last_body(answer)["text"]
 
 

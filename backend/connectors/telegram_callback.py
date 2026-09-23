@@ -32,6 +32,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.common.approval_allowlist import is_authorized_tapper
 from backend.connectors.approval_callback import (
     ApprovalConnectorAdapter,
     handle_approval_callback,
@@ -51,15 +52,21 @@ def _is_callback_query(body: dict[str, Any]) -> bool:
 
 
 def _is_authorized_founder(parsed: dict[str, Any], account: ConnectorAccountRow) -> bool:
-    """The tap is the authorized founder iff the chat is PRIVATE and the tapper's
-    ``from.id`` equals the account's bound ``chat_id`` (compared as strings, since
-    ``delivery_config`` may store either an int or a str)."""
-    if parsed.get("chat_type") != "private":
-        return False
-    bound_chat_id = account.delivery_config.get("chat_id")
-    if bound_chat_id is None:
-        return False
-    return str(parsed.get("from_id")) == str(bound_chat_id)
+    """The tap is authorized iff the tapper is on the account's allowlist.
+
+    슬랙·디스코드와 **같은 규칙**이다 — :func:`is_authorized_tapper`. 텔레그램은
+    스코프 키가 없다(봇 토큰 자체가 이미 한 봇으로 스코프를 좁힌다; 슬랙의
+    ``team_id`` / 디스코드의 ``guild_id`` 에 해당하는 축이 없다).
+
+    2026-09-23 이전에는 ``chat_type == "private" AND from_id == chat_id`` 였고,
+    그래서 그룹방에서는 승인이 불가능했다. 그 제약이 여기서 사라진다 —
+    기존 계정은 마이그레이션이 ``chat_id`` 를 허용목록으로 옮겨 심는다
+    (1:1 에서는 ``chat_id`` 가 곧 그 사람의 user id 라 무중단이다).
+    """
+    return is_authorized_tapper(
+        delivery_config=account.delivery_config,
+        user_id=parsed.get("from_id"),
+    )
 
 
 def _build_ack(parsed: dict[str, Any], text: str) -> dict[str, Any] | None:

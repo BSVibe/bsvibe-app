@@ -35,6 +35,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.common.approval_allowlist import is_authorized_tapper
 from backend.connectors.approval_callback import (
     ApprovalConnectorAdapter,
     handle_approval_callback,
@@ -52,23 +53,19 @@ def _is_block_actions(body: dict[str, Any]) -> bool:
 
 
 def _is_authorized_user(parsed: dict[str, Any], account: ConnectorAccountRow) -> bool:
-    """The tap is an authorized user iff their ``user_id`` is on the account's
-    ``authorized_user_ids`` allowlist AND — when a ``team_id`` is bound — the tap's
-    ``team_id`` matches it.
+    """The tap is authorized iff the tapper is on the account's allowlist AND —
+    when a ``team_id`` is bound — the tap's ``team_id`` matches it.
 
-    FAIL-CLOSED: an empty or missing allowlist authorizes NOBODY (approval is
-    irreversible, and a channel card is tappable by any member). This is the
-    human-authz layer; the transport signature was already verified upstream."""
-    allowed = account.delivery_config.get("authorized_user_ids")
-    if not isinstance(allowed, (list, tuple)) or not allowed:
-        return False
-    user_id = parsed.get("user_id")
-    if user_id is None or str(user_id) not in {str(u) for u in allowed}:
-        return False
-    bound_team = account.delivery_config.get("team_id")
-    if bound_team is not None and str(parsed.get("team_id")) != str(bound_team):
-        return False
-    return True
+    규칙 본문은 :func:`is_authorized_tapper` 가 소유한다. 2026-09-23 이전에는
+    이 함수가 그 규칙의 **사본**이었고, 슬랙과 디스코드의 사본은 글자까지
+    같았다 — 그러면서 텔레그램만 다른 등식을 써서 그룹방에서 승인이 안 됐다.
+    """
+    return is_authorized_tapper(
+        delivery_config=account.delivery_config,
+        user_id=parsed.get("user_id"),
+        scope_key="team_id",
+        scope_value=parsed.get("team_id"),
+    )
 
 
 def _build_ack(parsed: dict[str, Any], text: str) -> dict[str, Any] | None:
