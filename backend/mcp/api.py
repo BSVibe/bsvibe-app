@@ -294,6 +294,13 @@ async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
         )
         # REST 와 **같은 길**이다 — 호출자의 세션 안에 행을 남긴다.
         await AuditEmitter().emit(event, session=ctx.session)
+        # ⚠️ 그리고 **직접 커밋한다.** 여기까지 오면 핸들러는 이미 자기 작업을
+        #    커밋하고 끝났고(툴마다 `await ctx.session.commit()`), 이 뒤에는
+        #    아무도 커밋하지 않는다 — 세션이 닫히며 감사 행이 조용히 사라진다.
+        #    2026-09-23: 이 커밋이 없는 채로 배포했고 prod 는 여전히 0건이었다.
+        #    유닛은 초록이었는데, **테스트가 call_tool 뒤에 커밋을 보태고 있었다**
+        #    (프로덕션이 안 주는 것을 테스트가 준 것이다).
+        await ctx.session.commit()
     except Exception:  # noqa: BLE001 — audit must never break the call
         logger.warning(
             "mcp_audit_emit_failed",
