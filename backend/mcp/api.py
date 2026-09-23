@@ -22,7 +22,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 import structlog
 from mcp.types import Tool as McpTool
@@ -85,15 +85,11 @@ class McpPrincipal:
         return scope in self.scopes
 
 
-# ---------------------------------------------------------------------------
-# Audit outbox protocol — matches the REST surface's audit pipeline.
-# ---------------------------------------------------------------------------
-@runtime_checkable
-class AuditOutboxLike(Protocol):
-    is_open: bool
-
-    async def insert_event(self, event: Any) -> None:  # pragma: no cover - protocol
-        ...
+# 감사 아웃박스 프로토콜은 2026-09-23 에 삭제됐다(#1039). ``AuditOutboxLike`` 는
+# ``is_open: bool`` 을 요구했는데 **어떤 구현도 그걸 세우지 않았다** — 그 이름은
+# 코드 전체에서 선언과 검사 두 곳에만 있었다. 상상 속 인터페이스를 향해 설계된
+# 감사가 49개 쓰기 툴을 통째로 침묵시켰다. 지금은 REST 와 같은 길을 쓴다:
+# ``AuditEmitter().emit(event, session=ctx.session)``.
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +106,6 @@ class ToolContext:
 
     principal: McpPrincipal
     session: AsyncSession
-    audit_outbox: AuditOutboxLike | None = None
     request_id: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     # The same factory the FastAPI app threads into REST handlers — used
@@ -260,17 +255,25 @@ def _enforce_scopes(tool: Tool, ctx: ToolContext) -> None:
 
 
 async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
-    """Emit ``tool.audit_event`` via the audit outbox.
+    """Emit ``tool.audit_event`` into the caller's transaction (REST 와 같은 길).
 
     Failures are swallowed — an audit-pipeline outage cannot break a
     successful tool call. The payload carries only the tool name + the
     actor; richer event payloads are the handler's job (matches the REST
     audit convention).
+
+    ⚠️ 2026-09-23 이전에는 이 함수가 **존재하지 않는 인터페이스**를 기다렸다.
+    ``ctx.audit_outbox`` 가 ``is_open`` 인 것을 요구했는데, 그 이름은 코드 전체에서
+    프로토콜 선언과 이 검사 **두 곳에만** 있었다 — 어떤 구현도 세우지 않는다.
+    게다가 prod 의 유일한 ``ToolContext(`` 생성이 그 필드를 안 넘겨서 기본값
+    ``None`` 으로 **첫 줄에서 리턴**했다. 예외도 경고도 없이.
+
+    결과: 49개 쓰기 툴이 감사를 선언하는데 prod ``audit_outbox`` 의
+    ``bsvibe.mcp.*`` 가 **0건**이었다(전체 5,571행 — 아웃박스는 살아 있었다).
+    표면에서는 감사가 켜진 것과 완전히 똑같아 보였다. #1039
     """
-    outbox = ctx.audit_outbox
-    if outbox is None or not getattr(outbox, "is_open", False):
-        return
     try:
+        from plugin.audit.emitter import AuditEmitter  # noqa: PLC0415 — lazy to avoid cycle
         from plugin.audit.events import (  # noqa: PLC0415 — lazy to avoid cycle
             AuditActor,
             AuditEventBase,
@@ -289,7 +292,8 @@ async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
             resource=AuditResource(type="mcp_tool", id=tool.name),
             data={"tool": tool.name, "client_id": ctx.principal.client_id},
         )
-        await outbox.insert_event(event)
+        # REST 와 **같은 길**이다 — 호출자의 세션 안에 행을 남긴다.
+        await AuditEmitter().emit(event, session=ctx.session)
     except Exception:  # noqa: BLE001 — audit must never break the call
         logger.warning(
             "mcp_audit_emit_failed",
@@ -300,7 +304,6 @@ async def _safe_audit_emit(tool: Tool, ctx: ToolContext) -> None:
 
 
 __all__ = [
-    "AuditOutboxLike",
     "McpPrincipal",
     "Tool",
     "ToolContext",
