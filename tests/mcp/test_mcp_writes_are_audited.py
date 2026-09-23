@@ -116,7 +116,10 @@ async def test_a_write_tool_leaves_an_audit_row(db) -> None:
         ctx = ToolContext(principal=_principal(ws), session=session)
         # 실패해도 좋다 — 감사는 핸들러 성공 뒤에 찍히므로, 성공하는 가장 싼 툴을 쓴다.
         await registry.call_tool("bsvibe_intents_create", {"name": "감사배선-테스트"}, ctx)
-        await session.commit()
+        # ⚠️ 여기서 커밋하지 **않는다.** prod 의 디스패처는 핸들러가 스스로 커밋한
+        # 뒤 감사를 찍고 **아무도 다시 커밋하지 않는다** — 테스트가 커밋을 보태면
+        # 그 구멍이 덮인다. 2026-09-23 에 실제로 그렇게 초록이 났고, prod 에서는
+        # 여전히 0건이었다. 감사 경로가 **스스로** 커밋해야 한다.
 
     async with db() as session:
         after = await _outbox_count(session)
@@ -132,7 +135,10 @@ async def test_the_audited_row_names_the_tool(db) -> None:
     async with db() as session:
         ctx = ToolContext(principal=_principal(ws), session=session)
         await registry.call_tool("bsvibe_intents_create", {"name": "감사배선-테스트"}, ctx)
-        await session.commit()
+        # ⚠️ 여기서 커밋하지 **않는다.** prod 의 디스패처는 핸들러가 스스로 커밋한
+        # 뒤 감사를 찍고 **아무도 다시 커밋하지 않는다** — 테스트가 커밋을 보태면
+        # 그 구멍이 덮인다. 2026-09-23 에 실제로 그렇게 초록이 났고, prod 에서는
+        # 여전히 0건이었다. 감사 경로가 **스스로** 커밋해야 한다.
 
     async with db() as session:
         rows = (
@@ -158,7 +164,6 @@ async def test_a_read_tool_leaves_no_row(db) -> None:
         before = await _outbox_count(session)
         ctx = ToolContext(principal=_principal(ws), session=session)
         await registry.call_tool("bsvibe_intents_list", {}, ctx)
-        await session.commit()
         after = await _outbox_count(session)
     assert after == before, "읽기 툴이 감사 행을 남겼다"
 
