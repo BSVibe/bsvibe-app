@@ -87,9 +87,20 @@ export function groupProductRuns(
   const needsYouRuns = runs.filter(needsAction);
   const rest = runs.filter((r) => !needsAction(r));
 
-  // 날짜별로 모은다. 입력은 이미 최신순이라 그 순서를 보존한다.
+  // ⚠️ **입력이 최신순이라고 가정하지 않는다.** 처음엔 "입력은 이미 최신순이라
+  // 그 순서를 보존한다"로 적었는데, 2026-09-23 prod 에서 날짜 소제목이 이렇게 나왔다:
+  //
+  //     9월 4일 · 9월 18일 · 7월 23일 · 7월 22일 · 7월 31일 · 7월 7일 · 7월 6일
+  //
+  // 그 전제가 거짓이었고, 내 픽스처는 내가 최신순으로 만들어 넣어서 한 번도
+  // 거짓인 경우를 안 봤다 — 테스트가 프로덕션이 안 주는 것을 준 셈이다.
+  // 전제를 없애고 **여기서 정렬한다.** 호출자의 순서에 기대지 않는다.
+  const sorted = [...rest].sort(
+    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+  );
+
   const byDate = new Map<string, ProductDetailRun[]>();
-  for (const run of rest) {
+  for (const run of sorted) {
     const key = dateKeyOf(run.updatedAt);
     const bucket = byDate.get(key);
     if (bucket) bucket.push(run);
@@ -100,10 +111,17 @@ export function groupProductRuns(
   for (const [dateKey, items] of byDate) {
     groups.push({ kind: kindOf(dateKey, now), dateKey, rows: collapseConsecutive(items) });
   }
+  // 여기서 `groups.sort` 를 한 번 더 하지 **않는다.** 위에서 입력을 정렬했으므로
+  // Map 삽입 순서가 곧 날짜 내림차순이고(JS Map 은 삽입 순서를 보장한다),
+  // 덧붙인 정렬은 절단해도 테스트가 초록이었다 — **뒤집히지 않는 방어는 아무것도
+  // 지키지 않으면서 다음 사람에게 "여기가 정렬을 책임진다"고 거짓말한다.**
+  // 정렬의 책임은 `sorted` 한 곳이고, 그건 절단으로 증명된다.
 
   return {
     // 행동이 필요한 줄은 접지 않는다 — 각각이 형님의 결정을 기다린다.
-    needsYou: needsYouRuns.map((run) => ({ run, count: 1, runIds: [run.runId] })),
+    needsYou: [...needsYouRuns]
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .map((run) => ({ run, count: 1, runIds: [run.runId] })),
     groups,
   };
 }
