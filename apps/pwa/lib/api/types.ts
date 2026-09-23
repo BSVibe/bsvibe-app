@@ -167,6 +167,9 @@ export interface ResourceBinding {
   workspace_id: string;
   product_id: string;
   connector_account_id: string;
+  /** 커넥터 종류(`"telegram"` / `"github"` …). #1042 — 화면이 uuid 앞 8자를
+   *  보여주면서 정작 어느 커넥터인지는 안 말하고 있었다. 서버가 채운다. */
+  connector?: string | null;
   resource_id: string;
   selection: Record<string, unknown>;
   trigger: TriggerKnob;

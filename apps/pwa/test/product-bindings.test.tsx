@@ -36,6 +36,7 @@ function binding(over: Partial<ResourceBinding> = {}): ResourceBinding {
     workspace_id: "ws-1",
     product_id: PRODUCT_ID,
     connector_account_id: CONNECTOR_ID,
+    connector: "telegram",
     resource_id: "acme/blog",
     selection: {},
     trigger: { filters: {} },
@@ -79,6 +80,32 @@ describe("ProductBindings", () => {
     // Output mode select reflects `safe`.
     const output = within(section).getByRole("combobox", { name: /Output/i });
     expect(output).toHaveValue("safe");
+  });
+
+  it("says which connector the row is, and does not show a raw uuid fragment", async () => {
+    // #1042, 형님 실사용 피드백(2026-09-23). 화면이 이랬다:
+    //
+    //     BSVibe/bsvibe-app   be3514f6
+    //     8242700007          7bfb9d70
+    //
+    // `be3514f6` 는 uuid 앞 8자다 — 형님께 아무 의미가 없는데 제목 옆 가장 눈에
+    // 띄는 자리에 있었고, `aria-hidden` 이라 **시각 사용자에게만 보이는 노이즈**였다.
+    // 정작 `8242700007` 이 텔레그램 채팅이라는 건 화면 어디에도 없었다.
+    const listBindings = vi.fn().mockResolvedValue([binding()]);
+    render(<ProductBindings productId={PRODUCT_ID} listBindings={listBindings} />);
+
+    const section = await screen.findByRole("region", { name: /Connector bindings/i });
+    expect(within(section).getByText(/telegram/i)).toBeInTheDocument();
+    // uuid 앞 8자가 사라졌다
+    expect(within(section).queryByText(CONNECTOR_ID.slice(0, 8))).toBeNull();
+  });
+
+  it("degrades calmly when the server does not say the connector", async () => {
+    // 음성 대조군 — 서버가 예전 응답을 주면(필드 없음) 깨지지 않고 조용히 비운다.
+    const listBindings = vi.fn().mockResolvedValue([binding({ connector: undefined })]);
+    render(<ProductBindings productId={PRODUCT_ID} listBindings={listBindings} />);
+    const section = await screen.findByRole("region", { name: /Connector bindings/i });
+    expect(within(section).getByText("acme/blog")).toBeInTheDocument();
   });
 
   it("shows a calm empty state when there are no bindings", async () => {

@@ -200,6 +200,12 @@ class ResourceBindingResponse(BaseModel):
     product_id: uuid.UUID
     connector_account_id: uuid.UUID
     resource_id: str
+    #: 커넥터 종류(``"telegram"`` / ``"github"`` …). #1042 — 화면이 uuid 앞 8자를
+    #: 보여주면서 정작 **어느 커넥터인지는 안 말하고** 있었다. `8242700007` 이
+    #: 텔레그램 채팅이라는 걸 응답에 없으면 프런트가 말할 수 없다.
+    #: ORM 행에는 없는 값이라 라우트가 **명시적으로** 채운다(지연 로딩 금지 —
+    #: async 세션에서 relationship 을 늦게 건드리면 MissingGreenlet 이 난다).
+    connector: str | None = None
     selection: dict[str, Any]
     trigger: dict[str, Any]
     output_mode: str
