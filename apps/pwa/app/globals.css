@@ -3280,6 +3280,42 @@ main.login {
   color: #a1564a;
 }
 
+/* #1042 — 활동 탭은 **많은 걸 전제로** 그린다. prod 런 291건 중 72%가 중단이고
+   월 ~50건씩 쌓이는데 정리 기제가 없다. 그래서 날짜 소제목 + 반복 접기 + 행동이
+   필요한 구역을 따로 둔다. 목록 자체는 기존 스타일을 그대로 쓴다. */
+.product-runs__group,
+.product-runs__needs-you {
+  margin-top: 1rem;
+}
+
+.product-runs__group-label {
+  margin: 0 0 0.375rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  letter-spacing: 0.02em;
+}
+
+/* 행동이 필요한 구역만 무게를 더 준다 — 나머지와 같은 무게면 다시 묻힌다. */
+.product-runs__needs-you .product-runs__group-label {
+  color: var(--ink-1);
+}
+
+.product-runs__needs-you .product-runs__list {
+  border-color: var(--hair-strong);
+  box-shadow: 0 0 0 1px var(--hair-strong);
+}
+
+/* 접힌 줄의 개수 배지. 조용해야 한다 — 이건 신호가 아니라 맥락이다. */
+.product-run__repeat {
+  flex: none;
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  padding: 0 0.3rem;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+}
+
 .product-run__when {
   flex: none;
   font-size: 0.76rem;
