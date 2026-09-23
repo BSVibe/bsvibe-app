@@ -203,9 +203,15 @@ export default function ProductBindings({
             <li key={row.id} className="product-bindings__row">
               <div className="product-bindings__ident">
                 <span className="product-bindings__resource">{row.resource_id}</span>
-                <span className="product-bindings__connector" aria-hidden="true">
-                  {row.connector_account_id?.slice(0, 8) ?? ""}
-                </span>
+                {/* #1042 — 여기엔 `connector_account_id` 앞 8자가 있었다. uuid 조각은
+                    형님께 아무 의미가 없는데 제목 옆 가장 눈에 띄는 자리를 차지했고,
+                    `aria-hidden` 이라 **시각 사용자에게만 보이는 노이즈**였다.
+                    정작 `8242700007` 이 텔레그램 채팅이라는 건 화면에 없었다.
+                    서버가 종류를 실어 주므로(ResourceBindingResponse.connector)
+                    그걸 보여준다. 없으면(옛 응답) 조용히 비운다 — 깨지지 않는다. */}
+                {row.connector && (
+                  <span className="product-bindings__connector">{row.connector}</span>
+                )}
               </div>
 
               <label className="product-bindings__knob">

@@ -290,3 +290,35 @@ async def test_binding_workspace_isolation(db) -> None:
         r = await c.get(f"/api/v1/products/{product_a}/bindings")
         assert r.status_code == 200
         assert len(r.json()) == 1
+
+
+async def test_a_binding_row_says_which_connector_it_is(client_with_parents) -> None:
+    """#1042 — 화면이 어느 커넥터인지 말할 수 있어야 한다.
+
+    2026-09-23 형님 실사용 피드백. 제품 상세의 바인딩 행이 이렇게 보였다:
+
+        BSVibe/bsvibe-app   be3514f6
+        8242700007          7bfb9d70
+
+    `be3514f6` 는 uuid 앞 8자다 — 형님께 아무 의미가 없는데 제목 옆 가장 눈에 띄는
+    자리에 있었고(게다가 `aria-hidden` 이라 **시각 사용자에게만 보이는 노이즈**),
+    정작 `8242700007` 이 **텔레그램 채팅**이라는 건 화면 어디에도 없었다.
+
+    응답에 종류가 없으면 프런트가 아무리 잘 그려도 말할 수 없다. 여기가 출발점이다.
+    """
+    client, _ws, product_id, account_id = client_with_parents
+    created = await client.post(
+        f"/api/v1/products/{product_id}/bindings",
+        json={"connector_account_id": str(account_id), "resource_id": "acme/blog"},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["connector"], "생성 응답이 커넥터 종류를 안 말한다"
+
+    listed = await client.get(f"/api/v1/products/{product_id}/bindings")
+    assert listed.status_code == 200
+    rows = listed.json()
+    assert rows, "행이 없다"
+    for row in rows:
+        assert row.get("connector"), f"목록 응답에 커넥터가 없다: {row}"
+    # 음성 대조군 — uuid 를 종류로 착각하지 않는다
+    assert rows[0]["connector"] != str(account_id)
