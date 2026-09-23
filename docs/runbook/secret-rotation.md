@@ -1,6 +1,7 @@
 # 런북 — 시크릿 로테이션
 
-**상태(2026-09-14)**: 이 문서는 **측정으로 쓰였고, 아직 한 번도 실제로 걸어본 적이 없다.**
+**상태(2026-09-23)**: 이 문서는 **측정으로 쓰였고, 아직 한 번도 실제로 걸어본 적이 없다.**
+§2b(워커 토큰)가 2026-09-23 에 추가됐다 — 걸을 예정인 첫 절차다.
 각 절차의 검증 여부를 항목마다 명시한다. 걸어본 뒤에는 그 표시를 갱신하라.
 
 > ⚠️ 이 런북의 목적 절반은 **"돌릴 수 있다"가 아니라 "무엇이 못 돌아가는가"를 적는 것**이다.
@@ -19,6 +20,7 @@
 | `BSVIBE_OAUTH_PRIVATE_KEY_PEM` | ⚠️ 미검증 | 발급된 액세스 토큰 전부 무효화 | 시끄럽다(401) |
 | `BSVIBE_PRODUCT_BUNDLE_S3_*` | ✅ | 번들 저장/조회 | 시끄럽다 |
 | **`BSVIBE_GATEWAY_KMS_KEY_B64`** | ❌ **절차로 불가** | 아래 §3 | ❌ **조용하다** |
+| `BSVIBE_WORKER_TOKEN` (launchd plist) | ✅ 아래 §2b | 그 워커 한 대 | **시끄럽다** — 401 |
 
 ---
 
@@ -80,6 +82,72 @@ docker exec -i bsvibe-prod-postgres-1 psql -U bsvibe -d bsvibe \
 # 3. backend/worker 재생성 (postgres 는 건드리지 않는다 — 상태 보유)
 # 4. /api/health 로 검증
 ```
+
+---
+
+## 2b. `BSVIBE_WORKER_TOKEN` — launchd 워커 (2026-09-23 추가)
+
+`.env.prod` 가 아니라 **launchd plist 의 `EnvironmentVariables`** 에 산다.
+`~/Library/LaunchAgents/com.bsvibe.worker-<name>.plist`.
+
+> 🚨 **이 절이 생긴 이유.** 2026-09-23 에 에이전트가 plist 인자를 훑다가 그 토큰을
+> **자기 도구 출력에 평문으로 찍었다.** #935 가 기록한 2026-09-10 사고와 **같은 모양**이다
+> (그때는 `.env.prod` 값 2개, 격리 서브에이전트). 두 번 같은 일이 난 셈이니,
+> **시크릿을 들고 있는 파일을 훑을 땐 출력에 리댁션을 걸어라** — `sed -E 's/"[0-9a-f]{32,}"/"<REDACTED>"/g'`.
+
+### 절차
+
+```bash
+# 0. 지금 등록된 워커를 확인한다 (id 가 필요하다)
+#    MCP: bsvibe_workers_list   /   PWA: 설정 → Workers
+
+# 1. 새 토큰을 발급한다 — 이 호스트에서
+bsvibe-worker register --name <name>
+#    토큰은 한 번만 보인다. token_urlsafe(32) 이고 서버에는 sha256 만 저장된다
+#    (backend/executors/service.py: _hash_token / register_worker_for_workspace)
+
+# 2. plist 의 EnvironmentVariables.BSVIBE_WORKER_TOKEN 을 새 값으로 바꾼다
+#    ⚠️ 권한도 같이 좁혀라 — 기본이 -rw-r--r-- 라 로컬 누구나 읽는다
+chmod 600 ~/Library/LaunchAgents/com.bsvibe.worker-<name>.plist
+
+# 3. ⚠️ plist 를 고쳤으면 kickstart 로는 안 먹는다
+launchctl bootout   gui/501/com.bsvibe.worker-<name>
+launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.bsvibe.worker-<name>.plist
+
+# 4. 옛 워커 행을 폐기한다
+#    MCP: bsvibe_workers_revoke(worker_id=<옛 id>)
+```
+
+### 검증 — 양성과 음성을 **둘 다**
+
+| | 무엇을 보나 |
+|---|---|
+| **양성** | `bsvibe_workers_list` 에서 새 워커의 `heartbeat_fresh: true` + `last_heartbeat` 가 재시작 이후 |
+| **양성** | 워커 **프로세스 시작 시각**이 갱신됐다 (`launchctl list` 의 PID 가 바뀐다). 낡음의 유일한 신호다 |
+| **음성 대조군** | **옛 토큰으로 직접 쳐서 401 을 본다** — 이게 없으면 "새 토큰이 된다"만 알 뿐 **옛 토큰이 죽었는지는 모른다** |
+
+```bash
+# 음성 대조군 — 반드시 하라
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "X-Worker-Token: <옛 토큰>" https://api.bsvibe.dev/api/v1/workers/heartbeat
+# 401 이어야 한다
+```
+
+폐기가 실제로 인증을 막는 것은 코드로 확인했다 — `authenticate_worker` 가
+`WorkerRow.is_active.is_(True)` 를 WHERE 에 걸고, `revoke_worker` 는 `is_active=False`
+로 소프트 삭제하며 Redis 디스패치 스트림도 같이 지운다. **그래도 위 401 을 직접 봐라** —
+코드를 읽은 것과 그 경로가 prod 에서 도는 것은 다른 주장이다.
+
+### ⚠️ 이 절이 못 덮는 것
+
+* **`com.bsvibe.worker-admin` 은 위 절차가 그대로 안 맞는다.** 그 plist 는 서버로
+  `http://localhost:8700` 을 보는데 그 포트는 **ssh 터널**(`lsof` 실측)이고, prod
+  워크스페이스의 `bsvibe_workers_list` 에는 **그 이름의 워커가 없다.**
+  ⇒ **어느 백엔드가 그 토큰을 발급했는지 확인하기 전에는 폐기 대상을 특정할 수 없다.**
+  터널 반대쪽을 먼저 확인하라
+* **낡은 등록이 살아 있다.** 2026-09-23 실측: `dogfood-mac` 이 `is_active: true` 인데
+  마지막 하트비트가 **2026-07-20**(두 달 전)이다. 보고를 멈춘 지 두 달 된 머신의 토큰이
+  **아직 유효하다.** 로테이션과 별개로 폐기 후보다
 
 ---
 
