@@ -134,7 +134,17 @@ export default function LoginPage() {
           <span>{t("orContinueWithEmail")}</span>
         </div>
 
-        <form className="login__form" onSubmit={handleSubmit}>
+        {/* ⚠️ `method`/`action` 은 **하이드레이션 전 제출**의 착지점이다 (#1053).
+            이게 없으면 브라우저가 기본 GET 을 해서 `name` 이 붙은 모든 필드 —
+            비밀번호 포함 — 가 쿼리스트링에 실린다. prod 에서 실측된 결함이다.
+            하이드레이션이 끝나면 `onSubmit` 이 preventDefault 하므로 이 경로는
+            안 쓰인다. 재현 테스트: e2e/login-does-not-leak-credentials-to-the-url */}
+        <form
+          className="login__form"
+          method="post"
+          action="/login/fallback"
+          onSubmit={handleSubmit}
+        >
           <label className="login__label" htmlFor="email">
             {t("email")}
           </label>
