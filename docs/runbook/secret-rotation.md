@@ -1,7 +1,8 @@
 # 런북 — 시크릿 로테이션
 
-**상태(2026-09-23)**: 이 문서는 **측정으로 쓰였고, 아직 한 번도 실제로 걸어본 적이 없다.**
-§2b(워커 토큰)가 2026-09-23 에 추가됐다 — 걸을 예정인 첫 절차다.
+**상태(2026-09-23)**: **§1 과 §2 를 prod 에서 실제로 걸었다.** 둘 다 돌아갔지만
+**문서가 세 군데 틀려 있었고, 그중 하나는 워커를 크래시 루프에 빠뜨렸다.** 아래 §0.1 이
+그 정정이다. §2b(워커 토큰)는 아직 미검증이다.
 각 절차의 검증 여부를 항목마다 명시한다. 걸어본 뒤에는 그 표시를 갱신하라.
 
 > ⚠️ 이 런북의 목적 절반은 **"돌릴 수 있다"가 아니라 "무엇이 못 돌아가는가"를 적는 것**이다.
@@ -10,11 +11,77 @@
 
 ---
 
+## 0.1 ⚠️ 2026-09-23 실제로 걸어보고 나온 정정 — **먼저 읽어라**
+
+문서대로 하면 안 되는 곳이 셋 있었다. 세 개 다 *"초록인데 사실은 안 됐다"* 계열이다.
+
+### ① 「적용은 자동이다」 는 **거짓** — 마이그레이션은 다시 안 돈다
+
+§1 이 *"백엔드가 부팅 때 마이그레이션을 돌리고 `20260715_runtime_role` 이 `ALTER ROLE`
+을 실행한다 … 재실행 가능하다"* 라고 적어 뒀다. **SQL 은 재실행 가능하지만 alembic 이
+그 리비전을 다시 돌리지 않는다** — 이미 적용된 리비전이라 `upgrade head` 가 건너뛴다.
+
+⇒ `.env.prod` 만 바꾸고 재생성하면 **역할 비밀번호는 옛 값 그대로**이고, 앱은 새 값으로
+붙으려다 실패한다. 실측: 워커 컨테이너가 `InvalidPasswordError` 로 **크래시 루프**에 빠졌다.
+
+**→ `ALTER ROLE` 을 §2 처럼 손으로 먼저 돌려라.** 두 역할 모두 같다:
+
+```bash
+# format(%L) 바인딩 — 문자열 보간 금지
+docker exec -i bsvibe-prod-backend-1 /app/.venv/bin/python - <<'PY' "<owner_pw>" "<new_pw>"
+import asyncio, sys, asyncpg
+async def main():
+    c = await asyncpg.connect(host="postgres", port=5432, user="bsvibe",
+                              password=sys.argv[1], database="bsvibe", timeout=10)
+    stmt = await c.fetchval("SELECT format('ALTER ROLE bsvibe_app WITH LOGIN PASSWORD %L', $1::text)", sys.argv[2])
+    await c.execute(stmt); await c.close()
+asyncio.run(main())
+PY
+```
+
+### ② 검증 프로브는 **컨테이너 밖 네트워크 경로**에서 재라
+
+`docker exec … psql -U bsvibe_app` 은 로컬 소켓이라 `trust` 로 붙는다. `-h 127.0.0.1`
+로 바꿔도 마찬가지다. 실측: **옛 비밀번호도, 쓰레기 값도 전부 "접속됨"** 이 나왔다 —
+음성 대조군이 **한쪽 판정밖에 못 내는 상태**였고, 그대로 믿었으면 *"로테이션 됐다"* 로
+보고할 뻔했다.
+
+앱이 실제로 쓰는 경로(컴포즈 네트워크의 `postgres` 호스트)로 재라. **세 값을 다 재라**:
+
+| 값 | 기대 |
+|---|---|
+| 새 비밀번호 | `CONNECTED` |
+| **옛 비밀번호** | **`REFUSED`** ← 이게 로테이션의 증명이다 |
+| 쓰레기 문자열 | `REFUSED` ← 프로브가 거절할 줄 아는지의 대조군 |
+
+### ③ `BSVIBE_DB_PASSWORD` 를 바꾸면 **postgres 컨테이너가 재생성된다**
+
+§2 가 *"postgres 는 건드리지 않는다 — 상태 보유"* 라고 적어 뒀는데, 그 값은 postgres
+서비스의 `POSTGRES_PASSWORD` 라 **compose 가 설정 변경으로 보고 컨테이너를 재생성한다.**
+`backend` 만 지정해도 그렇다. 실측: postgres 컨테이너가 `Created 02:11:45` 로 새로 떴다.
+
+**데이터가 산 이유는 절차가 아니라 named volume 이다** (`bsvibe-prod_pgdata`, 2026-05-23
+생성). 그게 없었으면 이 로테이션이 DB 를 날렸다. 재생성 뒤 **행 수를 세서 확인하라**:
+
+```bash
+docker exec bsvibe-prod-postgres-1 sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+  "SELECT (SELECT count(*) FROM execution_runs), (SELECT count(*) FROM audit_outbox)"'
+```
+
+### 덤 — `git_sha` 가 `"prod"` 로 바뀐다
+
+수동 재생성은 `--env-file deploy/.env.prod` 의 `BSVIBE_GIT_SHA=prod` 를 그대로 싣는다
+(autodeploy 는 실제 SHA 를 덮어쓴다). `/api/health` 의 `git_sha` 가 `"prod"` 면
+**코드가 바뀐 게 아니라 라벨이 바뀐 것**이다 — 다음 autodeploy 가 되돌린다.
+이미지 재빌드는 안 일어난다(`--build` 를 안 줬으면).
+
+---
+
 ## 0. 먼저 — 이 표부터 읽어라
 
 | 시크릿 | 절차로 돌아가나 | 블래스트 반경 | 실패가 시끄러운가 |
 |---|---|---|---|
-| `BSVIBE_APP_DB_PASSWORD` | ✅ 자가 적용 | 백엔드·워커의 모든 DB 연결 | **시끄럽다** — 연결 거부 |
+| `BSVIBE_APP_DB_PASSWORD` | ⚠️ **수동 `ALTER ROLE` 필요**(§0.1①) | 백엔드·워커의 모든 DB 연결 | **시끄럽다** — 연결 거부 |
 | `BSVIBE_DB_PASSWORD` (owner) | ⚠️ **수동 `ALTER ROLE` 필요** | 마이그레이션·부트 | **시끄럽다** — 부트 실패 |
 | `BSVIBE_REDIS_PASSWORD` | ✅ | 워커 디스패치·스트림 | **시끄럽다** |
 | `BSVIBE_OAUTH_PRIVATE_KEY_PEM` | ⚠️ 미검증 | 발급된 액세스 토큰 전부 무효화 | 시끄럽다(401) |
@@ -24,9 +91,9 @@
 
 ---
 
-## 1. `BSVIBE_APP_DB_PASSWORD` — 런타임 역할 (자가 적용)
+## 1. `BSVIBE_APP_DB_PASSWORD` — 런타임 역할 (⚠️ **자가 적용 아니다** — §0.1①)
 
-**검증 상태: 미검증(메커니즘은 코드로 확인).**
+**검증 상태: 2026-09-23 prod 에서 걸었다. 아래 본문은 §0.1 의 정정을 함께 읽어라.**
 
 이 비밀은 **두 곳**에 있다 — 그게 이 로테이션의 유일한 함정이다.
 * `BSVIBE_APP_DB_PASSWORD` — 마이그레이션이 역할에 **부여**하는 값
@@ -62,7 +129,7 @@ curl -s https://api.bsvibe.dev/api/health      # {"status":"ok",...} 여야 한�
 
 ## 2. `BSVIBE_DB_PASSWORD` — owner 역할 (⚠️ 자가 적용 아님)
 
-**검증 상태: 미검증.**
+**검증 상태: 2026-09-23 prod 에서 걸었다.** 절차는 맞았다 — 다만 §0.1③(postgres 재생성)을 같이 읽어라.
 
 ⚠️ **가장 흔한 오해**: 이 값은 `compose.prod.yaml:19` 에서 postgres 컨테이너의
 `POSTGRES_PASSWORD` 로 들어간다. 그런데 `POSTGRES_PASSWORD` 는 **데이터 디렉터리를
@@ -206,8 +273,8 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ## 5. 이 런북이 아직 답하지 못하는 것
 
-* 위 §1·§2 절차는 **한 번도 걸어본 적이 없다**. 걸을 때는 유지보수 창에서, 롤백 경로를
-  손에 쥔 채로 하라
+* ~~위 §1·§2 절차는 한 번도 걸어본 적이 없다~~ → **2026-09-23 에 걸었다**(§0.1).
+  걸 때는 유지보수 창에서, `.env.prod` 백업을 손에 쥔 채로 하라 — 이번에도 두 번 떴다
 * `BSVIBE_OAUTH_PRIVATE_KEY_PEM` 로테이션의 영향 범위(발급된 토큰 전부 무효화)는
   코드로 확인했지만 절차는 쓰지 않았다 — 걸어본 뒤에 적는 것이 맞다
 * 백업/복원과의 상호작용: 옛 백업을 복원하면 **그 시점의 키로 암호화된 데이터**가 돌아온다.
