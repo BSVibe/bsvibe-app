@@ -29,6 +29,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const PRODUCT_ID = "11111111-1111-1111-1111-111111111111";
 const CONNECTOR_ID = "33333333-3333-3333-3333-333333333333";
+const OTHER_CONNECTOR_ID = "44444444-4444-4444-4444-444444444444";
 
 function binding(over: Partial<ResourceBinding> = {}): ResourceBinding {
   return {
@@ -208,6 +209,66 @@ describe("ProductBindings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Remove/i }));
 
     expect(await screen.findByText(/couldn.t save that change/i)).toBeInTheDocument();
+  });
+
+  // ── #1057 — 취소된 커넥터는 선택지가 아니다 ──────────────────────────────
+  //
+  // `DELETE /api/v1/connectors/{id}` 는 soft-revoke 다 — `is_active` 를 false 로
+  // 내리고 ingress 는 그 뒤로 404 한다. 그리고 `connectors/resolver.py` 는 해소할
+  // 때 `is_active.is_(True)` 로 거른다. 그러니 취소된 커넥터에 건 바인딩은 **절대
+  // 해소되지 않는다** — 그런데 폼은 그걸 유효한 선택지로 줬고, 고르면 성공했고,
+  // 행도 멀쩡히 렌더됐다(2026-09-24 prod 에서 실제로 만들어 봤다).
+  //
+  // 유령을 고르면 에러 없이 그냥 안 되는 모양이다. 메뉴에서 뺀다.
+
+  it("does not offer a revoked connector as a choice", async () => {
+    const listBindings = vi.fn().mockResolvedValue([]);
+    const listConnectors = vi
+      .fn()
+      .mockResolvedValue([
+        connector({ id: CONNECTOR_ID, connector: "github", is_active: true }),
+        connector({ id: OTHER_CONNECTOR_ID, connector: "telegram", is_active: false }),
+      ]);
+
+    render(
+      <ProductBindings
+        productId={PRODUCT_ID}
+        listBindings={listBindings}
+        listConnectors={listConnectors}
+      />,
+    );
+
+    await screen.findByText(/No connector bindings yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /Add binding/i }));
+    const select = await screen.findByRole("combobox", { name: /Connector$/i });
+
+    const values = Array.from(select.querySelectorAll("option")).map((o) => o.value);
+    expect(values).toContain(CONNECTOR_ID);
+    // 양성 대조군이 위에 있다 — 활성 커넥터는 여전히 나온다. 그러니 아래의 부재는
+    // "목록이 통째로 비었다"가 아니라 "이 하나가 빠졌다"다.
+    expect(values).not.toContain(OTHER_CONNECTOR_ID);
+  });
+
+  it("says there is no connector when every one of them is revoked", async () => {
+    const listBindings = vi.fn().mockResolvedValue([]);
+    const listConnectors = vi.fn().mockResolvedValue([connector({ is_active: false })]);
+
+    render(
+      <ProductBindings
+        productId={PRODUCT_ID}
+        listBindings={listBindings}
+        listConnectors={listConnectors}
+      />,
+    );
+
+    await screen.findByText(/No connector bindings yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /Add binding/i }));
+    const select = await screen.findByRole("combobox", { name: /Connector$/i });
+
+    // 빈 select 를 남기면 "고를 게 있는데 안 보인다"로 읽힌다. 커넥터가 하나도
+    // 쓸 수 없으면 그렇게 말해야 한다.
+    const values = Array.from(select.querySelectorAll("option")).map((o) => o.value);
+    expect(values).toEqual([""]);
   });
 
   it("opens the add form, lists connectors, and creates a binding on submit", async () => {
