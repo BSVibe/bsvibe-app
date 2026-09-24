@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import structlog
 
 # Registering the executor tables on Base.metadata so create_all materialises them.
 import backend.executors.db  # noqa: F401
@@ -33,6 +34,13 @@ from backend.workflow.infrastructure.sandbox import SandboxError
 from ..._support import shared_file_sessionmaker
 
 pytestmark = pytest.mark.asyncio
+
+#: The HARNESS's own logger. Every event it emits is prefixed ``harness_`` on
+#: purpose: #1040 made CI keep a structured-log artifact, and whoever counts rows
+#: in it must never add a harness event to a product tally. A harness failure
+#: already wore the product's face once (CI 2026-08-25) — its instrumentation
+#: must not repeat that in the artifact.
+_harness_log = structlog.get_logger("tests.harness.client_worker")
 
 
 async def _make_redis() -> Any:
@@ -79,7 +87,7 @@ _FAKE_WORKER_BUDGET_S = 60.0
 
 
 def _attribute_a_late_worker(
-    progress: dict[str, float], *, started: float, gave_up_at: float
+    progress: dict[str, Any], *, started: float, gave_up_at: float
 ) -> None:
     """Raise a HARNESS-faced failure when the fake worker did not record in time.
 
@@ -92,9 +100,39 @@ def _attribute_a_late_worker(
     clock as an argument, and the three cases are pinned in microseconds.
     """
     recorded_at = progress.get("recorded_at")
-    if recorded_at is not None and recorded_at <= gave_up_at:
-        return  # the worker kept up — whatever failed, it was not this
     seen_at = progress.get("seen_at")
+    # ⭐ The verdict is RECORDED before it is acted on — including the passing
+    # one. Until 2026-09-24 this function spoke only when it blamed the harness,
+    # so a passing verdict left NOTHING behind: the 09-23 red could not be
+    # reconciled afterwards (the failure text said the discriminator had passed
+    # the worker, the artifact said the task was never recorded, and there was no
+    # row to break the tie). A check that only reports one of its outcomes hides
+    # the other one — here it hid the outcome the investigation needed.
+    verdict = (
+        "worker_kept_up"
+        if recorded_at is not None and recorded_at <= gave_up_at
+        else "harness_never_recorded"
+        if recorded_at is None
+        else "harness_recorded_late"
+    )
+    _harness_log.info(
+        "harness_worker_attribution",
+        verdict=verdict,
+        # ⭐ The join key doubles as a LIVENESS marker. The pinned unit tests
+        # below call this function with synthetic dicts, so their verdicts land
+        # in the artifact too — on a fully green run. A counter that cannot tell
+        # those apart finds a harness delay that never happened. Only a verdict
+        # that went through a real dispatch can carry a task id: **a verdict row
+        # without one is not a live verdict.**
+        task_id=progress.get("task_id"),
+        # Relative to ``started`` — absolute loop clocks differ per run and
+        # cannot be compared across CI reds.
+        seen_at_s=None if seen_at is None else seen_at - started,
+        recorded_at_s=None if recorded_at is None else recorded_at - started,
+        gave_up_at_s=gave_up_at - started,
+    )
+    if verdict == "worker_kept_up":
+        return  # the worker kept up — whatever failed, it was not this
     when = (
         "never"
         if recorded_at is None
@@ -119,7 +157,9 @@ async def _worker_then(redis: Any, factory: Any, worker_id: uuid.UUID, request: 
     time and then did not (CI 2026-08-25). Ordering it explicitly removes the
     question rather than re-tuning a timeout around it.
     """
-    progress: dict[str, float] = {}
+    # ``float`` milestones plus the task id (``str``) — the id is what tells a
+    # live verdict from a synthetic one in the artifact.
+    progress: dict[str, Any] = {}
     worker = asyncio.create_task(_run_one_exec_task(redis, factory, worker_id, progress))
     # One event-loop turn is enough to run the worker up to its first await;
     # sleep(0) yields without adding wall-clock to every test that uses this.
@@ -175,7 +215,7 @@ async def _worker_then(redis: Any, factory: Any, worker_id: uuid.UUID, request: 
 
 
 async def _run_one_exec_task(
-    redis: Any, factory: Any, worker_id: uuid.UUID, progress: dict[str, float] | None = None
+    redis: Any, factory: Any, worker_id: uuid.UUID, progress: dict[str, Any] | None = None
 ) -> None:
     """Simulate A/2's worker for exactly one ``exec`` task on ``worker_id``'s stream.
 
@@ -215,6 +255,20 @@ async def _run_one_exec_task(
                 seen.append(str(fields.get("action")))
                 marks["seen_at"] = asyncio.get_running_loop().time()
                 task_id = uuid.UUID(fields["task_id"])
+                marks["task_id"] = str(task_id)
+                # ``task_id`` is the JOIN KEY with the product's own
+                # ``executor_task_*`` events in the same artifact. Without it the
+                # artifact can say a task was dispatched and never recorded, but
+                # not WHETHER THIS SIDE EVER SAW IT — which is the cell #950 is
+                # standing on.
+                _harness_log.info(
+                    "harness_worker_saw_task",
+                    task_id=str(task_id),
+                    action="exec",
+                    stream=stream,
+                    reads=reads,
+                    elapsed_s=marks["seen_at"] - started,
+                )
                 command = fields["prompt"]
                 cwd = fields.get("workspace_dir") or "."
                 proc = await asyncio.create_subprocess_shell(
@@ -237,6 +291,12 @@ async def _run_one_exec_task(
                     )
                     await s.commit()
                 marks["recorded_at"] = asyncio.get_running_loop().time()
+                _harness_log.info(
+                    "harness_worker_recorded",
+                    task_id=str(task_id),
+                    exit_code=exit_code,
+                    elapsed_s=marks["recorded_at"] - started,
+                )
                 return
     # The budget elapsed without an ``exec`` task ever arriving. Returning here
     # — which is what this helper used to do — is the WORST possible outcome:
@@ -250,6 +310,18 @@ async def _run_one_exec_task(
     # shows many reads and nothing seen, and a task on the right stream with the
     # wrong action shows up in ``seen``.
     elapsed = asyncio.get_running_loop().time() - started
+    # The numbers below live in an AssertionError message, which reaches pytest's
+    # output but NOT the structured-log artifact — so an artifact-only reading
+    # cannot tell a starved loop (few reads) from a wrong stream (many reads,
+    # nothing seen). Emit them as a row too.
+    _harness_log.warning(
+        "harness_worker_gave_up",
+        stream=stream,
+        reads=reads,
+        actions_seen=seen,
+        elapsed_s=elapsed,
+        budget_s=_FAKE_WORKER_BUDGET_S,
+    )
     raise AssertionError(
         f"fake worker saw no exec task on {stream} in {elapsed:.1f}s "
         f"({reads} xread calls, actions seen: {seen or 'none'}). "
