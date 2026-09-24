@@ -30,6 +30,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 from typing import Any
@@ -239,3 +240,80 @@ async def test_a_live_verdict_carries_the_task_it_judged(tmp_path: Path) -> None
     verdict = _events(logs, _VERDICT_EVENT)[0]
     saw = _events(logs, "harness_worker_saw_task")[0]
     assert verdict["task_id"] == saw["task_id"], "판정 행이 어느 태스크에 대한 것인지 말하지 않는다"
+
+
+# ---------------------------------------------------------------------------
+# ④ 한 번도 안 걸어본 칸 — "기록은 제때 됐는데 제품이 타임아웃"
+# ---------------------------------------------------------------------------
+#
+# 판정표의 다섯째 칸이고, 2026-09-23 빨강의 **실패 문구가 가리키는 칸**이다
+# (`await worker` 도 판별자도 안 던졌다 ⇒ 판별자는 통과로 판정했다는 뜻).
+# 그런데 이 칸은 지금까지 **한 번도 실증된 적이 없다** — 실제로 발생하면 그때가
+# 처음이고, 그때 계측이 이 모양을 제대로 이름 짓는지는 아무도 모른다.
+#
+# 그래서 여기서 **일부러 만든다**: 워커는 정상으로 두고 awaiter 만 타임아웃시킨다.
+# 제품 버그를 흉내 내는 게 목적이 아니라, **그 모양이 왔을 때 아티팩트가 무엇을
+# 보여주는가**를 지금 고정하는 게 목적이다.
+
+
+@pytest.mark.asyncio
+async def test_a_result_recorded_in_time_under_a_timing_out_awaiter_points_at_the_product(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """워커는 봤고 기록했는데 제품이 타임아웃하면 — 행이 **제품 쪽**을 가리켜야 한다.
+
+    셋 다 있어야 이 칸이다:
+    ``saw_task`` + ``recorded`` + ``verdict=worker_kept_up``(task_id 있음).
+    하나라도 없으면 다른 칸이고, 그 구분이 이 PR 의 전부다.
+    """
+    from backend.executors import dispatch as _dispatch
+
+    async def _always_times_out(*args: Any, **kwargs: Any) -> Any:
+        # 워커가 집어서 기록할 시간을 준다 — 그러지 않으면 이건 '늦게 기록' 칸이 되고
+        # 흉내 내려던 칸이 아니게 된다.
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if marks.get("recorded_at") is not None:
+                break
+        raise _dispatch.TaskTimeout(
+            "forced",
+            task_id=kwargs.get("task_id"),
+            polls=36,
+            last_status="dispatched",
+            elapsed_s=70.0,
+        )
+
+    monkeypatch.setattr(_dispatch, "await_completion", _always_times_out)
+
+    workspace_id = uuid.uuid4()
+    redis = await _make_redis()
+    async with shared_file_sessionmaker() as factory:
+        wid = await _seed_worker(factory, workspace_id=workspace_id)
+        box = _make_session(
+            redis=redis, factory=factory, workspace_id=workspace_id, workspace_path=str(tmp_path)
+        )
+        marks: dict[str, Any] = {}
+        worker = asyncio.create_task(_run_one_exec_task(redis, factory, wid, marks))
+        await asyncio.sleep(0)
+        started = asyncio.get_running_loop().time()
+        with capture_logs() as logs:
+            result = await box.exec("echo ok", timeout_s=10.0, shell=True)
+            # ⭐ 제품이 포기한 **그 순간**을 잡는다. ``await worker`` 뒤에 재면
+            # 워커는 이미 끝나 있으므로 "제때 기록했다"가 구조적으로 항상 참이 되고,
+            # 이 테스트는 자기가 만든 답을 확인하게 된다 — 실제로 그렇게 써 놓고
+            # 전선을 끊어 보니 뒤집히지 않았다(2026-09-24).
+            gave_up_at = asyncio.get_running_loop().time()
+            await worker
+            _attribute_a_late_worker(marks, started=started, gave_up_at=gave_up_at)
+    await redis.aclose()
+
+    assert result.timed_out is True, "이 테스트의 전제(강제 타임아웃)가 안 걸렸다"
+
+    saw = _events(logs, "harness_worker_saw_task")
+    recorded = _events(logs, "harness_worker_recorded")
+    verdict = _events(logs, _VERDICT_EVENT)
+    assert len(saw) == 1 and len(recorded) == 1, "워커 쪽은 정상이었는데 그 흔적이 없다"
+    assert verdict[0]["verdict"] == "worker_kept_up"
+    assert verdict[0]["task_id"] == saw[0]["task_id"], "살아 있는 판정으로 안 보인다"
+    # ⇒ 이 셋이 함께 있으면 남은 설명은 하나뿐이다: 결과는 제때 커밋됐는데
+    #    awaiter 의 폴링이 끝내 그걸 못 봤다. **제품 쪽 공백**이다.
