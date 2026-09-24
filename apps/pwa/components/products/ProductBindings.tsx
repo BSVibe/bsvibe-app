@@ -45,6 +45,14 @@ type ListState =
   | { state: "error" }
   | { state: "ready"; rows: ResourceBinding[] };
 
+/** 고를 수 있는 커넥터인가 — 취소된 것은 아니다 (#1057).
+ *
+ * 옛 응답이 `is_active` 를 안 실어 주면(`undefined`) 막지 않는다: 알 수 없음을
+ * 취소로 읽으면 멀쩡한 커넥터가 조용히 사라진다. */
+function isSelectable(c: Connector): boolean {
+  return c.is_active !== false;
+}
+
 export default function ProductBindings({
   productId,
   listBindings = realListBindings,
@@ -68,6 +76,14 @@ export default function ProductBindings({
 
   const [list, setList] = useState<ListState>({ state: "loading" });
   const [connectors, setConnectors] = useState<Connector[]>([]);
+  // #1057 — 취소된(soft-revoke) 커넥터는 **고를 수 있는 것이 아니다.**
+  // `DELETE /api/v1/connectors/{id}` 는 `is_active` 를 내리고 ingress 는 404 하며,
+  // `connectors/resolver.py` 는 해소할 때 `is_active` 로 거른다 ⇒ 거기 건 바인딩은
+  // 절대 해소되지 않는다. 그런데 폼은 그걸 유효한 선택지로 줬고, 고르면 성공했고,
+  // 행도 멀쩡히 렌더됐다(2026-09-24 prod 실측). 유령은 메뉴에서 뺀다.
+  //
+  // 서버가 준 목록은 그대로 들고 있는다 — 거르는 것은 **선택지**뿐이다.
+  const selectable = connectors.filter(isSelectable);
   // Form state for adding a new binding.
   const [adding, setAdding] = useState(false);
   const [formConnectorId, setFormConnectorId] = useState<string>("");
@@ -114,7 +130,11 @@ export default function ProductBindings({
       .then((rows) => {
         if (!active) return;
         setConnectors(rows);
-        if (rows.length > 0 && !formConnectorId) setFormConnectorId(rows[0].id);
+        // 기본 선택도 **고를 수 있는 것** 중에서 골라야 한다. `rows[0]` 로 두면
+        // 첫 커넥터가 취소된 것일 때 폼이 열리자마자 유령을 집고 있게 된다 —
+        // 화면에는 그 옵션이 없는데 제출은 그 id 로 나간다.
+        const usable = rows.filter(isSelectable);
+        if (usable.length > 0 && !formConnectorId) setFormConnectorId(usable[0].id);
       })
       .catch(() => {
         /* leave dropdown empty — submit is gated on a chosen connector */
@@ -269,10 +289,10 @@ export default function ProductBindings({
               onChange={(e) => setFormConnectorId(e.target.value)}
               disabled={submitting}
             >
-              {connectors.length === 0 ? (
+              {selectable.length === 0 ? (
                 <option value="">{t("form.noConnectors")}</option>
               ) : (
-                connectors.map((c) => (
+                selectable.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.connector}
                     {c.external_ref ? ` — ${c.external_ref}` : ""}
