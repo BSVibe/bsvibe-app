@@ -1039,6 +1039,79 @@ async def list_product_tree(
     return entries
 
 
+#: 한 번의 검색이 돌려줄 수 있는 최대 경로 수. 브라우저 쪽 목록의 한계이기도 하고,
+#: 큰 레포에서 "a" 를 치는 순간 수천 줄을 실어 보내지 않기 위한 상한이기도 하다.
+_SEARCH_RESULT_CAP = 50
+
+
+@dataclass(frozen=True)
+class TreeSearch:
+    """검색 결과와 **잘렸는지 여부**.
+
+    ⭐ `truncated` 가 값으로 실려 오는 이유: 부르는 쪽에서 `len(results) == limit`
+    로 추론하면 *정확히 limit 개가 있고 더는 없는 경우*와 구분할 수 없고, 서버
+    상한이 `limit` 보다 작을 때는 잘렸는데도 False 가 된다. 실제로 그렇게 짰다가
+    두 테스트에서 걸렸다 — 세는 쪽은 자를 수 있는 쪽이 아니다.
+    """
+
+    results: list[TreeEntry]
+    truncated: bool
+
+
+async def search_product_tree(
+    product_id: uuid.UUID,
+    query: str,
+    *,
+    limit: int = _SEARCH_RESULT_CAP,
+    store: ProductBundleStore | None = None,
+) -> TreeSearch:
+    """Files in the product's ``main`` whose repo-relative path contains *query*.
+
+    Case-insensitive substring over the FULL path, so ``util/`` finds
+    ``src/util/io.py`` — a name-only match cannot answer "what is under util".
+
+    Recursive on purpose, and therefore a SERVER job: the browser fetches the
+    tree one directory at a time (:func:`list_product_tree`), so a file in a
+    directory nobody expanded does not exist on the client at all. There is no
+    client-side filter that could find it.
+
+    ``git ls-tree -r main`` is the source: it sees only what is COMMITTED, so
+    ``.git`` internals, untracked scratch files and build output left in a
+    worktree are never candidates. An exclude list would instead be a list of
+    the junk I happened to think of.
+
+    An empty / whitespace query returns ``[]`` rather than the whole repo —
+    clearing the search box must not dump every path into the UI. Results are
+    capped at *limit* (never above :data:`_SEARCH_RESULT_CAP`); the caller
+    decides how to say "there are more".
+    """
+    query = query.strip()
+    empty = TreeSearch(results=[], truncated=False)
+    if not query:
+        return empty
+    capped = max(1, min(limit, _SEARCH_RESULT_CAP))
+    repo = product_workspace_path(product_id)
+    if not await ensure_product_workspace(product_id, store=store):
+        return empty
+    result = await _git("ls-tree", "-r", "-z", "--name-only", "main", cwd=repo, check=False)
+    if result.returncode != 0:
+        return empty
+    needle = query.lower()
+    hits: list[TreeEntry] = []
+    truncated = False
+    for path in result.stdout.split("\0"):
+        if not path or needle not in path.lower():
+            continue
+        if len(hits) >= capped:
+            # 한 건을 더 **만나 본** 뒤에 자른다 — 개수만으로는 "딱 맞았다"와
+            # "잘렸다"가 같은 숫자다.
+            truncated = True
+            break
+        # ``-r`` without ``-t`` yields blobs only, so every hit is a file.
+        hits.append(TreeEntry(name=path.split("/")[-1], path=path, kind="file"))
+    return TreeSearch(results=hits, truncated=truncated)
+
+
 __all__ = [
     "capture_run_changed_paths",
     "MergeOutcome",
@@ -1046,6 +1119,8 @@ __all__ = [
     "ProductWorkspaceError",
     "TreeEntry",
     "list_product_tree",
+    "search_product_tree",
+    "TreeSearch",
     "abort_merge",
     "add_run_worktree",
     "commit_worktree",

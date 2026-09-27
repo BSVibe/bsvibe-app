@@ -9,7 +9,7 @@
  */
 
 import ProductFiles from "@/components/products/ProductFiles";
-import type { FileTreeEntry, ProductFileContent } from "@/lib/api/types";
+import type { FileTreeEntry, ProductFileContent, ProductFileSearch } from "@/lib/api/types";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -241,4 +241,147 @@ it("a breadcrumb directory that is already open stays open", async () => {
   await userEvent.click(within(crumb).getByRole("button", { name: "src" }));
 
   expect(screen.getByRole("button", { name: "app.py" })).toBeInTheDocument();
+});
+
+// ── #1042 — 검색 ───────────────────────────────────────────────────────────
+//
+// 트리는 한 단계씩 게으르게 가져온다 ⇒ **안 펼친 디렉터리의 파일은 클라이언트에
+// 존재하지 않는다.** 로컬 필터로는 절대 못 찾는다. 서버가 재귀로 훑는다.
+
+const DEEP_HIT: FileTreeEntry[] = [{ name: "io.py", path: "src/util/io.py", kind: "file" }];
+
+it("finds a file that the lazy tree has not even fetched yet", async () => {
+  const listFiles = vi.fn(async () => ROOT); // src/ 는 한 번도 펼쳐지지 않는다
+  const searchFiles = vi.fn(async () => ({ results: DEEP_HIT, truncated: false }));
+  render(
+    <ProductFiles
+      productId="p1"
+      listFiles={listFiles}
+      getContent={vi.fn(async (_p: string, path: string) => contentOf(path))}
+      searchFiles={searchFiles}
+    />,
+  );
+
+  await waitFor(() => screen.getByRole("button", { name: /src/ }));
+  await userEvent.type(screen.getByRole("searchbox", { name: /search|검색/i }), "io");
+
+  await waitFor(() => expect(searchFiles).toHaveBeenCalledWith("p1", "io"));
+  expect(await screen.findByRole("button", { name: "src/util/io.py" })).toBeInTheDocument();
+  // 로컬 필터였다면 절대 못 찾는다 — src 의 자식은 한 번도 안 가져왔다.
+  expect(listFiles).toHaveBeenCalledTimes(1);
+});
+
+it("opens a search hit in the content pane", async () => {
+  const getContent = vi.fn(async (_p: string, path: string) => contentOf(path));
+  render(
+    <ProductFiles
+      productId="p1"
+      listFiles={vi.fn(async () => ROOT)}
+      getContent={getContent}
+      searchFiles={vi.fn(async () => ({ results: DEEP_HIT, truncated: false }))}
+    />,
+  );
+
+  await waitFor(() => screen.getByRole("button", { name: /src/ }));
+  await userEvent.type(screen.getByRole("searchbox", { name: /search|검색/i }), "io");
+  await userEvent.click(await screen.findByRole("button", { name: "src/util/io.py" }));
+
+  expect(await screen.findByText("content of src/util/io.py")).toBeInTheDocument();
+});
+
+it("says so when the server truncated the results", async () => {
+  // 잘린 것을 안 알리면 화면이 "이게 전부"라고 거짓말한다.
+  render(
+    <ProductFiles
+      productId="p1"
+      listFiles={vi.fn(async () => ROOT)}
+      getContent={vi.fn(async (_p: string, path: string) => contentOf(path))}
+      searchFiles={vi.fn(async () => ({ results: DEEP_HIT, truncated: true }))}
+    />,
+  );
+
+  await waitFor(() => screen.getByRole("button", { name: /src/ }));
+  await userEvent.type(screen.getByRole("searchbox", { name: /search|검색/i }), "io");
+
+  expect(await screen.findByText(/더 있|more/i)).toBeInTheDocument();
+});
+
+it("shows the tree again when the search box is cleared", async () => {
+  const searchFiles = vi.fn(async () => ({ results: DEEP_HIT, truncated: false }));
+  render(
+    <ProductFiles
+      productId="p1"
+      listFiles={vi.fn(async () => ROOT)}
+      getContent={vi.fn(async (_p: string, path: string) => contentOf(path))}
+      searchFiles={searchFiles}
+    />,
+  );
+
+  await waitFor(() => screen.getByRole("button", { name: /src/ }));
+  const box = screen.getByRole("searchbox", { name: /search|검색/i });
+  await userEvent.type(box, "io");
+  await screen.findByRole("button", { name: "src/util/io.py" });
+
+  await userEvent.clear(box);
+  // 검색을 지우면 트리로 돌아온다 — 빈 결과 화면에 갇히면 안 된다.
+  await waitFor(() => expect(screen.getByRole("button", { name: /src/ })).toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "src/util/io.py" })).not.toBeInTheDocument();
+});
+
+it("says plainly when a search finds nothing", async () => {
+  render(
+    <ProductFiles
+      productId="p1"
+      listFiles={vi.fn(async () => ROOT)}
+      getContent={vi.fn(async (_p: string, path: string) => contentOf(path))}
+      searchFiles={vi.fn(async () => ({ results: [], truncated: false }))}
+    />,
+  );
+
+  await waitFor(() => screen.getByRole("button", { name: /src/ }));
+  await userEvent.type(screen.getByRole("searchbox", { name: /search|검색/i }), "zzz");
+
+  // 빈 화면은 "없다"와 "아직 로딩중"과 "깨졌다"를 구분해 주지 않는다.
+  expect(await screen.findByText(/찾은 파일이 없|no files/i)).toBeInTheDocument();
+});
+
+it("does not let a slow earlier search overwrite the newest one", async () => {
+  // 타이핑마다 요청이 나가면 느린 응답이 빠른 응답을 **덮어쓴다** — "io" 를 쳤는데
+  // "i" 의 결과가 화면에 남는 모양이다. 이 방어를 지워도 초록이면 아무것도 안
+  // 지키는 것이므로, 순서를 뒤집어 둔 두 응답으로 고정한다.
+  const slow: FileTreeEntry[] = [{ name: "old.py", path: "stale/old.py", kind: "file" }];
+  // 콜백 안에서만 대입되는 변수를 TS 는 `never` 로 좁힌다 — 해소자를 밖으로 꺼낸다.
+  let resolveFirst!: (v: ProductFileSearch) => void;
+  const firstCall = new Promise<ProductFileSearch>((res) => {
+    resolveFirst = res;
+  });
+  const searchFiles = vi
+    .fn()
+    .mockImplementationOnce(() => firstCall)
+    .mockImplementationOnce(async () => ({ results: DEEP_HIT, truncated: false }));
+
+  render(
+    <ProductFiles
+      productId="p1"
+      listFiles={vi.fn(async () => ROOT)}
+      getContent={vi.fn(async (_p: string, path: string) => contentOf(path))}
+      searchFiles={searchFiles}
+    />,
+  );
+
+  await waitFor(() => screen.getByRole("button", { name: /src/ }));
+  const box = screen.getByRole("searchbox", { name: /search|검색/i });
+  await userEvent.type(box, "i");
+  await waitFor(() => expect(searchFiles).toHaveBeenCalledTimes(1));
+  await userEvent.type(box, "o");
+  await waitFor(() => expect(searchFiles).toHaveBeenCalledTimes(2));
+
+  // 최신 결과가 먼저 도착하고, 그 **뒤에** 늦은 첫 응답이 온다.
+  await screen.findByRole("button", { name: "src/util/io.py" });
+  resolveFirst({ results: slow, truncated: false });
+
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "stale/old.py" })).not.toBeInTheDocument(),
+  );
+  expect(screen.getByRole("button", { name: "src/util/io.py" })).toBeInTheDocument();
 });

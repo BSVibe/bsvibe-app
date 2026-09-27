@@ -491,6 +491,16 @@ export interface FileTreeEntry {
   kind: "file" | "dir";
 }
 
+/** `GET /api/v1/products/{id}/files/search` (ProductFileSearchResponse).
+ *
+ *  `truncated` is carried as a VALUE, not inferred from `results.length`:
+ *  the count cannot tell "exactly the limit and no more" from "cut off", and
+ *  the server's own cap can be lower than the limit asked for. */
+export interface ProductFileSearch {
+  results: FileTreeEntry[];
+  truncated: boolean;
+}
+
 /** `GET /api/v1/products/{id}/files/content` (ProductFileContentResponse) —
  *  one file's content from the product main checkout, capped + binary-aware. */
 export interface ProductFileContent {

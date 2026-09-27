@@ -235,6 +235,19 @@ class FileTreeEntryResponse(BaseModel):
     kind: Literal["file", "dir"]
 
 
+class ProductFileSearchResponse(BaseModel):
+    """파일 검색 결과 (#1042).
+
+    ``truncated`` 가 따로 있는 이유: 상한에 걸린 것을 안 알리면 화면이 "이게
+    전부"라고 거짓말한다. 개수만 보고는 딱 맞은 건지 잘린 건지 알 수 없다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[FileTreeEntryResponse]
+    truncated: bool = False
+
+
 class ProductFileContentResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
