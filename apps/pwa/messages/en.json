@@ -172,6 +172,7 @@
     "files": "Files",
     "filesEmpty": "No files produced for this product yet.",
     "filesSelectHint": "Select a file to view it.",
+    "filePathLabel": "File path",
     "fileLoading": "Opening file…",
     "fileError": "Couldn’t open this file. See the repo.",
     "fileTruncated": "Showing the first part of a large file.",

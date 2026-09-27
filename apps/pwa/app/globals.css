@@ -3619,8 +3619,13 @@ main.login {
   border: 1px solid var(--hair-strong);
   border-radius: var(--radius);
   padding: 12px 14px;
-  min-height: 120px;
+  /* #1042 — 120px 였다. 트리는 60vh 까지 늘어나는데 내용 쪽만 손바닥만 해서,
+     페이지 하단이 통째로 비고 오른쪽은 빈 사각형처럼 보였다. 두 칸의 높이를
+     같은 기준으로 맞춘다. */
+  min-height: 60vh;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .product-files__hint {
@@ -3654,13 +3659,61 @@ main.login {
   color: var(--ink);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 50vh;
+  /* 고정 50vh 대신 남은 공간을 쓴다 — 짧은 파일에서 상자 안에 또 빈칸이 생기던
+     자리다. 넘치면 여기서만 스크롤한다(페이지는 안 흔들린다). */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+}
+
+.product-files__crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.78rem;
+}
+
+.product-files__crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.product-files__crumb-sep {
+  color: var(--ink-3);
+}
+
+.product-files__crumb-dir {
+  font: inherit;
+  color: var(--ink-3);
+  background: none;
+  border: none;
+  padding: 0 2px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.product-files__crumb-dir:hover {
+  color: var(--ink);
+  background: var(--accent-bg);
+}
+
+.product-files__crumb-leaf {
+  color: var(--ink);
+  font-weight: 550;
+  word-break: break-all;
 }
 
 @media (max-width: 720px) {
   .product-files__split {
     grid-template-columns: 1fr;
+  }
+
+  /* 한 줄로 쌓이면 두 칸이 각각 60vh 라 화면을 두 번 넘긴다. */
+  .product-files__content {
+    min-height: 40vh;
   }
 }
 
