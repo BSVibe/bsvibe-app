@@ -3,10 +3,11 @@
 import {
   getProductFileContent as realGetContent,
   listProductFiles as realListFiles,
+  searchProductFiles as realSearchFiles,
 } from "@/lib/api/products";
-import type { FileTreeEntry, ProductFileContent } from "@/lib/api/types";
+import type { FileTreeEntry, ProductFileContent, ProductFileSearch } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * "Files" — a lazy file-tree browser over the product's git `main`. Replaces
@@ -22,6 +23,13 @@ type ListState =
   | { state: "loading" }
   | { state: "error" }
   | { state: "ready"; entries: FileTreeEntry[] };
+
+type SearchState =
+  /** 검색창이 비어 있다 — 트리를 보여준다. */
+  | { state: "off" }
+  | { state: "searching" }
+  | { state: "error" }
+  | { state: "ready"; results: FileTreeEntry[]; truncated: boolean };
 
 type ContentState =
   | { state: "idle" }
@@ -47,10 +55,12 @@ export default function ProductFiles({
   productId,
   listFiles = realListFiles,
   getContent = realGetContent,
+  searchFiles = realSearchFiles,
 }: {
   productId: string;
   listFiles?: (productId: string, path?: string) => Promise<FileTreeEntry[]>;
   getContent?: (productId: string, path: string) => Promise<ProductFileContent>;
+  searchFiles?: (productId: string, q: string) => Promise<ProductFileSearch>;
 }) {
   const t = useTranslations("products");
   const [root, setRoot] = useState<ListState>({ state: "loading" });
@@ -60,6 +70,8 @@ export default function ProductFiles({
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState<ContentState>({ state: "idle" });
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchState>({ state: "off" });
 
   const selectFile = useCallback(
     (path: string) => {
@@ -95,6 +107,32 @@ export default function ProductFiles({
       active = false;
     };
   }, [productId, listFiles, selectFile]);
+
+  // 검색. 타이핑마다 요청이 나가면 느린 응답이 빠른 응답을 덮어써서 **다른
+  // 질의의 결과**가 화면에 남는다(질의 "io" 를 쳤는데 "i" 의 결과가 보이는 모양).
+  // 그래서 (1) 디바운스하고 (2) 자기 세대 번호가 최신일 때만 반영한다.
+  const searchGeneration = useRef(0);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setHits({ state: "off" });
+      return;
+    }
+    const mine = ++searchGeneration.current;
+    setHits({ state: "searching" });
+    const timer = setTimeout(() => {
+      searchFiles(productId, q)
+        .then((r) => {
+          if (searchGeneration.current !== mine) return;
+          setHits({ state: "ready", results: r.results, truncated: r.truncated });
+        })
+        .catch(() => {
+          if (searchGeneration.current !== mine) return;
+          setHits({ state: "error" });
+        });
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [query, productId, searchFiles]);
 
   const setDirOpen = useCallback(
     async (path: string, willExpand: boolean) => {
@@ -203,7 +241,53 @@ export default function ProductFiles({
 
       {root.state === "ready" && root.entries.length > 0 && (
         <div className="product-files__split">
-          <div className="product-files__list">{renderNodes(root.entries, 0)}</div>
+          <div className="product-files__list">
+            {/* #1042 — 검색. 트리는 한 단계씩 게으르게 가져오므로 **안 펼친
+                디렉터리의 파일은 클라이언트에 존재하지 않는다** — 로컬 필터로는
+                절대 못 찾는다. 서버가 커밋된 트리를 재귀로 훑는다. */}
+            <input
+              type="search"
+              className="product-files__search"
+              aria-label={t("fileSearchLabel")}
+              placeholder={t("fileSearchPlaceholder")}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {hits.state === "off" && renderNodes(root.entries, 0)}
+            {hits.state === "searching" && (
+              <p className="product-files__hint" aria-busy="true">
+                {t("fileSearching")}
+              </p>
+            )}
+            {hits.state === "error" && <p className="product-files__hint">{t("fileError")}</p>}
+            {hits.state === "ready" && hits.results.length === 0 && (
+              /* 빈 화면은 "없다"와 "아직 로딩중"과 "깨졌다"를 구분해 주지 않는다. */
+              <p className="product-files__hint">{t("fileSearchEmpty")}</p>
+            )}
+            {hits.state === "ready" && hits.results.length > 0 && (
+              <ul className="product-files__tree">
+                {hits.results.map((hit) => (
+                  <li key={hit.path}>
+                    <button
+                      type="button"
+                      className={`product-files__node${
+                        selected === hit.path ? " product-files__node--active" : ""
+                      }`}
+                      style={{ paddingLeft: 8 }}
+                      onClick={() => selectFile(hit.path)}
+                      title={hit.path}
+                    >
+                      {hit.path}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {hits.state === "ready" && hits.truncated && (
+              /* 잘린 것을 안 알리면 화면이 "이게 전부"라고 거짓말한다. */
+              <p className="product-files__hint">{t("fileSearchTruncated")}</p>
+            )}
+          </div>
 
           <div className="product-files__content">
             {content.state === "idle" && (

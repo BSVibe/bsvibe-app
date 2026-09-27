@@ -3564,6 +3564,22 @@ main.login {
   overflow-y: auto;
 }
 
+.product-files__search {
+  width: 100%;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--surface-2, transparent);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  margin-bottom: 4px;
+}
+
+.product-files__search::placeholder {
+  color: var(--ink-3);
+}
+
 .product-files__tree {
   list-style: none;
   margin: 0;

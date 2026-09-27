@@ -86,6 +86,10 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         ("DELETE", "/{product_id}/bindings/{binding_id}"),
         ("GET", "/{product_id}/files"),
         ("GET", "/{product_id}/files/content"),
+        # #1042 — 파일 검색. 트리 나열이 **한 단계씩 게으른** 탓에 안 펼친
+        # 디렉터리의 파일은 클라이언트에 존재하지 않는다 ⇒ 재귀 훑기는 서버 일이다.
+        # 경로가 `/files` 와 겹치지 않는 별도 세그먼트라 라우팅 충돌은 없다.
+        ("GET", "/{product_id}/files/search"),
     },
     "backend.api.v1.safemode": {
         ("GET", "/queue"),

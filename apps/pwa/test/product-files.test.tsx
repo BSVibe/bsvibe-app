@@ -9,7 +9,7 @@
  */
 
 import ProductFiles from "@/components/products/ProductFiles";
-import type { FileTreeEntry, ProductFileContent } from "@/lib/api/types";
+import type { FileTreeEntry, ProductFileContent, ProductFileSearch } from "@/lib/api/types";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -343,4 +343,45 @@ it("says plainly when a search finds nothing", async () => {
 
   // 빈 화면은 "없다"와 "아직 로딩중"과 "깨졌다"를 구분해 주지 않는다.
   expect(await screen.findByText(/찾은 파일이 없|no files/i)).toBeInTheDocument();
+});
+
+it("does not let a slow earlier search overwrite the newest one", async () => {
+  // 타이핑마다 요청이 나가면 느린 응답이 빠른 응답을 **덮어쓴다** — "io" 를 쳤는데
+  // "i" 의 결과가 화면에 남는 모양이다. 이 방어를 지워도 초록이면 아무것도 안
+  // 지키는 것이므로, 순서를 뒤집어 둔 두 응답으로 고정한다.
+  const slow: FileTreeEntry[] = [{ name: "old.py", path: "stale/old.py", kind: "file" }];
+  // 콜백 안에서만 대입되는 변수를 TS 는 `never` 로 좁힌다 — 해소자를 밖으로 꺼낸다.
+  let resolveFirst!: (v: ProductFileSearch) => void;
+  const firstCall = new Promise<ProductFileSearch>((res) => {
+    resolveFirst = res;
+  });
+  const searchFiles = vi
+    .fn()
+    .mockImplementationOnce(() => firstCall)
+    .mockImplementationOnce(async () => ({ results: DEEP_HIT, truncated: false }));
+
+  render(
+    <ProductFiles
+      productId="p1"
+      listFiles={vi.fn(async () => ROOT)}
+      getContent={vi.fn(async (_p: string, path: string) => contentOf(path))}
+      searchFiles={searchFiles}
+    />,
+  );
+
+  await waitFor(() => screen.getByRole("button", { name: /src/ }));
+  const box = screen.getByRole("searchbox", { name: /search|검색/i });
+  await userEvent.type(box, "i");
+  await waitFor(() => expect(searchFiles).toHaveBeenCalledTimes(1));
+  await userEvent.type(box, "o");
+  await waitFor(() => expect(searchFiles).toHaveBeenCalledTimes(2));
+
+  // 최신 결과가 먼저 도착하고, 그 **뒤에** 늦은 첫 응답이 온다.
+  await screen.findByRole("button", { name: "src/util/io.py" });
+  resolveFirst({ results: slow, truncated: false });
+
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "stale/old.py" })).not.toBeInTheDocument(),
+  );
+  expect(screen.getByRole("button", { name: "src/util/io.py" })).toBeInTheDocument();
 });
