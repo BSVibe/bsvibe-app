@@ -15,10 +15,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
-from backend.storage.product_workspace import list_product_tree
+from backend.storage.product_workspace import list_product_tree, search_product_tree
 
 from ._helpers import _MAX_FILE_BYTES, _looks_binary, _resolve_product_in_workspace
-from ._schemas import FileTreeEntryResponse, ProductFileContentResponse
+from ._schemas import (
+    FileTreeEntryResponse,
+    ProductFileContentResponse,
+    ProductFileSearchResponse,
+)
 
 router = APIRouter()
 
@@ -36,6 +40,37 @@ async def list_product_files(
     await _resolve_product_in_workspace(session, product_id, workspace_id)
     entries = await list_product_tree(product_id, path)
     return [FileTreeEntryResponse(name=e.name, path=e.path, kind=e.kind) for e in entries]
+
+
+@router.get("/{product_id}/files/search")
+async def search_product_files(
+    product_id: uuid.UUID,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    q: str = "",
+    limit: int = 50,
+) -> ProductFileSearchResponse:
+    """Find files in the product's ``main`` whose path contains ``q``.
+
+    The tree browser is LAZY — one directory per request — so a file inside a
+    folder nobody expanded does not exist on the client and no client-side
+    filter can reach it. This walks the committed tree server-side instead.
+
+    An empty query yields no results (clearing the box must not dump the repo).
+    ``truncated`` says the cap was hit, so the UI can avoid claiming the list is
+    complete. Same workspace gate as the listing and content reads — a new
+    endpoint standing quietly outside the gate is a shape this repo has hit
+    before.
+    """
+    await _resolve_product_in_workspace(session, product_id, workspace_id)
+    found = await search_product_tree(product_id, q, limit=limit)
+    return ProductFileSearchResponse(
+        results=[
+            FileTreeEntryResponse(name=e.name, path=e.path, kind=e.kind) for e in found.results
+        ],
+        # 세는 쪽이 아니라 **자른 쪽**이 말한다.
+        truncated=found.truncated,
+    )
 
 
 @router.get("/{product_id}/files/content")

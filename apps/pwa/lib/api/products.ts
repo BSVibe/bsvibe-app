@@ -15,6 +15,7 @@ import type {
   ProductBootstrap,
   ProductCreate,
   ProductFileContent,
+  ProductFileSearch,
 } from "./types";
 
 /** Products in the caller's resolved active workspace. */
@@ -47,6 +48,20 @@ export function deleteProduct(productId: string): Promise<void> {
 export function listProductFiles(productId: string, path = ""): Promise<FileTreeEntry[]> {
   const qs = path ? `?path=${encodeURIComponent(path)}` : "";
   return apiFetch<FileTreeEntry[]>(`/api/v1/products/${productId}/files${qs}`);
+}
+
+/** Find files in a product's repo `main` whose path contains `q`.
+ *
+ *  Server-side on purpose: the tree browser is lazy (one directory per call),
+ *  so a file inside a folder nobody expanded is not on the client at all and
+ *  no local filter could find it. */
+export function searchProductFiles(
+  productId: string,
+  q: string,
+  limit = 50,
+): Promise<ProductFileSearch> {
+  const qs = `?q=${encodeURIComponent(q)}&limit=${limit}`;
+  return apiFetch<ProductFileSearch>(`/api/v1/products/${productId}/files/search${qs}`);
 }
 
 /** Read one file's content from a product's repo `main` checkout. */

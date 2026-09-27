@@ -23,6 +23,7 @@ import pytest
 from backend.config import get_settings
 from backend.storage.product_workspace import (
     ProductWorkspaceError,
+    TreeSearch,
     add_run_worktree,
     init_product_workspace,
     list_product_tree,
@@ -31,6 +32,7 @@ from backend.storage.product_workspace import (
     remove_run_worktree,
     run_branch_name,
     run_worktree_path,
+    search_product_tree,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -373,6 +375,71 @@ async def test_list_product_tree_lists_one_level_dirs_before_files() -> None:
         ("util", "src/util", "dir"),
         ("app.py", "src/app.py", "file"),
     ]
+
+
+# ── #1042 — 검색 ───────────────────────────────────────────────────────────
+#
+# 파일 탭에 검색이 없다는 것이 형님 실사용 피드백의 한 축이었고, 2026-09-24 에
+# 화면으로 확인했다. 브라우저 쪽만으로는 못 만든다: 트리는 **한 단계씩 게으르게**
+# 가져오므로 아직 안 펼친 디렉터리의 파일은 프론트에 존재하지도 않는다. 그래서
+# 재귀로 훑는 것은 서버여야 한다.
+#
+# `git ls-tree -r main` 을 쓴다 — **커밋된 트리만** 보므로 `.git` 내부도, 미추적
+# 쓰레기도, 워크트리에 남은 빌드 산출물도 애초에 후보에 없다. 별도 제외 목록을
+# 만들면 그 목록이 곧 내 상상력의 한계가 된다.
+
+
+async def test_search_product_tree_finds_files_by_substring_case_insensitively() -> None:
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    await _commit_to_main(
+        product_id,
+        {"README.md": "# hi\n", "src/App.py": "x = 1\n", "src/util/io.py": "y = 2\n"},
+    )
+
+    hits = await search_product_tree(product_id, "app")
+    assert [e.path for e in hits.results] == ["src/App.py"]
+
+    # 경로 조각으로도 찾는다 — 파일명만 보면 "util 안에 뭐가 있더라"를 못 묻는다.
+    found = await search_product_tree(product_id, "util/")
+    assert [e.path for e in found.results] == ["src/util/io.py"]
+
+
+async def test_search_product_tree_returns_files_only() -> None:
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    await _commit_to_main(product_id, {"src/app.py": "x = 1\n"})
+
+    hits = await search_product_tree(product_id, "src")
+    # `src` 디렉터리 자체는 결과가 아니다 — 열어서 볼 내용이 없다.
+    assert [(e.path, e.kind) for e in hits.results] == [("src/app.py", "file")]
+
+
+async def test_search_product_tree_refuses_to_dump_the_repo_for_an_empty_query() -> None:
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    await _commit_to_main(product_id, {"a.py": "1\n", "b.py": "2\n"})
+
+    # 빈 질의를 "전부"로 읽으면, 검색창을 지우는 순간 레포 전체가 쏟아진다.
+    assert await search_product_tree(product_id, "") == TreeSearch(results=[], truncated=False)
+    assert (await search_product_tree(product_id, "   ")).results == []
+
+
+async def test_search_product_tree_caps_its_result_count() -> None:
+    product_id = uuid.uuid4()
+    await init_product_workspace(product_id)
+    await _commit_to_main(product_id, {f"mod{i}.py": "x\n" for i in range(12)})
+
+    hits = await search_product_tree(product_id, "mod", limit=5)
+    assert len(hits.results) == 5
+    assert hits.truncated is True
+    # 상한이 걸렸는지 **부르는 쪽이 알 수 있어야** 한다 — 아래 API 계층이
+    # "더 있음"을 말한다. 여기서는 잘린 것 자체를 고정한다.
+    assert all(e.kind == "file" for e in hits.results)
+
+
+async def test_search_product_tree_uninitialised_product_returns_empty() -> None:
+    assert (await search_product_tree(uuid.uuid4(), "anything")).results == []
 
 
 async def test_list_product_tree_uninitialised_product_returns_empty() -> None:
