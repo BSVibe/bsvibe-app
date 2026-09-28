@@ -26,7 +26,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.data.rls import workspace_session_scope
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.copy import (
     AUTH_DOWN_LINK,
@@ -130,7 +130,8 @@ class AuthDependencyWorker(BaseWorker):
     async def _announce(self, status: UserKeySourceStatus, *, recovered: bool) -> int:
         state = "up" if recovered else "down"
         async with self._sf() as session:
-            workspaces = (await session.execute(select(WorkspaceRow))).scalars().all()
+            async with cross_tenant_session_read(session):
+                workspaces = (await session.execute(select(WorkspaceRow))).scalars().all()
             for ws in workspaces:
                 # #959 — one workspace per iteration. The copy/prefs
                 # lookups and the notification emit below all read this

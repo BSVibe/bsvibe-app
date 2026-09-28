@@ -56,6 +56,7 @@ import structlog
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import cross_tenant_session_read
 from backend.identity.domain.repositories import WorkspaceRepository
 from backend.identity.infrastructure.repositories import SqlAlchemyWorkspaceRepository
 from plugin.audit.models import AuditOutboxRecord
@@ -127,7 +128,8 @@ class AuditRetentionSweepRunner:
         total_deleted = 0
         async with session_factory() as session:
             repo = self._workspace_repo_factory(session)
-            rows = await repo.list_with_audit_retention()
+            async with cross_tenant_session_read(session):
+                rows = await repo.list_with_audit_retention()
             for workspace_id, retention_days in rows:
                 if retention_days < 1:
                     # Defense-in-depth: REST validates ``>=1``, but a stray
