@@ -506,9 +506,19 @@ async def dispatch_task(
 ) -> str:
     """XADD ``task`` onto the worker's stream + mark it ``dispatched``.
 
-    The payload is flat strings only (the Redis Streams constraint). The DB row
-    is flipped to ``status="dispatched"`` with ``worker_id`` set in the SAME
-    session (the caller commits). Returns the stream entry id.
+    The payload is flat strings only (the Redis Streams constraint). Returns the
+    stream entry id.
+
+    **Commits before it publishes.** The row is flipped to ``dispatched`` with
+    ``worker_id`` set and the session is COMMITTED, and only then is the task
+    XADDed — so whatever reads the stream can already see the row. The worker
+    reports on its own session; publishing first let a fast worker report into
+    a row that did not exist yet, and ``record_result`` dropped it (CI
+    2026-09-28, #950). That commit covers the caller's transaction too: both
+    callers create the task in it and committed right after this anyway.
+
+    A publish that fails after the commit closes the row ``failed`` before
+    re-raising — left ``dispatched`` it would read as work a worker holds.
 
     ``env`` — environment for an ``exec`` command, carried BESIDE the command
     rather than inside it. A product's declared verification secrets travel this
@@ -537,21 +547,28 @@ async def dispatch_task(
     keeps its own default).
     """
     payload = _build_dispatch_payload(task, action=action, mcp=mcp, env=env, timeout_s=timeout_s)
-    msg_id = await redis.xadd(
-        worker_stream(worker_id),
-        payload,
-        maxlen=WORKER_STREAM_MAXLEN,
-        approximate=True,
-    )
-
+    task_id, executor_type = task.id, task.executor_type
     task.worker_id = worker_id
     task.status = "dispatched"
-    await session.flush()
+    await session.commit()
+    try:
+        msg_id = await redis.xadd(
+            worker_stream(worker_id),
+            payload,
+            maxlen=WORKER_STREAM_MAXLEN,
+            approximate=True,
+        )
+    except Exception:
+        logger.warning("executor_task_publish_failed", task_id=str(task_id), exc_info=True)
+        task.status = "failed"
+        task.error_message = "dispatch failed: the task could not be published to the worker"
+        await session.commit()
+        raise
     logger.info(
         "executor_task_dispatched",
-        task_id=str(task.id),
+        task_id=str(task_id),
         worker_id=str(worker_id),
-        executor_type=task.executor_type,
+        executor_type=executor_type,
     )
     return str(msg_id)
 
@@ -699,6 +716,7 @@ async def record_result(
     """
     task = await session.get(ExecutorTaskRow, task_id)
     if task is None:
+        logger.warning("executor_task_result_for_unknown_task", task_id=str(task_id))
         return None
     # H1 (2026-09-10 audit) — a bare ``task_id`` from the /result body is not
     # enough to close a task. The row must have been dispatched TO THIS worker,

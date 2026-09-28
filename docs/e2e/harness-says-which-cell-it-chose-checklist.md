@@ -65,19 +65,23 @@
 
 ## CI 에서만 닫히는 항목 — ⚠️ **머지했다고 닫지 마라**
 
-- [ ] **다음 CI 빨강의 아티팩트에서 이 행들이 보인다.**
-      `pytest-structlog` 아티팩트를 받아 `harness_worker_attribution` 을 세고,
-      `task_id` 가 있는 행만 남긴 뒤 flake 태스크의 id 로 조인한다
-- [ ] **그 빨강에서 칸이 갈린다** — 아래 셋 중 어느 것인지 **한 번의 조회**로 나와야 한다
+- [x] **다음 CI 빨강의 아티팩트에서 이 행들이 보인다.** — 2026-09-28, PR #1064 run
+      `36402552114`. `harness_worker_attribution` 10행, flake 태스크 `96fdca42` 로 조인됨
+- [x] **그 빨강에서 칸이 갈린다** — 아래 셋 중 어느 것인지 **한 번의 조회**로 나와야 한다
 
       | 아티팩트가 보이는 것 | 판정 |
       |---|---|
       | 그 `task_id` 에 `harness_worker_saw_task` **없음** | 하네스가 태스크를 **못 받았다** — 수신/클레임 실패 |
       | `saw_task` 있고 `harness_worker_recorded` 없음 | 하네스가 받고 **서브프로세스에서 멈췄다** |
       | `recorded` 있고 `verdict=worker_kept_up` 인데 제품이 타임아웃 | **제품 쪽 공백** — 기록이 커밋됐는데 awaiter 가 못 봤다 (판정표 다섯째 칸) |
-- [ ] **음성 대조군을 같은 창에서** — 같은 아티팩트에 `executor_task_dispatched` 가
-      있는지 먼저 확인한다. 생산자가 꺼져 있으면 그 0 은 *"안 일어났다"* 가 아니라
-      *"잴 수 없다"* 다 (이 이슈가 두 번 속은 모양)
 
-> 🧭 **이 체크리스트의 마지막 세 칸은 빨강을 기다린다.** flake 는 재현 명령이 없다 —
-> 그래서 *"고쳤다"* 가 아니라 *"다음에 읽을 수 있게 했다"* 가 이 PR 의 주장이다.
+      **결과**: 한 번의 조회로 나왔다. 표로는 셋째 칸
+      (`saw_task` 0.010s → `recorded` 0.018s → `worker_kept_up` → 제품 포기 90.06s).
+      **그런데 그 칸의 전제 *"기록이 커밋됐는데"* 가 틀렸다**: 성공 태스크엔 있는
+      `executor_task_result_recorded` 가 없었고, `record_result` 의 두 거절 경로 warning 도 없었다
+      ⇒ 무로그 `task is None → return None`. 하네스는 반환값을 안 보고 `recorded` 를 찍었다.
+      원인은 **publish-before-commit** — `dispatch_task` 가 커밋 전에 xadd 했다(고친 PR 참조)
+- [x] **음성 대조군을 같은 창에서** — 같은 아티팩트에 `executor_task_dispatched` **123행**. 생산자는 켜져 있었다
+
+> 🧭 **이 체크리스트는 닫혔다.** 교훈: `harness_worker_recorded` 는 *"기록했다"* 가 아니라
+> *"record_result 를 불렀다"* 를 쟀다 — 센서가 호출을 재고 결과를 안 쟀다. 이제 하네스가 반환값을 단언한다.

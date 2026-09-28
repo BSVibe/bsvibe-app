@@ -280,7 +280,10 @@ async def _run_one_exec_task(
                 out, _ = await proc.communicate()
                 exit_code = proc.returncode or 0
                 async with factory() as s:
-                    await dispatch.record_result(
+                    # ``harness_worker_recorded`` used to mean "called record_result":
+                    # on CI 2026-09-28 the call returned None (row not visible yet)
+                    # and the harness logged "recorded" anyway (#950).
+                    closed = await dispatch.record_result(
                         s,
                         redis,
                         task_id=task_id,
@@ -290,6 +293,7 @@ async def _run_one_exec_task(
                         error_message=None if exit_code == 0 else f"exit {exit_code}",
                     )
                     await s.commit()
+                assert closed is not None, f"record_result dropped the report for {task_id}"
                 marks["recorded_at"] = asyncio.get_running_loop().time()
                 _harness_log.info(
                     "harness_worker_recorded",
