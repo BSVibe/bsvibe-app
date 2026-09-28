@@ -20,6 +20,7 @@ import uuid
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.data.rls import workspace_session_scope
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.infrastructure.repositories import (
     SqlAlchemyMembershipRepository,
@@ -132,8 +133,19 @@ async def ensure_user_bootstrapped(
             name=_default_workspace_name(email),
             safe_mode=True,
         )
-        await workspaces.add(workspace)
-        await session.flush()
+        # #959 — 자기가 만들 워크스페이스의 id 로 **먼저** 스코프를 건다.
+        #
+        # RLS 정책은 오늘 빈 GUC 를 통과시키지만(fail-open), 그 탈출구를 닫는 순간
+        # 이 INSERT 가 막힌다: 아직 없는 워크스페이스라 걸 GUC 가 없고
+        # `WITH CHECK (id::text = GUC)` 가 거절한다 — 닭-달걀이다.
+        #
+        # id 는 **앱이 만든다**(위 `uuid.uuid4()`). 그러니 쓰기 전에 그 id 를
+        # 게시하면 WITH CHECK 가 통과하고, 정책을 약화시키지 않고 풀린다.
+        # 스코프 안에서 flush 하는 것이 요점이다 — 나중으로 미루면 GUC 가 비워진
+        # 뒤(커밋 시점)에 나가 다시 막힌다.
+        async with workspace_session_scope(session, workspace.id):
+            await workspaces.add(workspace)
+            await session.flush()
         membership = MembershipRow(
             id=uuid.uuid4(),
             user_id=user.id,

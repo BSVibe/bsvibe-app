@@ -23,6 +23,7 @@ from backend.api.v1._identity_deps import (
     get_membership_repository,
     get_workspace_repository,
 )
+from backend.data.rls import workspace_session_scope
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.domain.repositories import (
     MembershipRepository,
@@ -113,8 +114,13 @@ async def create_workspace(
         name=payload.name,
         safe_mode=payload.safe_mode,
     )
-    await workspaces.add(row)
-    await session.flush()
+    # #959 — 새 워크스페이스의 id 로 스코프를 걸고 쓴다. 이 라우트는
+    # `get_workspace_id` 에 의존하지 않으므로 요청의 GUC 는 비어 있고, RLS 의
+    # 빈-GUC 탈출구가 닫히는 순간 이 INSERT 는 막힌다. 자세한 설명은
+    # `identity/service.py` 의 같은 자리에 있다.
+    async with workspace_session_scope(session, row.id):
+        await workspaces.add(row)
+        await session.flush()
     await memberships.add(
         MembershipRow(id=uuid.uuid4(), user_id=user.id, workspace_id=row.id, role="owner")
     )
