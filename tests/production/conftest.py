@@ -41,8 +41,9 @@ import httpx
 import jwt as pyjwt
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import ORMExecuteState, Session
 
 from .._support import _clean_all_rows, use_real_pg
 
@@ -217,3 +218,43 @@ def client_for(app: object, token: str) -> httpx.AsyncClient:
         base_url="http://test",
         headers={"Authorization": f"Bearer {token}"},
     )
+
+
+# ---------------------------------------------------------------------------
+# RLS instrument — the GUC each policied read ran under
+# ---------------------------------------------------------------------------
+_POLICIED_TABLES = frozenset(
+    {"workspaces", "requests", "execution_runs", "execution_decisions", "deliverables", "products"}
+)
+
+#: (policied tables an ORM SELECT touched, the GUC it ran under)
+PoliciedRead = tuple[frozenset[str], str]
+
+
+@pytest.fixture
+def policied_reads() -> Iterator[list[PoliciedRead]]:
+    """Every ORM SELECT on an RLS-policied table, with the GUC it ran under (#959).
+
+    Reads the GUC on the statement's own connection just before it runs, so it
+    is the value the policy will see. Removed on teardown.
+    """
+    reads: list[PoliciedRead] = []
+
+    def _record(state: ORMExecuteState) -> None:
+        if not state.is_select:
+            return
+        tables = frozenset(m.local_table.name for m in state.all_mappers) & _POLICIED_TABLES
+        if not tables:
+            return
+        guc = (
+            state.session.connection()
+            .execute(text("SELECT current_setting('app.current_workspace_id', true)"))
+            .scalar()
+        )
+        reads.append((tables, guc or ""))
+
+    event.listen(Session, "do_orm_execute", _record)
+    try:
+        yield reads
+    finally:
+        event.remove(Session, "do_orm_execute", _record)
