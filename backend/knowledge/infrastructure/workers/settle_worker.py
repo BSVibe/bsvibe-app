@@ -79,7 +79,7 @@ from backend.common.settle_kinds import (
     NEGATIVE_PATTERN_SETTLE_KIND,
     founder_authored_text,
 )
-from backend.data.rls import workspace_session_scope
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.knowledge.extraction.worth_remembering import (
@@ -943,7 +943,8 @@ class SettleWorker(BaseWorker):
             rows = await self._claim_undrained(session)
             if not rows:
                 return 0
-            policies = await self._resolve_workspaces(session, {r.workspace_id for r in rows})
+            async with cross_tenant_session_read(session):
+                policies = await self._resolve_workspaces(session, {r.workspace_id for r in rows})
 
             processed = 0
             promoted_ids: set[uuid.UUID] = set()

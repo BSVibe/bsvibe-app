@@ -73,7 +73,8 @@ EXEMPT_WORKERS: dict[str, str] = {
     "relay_worker": "audit_outbox 에 workspace_id 컬럼이 없다 — 레이어 2·3 대상이 아니다",
     "audit_retention_sweep_worker": (
         "같은 audit_outbox 를 지운다. 워크스페이스 구분은 payload['workspace_id'] "
-        "(JSON 필드)로 하는 명시적 술어이지 컬럼이 아니다"
+        "(JSON 필드)로 하는 명시적 술어이지 컬럼이 아니다. 단 대상 테넌트 열거는 "
+        "강제 표 workspaces 를 읽으므로 cross_tenant_session_read 로 청한다"
     ),
 }
 

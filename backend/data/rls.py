@@ -164,6 +164,28 @@ def cross_tenant_read() -> Iterator[None]:
 
 
 @asynccontextmanager
+async def cross_tenant_session_read(session: AsyncSession) -> AsyncIterator[None]:
+    """Publish ``'*'`` on this session's LIVE transaction for the block only.
+
+    The :func:`cross_tenant_read` counterpart for a transaction that is already
+    open — the enumeration at the head of a loop that then scopes each tenant.
+    Narrow on purpose: anything written while ``'*'`` is up is refused by
+    ``WITH CHECK``, so the block should hold the cross-tenant read and nothing
+    else. Leaves the transaction fail-open on the way out, like
+    :func:`workspace_session_scope`.
+    """
+    conn = await session.connection()
+    if _is_pg(conn):
+        await conn.execute(
+            text(f"SELECT set_config('{_GUC_NAME}', :value, true)"), {"value": _CROSS_TENANT}
+        )
+    try:
+        yield
+    finally:
+        await clear_workspace_guc(await session.connection())
+
+
+@asynccontextmanager
 async def workspace_session_scope(
     session: AsyncSession, workspace_id: uuid.UUID
 ) -> AsyncIterator[None]:
@@ -213,6 +235,7 @@ install_workspace_guc_listener()
 
 __all__ = [
     "cross_tenant_read",
+    "cross_tenant_session_read",
     "install_workspace_guc_listener",
     "set_workspace_guc",
     "set_workspace_guc_sync",
