@@ -248,6 +248,10 @@ class IntakeWorker(BaseWorker):
                             str(outcome.product_id) if outcome.product_id is not None else None
                         ),
                     )
+                    # Flush while the scope's GUC is still published — the
+                    # commit below runs after it is cleared, so anything left
+                    # to autoflush there is written blind (#959).
+                    await session.flush()
                     emitted_workspace_ids.append(str(trig.workspace_id))
                     count += 1
             await session.commit()

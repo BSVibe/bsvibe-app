@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from backend.workflow.application.product_tick_planner import ProductTickPlanner
 
 from backend.config import Settings, get_settings
+from backend.data.rls import workspace_session_scope
 from backend.data.scoping import workspace_scope
 from backend.dispatch.adapter import ExecutorCapacitySaturated
 from backend.extensions.skill.loader import SkillLoader
@@ -309,10 +310,14 @@ class AgentWorker(BaseWorker):
         count = 0
         async with self._session_factory() as session:
             async for req in self._claim_batch(session):
-                runner = AgentRunner(session)
-                run_id = await runner.open_run(request=req)
-                req.status = RequestStatus.RUNNING
-                await session.flush()
+                # #959 — the claim reads across tenants; the writes it makes
+                # belong to one. The session's transaction began before this
+                # loop, so only the explicit publication covers the flush.
+                async with workspace_session_scope(session, req.workspace_id):
+                    runner = AgentRunner(session)
+                    run_id = await runner.open_run(request=req)
+                    req.status = RequestStatus.RUNNING
+                    await session.flush()
                 logger.info(
                     "agent_worker_claimed",
                     request_id=str(req.id),
