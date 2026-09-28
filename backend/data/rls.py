@@ -43,8 +43,9 @@ backend so unit tests don't blow up. The migration similarly skips its
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 
 from sqlalchemy import event, text
 from sqlalchemy.engine import Connection
@@ -54,6 +55,11 @@ from sqlalchemy.orm import Session, SessionTransaction
 from backend.data.scoping import current_workspace_id, workspace_scope
 
 _GUC_NAME = "app.current_workspace_id"
+
+# The policy's ``USING`` accepts this value as "every tenant" (migration
+# ``rls_cross_tenant_read``); its ``WITH CHECK`` does not, so writes stay closed.
+_CROSS_TENANT = "*"
+_cross_tenant_read: ContextVar[bool] = ContextVar("cross_tenant_read", default=False)
 
 
 def _is_pg(bind: Connection | AsyncConnection) -> bool:
@@ -129,9 +135,32 @@ def _publish_workspace_guc(
     as before and pays no extra round trip.
     """
     workspace_id = current_workspace_id.get()
-    if workspace_id is None:
-        return
-    set_workspace_guc_sync(connection, workspace_id)
+    if workspace_id is not None:
+        set_workspace_guc_sync(connection, workspace_id)
+    elif _cross_tenant_read.get() and _is_pg(connection):
+        connection.execute(
+            text(f"SELECT set_config('{_GUC_NAME}', :value, true)"), {"value": _CROSS_TENANT}
+        )
+
+
+@contextmanager
+def cross_tenant_read() -> Iterator[None]:
+    """Let transactions opened inside read every tenant's rows — and write none.
+
+    For the background paths whose job IS to cross tenants: queue claims,
+    global sweeps, tenant enumeration (#959). Publishes ``'*'`` through the same
+    ``after_begin`` listener, so it covers transactions that BEGIN inside the
+    block; one already open keeps the GUC it began with.
+
+    A :func:`workspace_scope` nested inside wins — it is the narrower of the two
+    — which is the claim shape: read ids across tenants, then write each row in
+    its own tenant's scope, where ``WITH CHECK`` accepts it.
+    """
+    token = _cross_tenant_read.set(True)
+    try:
+        yield
+    finally:
+        _cross_tenant_read.reset(token)
 
 
 @asynccontextmanager
@@ -183,6 +212,7 @@ install_workspace_guc_listener()
 
 
 __all__ = [
+    "cross_tenant_read",
     "install_workspace_guc_listener",
     "set_workspace_guc",
     "set_workspace_guc_sync",
