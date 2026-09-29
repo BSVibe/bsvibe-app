@@ -31,6 +31,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.identity.infrastructure.repositories.resource_binding_repository_sql import (
     SqlAlchemyResourceBindingRepository,
 )
@@ -49,25 +50,26 @@ async def sf():
 
 async def _seed(session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     ws = uuid.uuid4()
-    session.add(WorkspaceRow(id=ws, name="WS", language="ko"))
-    # Flush each FK LEVEL before the rows pointing at it — SQLite's lax FK
-    # enforcement hides the violation until PostgreSQL runs it.
-    await session.flush()
-    product = ProductRow(
-        id=uuid.uuid4(), workspace_id=ws, name="P", slug=f"p-{uuid.uuid4().hex[:8]}"
-    )
-    account = ConnectorAccountRow(
-        id=uuid.uuid4(),
-        workspace_id=ws,
-        connector="telegram",
-        webhook_token=uuid.uuid4().hex,
-        signing_secret_ciphertext="ct",
-        delivery_config={"chat_id": "1"},
-        is_active=True,
-    )
-    session.add(product)
-    session.add(account)
-    await session.flush()
+    async with workspace_session_scope(session, ws):
+        session.add(WorkspaceRow(id=ws, name="WS", language="ko"))
+        # Flush each FK LEVEL before the rows pointing at it — SQLite's lax FK
+        # enforcement hides the violation until PostgreSQL runs it.
+        await session.flush()
+        product = ProductRow(
+            id=uuid.uuid4(), workspace_id=ws, name="P", slug=f"p-{uuid.uuid4().hex[:8]}"
+        )
+        account = ConnectorAccountRow(
+            id=uuid.uuid4(),
+            workspace_id=ws,
+            connector="telegram",
+            webhook_token=uuid.uuid4().hex,
+            signing_secret_ciphertext="ct",
+            delivery_config={"chat_id": "1"},
+            is_active=True,
+        )
+        session.add(product)
+        session.add(account)
+        await session.flush()
     return ws, product.id, account.id
 
 

@@ -32,6 +32,7 @@ from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.auth.providers import register_provider
 from backend.connectors.auth.tokenset import TokenSet
 from backend.connectors.db import ConnectorAccountRow, ConnectorsBase
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.runtime.product_bootstrap_runtime import (
@@ -102,44 +103,45 @@ async def test_bootstrap_persists_a_rotated_github_token(session_factory, tmp_pa
     cipher = CredentialCipher(KEY)
     account_id = uuid.uuid4()
 
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name="p",
-                slug="p",
-                repo_url="https://github.com/owner/private-repo",
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name="p",
+                    slug="p",
+                    repo_url="https://github.com/owner/private-repo",
+                )
             )
-        )
-        s.add(
-            ConnectorAccountRow(
-                id=account_id,
-                workspace_id=workspace_id,
-                connector="github",
-                webhook_token=uuid.uuid4().hex,
-                signing_secret_ciphertext=cipher.encrypt("legacy-secret"),
-                delivery_config={},
-                is_active=True,
+            s.add(
+                ConnectorAccountRow(
+                    id=account_id,
+                    workspace_id=workspace_id,
+                    connector="github",
+                    webhook_token=uuid.uuid4().hex,
+                    signing_secret_ciphertext=cipher.encrypt("legacy-secret"),
+                    delivery_config={},
+                    is_active=True,
+                )
             )
-        )
-        # PG enforces the token→account FK that SQLite ignores: the account row
-        # must land before the token that references it.
-        await s.flush()
-        s.add(
-            ConnectorOAuthTokenRow(
-                connector_account_id=account_id,
-                provider="github",
-                access_token_ciphertext=cipher.encrypt(OLD_ACCESS),
-                refresh_token_ciphertext=cipher.encrypt(OLD_REFRESH),
-                # Already past → resolve refreshes under the hood.
-                expires_at=datetime.now(tz=UTC) - timedelta(minutes=1),
-                status="active",
+            # PG enforces the token→account FK that SQLite ignores: the account row
+            # must land before the token that references it.
+            await s.flush()
+            s.add(
+                ConnectorOAuthTokenRow(
+                    connector_account_id=account_id,
+                    provider="github",
+                    access_token_ciphertext=cipher.encrypt(OLD_ACCESS),
+                    refresh_token_ciphertext=cipher.encrypt(OLD_REFRESH),
+                    # Already past → resolve refreshes under the hood.
+                    expires_at=datetime.now(tz=UTC) - timedelta(minutes=1),
+                    status="active",
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
     from backend.config import get_settings  # noqa: PLC0415
 
@@ -149,13 +151,14 @@ async def test_bootstrap_persists_a_rotated_github_token(session_factory, tmp_pa
     # Stop right after the clone — this test is about the credential side effect.
     fake_git.clone = AsyncMock(side_effect=GitError("stop after clone"))
 
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://github.com/owner/private-repo",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://github.com/owner/private-repo",
+            session_factory=session_factory,
+            git_ops=fake_git,
+        )
 
     # The clone used the refreshed access token...
     assert fake_git.clone.await_args.kwargs["token"] == NEW_ACCESS

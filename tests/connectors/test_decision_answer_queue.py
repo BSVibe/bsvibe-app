@@ -42,6 +42,7 @@ from backend.connectors.decision_answer_queue import (
     QUEUED_ANSWER_KEY,
     queued_answer,
 )
+from backend.data.rls import workspace_session_scope
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun
@@ -95,27 +96,29 @@ def _account(ws: uuid.UUID) -> ConnectorAccountRow:
 
 
 async def _seed(session, ws: uuid.UUID, *, kind: str, payload: dict) -> uuid.UUID:
-    owner = UserRow(id=uuid.uuid4(), supabase_user_id=f"sub-{uuid.uuid4().hex}")
-    session.add(WorkspaceRow(id=ws, name="WS", language="en"))
-    session.add(owner)
-    # Flush the FK TARGETS before the row that points at them. SQLAlchemy orders
-    # inserts per-mapper, not by cross-model FK dependency, so on PostgreSQL the
-    # membership can reach the wire before its user — SQLite's lax FK enforcement
-    # hides this entirely, which is why it only ever fails in CI.
-    await session.flush()
-    session.add(MembershipRow(user_id=owner.id, workspace_id=ws, role="owner"))
-    run = ExecutionRun(id=uuid.uuid4(), workspace_id=ws, status="running")
-    session.add(run)
-    await session.flush()
-    decision = Decision(
-        id=uuid.uuid4(),
-        run_id=run.id,
-        workspace_id=ws,
-        decision=kind,
-        payload=payload,
-        status=DecisionStatus.PENDING,
-    )
-    session.add(decision)
+    async with workspace_session_scope(session, ws):
+        owner = UserRow(id=uuid.uuid4(), supabase_user_id=f"sub-{uuid.uuid4().hex}")
+        session.add(WorkspaceRow(id=ws, name="WS", language="en"))
+        session.add(owner)
+        # Flush the FK TARGETS before the row that points at them. SQLAlchemy orders
+        # inserts per-mapper, not by cross-model FK dependency, so on PostgreSQL the
+        # membership can reach the wire before its user — SQLite's lax FK enforcement
+        # hides this entirely, which is why it only ever fails in CI.
+        await session.flush()
+        session.add(MembershipRow(user_id=owner.id, workspace_id=ws, role="owner"))
+        run = ExecutionRun(id=uuid.uuid4(), workspace_id=ws, status="running")
+        session.add(run)
+        await session.flush()
+        decision = Decision(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=ws,
+            decision=kind,
+            payload=payload,
+            status=DecisionStatus.PENDING,
+        )
+        session.add(decision)
+        await session.flush()
     await session.commit()
     return decision.id
 
@@ -158,15 +161,16 @@ async def test_an_action_tap_queues_and_does_not_resolve() -> None:
             await _tap(session, ws, _parsed("dca", str(did), "discard"))
 
             session.expire_all()
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            # Still pending — the engine has not run yet.
-            assert decision.status == DecisionStatus.PENDING
-            queued = queued_answer(decision)
-            assert queued is not None
-            assert queued.action_key == "discard"
-            assert queued.answer == ""
-            assert queued.actor_id
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                # Still pending — the engine has not run yet.
+                assert decision.status == DecisionStatus.PENDING
+                queued = queued_answer(decision)
+                assert queued is not None
+                assert queued.action_key == "discard"
+                assert queued.answer == ""
+                assert queued.actor_id
 
 
 async def test_an_option_tap_queues_the_TEXT_not_the_index() -> None:
@@ -185,12 +189,13 @@ async def test_an_option_tap_queues_the_TEXT_not_the_index() -> None:
             await _tap(session, ws, _parsed("dco", str(did), "1"))
 
             session.expire_all()
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            queued = queued_answer(decision)
-            assert queued is not None
-            assert queued.answer == options[1]
-            assert queued.action_key is None
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                queued = queued_answer(decision)
+                assert queued is not None
+                assert queued.answer == options[1]
+                assert queued.action_key is None
 
 
 async def test_an_out_of_range_option_queues_nothing() -> None:
@@ -203,9 +208,10 @@ async def test_an_out_of_range_option_queues_nothing() -> None:
             await _tap(session, ws, _parsed("dco", str(did), "9"))
 
             session.expire_all()
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            assert QUEUED_ANSWER_KEY not in (decision.payload or {})
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                assert QUEUED_ANSWER_KEY not in (decision.payload or {})
 
 
 async def test_a_second_tap_does_not_overwrite_a_queued_answer() -> None:
@@ -220,11 +226,12 @@ async def test_a_second_tap_does_not_overwrite_a_queued_answer() -> None:
             runner = await _tap(session, ws, _parsed("dca", str(did), "ship"))
 
             session.expire_all()
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            queued = queued_answer(decision)
-            assert queued is not None
-            assert queued.action_key == "discard"
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                queued = queued_answer(decision)
+                assert queued is not None
+                assert queued.action_key == "discard"
 
     # Already-queued: ack only, no second card edit.
     assert runner.calls == ["parse", "ack"]
@@ -241,9 +248,10 @@ async def test_another_workspaces_decision_queues_nothing() -> None:
             await _tap(session, attacker_ws, _parsed("dca", str(did), "discard"))
 
             session.expire_all()
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            assert QUEUED_ANSWER_KEY not in (decision.payload or {})
+            async with workspace_session_scope(session, owner_ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                assert QUEUED_ANSWER_KEY not in (decision.payload or {})
 
 
 def test_the_inbound_layer_never_imports_the_resolver() -> None:

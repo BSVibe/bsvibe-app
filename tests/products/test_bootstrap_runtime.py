@@ -12,6 +12,8 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import backend.workflow.application.runtime.product_bootstrap_runtime as bootstrap_runtime
+from backend.data.rls import cross_tenant_read
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from backend.workflow.application.runtime.product_bootstrap_runtime import (
     STATUS_FAILED_CLONE,
@@ -66,19 +68,20 @@ def _clone_stub(files: dict[str, str]):
 
 
 async def _seed_product(session_factory, workspace_id: uuid.UUID, product_id: uuid.UUID) -> None:
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name="p",
-                slug="p",
-                repo_url="https://x/y",
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name="p",
+                    slug="p",
+                    repo_url="https://x/y",
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
 
 @pytest_asyncio.fixture
@@ -90,36 +93,37 @@ async def session_factory():
 async def test_sqlalchemy_repository_marks_status(session_factory):
     workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name="p",
-                slug="p",
-                repo_url="https://x/y",
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name="p",
+                    slug="p",
+                    repo_url="https://x/y",
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
-    repo = SqlAlchemyBootstrapRepository(session_factory)
-    run_id = uuid.uuid4()
-    await repo.mark_status(product_id, status="cloning", run_id=run_id)
-    await repo.mark_status(product_id, status="complete", artifacts_count=42)
+        repo = SqlAlchemyBootstrapRepository(session_factory)
+        run_id = uuid.uuid4()
+        await repo.mark_status(product_id, status="cloning", run_id=run_id)
+        await repo.mark_status(product_id, status="complete", artifacts_count=42)
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == "complete"
-        assert row.bootstrap_run_id == run_id
-        assert row.bootstrap_artifacts_count == 42
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == "complete"
+            assert row.bootstrap_run_id == run_id
+            assert row.bootstrap_artifacts_count == 42
 
-    progress = await repo.fetch_progress(product_id, workspace_id=workspace_id)
-    assert progress is not None
-    assert progress.status == "complete"
-    assert progress.artifacts_count == 42
+        progress = await repo.fetch_progress(product_id, workspace_id=workspace_id)
+        assert progress is not None
+        assert progress.status == "complete"
+        assert progress.artifacts_count == 42
 
 
 async def test_sqlalchemy_repository_fetch_progress_workspace_scoped(session_factory):
@@ -127,59 +131,67 @@ async def test_sqlalchemy_repository_fetch_progress_workspace_scoped(session_fac
     ws_a = uuid.uuid4()
     ws_b = uuid.uuid4()
     product_id = uuid.uuid4()
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=ws_a, name="a", safe_mode=True))
-        s.add(WorkspaceRow(id=ws_b, name="b", safe_mode=True))
-        await s.flush()
-        s.add(ProductRow(id=product_id, workspace_id=ws_a, name="p", slug="p"))
-        await s.commit()
+    with workspace_scope(ws_b):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=ws_b, name="b", safe_mode=True))
+            await s.commit()
+    with workspace_scope(ws_a):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=ws_a, name="a", safe_mode=True))
+            await s.flush()
+            s.add(ProductRow(id=product_id, workspace_id=ws_a, name="p", slug="p"))
+            await s.commit()
 
     repo = SqlAlchemyBootstrapRepository(session_factory)
-    assert await repo.fetch_progress(product_id, workspace_id=ws_b) is None
+    # Every tenant visible, so the None below is the repository's own WHERE —
+    # not RLS answering for it.
+    with cross_tenant_read():
+        assert await repo.fetch_progress(product_id, workspace_id=ws_b) is None
 
 
 async def test_run_job_writes_failed_clone_on_git_error(session_factory, tmp_path):
     """Job lifecycle: clone fails → status row reads ``failed:clone``."""
     workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name="p",
-                slug="p",
-                repo_url="https://x/y",
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name="p",
+                    slug="p",
+                    repo_url="https://x/y",
+                )
             )
+            await s.commit()
+
+        # Point the product workspace root at tmp_path so the job's mkdir/clone
+        # path stays inside the test sandbox.
+        from backend.config import get_settings  # noqa: PLC0415
+
+        settings = get_settings()
+        object.__setattr__(settings, "product_workspace_root", str(tmp_path))
+
+        fake_git = MagicMock()
+        fake_git.clone = AsyncMock(side_effect=GitError("simulated clone failure"))
+
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://invalid.example/repo.git",
+            session_factory=session_factory,
+            git_ops=fake_git,
         )
-        await s.commit()
 
-    # Point the product workspace root at tmp_path so the job's mkdir/clone
-    # path stays inside the test sandbox.
-    from backend.config import get_settings  # noqa: PLC0415
-
-    settings = get_settings()
-    object.__setattr__(settings, "product_workspace_root", str(tmp_path))
-
-    fake_git = MagicMock()
-    fake_git.clone = AsyncMock(side_effect=GitError("simulated clone failure"))
-
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://invalid.example/repo.git",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
-
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == STATUS_FAILED_CLONE
-        assert row.bootstrap_error is not None
-        assert "GitError" in row.bootstrap_error
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == STATUS_FAILED_CLONE
+            assert row.bootstrap_error is not None
+            assert "GitError" in row.bootstrap_error
 
 
 async def test_run_job_writes_failed_when_workspace_missing(session_factory, tmp_path):
@@ -195,36 +207,37 @@ async def test_run_job_writes_failed_when_workspace_missing(session_factory, tmp
     real_workspace_id = uuid.uuid4()
     bogus_workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=real_workspace_id, name="t", safe_mode=True))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=real_workspace_id,
-                name="p",
-                slug="p",
-                repo_url="https://x/y",
+    with workspace_scope(real_workspace_id):  # the product's tenant — mark_status must see its row
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=real_workspace_id, name="t", safe_mode=True))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=real_workspace_id,
+                    name="p",
+                    slug="p",
+                    repo_url="https://x/y",
+                )
             )
+            await s.commit()
+
+        fake_git = MagicMock()
+        fake_git.clone = AsyncMock()
+
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=bogus_workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=fake_git,
         )
-        await s.commit()
 
-    fake_git = MagicMock()
-    fake_git.clone = AsyncMock()
-
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=bogus_workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
-
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == "failed:ingest"
-        assert row.bootstrap_error is not None
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == "failed:ingest"
+            assert row.bootstrap_error is not None
 
 
 # --------------------------------------------------------------------------
@@ -252,13 +265,14 @@ async def test_bootstrap_scaffolds_gate_for_gateless_python_repo(
     # Stop right after scaffolding — no LLM account needed.
     monkeypatch.setattr(bootstrap_runtime, "build_bootstrap_knowledge", lambda **_: None)
 
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=git,
-    )
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=git,
+        )
 
     repo_path = tmp_path / str(product_id)
     ci = repo_path / ".github" / "workflows" / "ci.yml"
@@ -289,13 +303,14 @@ async def test_bootstrap_does_not_scaffold_when_repo_has_a_gate(
     )
     monkeypatch.setattr(bootstrap_runtime, "build_bootstrap_knowledge", lambda **_: None)
 
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=git,
-    )
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=git,
+        )
 
     repo_path = tmp_path / str(product_id)
     # The user's CI is unchanged, and there is exactly ONE commit (the seed) —

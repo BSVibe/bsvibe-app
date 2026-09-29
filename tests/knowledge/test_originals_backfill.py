@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.common.settle_kinds import DECISION_RESOLUTION_SETTLE_KIND
 from backend.config import get_settings
+from backend.data.scoping import workspace_scope
 from backend.knowledge.originals_backfill import backfill_originals
 from backend.workflow.application._checkpoint_shared import ACTION_ACKNOWLEDGE
 from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunActivity, RunStatus
@@ -43,6 +44,13 @@ async def sf():
         yield async_sessionmaker(engine, expire_on_commit=False)
 
 
+async def _backfill(sf, *, workspace_id: uuid.UUID, **kwargs):
+    """The MCP tool hands ``backfill_originals`` its request's published session."""
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            return await backfill_originals(s, workspace_id=workspace_id, **kwargs)
+
+
 def _seeds(vault_root: Path, workspace_id: uuid.UUID, kind: str) -> list[Path]:
     d = vault_root / get_settings().knowledge_default_region / str(workspace_id) / "seeds" / kind
     return sorted(d.glob("*.md")) if d.exists() else []
@@ -51,59 +59,61 @@ def _seeds(vault_root: Path, workspace_id: uuid.UUID, kind: str) -> list[Path]:
 async def _seed_request(sf, *, workspace_id: uuid.UUID, payload: dict) -> uuid.UUID:
     request_id = uuid.uuid4()
     trigger_id = uuid.uuid4()
-    async with sf() as s:
-        s.add(
-            TriggerEventRow(
-                id=trigger_id,
-                workspace_id=workspace_id,
-                trigger_kind="direct",
-                source="test",
-                idempotency_key=f"k-{trigger_id}",
-                payload={},
-                received_at=datetime.now(tz=UTC),
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            s.add(
+                TriggerEventRow(
+                    id=trigger_id,
+                    workspace_id=workspace_id,
+                    trigger_kind="direct",
+                    source="test",
+                    idempotency_key=f"k-{trigger_id}",
+                    payload={},
+                    received_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.flush()
-        s.add(
-            RequestRow(
-                id=request_id,
-                workspace_id=workspace_id,
-                trigger_event_id=trigger_id,
-                status=RequestStatus.OPEN,
-                payload=payload,
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+            await s.flush()
+            s.add(
+                RequestRow(
+                    id=request_id,
+                    workspace_id=workspace_id,
+                    trigger_event_id=trigger_id,
+                    status=RequestStatus.OPEN,
+                    payload=payload,
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
     return request_id
 
 
 async def _seed_settle(sf, *, workspace_id: uuid.UUID, payload: dict) -> uuid.UUID:
     run_id = uuid.uuid4()
     activity_id = uuid.uuid4()
-    async with sf() as s:
-        s.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=workspace_id,
-                status=RunStatus.REVIEW_READY,
-                payload={},
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            s.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    status=RunStatus.REVIEW_READY,
+                    payload={},
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.flush()
-        s.add(
-            ExecutionRunActivity(
-                id=activity_id,
-                run_id=run_id,
-                workspace_id=workspace_id,
-                activity_type="settle",
-                payload=payload,
+            await s.flush()
+            s.add(
+                ExecutionRunActivity(
+                    id=activity_id,
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    activity_type="settle",
+                    payload=payload,
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
     return activity_id
 
 
@@ -113,8 +123,7 @@ class TestThePastIsBroughtDown:
         ws = uuid.uuid4()
         request_id = await _seed_request(sf, workspace_id=ws, payload={"text": INTENT})
 
-        async with sf() as s:
-            result = await backfill_originals(s, workspace_id=ws, vault_root=tmp_path)
+        result = await _backfill(sf, workspace_id=ws, vault_root=tmp_path)
 
         assert result.recorded == 1
         written = _seeds(tmp_path, ws, "request")
@@ -137,8 +146,7 @@ class TestThePastIsBroughtDown:
             },
         )
 
-        async with sf() as s:
-            result = await backfill_originals(s, workspace_id=ws, vault_root=tmp_path)
+        result = await _backfill(sf, workspace_id=ws, vault_root=tmp_path)
 
         assert result.recorded == 2
         feedback = _seeds(tmp_path, ws, "feedback")
@@ -172,8 +180,7 @@ class TestTheDerivationRuleIsShared:
             },
         )
 
-        async with sf() as s:
-            result = await backfill_originals(s, workspace_id=ws, vault_root=tmp_path)
+        result = await _backfill(sf, workspace_id=ws, vault_root=tmp_path)
 
         assert result.recorded == 0
         assert _seeds(tmp_path, ws, "feedback") == []
@@ -185,12 +192,10 @@ class TestBackfillIsIdempotent:
         ws = uuid.uuid4()
         await _seed_request(sf, workspace_id=ws, payload={"text": INTENT})
 
-        async with sf() as s:
-            first = await backfill_originals(s, workspace_id=ws, vault_root=tmp_path)
+        first = await _backfill(sf, workspace_id=ws, vault_root=tmp_path)
         before = _seeds(tmp_path, ws, "request")[0].read_bytes()
 
-        async with sf() as s:
-            second = await backfill_originals(s, workspace_id=ws, vault_root=tmp_path)
+        second = await _backfill(sf, workspace_id=ws, vault_root=tmp_path)
 
         assert first.recorded == 1
         assert second.recorded == 0
@@ -215,8 +220,7 @@ class TestBackfillIsIdempotent:
             content="실시간이 쓴 본문",
         )
 
-        async with sf() as s:
-            await backfill_originals(s, workspace_id=ws, vault_root=tmp_path)
+        await _backfill(sf, workspace_id=ws, vault_root=tmp_path)
 
         body = _seeds(tmp_path, ws, "request")[0].read_text(encoding="utf-8")
         assert "실시간이 쓴 본문" in body
@@ -231,8 +235,7 @@ class TestBackfillIsScopedAndBounded:
         await _seed_request(sf, workspace_id=mine, payload={"text": INTENT})
         await _seed_request(sf, workspace_id=theirs, payload={"text": "남의 지시문"})
 
-        async with sf() as s:
-            result = await backfill_originals(s, workspace_id=mine, vault_root=tmp_path)
+        result = await _backfill(sf, workspace_id=mine, vault_root=tmp_path)
 
         assert result.recorded == 1
         assert len(_seeds(tmp_path, mine, "request")) == 1
@@ -250,14 +253,12 @@ class TestBackfillIsScopedAndBounded:
         for _ in range(3):
             await _seed_request(sf, workspace_id=ws, payload={"text": INTENT})
 
-        async with sf() as s:
-            first = await backfill_originals(s, workspace_id=ws, vault_root=tmp_path, limit=2)
+        first = await _backfill(sf, workspace_id=ws, vault_root=tmp_path, limit=2)
 
         assert first.recorded == 2
         assert first.remaining == 1
 
-        async with sf() as s:
-            second = await backfill_originals(s, workspace_id=ws, vault_root=tmp_path, limit=2)
+        second = await _backfill(sf, workspace_id=ws, vault_root=tmp_path, limit=2)
 
         assert second.recorded == 1
         assert second.remaining == 0
@@ -269,8 +270,7 @@ class TestBackfillIsScopedAndBounded:
         ws = uuid.uuid4()
         await _seed_request(sf, workspace_id=ws, payload={"text": INTENT})
 
-        async with sf() as s:
-            result = await backfill_originals(s, workspace_id=ws, vault_root=tmp_path, dry_run=True)
+        result = await _backfill(sf, workspace_id=ws, vault_root=tmp_path, dry_run=True)
 
         assert result.pending == 1
         assert result.recorded == 0

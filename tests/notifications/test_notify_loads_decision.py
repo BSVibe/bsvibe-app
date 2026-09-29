@@ -19,6 +19,7 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.notifications.db import NotificationEventRow, NotificationStatus
 from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun
 from backend.workflow.infrastructure.workers.notify_worker import NotifyWorker
@@ -38,19 +39,20 @@ pytestmark = pytest.mark.asyncio
 
 async def _seed(session, *, kind: str, payload: dict) -> tuple[uuid.UUID, uuid.UUID]:
     workspace_id = uuid.uuid4()
-    run = ExecutionRun(id=uuid.uuid4(), workspace_id=workspace_id, status="open")
-    session.add(run)
-    await session.flush()
-    decision = Decision(
-        id=uuid.uuid4(),
-        run_id=run.id,
-        workspace_id=workspace_id,
-        decision=kind,
-        payload=payload,
-        status=DecisionStatus.PENDING,
-    )
-    session.add(decision)
-    await session.flush()
+    async with workspace_session_scope(session, workspace_id):
+        run = ExecutionRun(id=uuid.uuid4(), workspace_id=workspace_id, status="open")
+        session.add(run)
+        await session.flush()
+        decision = Decision(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=workspace_id,
+            decision=kind,
+            payload=payload,
+            status=DecisionStatus.PENDING,
+        )
+        session.add(decision)
+        await session.flush()
     return workspace_id, decision.id
 
 
@@ -80,7 +82,9 @@ async def test_an_action_decision_arrives_with_its_localized_actions() -> None:
             worker = NotifyWorker(
                 session_factory=sf, sender=_NoopSender(), pwa_url="https://app.bsvibe.dev"
             )
-            content = await worker._localized_content(session, _row(ws, did))
+            # The worker's drain publishes the row's workspace around this call.
+            async with workspace_session_scope(session, ws):
+                content = await worker._localized_content(session, _row(ws, did))
 
     assert content.decision_id == str(did)
     keys = [a.key for a in content.decision_actions]
@@ -103,7 +107,8 @@ async def test_an_ask_user_question_arrives_with_its_options() -> None:
             worker = NotifyWorker(
                 session_factory=sf, sender=_NoopSender(), pwa_url="https://app.bsvibe.dev"
             )
-            content = await worker._localized_content(session, _row(ws, did))
+            async with workspace_session_scope(session, ws):
+                content = await worker._localized_content(session, _row(ws, did))
 
     assert list(content.decision_options) == ["예", "아니오", "나중에"]
 
@@ -118,14 +123,17 @@ async def test_a_resolved_decision_carries_no_answers() -> None:
         sf = async_sessionmaker(engine, expire_on_commit=False)
         async with sf() as session:
             ws, did = await _seed(session, kind="human_review_required", payload={})
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            decision.status = DecisionStatus.RESOLVED
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                decision.status = DecisionStatus.RESOLVED
+                await session.flush()
             await session.commit()
             worker = NotifyWorker(
                 session_factory=sf, sender=_NoopSender(), pwa_url="https://app.bsvibe.dev"
             )
-            content = await worker._localized_content(session, _row(ws, did))
+            async with workspace_session_scope(session, ws):
+                content = await worker._localized_content(session, _row(ws, did))
 
     assert content.decision_actions == ()
     assert content.decision_options == ()
@@ -161,6 +169,7 @@ async def test_a_shipped_row_does_not_load_a_decision() -> None:
             worker = NotifyWorker(
                 session_factory=sf, sender=_NoopSender(), pwa_url="https://app.bsvibe.dev"
             )
-            content = await worker._localized_content(session, row)
+            async with workspace_session_scope(session, ws):
+                content = await worker._localized_content(session, row)
 
     assert content.decision_actions == ()

@@ -34,6 +34,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 from backend.notifications.bindings import resolve_notify_bindings
 from backend.notifications.db import NotificationEventRow
@@ -55,11 +56,12 @@ async def sf():
 
 async def _workspace(session: AsyncSession) -> uuid.UUID:
     ws = uuid.uuid4()
-    session.add(WorkspaceRow(id=ws, name="WS", language="ko"))
-    # Flush each FK LEVEL before the rows pointing at it — SQLAlchemy orders
-    # inserts per-mapper, and SQLite's lax FK enforcement hides the violation
-    # until PostgreSQL runs it.
-    await session.flush()
+    async with workspace_session_scope(session, ws):
+        session.add(WorkspaceRow(id=ws, name="WS", language="ko"))
+        # Flush each FK LEVEL before the rows pointing at it — SQLAlchemy orders
+        # inserts per-mapper, and SQLite's lax FK enforcement hides the violation
+        # until PostgreSQL runs it.
+        await session.flush()
     return ws
 
 
@@ -67,8 +69,9 @@ async def _product(session: AsyncSession, ws: uuid.UUID, name: str) -> uuid.UUID
     product = ProductRow(
         id=uuid.uuid4(), workspace_id=ws, name=name, slug=f"p-{uuid.uuid4().hex[:8]}"
     )
-    session.add(product)
-    await session.flush()
+    async with workspace_session_scope(session, ws):
+        session.add(product)
+        await session.flush()
     return product.id
 
 

@@ -47,6 +47,7 @@ from backend.common.settle_kinds import (
     founder_authored_text,
 )
 from backend.config import get_settings
+from backend.data.scoping import workspace_scope
 from backend.knowledge.extraction.worth_remembering import is_inherently_notable
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
@@ -153,29 +154,30 @@ async def _seed_decision(
     """PENDING Decision + 그 런. 반환 ``(run_id, decision_id)``."""
     run_id = uuid.uuid4()
     decision_id = uuid.uuid4()
-    async with sf() as s:
-        s.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=workspace_id,
-                status=run_status,
-                payload={"intent_text": "리포트에 기간 표시 추가"},
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            s.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    status=run_status,
+                    payload={"intent_text": "리포트에 기간 표시 추가"},
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.flush()
-        s.add(
-            Decision(
-                id=decision_id,
-                run_id=run_id,
-                workspace_id=workspace_id,
-                decision=kind,
-                payload=payload or {"reason": "ci_deadline_exceeded"},
-                status=DecisionStatus.PENDING,
+            await s.flush()
+            s.add(
+                Decision(
+                    id=decision_id,
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    decision=kind,
+                    payload=payload or {"reason": "ci_deadline_exceeded"},
+                    status=DecisionStatus.PENDING,
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
     return run_id, decision_id
 
 
@@ -241,16 +243,18 @@ async def test_one_click_acknowledge_leaves_no_vault_note(
     _run_id, decision_id = await _seed_decision(
         sf, workspace_id, kind="merge_watch_stalled", run_status=RunStatus.SHIPPED
     )
-    async with sf() as s:
-        await resolve_checkpoint(
-            s,
-            workspace_id=workspace_id,
-            checkpoint_id=decision_id,
-            answer="",
-            action_key=ACTION_ACKNOWLEDGE,
-            actor_id=founder_id,
-        )
-        await s.commit()
+    # The REST/MCP handler that calls this has already published the caller's workspace.
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            await resolve_checkpoint(
+                s,
+                workspace_id=workspace_id,
+                checkpoint_id=decision_id,
+                answer="",
+                action_key=ACTION_ACKNOWLEDGE,
+                actor_id=founder_id,
+            )
+            await s.commit()
 
     # 감사 흔적은 그대로다 — settle 활동은 계속 기록된다(런 히스토리/타임라인).
     payloads = await _settle_payloads(sf, DECISION_RESOLUTION_SETTLE_KIND)
@@ -273,17 +277,18 @@ async def test_one_click_discard_without_a_reason_leaves_no_vault_note(
     _run_id, decision_id = await _seed_decision(
         sf, workspace_id, kind="run_drive_failed", run_status=RunStatus.RUNNING
     )
-    async with sf() as s:
-        await resolve_checkpoint(
-            s,
-            workspace_id=workspace_id,
-            checkpoint_id=decision_id,
-            answer="",
-            action_key=ACTION_DISCARD,
-            reason="",
-            actor_id=founder_id,
-        )
-        await s.commit()
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            await resolve_checkpoint(
+                s,
+                workspace_id=workspace_id,
+                checkpoint_id=decision_id,
+                answer="",
+                action_key=ACTION_DISCARD,
+                reason="",
+                actor_id=founder_id,
+            )
+            await s.commit()
 
     assert len(await _settle_payloads(sf, DECISION_RESOLUTION_SETTLE_KIND)) == 1
     # 사유가 없으니 negative_pattern 행 자체가 없다 (기존 생산자 게이트).
@@ -302,17 +307,18 @@ async def test_discard_with_a_reason_keeps_only_the_founders_own_words(
     _run_id, decision_id = await _seed_decision(
         sf, workspace_id, kind="run_drive_failed", run_status=RunStatus.RUNNING
     )
-    async with sf() as s:
-        await resolve_checkpoint(
-            s,
-            workspace_id=workspace_id,
-            checkpoint_id=decision_id,
-            answer="",
-            action_key=ACTION_DISCARD,
-            reason="이 접근은 실제 스택 위에서 깨지는 것을 정의상 못 잡는다",
-            actor_id=founder_id,
-        )
-        await s.commit()
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            await resolve_checkpoint(
+                s,
+                workspace_id=workspace_id,
+                checkpoint_id=decision_id,
+                answer="",
+                action_key=ACTION_DISCARD,
+                reason="이 접근은 실제 스택 위에서 깨지는 것을 정의상 못 잡는다",
+                actor_id=founder_id,
+            )
+            await s.commit()
 
     assert len(await _settle_payloads(sf, DECISION_RESOLUTION_SETTLE_KIND)) == 1
     assert len(await _settle_payloads(sf, NEGATIVE_PATTERN_SETTLE_KIND)) == 1
@@ -340,15 +346,16 @@ async def test_positive_control_free_text_decision_still_becomes_a_note(
         run_status=RunStatus.RUNNING,
         payload={"question": "큐 저장소는 무엇으로 할까요?"},
     )
-    async with sf() as s:
-        await resolve_checkpoint(
-            s,
-            workspace_id=workspace_id,
-            checkpoint_id=decision_id,
-            answer="SQLite 말고 Postgres 로 간다",
-            actor_id=founder_id,
-        )
-        await s.commit()
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            await resolve_checkpoint(
+                s,
+                workspace_id=workspace_id,
+                checkpoint_id=decision_id,
+                answer="SQLite 말고 Postgres 로 간다",
+                actor_id=founder_id,
+            )
+            await s.commit()
 
     assert await _drain(sf, tmp_path) == 1
     notes = _notes(tmp_path, workspace_id)
@@ -364,39 +371,41 @@ async def test_positive_control_safe_mode_denial_with_a_reason_still_becomes_kno
     이걸 과교정으로 죽이는 것은 고치려던 버그보다 나쁘다."""
     run_id = uuid.uuid4()
     item_id = uuid.uuid4()
-    async with sf() as s:
-        s.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=workspace_id,
-                status=RunStatus.RUNNING,
-                payload={"intent_text": "브라우저 검증을 붙여라"},
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            s.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    status=RunStatus.RUNNING,
+                    payload={"intent_text": "브라우저 검증을 붙여라"},
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.flush()
-        s.add(
-            SafeModeQueueItemRow(
-                id=item_id,
-                workspace_id=workspace_id,
-                deliverable_id=uuid.uuid4(),
-                run_id=run_id,
-                status=SafeModeStatus.PENDING,
-                expires_at=datetime.now(tz=UTC) + timedelta(days=30),
+            await s.flush()
+            s.add(
+                SafeModeQueueItemRow(
+                    id=item_id,
+                    workspace_id=workspace_id,
+                    deliverable_id=uuid.uuid4(),
+                    run_id=run_id,
+                    status=SafeModeStatus.PENDING,
+                    expires_at=datetime.now(tz=UTC) + timedelta(days=30),
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
-    async with sf() as s:
-        flipped = await SafeModeQueue(s).deny(
-            workspace_id=workspace_id,
-            item_id=item_id,
-            actor_id=founder_id,
-            reason="백엔드를 가로채면 실제 스택 위에서 깨지는 것을 정의상 못 잡는다",
-            kind=DenyKind.REJECTED_APPROACH,
-        )
-        await s.commit()
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            flipped = await SafeModeQueue(s).deny(
+                workspace_id=workspace_id,
+                item_id=item_id,
+                actor_id=founder_id,
+                reason="백엔드를 가로채면 실제 스택 위에서 깨지는 것을 정의상 못 잡는다",
+                kind=DenyKind.REJECTED_APPROACH,
+            )
+            await s.commit()
     assert flipped is True
 
     assert len(await _settle_payloads(sf, NEGATIVE_PATTERN_SETTLE_KIND)) == 1

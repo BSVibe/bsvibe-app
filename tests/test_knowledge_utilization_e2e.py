@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.executors.db  # noqa: F401 — register tables on the shared Base
 from backend.config import get_settings
+from backend.data.scoping import workspace_scope
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenNote
 from backend.knowledge.graph.writer_core import GardenWriter
@@ -95,38 +96,39 @@ class _NoopJudge:
 async def _seed_settle(sf, *, workspace_id: uuid.UUID, summary: str) -> None:
     from tests._support import agent_knowledge_payload  # noqa: PLC0415
 
-    async with sf() as s:
-        run_id = uuid.uuid4()
-        s.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=workspace_id,
-                request_id=uuid.uuid4(),
-                status=RunStatus.REVIEW_READY,
-                payload={"intent_text": "harden the search API"},
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            run_id = uuid.uuid4()
+            s.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    request_id=uuid.uuid4(),
+                    status=RunStatus.REVIEW_READY,
+                    payload={"intent_text": "harden the search API"},
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.flush()
-        s.add(
-            ExecutionRunActivity(
-                id=uuid.uuid4(),
-                run_id=run_id,
-                workspace_id=workspace_id,
-                activity_type="settle",
-                payload={
-                    "verified": True,
-                    "artifact_refs": ["backend/api/search.py"],
-                    "summary": summary,
-                    "intent_text": "harden the search API",
-                    # v2 — the agent declared knowledge, so this deposits a note.
-                    "agent_knowledge": agent_knowledge_payload(summary),
-                },
-                created_at=datetime.now(tz=UTC),
+            await s.flush()
+            s.add(
+                ExecutionRunActivity(
+                    id=uuid.uuid4(),
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    activity_type="settle",
+                    payload={
+                        "verified": True,
+                        "artifact_refs": ["backend/api/search.py"],
+                        "summary": summary,
+                        "intent_text": "harden the search API",
+                        # v2 — the agent declared knowledge, so this deposits a note.
+                        "agent_knowledge": agent_knowledge_payload(summary),
+                    },
+                    created_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
 
 def _seed_prior_decision(vault_root: Path, workspace_id: uuid.UUID, *, question: str, answer: str):
