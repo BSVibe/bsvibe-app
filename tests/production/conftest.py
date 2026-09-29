@@ -258,3 +258,46 @@ def policied_reads() -> Iterator[list[PoliciedRead]]:
         yield reads
     finally:
         event.remove(Session, "do_orm_execute", _record)
+
+
+#: (policied table a flush wrote, the row's workspace, the GUC at that flush)
+PoliciedWrite = tuple[str, str, str]
+
+
+@pytest.fixture
+def policied_writes() -> Iterator[list[PoliciedWrite]]:
+    """Every row a flush writes to an RLS-policied table, with the GUC it ran under.
+
+    The write-side sibling of :func:`policied_reads` (#959): ``WITH CHECK`` needs
+    the GUC to equal the row's own workspace, so that is what a caller compares.
+    """
+    writes: list[PoliciedWrite] = []
+
+    def _record(session: Session, _ctx: object, _instances: object) -> None:
+        rows = [
+            o
+            for o in (*session.new, *session.dirty)
+            if getattr(o, "__tablename__", None) in _POLICIED_TABLES
+        ]
+        if not rows:
+            return
+        guc = (
+            session.connection()
+            .execute(text("SELECT current_setting('app.current_workspace_id', true)"))
+            .scalar()
+        )
+        # A ``workspaces`` row IS its workspace; every other policied row names one.
+        writes.extend(
+            (
+                o.__tablename__,
+                str(o.id if o.__tablename__ == "workspaces" else o.workspace_id),
+                guc or "",
+            )
+            for o in rows
+        )
+
+    event.listen(Session, "before_flush", _record)
+    try:
+        yield writes
+    finally:
+        event.remove(Session, "before_flush", _record)

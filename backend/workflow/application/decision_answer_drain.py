@@ -22,6 +22,8 @@ dropping it leaves the Decision answerable again — from the phone or the Brief
 
 from __future__ import annotations
 
+import uuid
+
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +33,7 @@ from backend.connectors.decision_answer_queue import (
     clear_queued_answer,
     queued_answer,
 )
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.workflow.application.checkpoint_resolution import (
     CheckpointNotFound,
     resolve_checkpoint,
@@ -50,61 +53,75 @@ async def drain_queued_answers(session: AsyncSession, *, limit: int = _BATCH) ->
     Scans PENDING Decisions and acts ONLY on those carrying a queued answer —
     a scan that acted on all of them would settle the founder's whole queue on
     its first tick.
+
+    #959 — the scan crosses tenants and asks for it by name; each answer is then
+    applied inside its own tenant's scope, where ``WITH CHECK`` accepts the
+    writes. Only ids leave the scan: a rollback below expires the loaded rows,
+    and re-reading one must happen under the scope, not after it.
     """
-    rows = (
-        (
-            await session.execute(
-                select(Decision).where(Decision.status == DecisionStatus.PENDING).limit(limit)
+    async with cross_tenant_session_read(session):
+        rows = (
+            (
+                await session.execute(
+                    select(Decision).where(Decision.status == DecisionStatus.PENDING).limit(limit)
+                )
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
+        queued = [(d.id, d.workspace_id) for d in rows if QUEUED_ANSWER_KEY in (d.payload or {})]
     applied = 0
-    for decision in rows:
-        if QUEUED_ANSWER_KEY not in (decision.payload or {}):
-            continue
-        answer = queued_answer(decision)
-        if answer is None:
-            # Unreadable — drop it so the queue keeps moving. The Decision stays
-            # pending and answerable; nothing was decided on the founder's behalf.
-            clear_queued_answer(decision)
-            await session.commit()
-            continue
-        try:
-            await resolve_checkpoint(
-                session,
-                workspace_id=decision.workspace_id,
-                checkpoint_id=decision.id,
-                answer=answer.answer,
-                action_key=answer.action_key,
-                actor_id=answer.actor_id,
-            )
-        except CheckpointNotFound:
-            # Someone answered it in the Brief first. Clear and move on — the
-            # founder's intent is already satisfied.
-            clear_queued_answer(decision)
-            await session.commit()
-            continue
-        except Exception:  # noqa: BLE001 — one bad Decision must not stall the rest
-            logger.warning(
-                "decision_answer_apply_failed",
-                decision_id=str(decision.id),
-                action_key=answer.action_key,
-                exc_info=True,
-            )
-            await session.rollback()
-            continue
+    for decision_id, workspace_id in queued:
+        async with workspace_session_scope(session, workspace_id):
+            applied += await _apply_one(session, decision_id)
+    return applied
+
+
+async def _apply_one(session: AsyncSession, decision_id: uuid.UUID) -> int:
+    """Apply one queued answer; 1 when it resolved the Decision, else 0."""
+    decision = await session.get(Decision, decision_id)
+    if decision is None:
+        return 0
+    answer = queued_answer(decision)
+    if answer is None:
+        # Unreadable — drop it so the queue keeps moving. The Decision stays
+        # pending and answerable; nothing was decided on the founder's behalf.
         clear_queued_answer(decision)
         await session.commit()
-        applied += 1
-        logger.info(
-            "decision_answer_applied",
-            decision_id=str(decision.id),
-            connector=answer.connector,
+        return 0
+    try:
+        await resolve_checkpoint(
+            session,
+            workspace_id=decision.workspace_id,
+            checkpoint_id=decision.id,
+            answer=answer.answer,
             action_key=answer.action_key,
+            actor_id=answer.actor_id,
         )
-    return applied
+    except CheckpointNotFound:
+        # Someone answered it in the Brief first. Clear and move on — the
+        # founder's intent is already satisfied.
+        clear_queued_answer(decision)
+        await session.commit()
+        return 0
+    except Exception:  # noqa: BLE001 — one bad Decision must not stall the rest
+        logger.warning(
+            "decision_answer_apply_failed",
+            decision_id=str(decision_id),
+            action_key=answer.action_key,
+            exc_info=True,
+        )
+        await session.rollback()
+        return 0
+    clear_queued_answer(decision)
+    await session.commit()
+    logger.info(
+        "decision_answer_applied",
+        decision_id=str(decision_id),
+        connector=answer.connector,
+        action_key=answer.action_key,
+    )
+    return 1
 
 
 __all__ = ["drain_queued_answers"]
