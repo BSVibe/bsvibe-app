@@ -16,8 +16,9 @@ from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -60,7 +61,7 @@ async def registry() -> ToolRegistry:
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
     """Stage-flush the workspace so FK references resolve under real Postgres."""
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             WorkspaceRow(
                 id=workspace_id,

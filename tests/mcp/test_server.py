@@ -39,6 +39,7 @@ from backend.mcp.principal import (
 from backend.mcp.server import build_server
 
 from .._support import db_engine
+from ._rls import scoped_session
 
 pytestmark = pytest.mark.asyncio
 
@@ -70,7 +71,7 @@ def user_id() -> uuid.UUID:
 
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id, user_id) -> AsyncIterator[None]:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.flush()
