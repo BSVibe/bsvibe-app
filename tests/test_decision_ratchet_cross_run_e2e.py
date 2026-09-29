@@ -62,6 +62,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import get_settings
+from backend.data.scoping import workspace_scope
 from backend.knowledge.factory import KnowledgeFactory
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
@@ -75,7 +76,7 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from ._support import db_engine, fake_current_user
+from ._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -120,9 +121,6 @@ def founder_id() -> uuid.UUID:
 async def client(sf, workspace_id: uuid.UUID, founder_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -131,7 +129,7 @@ async def client(sf, workspace_id: uuid.UUID, founder_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -150,28 +148,29 @@ async def _seed_run_a_pending(
     with a PENDING ``ask_user_question`` Decision carrying the blocking question.
     Returns ``(run_id, decision_id)``.
     """
-    async with sf() as s:
-        run = ExecutionRun(
-            id=uuid.uuid4(),
-            workspace_id=workspace_id,
-            status=RunStatus.RUNNING,
-            payload={"text": _INTENT, "intent_text": _INTENT},
-            created_at=datetime.now(tz=UTC),
-            updated_at=datetime.now(tz=UTC),
-        )
-        s.add(run)
-        await s.flush()
-        decision = Decision(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            workspace_id=workspace_id,
-            decision="ask_user_question",
-            payload={"question": _QUESTION},
-            status=DecisionStatus.PENDING,
-        )
-        s.add(decision)
-        await s.commit()
-        return run.id, decision.id
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            run = ExecutionRun(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                status=RunStatus.RUNNING,
+                payload={"text": _INTENT, "intent_text": _INTENT},
+                created_at=datetime.now(tz=UTC),
+                updated_at=datetime.now(tz=UTC),
+            )
+            s.add(run)
+            await s.flush()
+            decision = Decision(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                workspace_id=workspace_id,
+                decision="ask_user_question",
+                payload={"question": _QUESTION},
+                status=DecisionStatus.PENDING,
+            )
+            s.add(decision)
+            await s.commit()
+            return run.id, decision.id
 
 
 def _production_retriever(vault_root: Path, workspace_id: uuid.UUID):

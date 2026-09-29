@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import backend.identity.workspaces_db  # noqa: F401
 import backend.notifications.db  # noqa: F401
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.db import NotificationEventRow
 from backend.shared.authz.probe import UserKeySourceStatus
@@ -44,7 +45,9 @@ async def _seed_workspaces(sf, n: int = 2) -> list[uuid.UUID]:
     ids = [uuid.uuid4() for _ in range(n)]
     async with sf() as s:
         for i, ws in enumerate(ids):
-            s.add(WorkspaceRow(id=ws, name=f"ws{i}"))
+            async with workspace_session_scope(s, ws):
+                s.add(WorkspaceRow(id=ws, name=f"ws{i}"))
+                await s.flush()
         await s.commit()
     return ids
 
@@ -162,7 +165,7 @@ async def test_the_row_this_worker_emits_is_one_the_notify_worker_can_deliver(sf
     from backend.workflow.infrastructure.workers.notify_worker import NotifyWorker
 
     ws = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         s.add(WorkspaceRow(id=ws, name="ws", language="ko"))
         s.add(
             ConnectorAccountRow(
@@ -174,6 +177,7 @@ async def test_the_row_this_worker_emits_is_one_the_notify_worker_can_deliver(sf
                 is_active=True,
             )
         )
+        await s.flush()
         await s.commit()
 
     await self_tick(_worker(sf, [DOWN]))

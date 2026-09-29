@@ -35,6 +35,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.schedule.domain.advancer import CronScheduleAdvancer
 from backend.schedule.infrastructure.db_poll_runner import DbPollScheduleRunner
 from backend.schedule.infrastructure.workers.schedule_worker import ScheduleWorker
@@ -145,7 +146,7 @@ async def test_due_schedule_becomes_real_run_with_submitted_instruction(
 
     # 5. THE PROOF — a real ExecutionRun exists whose framed intent text is the
     #    SUBMITTED instruction, not "Untitled run".
-    async with session_factory() as session:
+    async with session_factory() as session, workspace_session_scope(session, workspace_id):
         run = (
             await session.execute(
                 select(ExecutionRun).where(ExecutionRun.workspace_id == workspace_id)

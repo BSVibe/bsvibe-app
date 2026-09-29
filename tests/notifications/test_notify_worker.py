@@ -28,6 +28,7 @@ import backend.connectors.db  # noqa: F401
 import backend.identity.workspaces_db  # noqa: F401
 import backend.notifications.db  # noqa: F401
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.db import (
     NotificationEventRow,
@@ -108,7 +109,7 @@ async def _seed(
 
     Returns the pending :class:`NotificationEventRow` id.
     """
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         s.add(WorkspaceRow(id=ws, name="Test WS", timezone=timezone, language=language))
         for connector, cfg in connectors:
             s.add(_account(ws, connector, cfg))
@@ -135,6 +136,7 @@ async def _seed(
             status=NotificationStatus.PENDING,
         )
         s.add(row)
+        await s.flush()
         await s.commit()
         return row.id
 
@@ -343,8 +345,11 @@ async def test_shipped_row_threads_deliverable_id_and_language_into_content(
 async def test_drain_is_a_noop_when_the_outbox_is_empty(
     sf: async_sessionmaker[AsyncSession],
 ) -> None:
+    ws = uuid.uuid4()
     async with sf() as s:  # materialise the schema without seeding a row
-        s.add(WorkspaceRow(id=uuid.uuid4(), name="empty"))
+        async with workspace_session_scope(s, ws):
+            s.add(WorkspaceRow(id=ws, name="empty"))
+            await s.flush()
         await s.commit()
     worker = NotifyWorker(session_factory=sf, sender=_RecordingSender())
     assert await worker.drain_once() == 0

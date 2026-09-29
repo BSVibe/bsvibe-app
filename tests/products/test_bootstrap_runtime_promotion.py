@@ -16,6 +16,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from backend.workflow.application.runtime.product_bootstrap_runtime import (
     run_product_bootstrap_job,
@@ -56,19 +57,20 @@ async def test_bootstrap_job_registers_anchors_after_successful_ingest(
     """
     workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name="p",
-                slug="p",
-                repo_url="https://x/y",
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name="p",
+                    slug="p",
+                    repo_url="https://x/y",
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
     # Point both product workspace root + knowledge vault root at tmp_path so
     # the runtime's clone + ingest stay inside the sandbox.
@@ -119,18 +121,19 @@ async def test_bootstrap_job_registers_anchors_after_successful_ingest(
         lambda **_kw: _StubKnowledge(),
     )
 
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=fake_git,
+        )
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == "complete", row.bootstrap_error
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == "complete", row.bootstrap_error
 
     # The recurring tag got promoted to a canonical anchor.
     concept_file = workspace_vault / "concepts" / "active" / "stub-concept.md"
@@ -155,15 +158,20 @@ async def test_bootstrap_job_reconciles_embeddings_after_successful_ingest(
 
     workspace_id = uuid.uuid4()
     product_id = uuid.uuid4()
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id, workspace_id=workspace_id, name="p", slug="p", repo_url="https://x/y"
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name="p",
+                    slug="p",
+                    repo_url="https://x/y",
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
     from backend.config import get_settings
 
@@ -204,16 +212,17 @@ async def test_bootstrap_job_reconciles_embeddings_after_successful_ingest(
 
     monkeypatch.setattr(rt, "_reconcile_embeddings_soft", _spy)
 
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=fake_git,
+        )
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row.bootstrap_status == "complete", row.bootstrap_error
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row.bootstrap_status == "complete", row.bootstrap_error
     # The imported knowledge was embedded — once, for this workspace.
     assert calls == [(workspace_id,)]

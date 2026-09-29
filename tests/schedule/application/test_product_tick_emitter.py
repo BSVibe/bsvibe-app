@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 # Imported for table registration on the shared Base.metadata.
 import backend.identity.workspaces_db  # noqa: F401
 import backend.workflow.infrastructure.intake.db  # noqa: F401
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.schedule.application.emitter import ScheduleTrigger
 from backend.schedule.domain.product_tick import product_tick_instruction
@@ -55,24 +56,25 @@ async def test_fire_product_tick_seeds_meta_instruction(
     product_id = uuid.uuid4()
     schedule_id = uuid.uuid4()
     fired_at = datetime(2026, 7, 22, 9, 0, tzinfo=UTC)
-    async with sf() as session:
-        session.add(WorkspaceRow(id=ws, name="acme"))  # default language en
-        await session.commit()
+    with workspace_scope(ws):  # the poll runner fires each schedule inside its tenant's scope
+        async with sf() as session:
+            session.add(WorkspaceRow(id=ws, name="acme"))  # default language en
+            await session.commit()
 
-        trigger = ScheduleTrigger(session)
-        outcome = await trigger.fire(
-            workspace_id=ws,
-            schedule_id=schedule_id,
-            kind="product_tick",
-            # The stored schedule payload is empty for product_tick — the emitter
-            # must NOT depend on a founder-provided ``text``.
-            schedule_payload={},
-            cron_expr="0 9 * * *",
-            fired_at=fired_at,
-            product_id=product_id,
-        )
-        assert outcome.duplicate is False
-        await session.commit()
+            trigger = ScheduleTrigger(session)
+            outcome = await trigger.fire(
+                workspace_id=ws,
+                schedule_id=schedule_id,
+                kind="product_tick",
+                # The stored schedule payload is empty for product_tick — the emitter
+                # must NOT depend on a founder-provided ``text``.
+                schedule_payload={},
+                cron_expr="0 9 * * *",
+                fired_at=fired_at,
+                product_id=product_id,
+            )
+            assert outcome.duplicate is False
+            await session.commit()
 
     async with sf() as session:
         row = (await session.execute(select(TriggerEventRow))).scalar_one()
@@ -87,21 +89,22 @@ async def test_fire_product_tick_localizes_to_workspace_language(
     sf: async_sessionmaker[AsyncSession],
 ) -> None:
     ws = uuid.uuid4()
-    async with sf() as session:
-        session.add(WorkspaceRow(id=ws, name="acme", language="ko"))
-        await session.commit()
+    with workspace_scope(ws):
+        async with sf() as session:
+            session.add(WorkspaceRow(id=ws, name="acme", language="ko"))
+            await session.commit()
 
-        trigger = ScheduleTrigger(session)
-        await trigger.fire(
-            workspace_id=ws,
-            schedule_id=uuid.uuid4(),
-            kind="product_tick",
-            schedule_payload={},
-            cron_expr="0 9 * * *",
-            fired_at=datetime(2026, 7, 22, 9, 0, tzinfo=UTC),
-            product_id=uuid.uuid4(),
-        )
-        await session.commit()
+            trigger = ScheduleTrigger(session)
+            await trigger.fire(
+                workspace_id=ws,
+                schedule_id=uuid.uuid4(),
+                kind="product_tick",
+                schedule_payload={},
+                cron_expr="0 9 * * *",
+                fired_at=datetime(2026, 7, 22, 9, 0, tzinfo=UTC),
+                product_id=uuid.uuid4(),
+            )
+            await session.commit()
 
     async with sf() as session:
         row = (await session.execute(select(TriggerEventRow))).scalar_one()
@@ -113,20 +116,21 @@ async def test_fire_instruction_kind_still_uses_schedule_text(
 ) -> None:
     """No regression — the instruction kind still carries its founder ``text``."""
     ws = uuid.uuid4()
-    async with sf() as session:
-        session.add(WorkspaceRow(id=ws, name="acme"))
-        await session.commit()
+    with workspace_scope(ws):
+        async with sf() as session:
+            session.add(WorkspaceRow(id=ws, name="acme"))
+            await session.commit()
 
-        trigger = ScheduleTrigger(session)
-        await trigger.fire(
-            workspace_id=ws,
-            schedule_id=uuid.uuid4(),
-            kind="instruction",
-            schedule_payload={"text": "post the weekly summary"},
-            cron_expr="0 9 * * 1",
-            fired_at=datetime(2026, 7, 27, 9, 0, tzinfo=UTC),
-        )
-        await session.commit()
+            trigger = ScheduleTrigger(session)
+            await trigger.fire(
+                workspace_id=ws,
+                schedule_id=uuid.uuid4(),
+                kind="instruction",
+                schedule_payload={"text": "post the weekly summary"},
+                cron_expr="0 9 * * 1",
+                fired_at=datetime(2026, 7, 27, 9, 0, tzinfo=UTC),
+            )
+            await session.commit()
 
     async with sf() as session:
         row = (await session.execute(select(TriggerEventRow))).scalar_one()
