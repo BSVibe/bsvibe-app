@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.extensions.plugin.loader import PluginLoader
 from backend.extensions.skill.loader import SkillLoader
 from backend.router.accounts.crypto import CredentialCipher
@@ -261,7 +262,7 @@ async def test_verified_run_delivers_as_github_pr(
         )
     )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await _seed_github_connector(s, cipher, workspace_id)
         run_id = await _seed_open_run(s, workspace_id)
 
@@ -277,7 +278,7 @@ async def test_verified_run_delivers_as_github_pr(
     # The clone is a real checkout of the bare remote on the per-run branch.
     assert (await _git("rev-parse", "--abbrev-ref", "HEAD", cwd=checkout)) == branch
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.REVIEW_READY
         deliverable = (await s.execute(select(Deliverable))).scalar_one()
@@ -323,7 +324,7 @@ async def test_verified_run_delivers_as_github_pr(
     assert pr_route.calls.last.request.headers["authorization"] == "Bearer ghp_test_token"
 
     # Direct delivery result is recorded against the deliverable + the event drained.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.execute(select(DeliveryEventRow))).first() is None
         assert await s.get(Deliverable, deliverable_id) is not None
 
@@ -345,7 +346,7 @@ async def test_auto_merge_flag_on_enqueues_merge_watch_row(
         )
     )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await _seed_github_connector(s, cipher, workspace_id)
         run_id = await _seed_open_run(s, workspace_id)
 
@@ -371,7 +372,7 @@ async def test_auto_merge_flag_on_enqueues_merge_watch_row(
     assert await worker.drain_once() == 1
 
     branch = f"bsvibe/run-{run_id.hex[:8]}"
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         rows = (await s.execute(select(GithubMergeWatchRow))).scalars().all()
     assert len(rows) == 1
     watch = rows[0]
@@ -400,7 +401,7 @@ async def test_auto_merge_flag_off_enqueues_nothing(
         )
     )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await _seed_github_connector(s, cipher, workspace_id)
         await _seed_open_run(s, workspace_id)
 
@@ -424,7 +425,7 @@ async def test_auto_merge_flag_off_enqueues_nothing(
     )
     assert await worker.drain_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         rows = (await s.execute(select(GithubMergeWatchRow))).scalars().all()
     assert rows == []
 
@@ -441,7 +442,7 @@ async def test_github_no_file_changes_no_push_no_pr_clean_success(
 
     pr_route = respx.post(f"{GITHUB_API}/repos/owner/name/pulls")
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await _seed_github_connector(s, cipher, workspace_id)
         run_id = await _seed_open_run(s, workspace_id)
 
@@ -471,7 +472,7 @@ async def test_github_no_file_changes_no_push_no_pr_clean_success(
     branches = await _git("branch", "--list", cwd=bare)
     assert branch not in branches
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.execute(select(DeliveryEventRow))).first() is None
 
 
@@ -549,7 +550,7 @@ async def test_github_pr_closes_and_comments_on_source_issue(
         )
     )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await _seed_github_connector(s, cipher, workspace_id)
         await _seed_run_from_github_issue(s, workspace_id, 42)
 
@@ -589,7 +590,7 @@ async def test_source_issue_number_none_for_direct_run(
     """A Direct chat run (no Request/TriggerEvent) has no issue to reply to — the
     tracer returns None so non-github delivery is untouched (no Closes/comment)."""
     workspace_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,

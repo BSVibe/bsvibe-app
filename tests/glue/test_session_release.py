@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.config import get_settings
 from backend.data import Base
+from backend.data.rls import workspace_session_scope
 from backend.dispatch.adapter import ExecutorCapacitySaturated
 from backend.extensions.skill.loader import SkillLoader
 from backend.identity.workspaces_db import WorkspaceRow
@@ -120,7 +121,7 @@ def _deps(root: Path, orchestrator_factory) -> AgentExecutionDeps:
 
 
 async def _seed_workspace(sf: async_sessionmaker, ws_id: uuid.UUID) -> None:
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         s.add(
             WorkspaceRow(
                 id=ws_id,
@@ -142,7 +143,7 @@ async def _seed_run(
     claimed_at: datetime | None = None,
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -188,7 +189,7 @@ async def test_no_connection_held_during_executor_await(tmp_path: Path) -> None:
         # request_id=None + a pre-seeded "frame" → framing is skipped (no frame LLM needed).
         run_id = await _seed_run(sf, ws_id=ws_id, payload={"frame": {"skill_match": None}})
         # Clear request_id so _frame_and_drive never fetches a Request.
-        async with sf() as s:
+        async with sf() as s, workspace_session_scope(s, ws_id):
             await s.execute(
                 update(ExecutionRun).where(ExecutionRun.id == run_id).values(request_id=None)
             )
@@ -218,7 +219,7 @@ async def test_no_connection_held_during_executor_await(tmp_path: Path) -> None:
             # The drive is now parked in the executor await. With a 1-connection
             # pool this MUST succeed only if the drive holds zero connections.
             async def _heartbeat() -> int:
-                async with sf() as s:
+                async with sf() as s, workspace_session_scope(s, ws_id):
                     rows = (await s.execute(select(ExecutionRun.id))).all()
                     return len(rows)
 
@@ -259,7 +260,7 @@ async def test_no_connection_held_during_verify(tmp_path: Path) -> None:
         ws_id = uuid.uuid4()
         await _seed_workspace(sf, ws_id)
         run_id = await _seed_run(sf, ws_id=ws_id, payload={"frame": {"skill_match": None}})
-        async with sf() as s:
+        async with sf() as s, workspace_session_scope(s, ws_id):
             await s.execute(
                 update(ExecutionRun).where(ExecutionRun.id == run_id).values(request_id=None)
             )
@@ -299,7 +300,7 @@ async def test_no_connection_held_during_verify(tmp_path: Path) -> None:
             await asyncio.wait_for(parked.wait(), timeout=15)
 
             async def _heartbeat() -> int:
-                async with sf() as s:
+                async with sf() as s, workspace_session_scope(s, ws_id):
                     rows = (await s.execute(select(ExecutionRun.id))).all()
                     return len(rows)
 
@@ -343,7 +344,7 @@ async def test_no_connection_held_inside_verify_long_steps(tmp_path: Path) -> No
         ws_id = uuid.uuid4()
         await _seed_workspace(sf, ws_id)
         run_id = await _seed_run(sf, ws_id=ws_id, payload={"frame": {"skill_match": None}})
-        async with sf() as s:
+        async with sf() as s, workspace_session_scope(s, ws_id):
             await s.execute(
                 update(ExecutionRun).where(ExecutionRun.id == run_id).values(request_id=None)
             )
@@ -411,7 +412,7 @@ async def test_no_connection_held_inside_verify_long_steps(tmp_path: Path) -> No
             await asyncio.wait_for(parked.wait(), timeout=20)
 
             async def _heartbeat() -> int:
-                async with sf() as s:
+                async with sf() as s, workspace_session_scope(s, ws_id):
                     rows = (await s.execute(select(ExecutionRun.id))).all()
                     return len(rows)
 
@@ -467,7 +468,7 @@ async def test_two_workers_never_double_claim_one_batch(sf) -> None:
     # Together they cover the whole batch.
     assert set1 | set2 == run_ids
     # Every claimed run is RUNNING with a claimed_by matching one of the workers.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         for run_id in run_ids:
             run = await s.get(ExecutionRun, run_id)
             assert run.status is RunStatus.RUNNING
@@ -501,7 +502,7 @@ async def test_reaper_resets_stale_claims_but_never_paused_on_decision(sf, monke
     r_fresh = await _seed_run(sf, ws_id=ws_id, status=RunStatus.RUNNING, claimed_at=fresh)
     # (4) stale claim BUT pending decision → NOT reaped (second guard).
     r_stale_decided = await _seed_run(sf, ws_id=ws_id, status=RunStatus.RUNNING, claimed_at=stale)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         for rid in (r_paused, r_stale_decided):
             s.add(
                 Decision(
@@ -519,7 +520,7 @@ async def test_reaper_resets_stale_claims_but_never_paused_on_decision(sf, monke
     reaped = await worker._reap_stale_claims()
     assert reaped == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         assert (await s.get(ExecutionRun, r_stale)).status is RunStatus.OPEN
         assert (await s.get(ExecutionRun, r_stale)).claimed_at is None
         assert (await s.get(ExecutionRun, r_paused)).status is RunStatus.RUNNING
@@ -582,7 +583,7 @@ async def test_run_claimed_within_lease_at_max_turn_length_is_not_reaped(sf) -> 
     reaped = await worker._reap_stale_claims()
     assert reaped == 0
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         assert (await s.get(ExecutionRun, run_id)).status is RunStatus.RUNNING
 
 
@@ -624,7 +625,7 @@ async def test_resume_skips_framing_and_terminates_once(sf, tmp_path: Path) -> N
     assert driven == 1
     assert framed == [], "frame stage was re-invoked on a pre-framed (resumed) run"
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         run = await s.get(ExecutionRun, run_id)
         assert run.status is RunStatus.REVIEW_READY
         assert run.claimed_at is None  # claim cleared on terminal exit
@@ -664,7 +665,7 @@ async def test_act_saturation_resets_run_open_and_is_repicked(sf, tmp_path: Path
     driven = await worker.drive_once()
     assert driven == 0  # a yielded run was not driven
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         run = await s.get(ExecutionRun, run_id)
         assert run.status is RunStatus.OPEN
         assert run.claimed_at is None
@@ -678,7 +679,7 @@ async def test_act_saturation_resets_run_open_and_is_repicked(sf, tmp_path: Path
 
     worker2 = AgentWorker(session_factory=sf, execution=_deps(tmp_path, _ok_factory))
     assert await worker2.drive_once() == 1
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         assert (await s.get(ExecutionRun, run_id)).status is RunStatus.REVIEW_READY
 
 

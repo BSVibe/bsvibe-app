@@ -27,6 +27,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.data.scoping import current_workspace_id
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
@@ -73,7 +74,7 @@ class _ScopeRecordingDispatcher:
 async def _seed_event(sf_: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID) -> None:
     """A workspace with safe-mode OFF + a run + one pending delivery event."""
     run_id = uuid.uuid4()
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         s.add(WorkspaceRow(id=workspace_id, name=f"ws-{workspace_id.hex[:6]}", safe_mode=False))
         s.add(
             ExecutionRun(
@@ -169,7 +170,7 @@ async def _seed_notification(sf_: async_sessionmaker[AsyncSession], ws: uuid.UUI
     from backend.connectors.db import ConnectorAccountRow
     from backend.notifications.db import NotificationEventRow, NotificationPrefsRow
 
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, ws):
         s.add(WorkspaceRow(id=ws, name=f"ws-{ws.hex[:6]}", timezone="UTC", language="en"))
         s.add(
             ConnectorAccountRow(
@@ -227,10 +228,10 @@ async def test_notify_worker_publishes_each_rows_workspace(sf) -> None:
 
 async def _two_workspaces(sf_: async_sessionmaker[AsyncSession]) -> tuple[uuid.UUID, uuid.UUID]:
     a, b = uuid.uuid4(), uuid.uuid4()
-    async with sf_() as s:
-        for ws in (a, b):
+    for ws in (a, b):
+        async with sf_() as s, workspace_session_scope(s, ws):
             s.add(WorkspaceRow(id=ws, name=f"ws-{ws.hex[:6]}", timezone="UTC", language="en"))
-        await s.commit()
+            await s.commit()
     return a, b
 
 

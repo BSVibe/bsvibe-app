@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.config import get_settings
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
@@ -76,29 +77,30 @@ async def _seed_settle_activity(
         payload["agent_knowledge"] = {"topic": "Remembered knowledge", "insight": summary}
     if extra_payload:
         payload.update(extra_payload)
-    async with sf() as s:
-        s.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=workspace_id,
-                status=RunStatus.REVIEW_READY,
-                payload={},
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            s.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    status=RunStatus.REVIEW_READY,
+                    payload={},
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.flush()
-        s.add(
-            ExecutionRunActivity(
-                id=activity_id,
-                run_id=run_id,
-                workspace_id=workspace_id,
-                activity_type=activity_type,
-                payload=payload,
-                created_at=datetime.now(tz=UTC),
+            await s.flush()
+            s.add(
+                ExecutionRunActivity(
+                    id=activity_id,
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    activity_type=activity_type,
+                    payload=payload,
+                    created_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
     return activity_id
 
 
@@ -463,9 +465,10 @@ async def test_settle_worker_workspace_isolation(sf, tmp_path) -> None:
     """
     ws_a = uuid.uuid4()
     ws_b = uuid.uuid4()
-    async with sf() as s:
-        s.add(WorkspaceRow(id=ws_b, name="ws-b"))
-        await s.commit()
+    with workspace_scope(ws_b):
+        async with sf() as s:
+            s.add(WorkspaceRow(id=ws_b, name="ws-b"))
+            await s.commit()
 
     await _seed_settle_activity(sf, workspace_id=ws_a, summary="alpha learning", knowledge=True)
     await _seed_settle_activity(sf, workspace_id=ws_b, summary="beta learning", knowledge=True)

@@ -40,6 +40,8 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
+from backend.data.scoping import workspace_scope
 from backend.router.accounts.schemas import ModelAccountCreate
 from backend.router.accounts.service import ModelAccountService
 from backend.router.llm_client import LlmClient
@@ -55,7 +57,7 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
 )
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -89,7 +91,7 @@ async def seeded_product(
     from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 
     product_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             WorkspaceRow(
                 id=workspace_id,
@@ -239,9 +241,6 @@ async def client(
 ) -> AsyncIterator[httpx.AsyncClient]:
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -250,7 +249,7 @@ async def client(
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -274,7 +273,7 @@ async def _seed_active_account(
 
     from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = ModelAccountService(s, cipher=runtime.CredentialCipher(runtime._key_from_settings()))
         out = await svc.create(
             workspace_id=workspace_id,
@@ -340,7 +339,7 @@ async def test_production_deps_drive_greenfield_direct_run_to_delivery(
     assert await agent.claim_once() == 1
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         # "Build the answer file" frames as ``design_then_impl`` (artifact code +
         # a build verb), so REVIEW_READY chains an impl run. Select the DESIGN
         # run — the one this test drove — rather than assuming a single row.
@@ -376,7 +375,7 @@ async def test_production_deps_drive_greenfield_direct_run_to_delivery(
         config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
     )
     assert await delivery.drain_once() == 1
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.execute(select(DeliveryEventRow))).first() is None
     # No matching plugin is fine — the event still drains (queue never wedges).
     assert deliverable_id is not None
@@ -410,7 +409,7 @@ async def test_zero_active_accounts_creates_decision_and_run_stays_running(
     # the factory created a Decision and returned None.
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         # Run stays RUNNING (paused on the Decision) — never silently stalled,
         # never crashed, never advanced to REVIEW_READY/FAILED.
@@ -461,7 +460,7 @@ async def test_two_active_accounts_workspace_default_picks_winner(
     agent = AgentWorker(session_factory=sf, execution=deps)
     assert await agent.claim_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         # Default is "b" (last seed stamped it).
         ws = (
             await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
@@ -562,7 +561,7 @@ async def test_drive_frames_against_only_the_runs_workspace_skills(
     assert await agent.claim_once() == 1
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         # Framed against workspace A's skills only — sees A's "weekly-digest",
         # never the other workspace's "groceries".
@@ -672,7 +671,9 @@ async def test_settle_entity_extractor_factory_extracts_entities(
     factory = runtime.build_settle_entity_extractor_factory(
         session_factory=sf, settings=get_settings()
     )
-    extractor = await factory(workspace_id=workspace_id)
+    # The settle worker calls the factory inside the settlement's workspace scope.
+    with workspace_scope(workspace_id):
+        extractor = await factory(workspace_id=workspace_id)
     assert extractor is not None
     names = await extractor.extract_entity_names("build a calculator in python")
     assert names == ["calculator", "Python"]
@@ -734,7 +735,9 @@ async def test_concept_framer_factory_distills_via_routing(
     _patch_scripted_llm(monkeypatch, _ScriptedCompletion([{"content": framing}]))
 
     factory = runtime.build_concept_framer(session_factory=sf, settings=get_settings())
-    framer = await factory(workspace_id=workspace_id)
+    # The settle worker's promote pass calls the factory inside workspace scope.
+    with workspace_scope(workspace_id):
+        framer = await factory(workspace_id=workspace_id)
     assert framer is not None
     text = await framer.frame(
         concept="resolver-pattern", members=[("resolver-soft-fallback", "return None on a miss")]
@@ -789,7 +792,9 @@ async def test_settle_entity_extractor_factory_none_when_no_account(
     factory = runtime.build_settle_entity_extractor_factory(
         session_factory=sf, settings=get_settings()
     )
-    assert await factory(workspace_id=workspace_id) is None
+    # The settle worker calls the factory inside the settlement's workspace scope.
+    with workspace_scope(workspace_id):
+        assert await factory(workspace_id=workspace_id) is None
 
 
 async def test_settle_entity_extractor_factory_none_when_no_default_or_rule(
@@ -809,7 +814,9 @@ async def test_settle_entity_extractor_factory_none_when_no_default_or_rule(
     factory = runtime.build_settle_entity_extractor_factory(
         session_factory=sf, settings=get_settings()
     )
-    assert await factory(workspace_id=workspace_id) is None
+    # The settle worker calls the factory inside the settlement's workspace scope.
+    with workspace_scope(workspace_id):
+        assert await factory(workspace_id=workspace_id) is None
 
 
 # --------------------------------------------------------------------------
@@ -844,7 +851,7 @@ async def test_a_stage_rule_makes_the_worker_label_the_run(
     _write_skill(skills_root / str(workspace_id), "weekly-digest", "Generate a weekly digest")
     await _seed_active_account(sf, workspace_id=workspace_id, account_id=account_id)
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             RunRoutingRuleRow(
                 id=uuid.uuid4(),
@@ -876,7 +883,7 @@ async def test_a_stage_rule_makes_the_worker_label_the_run(
     assert await agent.claim_once() == 1
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         # 워커가 라벨을 적었다 — 라우팅이 형님 룰을 만날 수 있다.
         assert run.payload["stage"] == "design"
@@ -924,7 +931,7 @@ async def test_without_a_stage_rule_the_worker_labels_nothing(
     assert await agent.claim_once() == 1
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         assert "stage" not in run.payload
         assert "steps" not in run.payload["frame"]

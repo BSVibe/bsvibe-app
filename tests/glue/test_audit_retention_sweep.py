@@ -38,6 +38,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.schedule.infrastructure.workers.schedule_worker import ScheduleWorker
 from plugin.audit.models import AuditOutboxRecord
@@ -66,7 +67,7 @@ async def _seed_workspace(
     audit_retention_days: int | None,
 ) -> uuid.UUID:
     workspace_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(WorkspaceRow(id=workspace_id, name=name, audit_retention_days=audit_retention_days))
         await s.commit()
     return workspace_id

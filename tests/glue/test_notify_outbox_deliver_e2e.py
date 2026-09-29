@@ -45,6 +45,7 @@ import backend.identity.workspaces_db  # noqa: F401
 import backend.notifications.db  # noqa: F401
 import backend.workflow.infrastructure.db  # noqa: F401
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.notify_builders import NotificationContent
 from backend.workflow.application.run_persistence import create_decision
@@ -105,7 +106,7 @@ async def _seed_workspace_with_telegram(
     from backend.notifications.db import NotificationPrefsRow
 
     ws = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         s.add(WorkspaceRow(id=ws, name="Notify Hop WS", timezone="UTC", language="en"))
         s.add(
             ConnectorAccountRow(
@@ -137,7 +138,7 @@ async def test_decision_drives_the_founder_notification_all_the_way_to_the_sende
 
     # 1. REAL producer — a run stops on a Decision; create_decision stages the
     #    ``needs_you`` outbox row in the SAME transaction. Nothing is pre-seeded.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         run = ExecutionRun(workspace_id=ws, status=RunStatus.RUNNING, payload={})
         s.add(run)
         await s.flush()
@@ -173,7 +174,7 @@ async def test_decision_drives_the_founder_notification_all_the_way_to_the_sende
     #    transitioned to its terminal ``sent`` state (the hop completed).
     from backend.notifications.db import NotificationEventRow, NotificationStatus
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         row = (
             await s.execute(
                 select(NotificationEventRow).where(

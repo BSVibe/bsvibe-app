@@ -49,6 +49,7 @@ import backend.identity.workspaces_db  # noqa: F401
 import backend.workflow.infrastructure.db  # noqa: F401
 import backend.workflow.infrastructure.delivery.db  # noqa: F401
 import backend.workflow.infrastructure.intake.db  # noqa: F401
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.schedule.application.emitter import ScheduleTrigger
 from backend.schedule.infrastructure.schedule_db import SCHEDULE_KIND_PRODUCT_TICK
@@ -124,7 +125,7 @@ async def _seed_workspace_and_product(
     from the workspace flag) + a product for the tick to target."""
     ws = uuid.uuid4()
     product = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         s.add(WorkspaceRow(id=ws, name="Tick WS", timezone="UTC", language="en", safe_mode=False))
         await s.flush()
         s.add(
@@ -150,7 +151,7 @@ async def _fire_emitter(
     """Drive the REAL schedule emitter for one fired window — it stamps the
     trigger ``kind`` onto the TriggerEvent payload. No payload["kind"] is set by
     hand anywhere in this test; this is the sole origin of the kind."""
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         await ScheduleTrigger(s).fire(
             workspace_id=ws,
             schedule_id=uuid.uuid4(),
@@ -168,7 +169,7 @@ async def _open_run_from_intake(
     """IntakeWorker mints the Request (kind rides through Receive), then the REAL
     ``AgentRunner.open_run`` propagates it onto the run payload. Returns run_id."""
     assert await IntakeWorker(session_factory=sf).drain_once() == 1
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         request = (
             await s.execute(select(RequestRow).where(RequestRow.workspace_id == ws))
         ).scalar_one()
@@ -183,7 +184,7 @@ async def _seed_deliverable_and_event(
     """The DOWNSTREAM artifact (a verified deliverable + its DeliveryEvent). This
     is not the kind seam — the seam is ``run.payload["kind"]``, already set by the
     real chain above. The DeliveryEventRow.run_id points the gate back at that run."""
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         deliverable = Deliverable(
             id=uuid.uuid4(),
             run_id=run_id,
@@ -224,7 +225,7 @@ async def test_product_tick_deliverable_is_held_by_safe_mode_gate(
     run_id = await _open_run_from_intake(sf, ws=ws)
 
     # PROOF the propagation reached the run payload (the seam) via the real chain.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.payload.get("kind") == "product_tick", (
@@ -246,7 +247,7 @@ async def test_product_tick_deliverable_is_held_by_safe_mode_gate(
 
     # Held, NOT dispatched: enqueued into the SafeModeQueue, dispatcher untouched.
     assert dispatcher.calls == [], "autonomous product_tick deliverable was dispatched, not held"
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         items = (
             (
                 await s.execute(
@@ -280,7 +281,7 @@ async def test_instruction_run_is_dispatched_directly_under_the_same_conditions(
     )
     run_id = await _open_run_from_intake(sf, ws=ws)
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         # The instruction kind propagated too — it's simply NOT an autonomous-origin
@@ -299,7 +300,7 @@ async def test_instruction_run_is_dispatched_directly_under_the_same_conditions(
 
     # Dispatched directly, NOT held.
     assert dispatcher.calls == [deliverable_id], "instruction deliverable was not dispatched"
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         items = (
             (
                 await s.execute(

@@ -26,6 +26,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -34,7 +35,7 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -59,7 +60,7 @@ def workspace_id() -> uuid.UUID:
 async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID):
     app = create_app()
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = lambda: SimpleNamespace(id=founder_id)
 
     async def _session():
@@ -73,7 +74,7 @@ async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID):
 
 
 async def _seed(sf_, workspace_id, status: RunStatus) -> uuid.UUID:
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -98,7 +99,7 @@ async def test_cancel_inflight_run(client, sf, workspace_id, status) -> None:
     resp = await client.post(f"/api/v1/runs/{run_id}/cancel")
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "cancelled"
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.CANCELLED
 
@@ -108,7 +109,7 @@ async def test_cancel_resolves_pending_decision(client, sf, workspace_id) -> Non
     decision — else the Summary "확인 필요" card lingers after cancel (orphaned-half)."""
     run_id = await _seed(sf, workspace_id, RunStatus.RUNNING)
     dec_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             Decision(
                 id=dec_id,
@@ -124,7 +125,7 @@ async def test_cancel_resolves_pending_decision(client, sf, workspace_id) -> Non
 
     resp = await client.post(f"/api/v1/runs/{run_id}/cancel")
     assert resp.status_code == 200, resp.text
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         dec = await s.get(Decision, dec_id)
         assert dec is not None and dec.status is DecisionStatus.RESOLVED
 
@@ -156,7 +157,7 @@ async def test_worker_cannot_uncancel(sf, workspace_id) -> None:
     """A RUNNING run cancelled mid-drive must NOT be flipped back to a terminal
     success by the worker's post-drive transition (transition guard)."""
     run_id = await _seed(sf, workspace_id, RunStatus.RUNNING)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         runner = AgentRunner(s)
         # Founder cancels.
         await runner.transition(run_id=run_id, to_status=RunStatus.CANCELLED, reason="founder")
@@ -171,7 +172,7 @@ async def test_worker_cannot_uncancel(sf, workspace_id) -> None:
 async def test_retry_reopens_a_cancelled_run(sf, workspace_id) -> None:
     """The cancel guard must STILL allow the explicit retry path (CANCELLED → OPEN)."""
     run_id = await _seed(sf, workspace_id, RunStatus.CANCELLED)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         runner = AgentRunner(s)
         moved = await runner.transition(run_id=run_id, to_status=RunStatus.OPEN, reason="retry")
         await s.commit()
@@ -189,7 +190,7 @@ async def test_retry_stamps_restarted_at(client, sf, workspace_id) -> None:
     run_id = await _seed(sf, workspace_id, RunStatus.FAILED)
     resp = await client.post(f"/api/v1/runs/{run_id}/retry")
     assert resp.status_code == 200, resp.text
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert isinstance(run.payload.get("restarted_at"), str) and run.payload["restarted_at"]

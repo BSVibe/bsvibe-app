@@ -18,6 +18,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import (
     SafeModeQueueItemRow,
@@ -71,11 +72,11 @@ async def test_shipped_run_item_excluded_others_kept(sf):
     shipped_item = _item(ws, shipped_run.id)
     legacy_item = _item(ws, None)  # no run_id — must always be kept
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, ws):
         session.add_all([review_run, shipped_run, review_item, shipped_item, legacy_item])
         await session.commit()
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, ws):
         repo = SqlAlchemySafeModeQueueRepository(session)
         pending = await repo.list_pending_by_workspace(ws)
 

@@ -32,6 +32,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
 from backend.extensions.skill.loader import SkillLoader
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.product_tick_planner import ProductTickPlanner, TickPlan
@@ -164,7 +165,7 @@ async def test_tick_plan_overrides_framing_intent_and_stashes_provenance(
     )
     planner = _StubPlanner(result=plan)
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run_id = await _seed_tick_run(
             session, workspace_id=workspace_id, product_id=product_id, kind="product_tick"
         )
@@ -180,7 +181,7 @@ async def test_tick_plan_overrides_framing_intent_and_stashes_provenance(
     # The frame stage lowercases its extracted text, so compare case-insensitively.
     assert any("add the stripe webhook signature check" in u.lower() for u in frame_llm.users)
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert run.payload["intent_text"] == "Add the Stripe webhook signature check"
@@ -197,7 +198,7 @@ async def test_planner_none_falls_back_to_static_instruction(
     product_id = uuid.uuid4()
     planner = _StubPlanner(result=None)  # planner declines
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run_id = await _seed_tick_run(
             session, workspace_id=workspace_id, product_id=product_id, kind="product_tick"
         )
@@ -208,7 +209,7 @@ async def test_planner_none_falls_back_to_static_instruction(
     assert await agent.drive_once() == 1
 
     assert planner.calls == [(workspace_id, product_id)]  # planner WAS consulted
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         # No override → the static meta-instruction remains the framing intent.
@@ -224,7 +225,7 @@ async def test_non_tick_run_never_invokes_planner(
     # A plan is armed, but the run is NOT a product_tick → it must never be used.
     planner = _StubPlanner(result=TickPlan(instruction="should not apply", rationale="x"))
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run_id = await _seed_tick_run(
             session, workspace_id=workspace_id, product_id=product_id, kind=None
         )
@@ -235,7 +236,7 @@ async def test_non_tick_run_never_invokes_planner(
     assert await agent.drive_once() == 1
 
     assert planner.calls == []  # planner NEVER consulted for a non-tick run
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert run.payload["intent_text"] == _STATIC_INSTRUCTION

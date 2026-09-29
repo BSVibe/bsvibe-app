@@ -44,6 +44,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
 from backend.knowledge.canonicalization.models import DecisionEntry
@@ -89,7 +90,7 @@ def _gated_sink(vault_root):
 
 
 async def _add_workspace(sf, *, workspace_id: uuid.UUID, safe_mode: bool) -> None:
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=safe_mode))
         await s.commit()
 
@@ -125,7 +126,7 @@ async def _seed_settle_activity(
         payload["product_name"] = product_name
     if intent_text is not None:
         payload["intent_text"] = intent_text
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             ExecutionRun(
                 id=run_id,

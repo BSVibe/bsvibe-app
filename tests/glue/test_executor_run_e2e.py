@@ -30,6 +30,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
 from backend.executors.db import WorkerRow
 from backend.router.accounts.models import ModelAccount
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
@@ -184,7 +185,7 @@ async def test_non_executor_account_builds_native_orchestrator(
     from backend.router.accounts.crypto import CredentialCipher  # noqa: PLC0415
 
     workspace_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         cipher = CredentialCipher(b"0" * 32)
         account = ModelAccount(
             id=uuid.uuid4(),
@@ -215,7 +216,7 @@ async def test_non_executor_account_builds_native_orchestrator(
         await s.commit()
 
     deps = build_agent_execution_deps()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         orchestrator = await deps.orchestrator_factory(s, run)
@@ -246,7 +247,7 @@ async def test_lift_e3_executor_account_routes_through_native_run_orchestrator(
 
     workspace_id = uuid.uuid4()
     redis = await _make_redis()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         worker = await _seed_worker(s, workspace_id=workspace_id, capabilities=["claude_code"])
         await _seed_executor_account(
             s, workspace_id=workspace_id, worker_id=worker.id, executor_type="claude_code"
@@ -255,7 +256,7 @@ async def test_lift_e3_executor_account_routes_through_native_run_orchestrator(
         await s.commit()
 
     deps = build_agent_execution_deps(redis_client=redis, settings=_short_timeout_settings())
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         orchestrator = await deps.orchestrator_factory(s, run)
@@ -355,7 +356,7 @@ async def test_factory_wires_retriever_into_native_orchestrator(
         concept_id="structured-logging",
         display="Use structlog for structured logging",
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         cipher = CredentialCipher(b"0" * 32)
         account = ModelAccount(
             id=uuid.uuid4(),
@@ -384,7 +385,7 @@ async def test_factory_wires_retriever_into_native_orchestrator(
         await s.commit()
 
     deps = build_agent_execution_deps(settings=settings)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         orchestrator = await deps.orchestrator_factory(s, run)

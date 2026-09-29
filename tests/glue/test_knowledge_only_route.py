@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
 from backend.router.accounts.schemas import ModelAccountCreate
 from backend.router.accounts.service import ModelAccountService
 from backend.router.llm_client import LlmClient
@@ -127,7 +128,7 @@ async def _seed_active_account(
 
     from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = ModelAccountService(s, cipher=runtime.CredentialCipher(runtime._key_from_settings()))
         out = await svc.create(
             workspace_id=workspace_id,
@@ -220,7 +221,7 @@ async def test_ask_run_takes_the_same_seam_as_any_other_run(
     workspace_id = uuid.uuid4()
     await _seed_active_account(sf, workspace_id=workspace_id, account_id=uuid.uuid4())
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -261,7 +262,7 @@ async def test_agent_loop_path_is_unchanged(
     workspace_id = uuid.uuid4()
     await _seed_active_account(sf, workspace_id=workspace_id, account_id=uuid.uuid4())
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run_id = await _seed_request_and_run(
             session, workspace_id=workspace_id, text="build the answer file"
         )
@@ -300,7 +301,7 @@ async def test_agent_loop_path_is_unchanged(
     agent = AgentWorker(session_factory=sf, execution=deps)
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY
@@ -327,7 +328,7 @@ async def test_factory_routes_executor_account_even_when_knowledge_only(
         sf, workspace_id=workspace_id, account_id=uuid.uuid4(), provider="executor"
     )
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -363,7 +364,7 @@ async def test_knowledge_only_without_llm_falls_back_to_loop(
     creates a model-account Decision and returns None — the run is paused (never
     routed to a knowledge orchestrator it cannot build, never stranded)."""
     workspace_id = uuid.uuid4()
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,

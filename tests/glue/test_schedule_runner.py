@@ -36,6 +36,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.schedule.application.emitter import ScheduleTrigger
 from backend.schedule.domain.runner_protocol import ScheduleRunnerProtocol
 from backend.schedule.infrastructure.db_poll_runner import DbPollScheduleRunner
@@ -335,7 +336,7 @@ async def test_request_payload_propagates_schedule_audit_tag(
     intake = IntakeWorker(session_factory=sf)
     await intake.drain_once()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         req = (
             (await s.execute(select(RequestRow).where(RequestRow.workspace_id == workspace_id)))
             .scalars()

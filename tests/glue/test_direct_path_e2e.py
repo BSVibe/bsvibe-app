@@ -41,6 +41,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.extensions.skill.loader import SkillLoader
 from backend.identity.workspaces_db import ProductRow
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
@@ -56,7 +57,7 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
 )
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
-from .._support import BuildFrameLlm, db_engine, fake_current_user
+from .._support import BuildFrameLlm, db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -152,9 +153,6 @@ def _execution_deps(
 async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -163,7 +161,7 @@ async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -194,7 +192,7 @@ async def seeded_product(
     from backend.identity.workspaces_db import WorkspaceRow
 
     product_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             WorkspaceRow(
                 id=workspace_id,
@@ -240,7 +238,7 @@ async def test_direct_path_message_to_delivered_artifact(
     body = resp.json()
     assert body == {"accepted": True, "duplicate": False, "workspace_id": str(workspace_id)}
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         triggers = (
             (
                 await s.execute(
@@ -256,7 +254,7 @@ async def test_direct_path_message_to_delivered_artifact(
     # 2. IntakeWorker drains the TriggerEvent → Request (OPEN).
     intake = IntakeWorker(session_factory=sf)
     assert await intake.drain_once() == 1
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         requests = (await s.execute(select(RequestRow))).scalars().all()
     assert len(requests) == 1
     assert requests[0].status is RequestStatus.OPEN
@@ -266,7 +264,7 @@ async def test_direct_path_message_to_delivered_artifact(
     deps = _execution_deps(sf, tmp_path)
     agent = AgentWorker(session_factory=sf, execution=deps)
     assert await agent.claim_once() == 1
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         req = await s.get(RequestRow, requests[0].id)
         assert req is not None and req.status is RequestStatus.RUNNING
@@ -275,7 +273,7 @@ async def test_direct_path_message_to_delivered_artifact(
 
     # 4. AgentWorker frames + drives the loop → REVIEW_READY + Deliverable + DeliveryEvent.
     assert await agent.drive_once() == 1
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY
@@ -306,7 +304,7 @@ async def test_direct_path_message_to_delivered_artifact(
     assert sink.dispatched[0]["workspace_id"] == workspace_id
 
     # Event removed from the queue after dispatch.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.execute(select(DeliveryEventRow))).first() is None
 
 

@@ -54,6 +54,7 @@ from backend.api.main import create_app
 from backend.api.v1.safemode import get_delivery_dispatcher
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.extensions.plugin.loader import PluginLoader
 from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
@@ -78,7 +79,7 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
 )
 from plugin.notion import plugin as notion_module
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 NOTION_API = "https://api.notion.test"
 
@@ -125,9 +126,6 @@ async def client(
 ):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -145,7 +143,7 @@ async def client(
         return build_connector_delivery_adapter(session_factory=sf, plugins=plugins, cipher=cipher)
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_delivery_dispatcher] = _dispatcher
@@ -290,7 +288,7 @@ async def test_safe_mode_approve_delivers_shaped_notion_event(
         return_value=httpx.Response(200, json={"id": "page-77", "url": "https://notion.so/page-77"})
     )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await _seed_notion_connector(s, cipher, workspace_id)
         deliverable_id = await _seed_verified_deliverable(s, workspace_id)
 
@@ -305,7 +303,7 @@ async def test_safe_mode_approve_delivers_shaped_notion_event(
     assert await worker.drain_once() == 1
     assert not route.called  # Safe Mode → no delivery yet.
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         items = (await s.execute(select(SafeModeQueueItemRow))).scalars().all()
         assert len(items) == 1
         assert items[0].status is SafeModeStatus.PENDING
@@ -326,7 +324,7 @@ async def test_safe_mode_approve_delivers_shaped_notion_event(
     assert "The spec body" in body  # body carries the rest of the summary
 
     # 4. Item marked APPROVED.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         item = await s.get(SafeModeQueueItemRow, uuid.UUID(item_id))
         assert item is not None
         assert item.status is SafeModeStatus.APPROVED
@@ -348,7 +346,7 @@ async def test_safe_mode_approve_no_binding_no_external_call(
 ) -> None:
     route = respx.post(f"{NOTION_API}/v1/pages")
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         deliverable_id = await _seed_verified_deliverable(s, workspace_id)
 
     worker = DeliveryWorker(
@@ -369,7 +367,7 @@ async def test_safe_mode_approve_no_binding_no_external_call(
     # No connector binding → no external HTTP call, no error.
     assert not route.called
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         item = await s.get(SafeModeQueueItemRow, uuid.UUID(item_id))
         assert item is not None
         assert item.status is SafeModeStatus.APPROVED

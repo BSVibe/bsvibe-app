@@ -26,6 +26,8 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
+from backend.data.scoping import workspace_scope
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.application.run_delivery_resolution import auto_resolve_run_on_delivery
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
@@ -106,7 +108,7 @@ async def _seed_run(
     run_id = uuid.uuid4()
     deliverable_id = uuid.uuid4()
     decision_id: uuid.UUID | None = None
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -146,8 +148,12 @@ async def _seed_run(
     return workspace_id, run_id, deliverable_id, decision_id
 
 
-async def _run_helper(sf_: async_sessionmaker, deliverable_id: uuid.UUID) -> bool:
-    async with sf_() as s:
+async def _run_helper(
+    sf_: async_sessionmaker, workspace_id: uuid.UUID, deliverable_id: uuid.UUID
+) -> bool:
+    """Drive the helper in a session scoped to the workspace, as every real
+    caller's session is."""
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         resolved = await auto_resolve_run_on_delivery(s, deliverable_id=deliverable_id)
         await s.commit()
     return resolved
@@ -169,7 +175,7 @@ async def test_github_bound_run_reaches_shipped_after_delivery(sf) -> None:
     workspace_id = uuid.uuid4()
     run_id = uuid.uuid4()
     product_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -188,12 +194,12 @@ async def test_github_bound_run_reaches_shipped_after_delivery(sf) -> None:
     # from the "no product_id" / "no worktree" leaves of its own gate (the
     # github-binding branch is exercised directly by test_auto_ship_gate.py) —
     # what matters here is that AgentRunner records WHATEVER it computed.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         runner = AgentRunner(s)
         await runner.transition(run_id=run_id, to_status=RunStatus.REVIEW_READY, reason="verified")
         await s.commit()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY  # not auto-shipped locally
@@ -212,15 +218,17 @@ async def test_github_bound_run_reaches_shipped_after_delivery(sf) -> None:
         await s.commit()
 
     dispatcher = _RecordingDispatcher(_success_result(workspace_id, deliverable_id))
-    await dispatch_delivery(
-        dispatcher,
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            dispatcher,
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.SHIPPED
@@ -258,14 +266,16 @@ async def test_failed_delivery_does_not_ship_github_bound_run(sf) -> None:
         product_id=uuid.uuid4(),
         payload={"delivers_via_local_product_repo": False},
     )
-    await dispatch_delivery(
-        _RecordingDispatcher(_failed_result(workspace_id, deliverable_id)),
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
-    async with sf() as s:
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            _RecordingDispatcher(_failed_result(workspace_id, deliverable_id)),
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY
@@ -281,9 +291,9 @@ async def test_local_auto_ship_run_is_left_alone(sf) -> None:
         product_id=uuid.uuid4(),
         payload={"delivers_via_local_product_repo": True},
     )
-    resolved = await _run_helper(sf, deliverable_id)
+    resolved = await _run_helper(sf, workspace_id, deliverable_id)
     assert resolved is False
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY  # unchanged
@@ -300,14 +310,16 @@ async def test_pending_review_decision_takes_precedence(sf) -> None:
         payload={"delivers_via_local_product_repo": False},
         decision_kind="human_review_required",
     )
-    await dispatch_delivery(
-        _RecordingDispatcher(_success_result(workspace_id, deliverable_id)),
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
-    async with sf() as s:
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            _RecordingDispatcher(_success_result(workspace_id, deliverable_id)),
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         decision = await s.get(Decision, decision_id)
         assert decision is not None
         assert decision.status is DecisionStatus.RESOLVED
@@ -326,9 +338,9 @@ async def test_run_with_no_recorded_verdict_is_not_shipped(sf) -> None:
         product_id=uuid.uuid4(),
         payload={},
     )
-    resolved = await _run_helper(sf, deliverable_id)
+    resolved = await _run_helper(sf, workspace_id, deliverable_id)
     assert resolved is False
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY  # unchanged
@@ -345,9 +357,9 @@ async def test_non_product_run_without_pending_decision_is_untouched(sf) -> None
         product_id=None,
         payload={"delivers_via_local_product_repo": False},
     )
-    resolved = await _run_helper(sf, deliverable_id)
+    resolved = await _run_helper(sf, workspace_id, deliverable_id)
     assert resolved is False
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY  # unchanged
@@ -365,11 +377,11 @@ async def test_second_delivery_of_already_shipped_github_bound_run_is_noop(sf) -
         product_id=uuid.uuid4(),
         payload={"delivers_via_local_product_repo": False},
     )
-    first = await _run_helper(sf, deliverable_id)
-    second = await _run_helper(sf, deliverable_id)
+    first = await _run_helper(sf, workspace_id, deliverable_id)
+    second = await _run_helper(sf, workspace_id, deliverable_id)
     assert first is True
     assert second is False
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.SHIPPED

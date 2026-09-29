@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
 from backend.storage.product_workspace import (
     add_run_worktree,
     init_product_workspace,
@@ -112,16 +113,17 @@ async def _merge_in_progress(worktree: Path) -> bool:
 
 async def _seed_run_with_worktree(
     sf: async_sessionmaker[AsyncSession], *, intent: str = "build the answer"
-) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, Path]:
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, Path, uuid.UUID]:
     """Set up: product workspace init → worktree → ExecutionRun row +
-    WorkStep + RunAttempt rows. Returns (run_id, work_step_id, product_id, worktree_path)."""
+    WorkStep + RunAttempt rows. Returns (run_id, work_step_id, product_id,
+    worktree_path, workspace_id) — the workspace scopes every later session."""
     product_id = uuid.uuid4()
     workspace_id = uuid.uuid4()
     await init_product_workspace(product_id)
     run_id = uuid.uuid4()
     worktree = await add_run_worktree(product_id, run_id)
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -156,7 +158,7 @@ async def _seed_run_with_worktree(
             )
         )
         await s.commit()
-    return run_id, ws_id, product_id, worktree
+    return run_id, ws_id, product_id, worktree, workspace_id
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +170,7 @@ async def test_verified_run_auto_ships_to_main(sf: async_sessionmaker[AsyncSessi
     """End-to-end: agent writes a file → verify (no command checks, clean
     merge) → AgentRunner transition to REVIEW_READY → auto-ship to SHIPPED.
     main now carries the file."""
-    run_id, ws_id, product_id, worktree = await _seed_run_with_worktree(sf)
+    run_id, ws_id, product_id, worktree, workspace_id = await _seed_run_with_worktree(sf)
 
     # Simulate agent writing a file.
     (worktree / "hello.py").write_text("def add(a, b):\n    return a + b\n")
@@ -179,7 +181,7 @@ async def test_verified_run_auto_ships_to_main(sf: async_sessionmaker[AsyncSessi
     contract = VerificationContract(checks=())
     sandbox = NoopSandboxManager()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         work_step = await s.get(WorkStep, ws_id)
         attempt = (
@@ -201,12 +203,12 @@ async def test_verified_run_auto_ships_to_main(sf: async_sessionmaker[AsyncSessi
         await s.commit()
 
     # AgentRunner.transition(REVIEW_READY) → auto-ship.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         runner = AgentRunner(s)
         await runner.transition(run_id=run_id, to_status=RunStatus.REVIEW_READY, reason="verified")
         await s.commit()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run.status is RunStatus.SHIPPED
 
@@ -243,7 +245,7 @@ async def test_verify_surfaces_merge_conflict_as_failed(
     """Main moves with a conflicting change → verify FAILS with reason
     "merge_conflict" + paths. The conflict paths are surfaced on the result so
     the founder / next round knows WHICH files collided."""
-    run_id, ws_id, product_id, worktree = await _seed_run_with_worktree(sf)
+    run_id, ws_id, product_id, worktree, workspace_id = await _seed_run_with_worktree(sf)
     product_path = product_workspace_path(product_id)
 
     # Agent writes hello.py in worktree.
@@ -256,7 +258,7 @@ async def test_verify_surfaces_merge_conflict_as_failed(
     contract = VerificationContract(checks=())
     sandbox = NoopSandboxManager()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         work_step = await s.get(WorkStep, ws_id)
         attempt = (
@@ -293,7 +295,7 @@ async def test_verify_merge_conflict_aborts_so_next_commit_is_clean(
     ``abort_merge`` is now wired at the conflict branch, so after verify records
     FAILED the worktree is left CLEAN: no merge in progress, no markers, and a
     subsequent commit carries no ``<<<<<<<``."""
-    run_id, ws_id, product_id, worktree = await _seed_run_with_worktree(sf)
+    run_id, ws_id, product_id, worktree, workspace_id = await _seed_run_with_worktree(sf)
     product_path = product_workspace_path(product_id)
 
     (worktree / "hello.py").write_text("agent's add()\n")
@@ -304,7 +306,7 @@ async def test_verify_merge_conflict_aborts_so_next_commit_is_clean(
     contract = VerificationContract(checks=())
     sandbox = NoopSandboxManager()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         work_step = await s.get(WorkStep, ws_id)
         attempt = (
@@ -358,7 +360,7 @@ async def test_no_product_run_skips_merge_step(sf: async_sessionmaker[AsyncSessi
     ws_id = uuid.uuid4()
     attempt_id = uuid.uuid4()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -395,7 +397,7 @@ async def test_no_product_run_skips_merge_step(sf: async_sessionmaker[AsyncSessi
     contract = VerificationContract(checks=())
     sandbox = NoopSandboxManager()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         work_step = await s.get(WorkStep, ws_id)
         attempt = await s.get(RunAttempt, attempt_id)

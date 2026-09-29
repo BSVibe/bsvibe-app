@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIND
@@ -84,7 +85,7 @@ async def test_three_mid_loop_partials_all_gated_to_safe_mode_queue(
     product_id = uuid.uuid4()
     account_id = uuid.uuid4()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         # workspace flag OFF (per-Run gate is the only thing that should queue).
         # FK ordering matters on real PG: workspaces -> {products, connector_accounts}
         # -> resource_bindings/execution_runs. Without explicit ``relationship()``
