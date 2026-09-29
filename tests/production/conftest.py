@@ -301,3 +301,37 @@ def policied_writes() -> Iterator[list[PoliciedWrite]]:
         yield writes
     finally:
         event.remove(Session, "before_flush", _record)
+
+
+#: (policied table an ORM-enabled UPDATE statement targeted, the GUC it ran under)
+PoliciedUpdate = tuple[str, str]
+
+
+@pytest.fixture
+def policied_updates() -> Iterator[list[PoliciedUpdate]]:
+    """Every ``update(Model)`` statement on an RLS-policied table, with its GUC.
+
+    A statement-level UPDATE never reaches ``before_flush``, so
+    :func:`policied_writes` cannot see it (#959 — the queue claims are built this
+    way). ``WITH CHECK`` refuses both ``''`` under fail-closed and ``'*'`` always.
+    """
+    updates: list[PoliciedUpdate] = []
+
+    def _record(state: ORMExecuteState) -> None:
+        if not state.is_update:
+            return
+        table = state.statement.table.name  # type: ignore[attr-defined]
+        if table not in _POLICIED_TABLES:
+            return
+        guc = (
+            state.session.connection()
+            .execute(text("SELECT current_setting('app.current_workspace_id', true)"))
+            .scalar()
+        )
+        updates.append((table, guc or ""))
+
+    event.listen(Session, "do_orm_execute", _record)
+    try:
+        yield updates
+    finally:
+        event.remove(Session, "do_orm_execute", _record)

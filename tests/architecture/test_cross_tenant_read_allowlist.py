@@ -22,7 +22,9 @@ ALLOWED: dict[str, str] = {
     "backend/knowledge/infrastructure/workers/settle_worker.py": "배치에 섞인 테넌트들의 정책 조회",
     "plugin/audit/retention_sweep.py": "보존 기간을 둔 테넌트 열거",
     "backend/workflow/application/decision_answer_drain.py": "채팅 답이 큐에 든 Decision 스캔",
-    "backend/workflow/infrastructure/workers/agent_worker.py": "디스크 리퍼가 살아 있는 런·제품을 묻는다",
+    "backend/workflow/infrastructure/workers/agent_worker.py": (
+        "디스크 리퍼가 살아 있는 런·제품을 묻는다 · 큐 클레임(요청·런) · 멈춘 클레임 회수"
+    ),
 }
 
 
