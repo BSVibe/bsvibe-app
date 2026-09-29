@@ -74,7 +74,7 @@ describe("ProductBindings", () => {
     render(<ProductBindings productId={PRODUCT_ID} listBindings={listBindings} />);
 
     const section = await screen.findByRole("region", { name: /Connector bindings/i });
-    expect(within(section).getByText("acme/blog")).toBeInTheDocument();
+    expect(await within(section).findByText("acme/blog")).toBeInTheDocument();
     // The dead knob's control is gone — it read a key production stopped
     // sending and wrote one REST refuses with a 422.
     expect(within(section).queryByRole("checkbox")).toBeNull();
@@ -96,7 +96,7 @@ describe("ProductBindings", () => {
     render(<ProductBindings productId={PRODUCT_ID} listBindings={listBindings} />);
 
     const section = await screen.findByRole("region", { name: /Connector bindings/i });
-    expect(within(section).getByText(/telegram/i)).toBeInTheDocument();
+    expect(await within(section).findByText(/telegram/i)).toBeInTheDocument();
     // uuid 앞 8자가 사라졌다
     expect(within(section).queryByText(CONNECTOR_ID.slice(0, 8))).toBeNull();
   });
@@ -106,7 +106,7 @@ describe("ProductBindings", () => {
     const listBindings = vi.fn().mockResolvedValue([binding({ connector: undefined })]);
     render(<ProductBindings productId={PRODUCT_ID} listBindings={listBindings} />);
     const section = await screen.findByRole("region", { name: /Connector bindings/i });
-    expect(within(section).getByText("acme/blog")).toBeInTheDocument();
+    expect(await within(section).findByText("acme/blog")).toBeInTheDocument();
   });
 
   it("shows a calm empty state when there are no bindings", async () => {
