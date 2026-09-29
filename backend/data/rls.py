@@ -171,18 +171,27 @@ async def cross_tenant_session_read(session: AsyncSession) -> AsyncIterator[None
     open — the enumeration at the head of a loop that then scopes each tenant.
     Narrow on purpose: anything written while ``'*'`` is up is refused by
     ``WITH CHECK``, so the block should hold the cross-tenant read and nothing
-    else. Leaves the transaction fail-open on the way out, like
-    :func:`workspace_session_scope`.
+    else. Puts back whatever GUC it found — a tenant, when an MCP tool calls it
+    inside the principal's scope — so the rest of the transaction is not left
+    blind.
     """
     conn = await session.connection()
+    previous = ""
     if _is_pg(conn):
+        previous = (
+            await conn.execute(text(f"SELECT current_setting('{_GUC_NAME}', true)"))
+        ).scalar_one() or ""
         await conn.execute(
             text(f"SELECT set_config('{_GUC_NAME}', :value, true)"), {"value": _CROSS_TENANT}
         )
     try:
         yield
     finally:
-        await clear_workspace_guc(await session.connection())
+        conn = await session.connection()
+        if _is_pg(conn):
+            await conn.execute(
+                text(f"SELECT set_config('{_GUC_NAME}', :value, true)"), {"value": previous}
+            )
 
 
 @asynccontextmanager
