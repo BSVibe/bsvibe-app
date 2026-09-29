@@ -20,8 +20,9 @@ from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -75,7 +76,7 @@ async def seeded(db, workspace_id) -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]
     """
     product_id = uuid.uuid4()
     connector_account_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="P", slug="p"))
@@ -224,7 +225,7 @@ async def test_create_rejects_product_in_other_workspace(
     _, connector_account_id = seeded
     other_ws = uuid.uuid4()
     other_product = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_ws) as s:
         s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.flush()
         s.add(ProductRow(id=other_product, workspace_id=other_ws, name="X", slug="x"))
@@ -256,7 +257,7 @@ async def test_list_workspace_scoped(db, workspace_id, user_id, registry, seeded
     other_ws = uuid.uuid4()
     other_product = uuid.uuid4()
     other_account = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_ws) as s:
         s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.flush()
         s.add(ProductRow(id=other_product, workspace_id=other_ws, name="X", slug="x"))

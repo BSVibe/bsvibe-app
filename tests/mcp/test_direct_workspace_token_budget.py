@@ -31,8 +31,9 @@ from backend.workflow.application.workspace_token_budget import budget_window_st
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -80,7 +81,7 @@ async def _seed(db, *, workspace_id: uuid.UUID, user_id: uuid.UUID, budget: int,
     now = datetime.now(tz=UTC)
     inside = budget_window_start() + timedelta(seconds=1)
     product_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", monthly_token_budget=budget))
         s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
         await s.flush()

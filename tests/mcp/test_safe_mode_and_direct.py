@@ -31,8 +31,9 @@ from backend.workflow.infrastructure.db import (
 )
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -80,7 +81,7 @@ async def registry() -> ToolRegistry:
 async def seeded(db, workspace_id, user_id) -> AsyncIterator[uuid.UUID]:
     """Seed a workspace + user + run + deliverable + queue item; yield item_id."""
     item_id: uuid.UUID | None = None
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
         await s.flush()
@@ -342,7 +343,7 @@ async def test_safe_mode_approve_unknown_item_raises(
 
 
 async def test_direct_requires_a_product(db, workspace_id, user_id, registry) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.commit()
@@ -375,7 +376,7 @@ async def test_direct_accepts_with_product(
     monkeypatch.setattr(
         "backend.mcp.tools.direct_tools.get_emit_redis_client", lambda settings: None
     )
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.flush()
@@ -400,7 +401,7 @@ def _noop() -> None:
 
 
 async def test_direct_requires_write_scope(db, workspace_id, user_id, registry) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.flush()
@@ -419,7 +420,7 @@ async def test_direct_requires_write_scope(db, workspace_id, user_id, registry) 
 # L3 (#5) — Safe / Auto mode toggle over MCP (parity with Settings → General).
 # ---------------------------------------------------------------------------
 async def test_safe_mode_get_returns_workspace_flag(db, workspace_id, user_id, registry) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         await s.commit()
     async with db() as s:
@@ -432,7 +433,7 @@ async def test_safe_mode_get_returns_workspace_flag(db, workspace_id, user_id, r
 
 
 async def test_safe_mode_set_switches_to_auto(db, workspace_id, user_id, registry) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         await s.commit()
     async with db() as s:
@@ -445,13 +446,13 @@ async def test_safe_mode_set_switches_to_auto(db, workspace_id, user_id, registr
         out = await registry.call_tool("bsvibe_safe_mode_set", {"safe_mode": False}, ctx)
     assert out["safe_mode"] is False
     # The flag persists on the workspace row.
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         row = await s.get(WorkspaceRow, workspace_id)
         assert row is not None and row.safe_mode is False
 
 
 async def test_safe_mode_set_requires_write_scope(db, workspace_id, user_id, registry) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         await s.commit()
     async with db() as s:
@@ -507,7 +508,7 @@ async def test_safe_mode_approve_run_settles_and_dispatches_every_item(
     """
     run_id = uuid.uuid4()
     dispatcher = _HandleDispatcher()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
         await s.flush()
@@ -584,7 +585,7 @@ async def test_mcp_approve_persists_the_compensation_handle(
         assert out["dispatched"] is True
         deliverable_id = dispatcher.calls[0]["deliverable_id"]
 
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None
         handles = list(row.compensation_handles or [])

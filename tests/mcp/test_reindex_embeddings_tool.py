@@ -36,8 +36,9 @@ from backend.mcp.api import McpPrincipal, ToolContext, ToolRegistry, ToolScopeDe
 from backend.mcp.tools import register_all_tools
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 TOOL = "bsvibe_knowledge_reindex_embeddings"
 
@@ -132,7 +133,7 @@ async def seeded_ws(db, workspace_id, monkeypatch, tmp_path) -> AsyncIterator[Pa
     monkeypatch.setenv("BSVIBE_KNOWLEDGE_VAULT_ROOT", str(tmp_path))
     monkeypatch.setenv("BSVIBE_KNOWLEDGE_DEFAULT_REGION", "us-1")
     get_settings.cache_clear()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
     yield tmp_path

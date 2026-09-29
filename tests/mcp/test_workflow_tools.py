@@ -33,8 +33,9 @@ from backend.workflow.infrastructure.db import (
 )
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -80,7 +81,7 @@ async def registry() -> ToolRegistry:
 
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
@@ -91,12 +92,14 @@ async def test_products_list_returns_workspace_scoped_rows(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
     other_ws = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_ws) as s:
         s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.flush()
+        s.add(ProductRow(workspace_id=other_ws, name="X", slug="x"))
+        await s.commit()
+    async with scoped_session(db, workspace_id) as s:
         s.add(ProductRow(workspace_id=workspace_id, name="A", slug="a"))
         s.add(ProductRow(workspace_id=workspace_id, name="B", slug="b"))
-        s.add(ProductRow(workspace_id=other_ws, name="X", slug="x"))
         await s.commit()
     async with db() as s:
         ctx = ToolContext(
@@ -111,7 +114,7 @@ async def test_products_list_returns_workspace_scoped_rows(
 
 async def test_products_show_by_slug_and_uuid(db, workspace_id, user_id, registry, seeded) -> None:
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(ProductRow(id=pid, workspace_id=workspace_id, name="A", slug="a"))
         await s.commit()
     async with db() as s:
@@ -130,7 +133,7 @@ async def test_products_show_other_workspace_not_found(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
     other_ws = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_ws) as s:
         s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.flush()
         s.add(ProductRow(workspace_id=other_ws, name="X", slug="x"))
@@ -185,7 +188,7 @@ async def test_products_create_writes_row(db, workspace_id, user_id, registry, s
 
 async def test_runs_list_and_show(db, workspace_id, user_id, registry, seeded) -> None:
     run_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         run = ExecutionRun(
             id=run_id,
             workspace_id=workspace_id,
@@ -212,7 +215,7 @@ async def test_runs_list_and_show(db, workspace_id, user_id, registry, seeded) -
 
 async def _seed_run(db, workspace_id, *, status, product_id=None) -> uuid.UUID:
     run_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -238,7 +241,7 @@ async def test_runs_cancel_cancels_inflight(db, workspace_id, user_id, registry,
         out = await registry.call_tool("bsvibe_runs_cancel", {"run_id": str(run_id)}, ctx)
     assert out["cancelled"] is True
     assert out["status"] == "cancelled"
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         run = await s.get(ExecutionRun, run_id)
         assert run.status is RunStatus.CANCELLED
 
@@ -259,7 +262,7 @@ async def test_runs_discard_cancels_review_ready(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
     run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             Deliverable(
                 id=uuid.uuid4(),
@@ -281,7 +284,7 @@ async def test_runs_discard_cancels_review_ready(
     assert out["cancelled"] is True
     assert out["status"] == "cancelled"
     assert len(out["deliverables_retracted"]) == 1
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         run = await s.get(ExecutionRun, run_id)
         assert run.status is RunStatus.CANCELLED
 
@@ -314,7 +317,7 @@ async def test_deliverables_list_filters_by_run(
 ) -> None:
     run_id = uuid.uuid4()
     other_run_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         for rid in (run_id, other_run_id):
             s.add(
                 ExecutionRun(
@@ -368,7 +371,7 @@ async def test_products_set_metadata_replaces_and_show_reflects(
     metadata dict; ``bsvibe_products_show`` reflects it and the row actually
     carries it (producer existence, name-clash-free ``product_metadata`` attr)."""
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(ProductRow(id=pid, workspace_id=workspace_id, name="A", slug="a"))
         await s.commit()
 
@@ -406,7 +409,7 @@ async def test_products_set_metadata_replaces_and_show_reflects(
     assert shown["metadata"] == {"stage": "beta"}
 
     # The row genuinely carries it under the SQLAlchemy-safe attribute name.
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         row = await s.get(ProductRow, pid)
         assert row.product_metadata == {"stage": "beta"}
 
@@ -435,7 +438,7 @@ async def test_products_show_resolves_execution_target(
     setting ``metadata.execution_target = client_attach`` flips the resolved
     field. Declared via the existing free-form metadata surface (no new column)."""
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(ProductRow(id=pid, workspace_id=workspace_id, name="A", slug="a"))
         await s.commit()
 
@@ -474,7 +477,7 @@ async def test_products_show_resolves_execution_target(
 async def test_products_set_metadata_requires_write_scope(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(ProductRow(workspace_id=workspace_id, name="A", slug="a"))
         await s.commit()
     async with db() as s:
@@ -503,7 +506,7 @@ async def test_runs_list_by_product_is_not_truncated_by_newer_other_runs(
     is what makes the answer about the product.
     """
     product_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="P", slug="p"))
         await s.commit()
 
@@ -513,7 +516,7 @@ async def test_runs_list_by_product_is_not_truncated_by_newer_other_runs(
     # fast the seeds ran.
     product_run = uuid.uuid4()
     base = datetime.now(UTC)
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ExecutionRun(
                 id=product_run,
@@ -564,7 +567,7 @@ async def test_runs_detail_returns_the_same_derivation_the_browser_gets(
     re-derive that, and this is where the two would drift.
     """
     run_id = await _seed_run(db, workspace_id, status=RunStatus.RUNNING)
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         run.payload = {"intent_text": "ship the export", "frame": {"summary_title": "Export"}}
@@ -590,7 +593,7 @@ async def test_runs_detail_other_workspace_is_not_found(
 ) -> None:
     """A cross-workspace id is indistinguishable from an unknown one."""
     other_ws = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_ws) as s:
         s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.commit()
     run_id = await _seed_run(db, other_ws, status=RunStatus.RUNNING)
@@ -624,7 +627,7 @@ class _StubRetractHandler:
 
 async def _seed_retractable(db, workspace_id, run_id) -> uuid.UUID:
     deliverable_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             Deliverable(
                 id=deliverable_id,
@@ -668,7 +671,7 @@ async def test_deliverables_retract_runs_the_rule_and_marks_the_row(
     assert out["retracted"] is True
     assert out["already_retracted"] is False
     assert [c["plugin"] for c in handler.calls] == ["slack"]
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None and row.retracted_at is not None
 
@@ -692,7 +695,7 @@ async def test_deliverables_retract_does_not_mark_the_row_when_compensate_fails(
             )
     assert "upstream said no" in str(err.value)
 
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None and row.retracted_at is None
 
@@ -720,7 +723,7 @@ async def test_deliverables_retract_without_an_injected_handler_refuses(
             )
     assert "unknown tool" not in str(err.value)
 
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None and row.retracted_at is None
 
@@ -739,7 +742,7 @@ class _StubNarrative:
 
 async def _seed_reportable(db, workspace_id, run_id) -> uuid.UUID:
     deliverable_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             Deliverable(
                 id=deliverable_id,
@@ -814,7 +817,7 @@ async def test_deliverables_report_other_workspace_is_not_found(
 ) -> None:
     """A cross-workspace id is indistinguishable from an unknown one."""
     other_ws = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_ws) as s:
         s.add(WorkspaceRow(id=other_ws, name="other-report"))
         await s.commit()
     run_id = await _seed_run(db, other_ws, status=RunStatus.SHIPPED)
@@ -842,7 +845,7 @@ async def _seed_with_artifact(db, workspace_id, run_id, tmp_path, *, ref: str, b
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(body)
     deliverable_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             Deliverable(
                 id=deliverable_id,

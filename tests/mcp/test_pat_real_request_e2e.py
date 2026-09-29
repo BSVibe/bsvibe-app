@@ -45,6 +45,7 @@ from backend.mcp.streamable_http import build_streamable_http_app
 from backend.shared.authz.settings import get_settings as get_authz_settings
 
 from .._support import db_engine
+from ._rls import scoped_session
 
 pytestmark = pytest.mark.asyncio
 
@@ -86,7 +87,7 @@ def workspace_id() -> uuid.UUID:
 
 @pytest_asyncio.fixture
 async def seeded_user(db, workspace_id) -> AsyncIterator[UserRow]:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="t-ws"))
         user = UserRow(supabase_user_id="test-user", email="t@example.com")
         s.add(user)
