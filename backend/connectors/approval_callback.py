@@ -69,6 +69,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.decision_answer_queue import queue_answer
+from backend.data.rls import workspace_session_scope
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.runner import PluginRunner
 from backend.identity.db import MembershipRow
@@ -155,7 +156,33 @@ async def handle_approval_callback(  # noqa: PLR0911 — each return is one secu
     if not isinstance(body, dict) or not adapter.is_interaction(body):
         return False
 
-    runner = runner or PluginRunner()
+    # #959 — a webhook carries no user session, but its account names exactly
+    # one workspace. Publish it here rather than on the route: Discord calls this
+    # from a background task on a session of its own.
+    async with workspace_session_scope(session, account.workspace_id):
+        return await _handle_interaction(
+            adapter=adapter,
+            body=body,
+            account=account,
+            session=session,
+            plugin=plugin,
+            cipher=cipher,
+            dispatcher=dispatcher,
+            runner=runner or PluginRunner(),
+        )
+
+
+async def _handle_interaction(  # noqa: PLR0911 — each return is one security guard
+    *,
+    adapter: ApprovalConnectorAdapter,
+    body: dict[str, Any],
+    account: ConnectorAccountRow,
+    session: AsyncSession,
+    plugin: PluginMeta,
+    cipher: CredentialCipher,
+    dispatcher: Any | None,
+    runner: PluginRunner,
+) -> bool:
     context = _build_context(
         credentials={adapter.credential_key: cipher.decrypt(account.signing_secret_ciphertext)},
         config=dict(account.delivery_config),

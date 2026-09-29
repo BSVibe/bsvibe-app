@@ -51,6 +51,7 @@ from backend.config import get_settings
 from backend.connectors.handshake import handshake_response
 from backend.connectors.interactions import interaction_callback
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
+from backend.data.rls import workspace_session_scope
 from backend.extensions.plugin.webhook_registry import (
     WebhookParserRegistry,
     get_default_registry,
@@ -216,21 +217,24 @@ async def _resolve_inbound_product(
     if parsed_product_id is not None:
         return parsed_product_id
 
-    resolved = await _binding_for_event(session, account=account, payload=payload)
-    if resolved is not None:
-        binding, resource_id = resolved
-        payload[PAYLOAD_KEY_CONNECTOR_ACCOUNT_ID] = str(account.id)
-        payload[PAYLOAD_KEY_RESOURCE_ID] = resource_id
-        return binding.product_id
+    # #959 — no user session on a webhook; the account names the one workspace
+    # whose bindings and products this reads.
+    async with workspace_session_scope(session, account.workspace_id):
+        resolved = await _binding_for_event(session, account=account, payload=payload)
+        if resolved is not None:
+            binding, resource_id = resolved
+            payload[PAYLOAD_KEY_CONNECTOR_ACCOUNT_ID] = str(account.id)
+            payload[PAYLOAD_KEY_RESOURCE_ID] = resource_id
+            return binding.product_id
 
-    # Unify inbound with the Direct path: a github issue/PR is processed like a
-    # direct message ON the product it came from, so the run clones that repo +
-    # works in context + delivers a repo-native PR — instead of running unbound
-    # in an empty workspace.
-    repo = payload.get("repo") or account.external_ref
-    if repo:
-        return await _product_id_for_repo(session, account.workspace_id, str(repo))
-    return None
+        # Unify inbound with the Direct path: a github issue/PR is processed like a
+        # direct message ON the product it came from, so the run clones that repo +
+        # works in context + delivers a repo-native PR — instead of running unbound
+        # in an empty workspace.
+        repo = payload.get("repo") or account.external_ref
+        if repo:
+            return await _product_id_for_repo(session, account.workspace_id, str(repo))
+        return None
 
 
 async def _product_id_for_repo(

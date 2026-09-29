@@ -36,6 +36,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import cross_tenant_read
 from backend.data.session import make_engine
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.knowledge.graph.storage import FileSystemStorage
@@ -61,7 +62,23 @@ async def _resolve_targets(
     product_slug: str | None,
     workspace_id: uuid.UUID | None,
 ) -> list[_Target]:
-    """Resolve CLI args into the set of workspace vaults to retrofit."""
+    """Resolve CLI args into the set of workspace vaults to retrofit.
+
+    Crosses tenants by design (#959): the operator picks products by slug, by
+    workspace, or all of them, and this runs with no workspace of its own.
+    """
+    with cross_tenant_read():
+        return await _pick_targets(
+            session_factory, product_slug=product_slug, workspace_id=workspace_id
+        )
+
+
+async def _pick_targets(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    product_slug: str | None,
+    workspace_id: uuid.UUID | None,
+) -> list[_Target]:
     async with session_factory() as session:
         stmt = (
             select(ProductRow, WorkspaceRow)
