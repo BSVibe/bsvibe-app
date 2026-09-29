@@ -309,10 +309,12 @@ class AgentWorker(BaseWorker):
         """Pull one batch of OPEN Requests, open a run + flip to RUNNING. Returns count."""
         count = 0
         async with self._session_factory() as session:
-            async for req in self._claim_batch(session):
-                # #959 — the claim reads across tenants; the writes it makes
-                # belong to one. The session's transaction began before this
-                # loop, so only the explicit publication covers the flush.
+            # #959 — lock the heads of every tenant's queue with a cross-tenant
+            # read, then write each in its own tenant's scope. One transaction:
+            # the SKIP LOCKED row locks are held to the commit.
+            async with cross_tenant_session_read(session):
+                requests = [req async for req in self._claim_batch(session)]
+            for req in requests:
                 async with workspace_session_scope(session, req.workspace_id):
                     runner = AgentRunner(session)
                     run_id = await runner.open_run(request=req)
@@ -339,15 +341,13 @@ class AgentWorker(BaseWorker):
         connection) for the whole — up to 30-minute — executor turn. Instead:
 
         1. **Reap** stale claims (a crashed worker's RUNNING runs) back to OPEN.
-        2. **Claim** a batch atomically (``UPDATE ... WHERE id IN (SELECT ...
-           FOR UPDATE SKIP LOCKED) RETURNING`` — committed immediately, so the
-           lock releases at once but SKIP LOCKED still gives exact multi-worker
-           safety).
+        2. **Claim** a batch atomically (``SELECT ... FOR UPDATE SKIP LOCKED``
+           across tenants, then a per-tenant ``UPDATE`` of each locked row, in
+           one transaction committed immediately — the lock releases at once
+           but SKIP LOCKED still gives exact multi-worker safety).
         3. **Scope** each claimed run to its workspace — everything past the
-           claim's ``RETURNING`` belongs to one tenant, so layer 2 + layer 3
-           are published for it (#959). The claim itself stays workspace-blind
-           on purpose: ``execution_runs`` is RLS-FORCED, so a scope leaking
-           onto it would stop the pipeline for every other workspace.
+           claim belongs to one tenant, so layer 2 + layer 3 are published for
+           it (#959). The claim itself reads across tenants by name.
         4. **Drive** each claimed run in its OWN short-txn session; ``_drive_loop``
            commits at every turn boundary so NO connection is held across the
            executor await. ``claimed_at`` is cleared on every drive exit.
@@ -365,7 +365,7 @@ class AgentWorker(BaseWorker):
             # per transaction by the ``after_begin`` listener) both engage for
             # the drive AND for the claim-clearing / failure paths that follow
             # it. The scope is released on the way out — including on a crash —
-            # so the next claim above is workspace-blind again.
+            # so the next claim above is unscoped again.
             with workspace_scope(workspace_id):
                 if await self._drive_one_claimed(run_id, execution):
                     count += 1
@@ -530,19 +530,32 @@ class AgentWorker(BaseWorker):
             Decision.run_id == ExecutionRun.id,
             Decision.status == DecisionStatus.PENDING,
         )
-        stmt = (
-            update(ExecutionRun)
+        # #959 — find the stale claims across tenants (locking them), then give
+        # each back in its own tenant's scope: ``WITH CHECK`` refuses a
+        # cross-tenant UPDATE. A row another session holds is SKIPPED rather
+        # than waited on — someone is touching it, so it is not stale.
+        stale = (
+            select(ExecutionRun.id, ExecutionRun.workspace_id)
             .where(
                 ExecutionRun.status == RunStatus.RUNNING,
                 ExecutionRun.claimed_at.is_not(None),
                 ExecutionRun.claimed_at < cutoff,
                 ~pending_decision,
             )
-            .values(status=RunStatus.OPEN, claimed_at=None, claimed_by=None)
-            .returning(ExecutionRun.id)
+            .with_for_update(skip_locked=True, of=ExecutionRun)
         )
+        reaped: list[uuid.UUID] = []
         async with self._session_factory() as session:
-            reaped = [row[0] for row in (await session.execute(stmt)).all()]
+            async with cross_tenant_session_read(session):
+                locked = (await session.execute(stale)).all()
+            for run_id, workspace_id in locked:
+                async with workspace_session_scope(session, workspace_id):
+                    await session.execute(
+                        update(ExecutionRun)
+                        .where(ExecutionRun.id == run_id)
+                        .values(status=RunStatus.OPEN, claimed_at=None, claimed_by=None)
+                    )
+                reaped.append(run_id)
             await session.commit()
         if reaped:
             logger.info("agent_worker_reaped_stale_claims", count=len(reaped))
@@ -582,39 +595,39 @@ class AgentWorker(BaseWorker):
     async def _claim_runs_for_drive(self) -> list[tuple[uuid.UUID, uuid.UUID]]:
         """Atomically claim a batch of OPEN runs → RUNNING + stamp the claim.
 
-        ``UPDATE execution_runs SET status='running', claimed_at=now(),
-        claimed_by=:worker WHERE id IN (SELECT id FROM execution_runs WHERE
-        status='open' ORDER BY created_at ASC LIMIT :batch FOR UPDATE SKIP
-        LOCKED) RETURNING id, workspace_id`` — the canonical safe multi-worker
-        claim. The inner ``FOR UPDATE SKIP LOCKED`` guarantees two workers never
-        claim the same run; the row-lock is released on the immediate commit, so
-        (unlike the pre-refactor path) it never spans the drive.
+        One transaction: ``SELECT id, workspace_id … FOR UPDATE SKIP LOCKED``
+        across tenants (``cross_tenant_session_read``), then an ``UPDATE … WHERE
+        id = :id`` per run under ITS tenant's scope, then commit. The row locks
+        are held to the commit, so two workers still never claim the same run,
+        and they are released at once — never across the drive.
 
-        The claim is deliberately WORKSPACE-BLIND — a queue poller crosses
-        tenants, and ``execution_runs`` is RLS-FORCED, so a scope leaking onto
-        this query makes it fail closed and the pipeline stops for everyone
-        else. ``workspace_id`` rides along in the RETURNING precisely so the
-        scope can be published on the OTHER side of it: blind up to the claim,
-        scoped for everything the drive does after it (#959)."""
-        subq = (
-            select(ExecutionRun.id)
+        Why not one ``UPDATE … WHERE id IN (SELECT … SKIP LOCKED)``: the policy's
+        ``'*'`` opens ``USING`` only, and ``WITH CHECK`` wants each row's own
+        workspace (#959). ``workspace_id`` is returned so the drive can scope on
+        it too."""
+        candidates = (
+            select(ExecutionRun.id, ExecutionRun.workspace_id)
             .where(ExecutionRun.status == RunStatus.OPEN)
             .order_by(ExecutionRun.created_at.asc())
             .limit(self._cfg.batch_size)
             .with_for_update(skip_locked=True)
         )
-        stmt = (
-            update(ExecutionRun)
-            .where(ExecutionRun.id.in_(subq))
-            .values(
-                status=RunStatus.RUNNING,
-                claimed_at=datetime.now(UTC),
-                claimed_by=self._worker_id,
-            )
-            .returning(ExecutionRun.id, ExecutionRun.workspace_id)
-        )
+        claimed: list[tuple[uuid.UUID, uuid.UUID]] = []
         async with self._session_factory() as session:
-            claimed = [(row[0], row[1]) for row in (await session.execute(stmt)).all()]
+            async with cross_tenant_session_read(session):
+                locked = (await session.execute(candidates)).all()
+            for run_id, workspace_id in locked:
+                async with workspace_session_scope(session, workspace_id):
+                    await session.execute(
+                        update(ExecutionRun)
+                        .where(ExecutionRun.id == run_id)
+                        .values(
+                            status=RunStatus.RUNNING,
+                            claimed_at=datetime.now(UTC),
+                            claimed_by=self._worker_id,
+                        )
+                    )
+                claimed.append((run_id, workspace_id))
             await session.commit()
         for run_id, _ in claimed:
             logger.info("agent_worker_claimed_for_drive", run_id=str(run_id))
