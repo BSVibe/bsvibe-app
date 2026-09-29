@@ -27,6 +27,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.workers.db import SettleDrainRow
 from backend.workflow.application.metrics.trust_surface import (
     DEFAULT_WINDOW_DAYS,
@@ -146,12 +147,12 @@ async def test_touch_time_sums_resolved_deltas(sf, workspace_id, product_id):
         resolved_by=actor,
         status=DecisionStatus.RESOLVED,
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(run)
         await s.flush()
         s.add_all([d1, d2])
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         m = await svc.compute_touch_time(workspace_id, product_id, now=_NOW)
     assert m.decisions_resolved_count == 2
@@ -173,12 +174,12 @@ async def test_touch_time_clamps_at_4_hours(sf, workspace_id, product_id):
         resolved_by=actor,
         status=DecisionStatus.RESOLVED,
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(run)
         await s.flush()
         s.add(d_overnight)
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         m = await svc.compute_touch_time(workspace_id, product_id, now=_NOW)
     # Clamped at 4h (== TOUCH_TIME_CLAMP).
@@ -208,12 +209,12 @@ async def test_touch_time_excludes_auto_resolved(sf, workspace_id, product_id):
         resolved_by=None,  # no human touch
         status=DecisionStatus.RESOLVED,
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(run)
         await s.flush()
         s.add_all([d_human, d_auto])
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         m = await svc.compute_touch_time(workspace_id, product_id, now=_NOW)
     # Only the human-resolved Decision contributes — 1h, NOT 1.5h.
@@ -242,12 +243,12 @@ async def test_touch_time_only_within_window(sf, workspace_id, product_id):
         resolved_by=actor,
         status=DecisionStatus.RESOLVED,
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(run)
         await s.flush()
         s.add_all([d_outside, d_inside])
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         m = await svc.compute_touch_time(workspace_id, product_id, now=_NOW)
     assert m.decisions_resolved_count == 1
@@ -264,12 +265,12 @@ async def test_touch_time_pending_counted_separately(sf, workspace_id, product_i
         # No resolved_at; status pending.
         status=DecisionStatus.PENDING,
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(run)
         await s.flush()
         s.add(d_pending)
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         m = await svc.compute_touch_time(workspace_id, product_id, now=_NOW)
     assert m.decisions_pending_count == 1
@@ -291,12 +292,12 @@ async def test_deposit_rate_counts_verified_run_drains(sf, workspace_id, product
         _make_settle(workspace_id, shipped_run.id, drained_at=_NOW - timedelta(days=3)),
         _make_settle(workspace_id, failed_run.id, drained_at=_NOW - timedelta(days=1)),
     ]
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add_all([shipped_run, failed_run])
         await s.flush()
         s.add_all(list(drains))
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         m = await svc.compute_deposit_rate(workspace_id, product_id, now=_NOW)
     assert m.deposit_count == 3
@@ -304,7 +305,7 @@ async def test_deposit_rate_counts_verified_run_drains(sf, workspace_id, product
 
 async def test_deposit_rate_zero_when_no_drains(sf, workspace_id, product_id):
     """No drains → count 0, slope 0."""
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         m = await svc.compute_deposit_rate(workspace_id, product_id, now=_NOW)
     assert m.deposit_count == 0
@@ -316,7 +317,7 @@ async def test_deposit_rate_zero_when_no_drains(sf, workspace_id, product_id):
 
 async def test_trend_arrow_dormant_when_no_activity(sf, workspace_id, product_id):
     """No runs, no decisions, no drains → '·' dormant."""
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         arrow = await svc.compute_trend_arrow(workspace_id, product_id, now=_NOW)
     assert arrow.glyph == "·"
@@ -336,12 +337,12 @@ async def test_trend_arrow_new_product_returns_flat(sf, workspace_id, product_id
         resolved_by=actor,
         status=DecisionStatus.RESOLVED,
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(run)
         await s.flush()
         s.add(d)
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         arrow = await svc.compute_trend_arrow(workspace_id, product_id, now=_NOW)
     assert arrow.glyph == "→"
@@ -377,12 +378,12 @@ async def test_trend_arrow_rising_when_ratio_falls(sf, workspace_id, product_id)
         _make_settle(workspace_id, newer_run.id, drained_at=_NOW - timedelta(days=i))
         for i in range(1, 7)
     ]
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add_all([older_run, newer_run])
         await s.flush()
         s.add_all([d_old, d_new, drain_old, *drains_new])
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         arrow = await svc.compute_trend_arrow(workspace_id, product_id, now=_NOW)
     assert arrow.glyph == "↗"
@@ -416,12 +417,12 @@ async def test_trend_arrow_falling_when_ratio_rises(sf, workspace_id, product_id
         status=DecisionStatus.RESOLVED,
     )
     drain_new = _make_settle(workspace_id, newer_run.id, drained_at=_NOW - timedelta(days=2))
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add_all([older_run, newer_run])
         await s.flush()
         s.add_all([d_old, d_new, drain_new, *drains_old])
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         arrow = await svc.compute_trend_arrow(workspace_id, product_id, now=_NOW)
     assert arrow.glyph == "↘"
@@ -443,12 +444,12 @@ async def test_contract_strength_steady_when_runs_have_verifications(sf, workspa
         result={},
         created_at=_NOW - timedelta(days=1),
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(run)
         await s.flush()
         s.add(verif)
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         cs = await svc.compute_contract_strength(workspace_id, product_id, now=_NOW)
     assert cs.is_steady is True
@@ -461,10 +462,10 @@ async def test_contract_strength_amber_when_shipped_without_verifications(
     """Shipped runs but NO PASSED verifications → amber."""
     run = _make_run(workspace_id, product_id, status=RunStatus.SHIPPED)
     run.updated_at = _NOW - timedelta(days=1)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(run)
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         cs = await svc.compute_contract_strength(workspace_id, product_id, now=_NOW)
     assert cs.is_steady is False
@@ -473,7 +474,7 @@ async def test_contract_strength_amber_when_shipped_without_verifications(
 
 async def test_contract_strength_steady_when_no_runs_shipped(sf, workspace_id, product_id):
     """No shipped runs → default to steady (no amber) per design §2.1."""
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         cs = await svc.compute_contract_strength(workspace_id, product_id, now=_NOW)
     assert cs.is_steady is True
@@ -495,9 +496,14 @@ async def test_list_product_ids_returns_distinct_product_ids(sf, workspace_id):
     # Cross-workspace contamination guard.
     r5 = _make_run(other_ws, uuid.uuid4(), status=RunStatus.SHIPPED)
     async with sf() as s:
-        s.add_all([r1, r2, r3, r4, r5])
+        async with workspace_session_scope(s, workspace_id):
+            s.add_all([r1, r2, r3, r4])
+            await s.flush()
+        async with workspace_session_scope(s, other_ws):
+            s.add(r5)
+            await s.flush()
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         ids = await svc.list_product_ids(workspace_id)
     assert set(ids) == {p1, p2}
@@ -505,7 +511,7 @@ async def test_list_product_ids_returns_distinct_product_ids(sf, workspace_id):
 
 async def test_list_product_ids_empty_workspace(sf, workspace_id):
     """Empty workspace returns ``[]``."""
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         ids = await svc.list_product_ids(workspace_id)
     assert ids == []
@@ -542,12 +548,12 @@ async def test_compute_product_trust_composes_all_four(sf, workspace_id, product
         result={},
         created_at=_NOW - timedelta(days=1),
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(run)
         await s.flush()
         s.add_all([d, drain, verif])
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         svc = TrustSurfaceService(s)
         pt = await svc.compute_product_trust(workspace_id, product_id, now=_NOW)
     assert pt.product_id == product_id

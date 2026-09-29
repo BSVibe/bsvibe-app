@@ -33,6 +33,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from backend.data.rls import workspace_session_scope
 from backend.dispatch.adapter import ChatResponse
 from backend.extensions.skill.loader import SkillLoader
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
@@ -276,31 +277,33 @@ async def _seed_step_and_attempt(
 async def _seed_request_and_run(
     session: AsyncSession, *, workspace_id: uuid.UUID, text: str
 ) -> uuid.UUID:
-    # Seed the FK parent (TriggerEvent) BEFORE the Request — real Postgres
-    # enforces ``requests_trigger_event_id_fkey``; local SQLite does not.
-    trigger = TriggerEventRow(
-        id=uuid.uuid4(),
-        workspace_id=workspace_id,
-        source="direct",
-        trigger_kind=TriggerKind.DIRECT,
-        idempotency_key=f"k-{uuid.uuid4()}",
-        payload={"text": text},
-        received_at=datetime.now(tz=UTC),
-    )
-    session.add(trigger)
-    await session.flush()
-    request = RequestRow(
-        id=uuid.uuid4(),
-        workspace_id=workspace_id,
-        trigger_event_id=trigger.id,
-        status=RequestStatus.RUNNING,
-        payload={"text": text},
-        created_at=datetime.now(tz=UTC),
-        updated_at=datetime.now(tz=UTC),
-    )
-    session.add(request)
-    await session.flush()
-    return await AgentRunner(session).open_run(request=request)
+    # The intake drain opens the run inside the request's tenant scope (#959).
+    async with workspace_session_scope(session, workspace_id):
+        # Seed the FK parent (TriggerEvent) BEFORE the Request — real Postgres
+        # enforces ``requests_trigger_event_id_fkey``; local SQLite does not.
+        trigger = TriggerEventRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            source="direct",
+            trigger_kind=TriggerKind.DIRECT,
+            idempotency_key=f"k-{uuid.uuid4()}",
+            payload={"text": text},
+            received_at=datetime.now(tz=UTC),
+        )
+        session.add(trigger)
+        await session.flush()
+        request = RequestRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            trigger_event_id=trigger.id,
+            status=RequestStatus.RUNNING,
+            payload={"text": text},
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
+        session.add(request)
+        await session.flush()
+        return await AgentRunner(session).open_run(request=request)
 
 
 def _skill_loader_factory(root: Path):
@@ -483,7 +486,7 @@ async def test_frame_usage_lands_on_the_run_across_the_worker_boundary(
     assert await agent.drive_once() == 1
     assert frame_llm.calls == 1
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert "frame" in (run.payload or {}), "framing must actually have happened"
@@ -553,7 +556,7 @@ async def test_a_run_totals_more_than_its_act_turns_alone(
     assert frame_llm.calls == 1, "no frame turn ran"
     assert metered.judge_calls >= 1, "no judge turn ran"
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         total = run.usage_prompt_tokens + run.usage_completion_tokens
@@ -655,7 +658,7 @@ async def test_tick_planner_usage_lands_on_the_run(
                 usage_completion_tokens=44,
             )
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         trigger = TriggerEventRow(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -705,7 +708,7 @@ async def test_tick_planner_usage_lands_on_the_run(
     assert await agent.drive_once() == 1
     assert planner.calls == 1, "the planner must have RUN for this to measure anything"
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert run.usage_prompt_tokens == 880

@@ -20,6 +20,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.data import Base
+from backend.data.rls import workspace_session_scope
+from backend.data.scoping import workspace_scope
 from backend.workflow.application.runtime.merge_watch_runtime import (
     build_merge_watch_conflict_escalate,
     build_merge_watch_conflict_redispatch,
@@ -37,32 +39,41 @@ async def _seed_run(
     *,
     status: RunStatus,
     payload: dict | None = None,
-) -> uuid.UUID:
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Seed a run in a fresh workspace; returns ``(run_id, workspace_id)``.
+
+    The worker invokes every callback below inside ``workspace_scope`` of the
+    watched PR's workspace (#959), so the tests need that id to do the same.
+    """
     run_id = uuid.uuid4()
+    workspace_id = uuid.uuid4()
     async with sf() as session:
-        session.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=uuid.uuid4(),
-                status=status,
-                payload=payload or {"intent_text": "x"},
+        async with workspace_session_scope(session, workspace_id):
+            session.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    status=status,
+                    payload=payload or {"intent_text": "x"},
+                )
             )
-        )
+            await session.flush()
         await session.commit()
-    return run_id
+    return run_id, workspace_id
 
 
 async def test_conflict_redispatch_writes_payload_and_reopens_running_run() -> None:
     async with db_engine(Base) as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
-        run_id = await _seed_run(sf, status=RunStatus.RUNNING)
+        run_id, ws = await _seed_run(sf, status=RunStatus.RUNNING)
 
         redispatch = build_merge_watch_conflict_redispatch(session_factory=sf)
-        await redispatch(
-            run_id, conflict_paths=["shared.txt", "a/b.py"], base_branch="main", pr_number=42
-        )
+        with workspace_scope(ws):
+            await redispatch(
+                run_id, conflict_paths=["shared.txt", "a/b.py"], base_branch="main", pr_number=42
+            )
 
-        async with sf() as session:
+        async with sf() as session, workspace_session_scope(session, ws):
             run = await session.get(ExecutionRun, run_id)
             assert run is not None
             assert run.status is RunStatus.OPEN  # RUNNING → OPEN resume seam
@@ -90,7 +101,7 @@ async def test_conflict_redispatch_clears_stale_resolving_marker() -> None:
     drive loop re-injects the directive and re-sets the marker cleanly."""
     async with db_engine(Base) as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
-        run_id = await _seed_run(
+        run_id, ws = await _seed_run(
             sf,
             status=RunStatus.RUNNING,
             # A prior turn consumed the one-shot directive (merge_conflict gone)
@@ -99,9 +110,10 @@ async def test_conflict_redispatch_clears_stale_resolving_marker() -> None:
         )
 
         redispatch = build_merge_watch_conflict_redispatch(session_factory=sf)
-        await redispatch(run_id, conflict_paths=["shared.txt"], base_branch="main", pr_number=9)
+        with workspace_scope(ws):
+            await redispatch(run_id, conflict_paths=["shared.txt"], base_branch="main", pr_number=9)
 
-        async with sf() as session:
+        async with sf() as session, workspace_session_scope(session, ws):
             run = await session.get(ExecutionRun, run_id)
             assert run is not None
             # The conflict directive is present again ...
@@ -117,16 +129,19 @@ async def test_conflict_escalate_raises_review_decision_and_pauses_run() -> None
     and clears the stale one-shot conflict markers so a guided retry is clean."""
     async with db_engine(Base) as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
-        run_id = await _seed_run(
+        run_id, ws = await _seed_run(
             sf,
             status=RunStatus.OPEN,  # a wedged re-drive left it OPEN
             payload={"intent_text": "x", "merge_conflict_resolving": True},
         )
 
         escalate = build_merge_watch_conflict_escalate(session_factory=sf)
-        await escalate(run_id, conflict_paths=["shared.txt"], base_branch="develop", pr_number=42)
+        with workspace_scope(ws):
+            await escalate(
+                run_id, conflict_paths=["shared.txt"], base_branch="develop", pr_number=42
+            )
 
-        async with sf() as session:
+        async with sf() as session, workspace_session_scope(session, ws):
             run = await session.get(ExecutionRun, run_id)
             assert run is not None
             # Paused ON the Decision (RUNNING convention — not re-picked by drive_once).
@@ -161,12 +176,13 @@ async def test_stall_escalate_raises_stalled_decision_without_reviving_the_run()
     않은 PR 하나이고, 그 사실을 형님이 알아야 할 뿐이다."""
     async with db_engine(Base) as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
-        run_id = await _seed_run(sf, status=RunStatus.SHIPPED)
+        run_id, ws = await _seed_run(sf, status=RunStatus.SHIPPED)
 
         escalate = build_merge_watch_stall_escalate(session_factory=sf)
-        await escalate(run_id, reason="ci_deadline_exceeded", repo="acme/x", pr_number=23)
+        with workspace_scope(ws):
+            await escalate(run_id, reason="ci_deadline_exceeded", repo="acme/x", pr_number=23)
 
-        async with sf() as session:
+        async with sf() as session, workspace_session_scope(session, ws):
             run = await session.get(ExecutionRun, run_id)
             assert run is not None
             assert run.status is RunStatus.SHIPPED  # 되살리지 않는다

@@ -45,6 +45,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import backend.notifications.db  # noqa: F401 — register the table on the shared Base
+from backend.data.rls import workspace_session_scope
 from backend.extensions.skill.loader import SkillLoader
 from backend.notifications.db import NotificationEventRow
 from backend.workflow.application.agent_loop import LoopTurn, RunOrchestrator
@@ -120,29 +121,31 @@ class _FlakyFrameLlm:
 async def _seed_request_and_run(
     session: AsyncSession, *, workspace_id: uuid.UUID, text: str
 ) -> uuid.UUID:
-    trigger = TriggerEventRow(
-        id=uuid.uuid4(),
-        workspace_id=workspace_id,
-        source="direct",
-        trigger_kind=TriggerKind.DIRECT,
-        idempotency_key=f"k-{uuid.uuid4()}",
-        payload={"text": text},
-        received_at=datetime.now(tz=UTC),
-    )
-    session.add(trigger)
-    await session.flush()
-    request = RequestRow(
-        id=uuid.uuid4(),
-        workspace_id=workspace_id,
-        trigger_event_id=trigger.id,
-        status=RequestStatus.RUNNING,
-        payload={"text": text},
-        created_at=datetime.now(tz=UTC),
-        updated_at=datetime.now(tz=UTC),
-    )
-    session.add(request)
-    await session.flush()
-    return await AgentRunner(session).open_run(request=request)
+    # The intake drain opens the run inside the request's tenant scope (#959).
+    async with workspace_session_scope(session, workspace_id):
+        trigger = TriggerEventRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            source="direct",
+            trigger_kind=TriggerKind.DIRECT,
+            idempotency_key=f"k-{uuid.uuid4()}",
+            payload={"text": text},
+            received_at=datetime.now(tz=UTC),
+        )
+        session.add(trigger)
+        await session.flush()
+        request = RequestRow(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            trigger_event_id=trigger.id,
+            status=RequestStatus.RUNNING,
+            payload={"text": text},
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
+        )
+        session.add(request)
+        await session.flush()
+        return await AgentRunner(session).open_run(request=request)
 
 
 def _deps(tmp_path: Path, frame_llm: Any, loop_llm: Any) -> AgentExecutionDeps:
@@ -197,7 +200,7 @@ async def test_a_transient_framing_blip_is_retried_and_the_run_still_lands(
     assert frame_llm.calls == 2, "the frame stage must be re-entered on the retry"
     assert loop_llm.calls > 0, "the run reached the agent loop"
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is not RunStatus.FAILED, "a transient blip must not be terminal"
@@ -225,7 +228,7 @@ async def test_a_framing_failure_never_ends_the_run_in_silence_or_jargon(
     await worker.drive_once()
     await worker.drive_once()
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is not RunStatus.FAILED, (
@@ -272,7 +275,7 @@ async def test_an_unresolved_frame_model_keeps_its_own_branch(
     worker = _worker(sf, _deps(tmp_path, None, _EndsTheLoopLlm()), max_drive_failures=1)
     await worker.drive_once()
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.RUNNING
