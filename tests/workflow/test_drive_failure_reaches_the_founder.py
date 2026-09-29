@@ -45,6 +45,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import backend.notifications.db  # noqa: F401 — register the table on the shared Base
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.workflow.infrastructure.db import (
     Decision,
     ExecutionRun,
@@ -107,7 +108,7 @@ async def test_a_failed_drive_gives_its_claim_back(sf) -> None:
 
     await worker.drive_once()
 
-    async with sf() as session:
+    async with sf() as session, cross_tenant_session_read(session):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert run.claimed_at is None, "a crashed drive must release its claim"
@@ -223,7 +224,8 @@ def _returns(sf: Any, ids: list[uuid.UUID]) -> Any:
     """
 
     async def _f(*_a: Any, **_k: Any) -> list[tuple[uuid.UUID, uuid.UUID]]:
-        async with sf() as session:
+        # The real claim reads across tenants too (``cross_tenant_session_read``).
+        async with sf() as session, cross_tenant_session_read(session):
             rows = (
                 await session.execute(
                     select(ExecutionRun.id, ExecutionRun.workspace_id).where(
@@ -261,27 +263,29 @@ async def _seed_run(sf: Any) -> uuid.UUID:
             claimed_at=datetime.now(tz=UTC),
             claimed_by=uuid.uuid4(),
         )
-        session.add(run)
+        async with workspace_session_scope(session, run.workspace_id):
+            session.add(run)
+            await session.flush()
         await session.commit()
         return run.id
 
 
 async def _decision_kinds(sf: Any, run_id: uuid.UUID) -> list[str]:
-    async with sf() as session:
+    async with sf() as session, cross_tenant_session_read(session):
         rows = await session.execute(select(Decision).where(Decision.run_id == run_id))
         return [d.decision for d in rows.scalars().all()]
 
 
 async def _persisted_failures(sf: Any, run_id: uuid.UUID) -> int:
     """The consecutive-failure count as it actually sits on the run row."""
-    async with sf() as session:
+    async with sf() as session, cross_tenant_session_read(session):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         return (run.payload or {}).get(DRIVE_FAILURES_KEY, 0)
 
 
 async def _last_history_reason(sf: Any, run_id: uuid.UUID) -> str:
-    async with sf() as session:
+    async with sf() as session, cross_tenant_session_read(session):
         rows = await session.execute(
             select(ExecutionRunHistory)
             .where(ExecutionRunHistory.run_id == run_id)

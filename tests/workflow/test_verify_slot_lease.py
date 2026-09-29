@@ -155,12 +155,17 @@ async def test_budget_defaults_when_the_workspace_is_unknown() -> None:
 
 
 async def test_budget_is_read_from_the_workspace_row() -> None:
+    from backend.data.rls import workspace_session_scope
     from backend.identity.workspaces_db import WorkspaceRow
     from backend.workflow.infrastructure.verify_slots import load_workspace_verify_slots
 
     async with _two_sessions() as (a, _b):
         wid = uuid.uuid4()
-        a.add(WorkspaceRow(id=wid, name="ws", verify_stack_slots=3))
+        async with workspace_session_scope(a, wid):
+            a.add(WorkspaceRow(id=wid, name="ws", verify_stack_slots=3))
+            await a.flush()
         await a.commit()
 
-        assert await load_workspace_verify_slots(a, wid) == 3
+        # The verify environment reads it inside the run's tenant scope (#959).
+        async with workspace_session_scope(a, wid):
+            assert await load_workspace_verify_slots(a, wid) == 3

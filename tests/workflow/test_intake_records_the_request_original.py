@@ -32,6 +32,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
 from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKind
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
@@ -116,7 +117,7 @@ class TestTheRequestOriginalIsRecordedAtIntake:
 
         from backend.workflow.infrastructure.db import ExecutionRun
 
-        async with sf() as s:
+        async with sf() as s, workspace_session_scope(s, ws):
             runs = (await s.execute(select(func.count()).select_from(ExecutionRun))).scalar_one()
         assert runs == 0, "이 시점엔 런이 아직 없다"
         assert list(_requests_dir(tmp_path, ws).glob("*.md")), "그래도 요청 원본은 남아야 한다"
@@ -170,7 +171,7 @@ class TestTheRequestOriginalIsRecordedAtIntake:
 
         from backend.workflow.infrastructure.intake.db import RequestRow
 
-        async with sf() as s:
+        async with sf() as s, workspace_session_scope(s, ws):
             made = (await s.execute(select(func.count()).select_from(RequestRow))).scalar_one()
         assert made == 1, "vault 사고가 Request 생성을 막으면 안 된다"
 
@@ -196,7 +197,7 @@ class TestOneOriginalPerRequest:
 
         await _worker(sf, tmp_path).drain_once()
 
-        async with sf() as s:
+        async with sf() as s, workspace_session_scope(s, ws):
             request_id = (await s.execute(select(RequestRow.id))).scalar_one()
 
         written = list(_requests_dir(tmp_path, ws).glob("*.md"))
