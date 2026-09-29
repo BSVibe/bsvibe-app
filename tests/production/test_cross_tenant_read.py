@@ -95,3 +95,48 @@ async def test_a_tenant_scope_inside_it_is_the_narrower_one_and_wins(
     with cross_tenant_read(), workspace_scope(a):
         async with session_factory() as session:
             assert await _guc(session) == str(a)
+
+
+async def test_the_star_guc_does_not_open_deletes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """``DELETE`` is checked against ``USING`` only — there is no new row for
+    ``WITH CHECK`` to refuse. A policy whose ``USING`` accepts ``'*'`` for every
+    command therefore let a cross-tenant read delete every tenant's rows
+    (measured 2026-09-29: ``DELETE 1``). The escape is for reading."""
+    a, _b = await _two_tenants(session_factory)
+    async with session_factory() as session:
+        await session.execute(text(f"SELECT set_config('{_GUC}', '*', true)"))
+        deleted = await session.execute(text("DELETE FROM workspaces WHERE id = :id"), {"id": a})
+        assert deleted.rowcount == 0  # type: ignore[attr-defined]
+        await session.rollback()
+
+
+async def test_the_star_guc_does_not_open_inserts(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await session.execute(text(f"SELECT set_config('{_GUC}', '*', true)"))
+        with pytest.raises(DBAPIError, match="row-level security"):
+            await session.execute(
+                text(
+                    "INSERT INTO workspaces (id, name, created_at, updated_at) "
+                    "VALUES (:id, 'x', now(), now())"
+                ),
+                {"id": uuid.uuid4()},
+            )
+
+
+async def test_the_star_guc_still_lets_a_claim_lock_rows(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """``SELECT … FOR UPDATE`` must pass the UPDATE policy's ``USING`` as well as
+    SELECT's — the queue claims lock their candidates under ``'*'`` (#1071)."""
+    ids = await _two_tenants(session_factory)
+    async with session_factory() as session:
+        await session.execute(text(f"SELECT set_config('{_GUC}', '*', true)"))
+        rows = await session.execute(
+            text("SELECT id FROM workspaces WHERE id = ANY(:ids) FOR UPDATE SKIP LOCKED"),
+            {"ids": list(ids)},
+        )
+        assert {r[0] for r in rows} == set(ids)
