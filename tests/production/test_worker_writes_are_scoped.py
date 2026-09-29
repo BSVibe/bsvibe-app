@@ -9,7 +9,7 @@ evaluated with an EMPTY ``app.current_workspace_id``:
 * ``AgentWorker.claim_once`` — ``open_run``'s ExecutionRun INSERT and the
   Request's RUNNING flip, with no scope at all.
 
-Empty was fail-OPEN then, so both landed. Under the fail-closed policy (#959 ③)
+Empty is fail-OPEN today, so both land. Under the fail-closed policy (#959 ③)
 they are rejected — and a claim wrapped in ``cross_tenant_read()`` would carry
 ``'*'``, which ``WITH CHECK`` also refuses.
 

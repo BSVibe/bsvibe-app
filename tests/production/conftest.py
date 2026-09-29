@@ -178,8 +178,8 @@ async def _reset_guc(session: AsyncSession) -> None:
     ``is_local=true`` (per transaction), so it cannot ride a pooled connection
     into the next caller. This stays for the tests that still set the GUC BY
     HAND with ``is_local=false`` (``test_tenant_isolation`` drives the policy
-    directly): a fixture reusing that connection must reset it to '' or an
-    INSERT into an RLS table whose id != the stale GUC trips the policy's
+    directly): a fixture reusing that connection must reset it to '' (fail-open)
+    or an INSERT into an RLS table whose id != the stale GUC trips the policy's
     WITH CHECK.
     """
     conn = await session.connection()
