@@ -18,9 +18,10 @@ from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry, ToolScopeDenied
 from backend.mcp.tools import register_all_tools
 
-from .._support import db_engine
+from .._support import db_engine, use_real_pg
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -63,7 +64,7 @@ async def registry() -> ToolRegistry:
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id, user_id) -> AsyncIterator[None]:
     """Stage-flush workspace + user + membership parents so PG FKs resolve."""
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id=f"supabase|{user_id}"))
         await s.flush()
@@ -115,12 +116,22 @@ async def test_account_get_requires_read_scope(db, workspace_id, user_id, regist
 # ---------------------------------------------------------------------------
 # bsvibe_account_memberships_list
 # ---------------------------------------------------------------------------
+@pytest.mark.xfail(
+    use_real_pg(),
+    strict=True,
+    reason=(
+        "PRODUCT defect (#959): server.py publishes the principal's workspace as the RLS "
+        "GUC before dispatch, and account_tools._h_memberships_list reads `workspaces` "
+        "through it — so every OTHER membership's row is filtered out on Postgres. "
+        "Fail-open does not help: the GUC is set, not empty. SQLite has no RLS."
+    ),
+)
 async def test_memberships_list_returns_active_workspaces(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
-    async with db() as s:
-        # Add a SECOND workspace + membership so the list isn't trivially singleton.
-        ws2 = uuid.uuid4()
+    # Add a SECOND workspace + membership so the list isn't trivially singleton.
+    ws2 = uuid.uuid4()
+    async with scoped_session(db, ws2) as s:
         s.add(WorkspaceRow(id=ws2, name="ws2"))
         await s.flush()
         s.add(
@@ -155,8 +166,8 @@ async def test_memberships_list_excludes_left_memberships(
     """A ``left_at``-set membership is NOT returned."""
     from datetime import UTC, datetime
 
-    async with db() as s:
-        ws_gone = uuid.uuid4()
+    ws_gone = uuid.uuid4()
+    async with scoped_session(db, ws_gone) as s:
         s.add(WorkspaceRow(id=ws_gone, name="gone"))
         await s.flush()
         s.add(

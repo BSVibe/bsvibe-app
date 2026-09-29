@@ -88,13 +88,15 @@ async def _seed_row(
     expires_in: timedelta | None = _DEFAULT_TTL,
 ):
     """Seed the token row. ``expires_in=None`` stores a NULL expiry (never expires)."""
+    from backend.data.rls import workspace_session_scope
     from backend.identity.db import UserRow
     from backend.identity.workspaces_db import WorkspaceRow
 
     now = datetime.now(UTC)
-    session.add(WorkspaceRow(id=workspace_id, name="ws"))
-    session.add(UserRow(id=user_id, supabase_user_id=f"u-{user_id}", email=f"{user_id}@t.co"))
-    await session.flush()
+    async with workspace_session_scope(session, workspace_id):
+        session.add(WorkspaceRow(id=workspace_id, name="ws"))
+        session.add(UserRow(id=user_id, supabase_user_id=f"u-{user_id}", email=f"{user_id}@t.co"))
+        await session.flush()
     row = OAuthAccessTokenRow(
         id=jti,
         workspace_id=workspace_id,

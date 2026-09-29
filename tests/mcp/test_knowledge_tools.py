@@ -18,8 +18,9 @@ from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -66,7 +67,7 @@ async def registry() -> ToolRegistry:
 
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[Path]:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
@@ -203,7 +204,7 @@ async def seeded_nested(db, workspace_id) -> AsyncIterator[Path]:
     - garden/entities/deep/baz.md     (sub-subdir, confirms full subtree walk)
     - concepts/active/qux.md          (root-level recursion)
     """
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()

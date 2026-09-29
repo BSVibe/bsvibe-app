@@ -48,9 +48,10 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -168,7 +169,7 @@ async def _seed_verification_failed(
 async def test_mcp_resolve_resolves_folds_and_resumes_run(
     db, workspace_id, user_id, registry
 ) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         run_id, decision_id = await _seed_pending_question(s, workspace_id)
         await s.commit()
 
@@ -189,7 +190,7 @@ async def test_mcp_resolve_resolves_folds_and_resumes_run(
 
     # The persisted state proves it went through the real resume path (the C1
     # service's AgentRunner.transition RUNNING → OPEN), not a flag flip.
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         decision = await s.get(Decision, decision_id)
         run = await s.get(ExecutionRun, run_id)
     assert decision is not None
@@ -213,7 +214,7 @@ async def test_mcp_resolve_resolves_folds_and_resumes_run(
 # [Ship-gate] ship over MCP ⇒ ToolError, Decision + run untouched.
 # ---------------------------------------------------------------------------
 async def test_mcp_resolve_rejects_ship_action(db, workspace_id, user_id, registry) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         run_id, decision_id = await _seed_verification_failed(s, workspace_id)
         await s.commit()
 
@@ -228,7 +229,7 @@ async def test_mcp_resolve_rejects_ship_action(db, workspace_id, user_id, regist
 
     # The Decision stays pending and the run is unchanged — the gate fired
     # before any side effect.
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         decision = await s.get(Decision, decision_id)
         run = await s.get(ExecutionRun, run_id)
     assert decision is not None and decision.status is DecisionStatus.PENDING
@@ -239,7 +240,7 @@ async def test_mcp_resolve_rejects_ship_action(db, workspace_id, user_id, regist
 async def test_mcp_resolve_allows_retry_action(db, workspace_id, user_id, registry) -> None:
     """The non-ship action (`retry`) IS accepted over MCP — it resumes the run
     RUNNING → OPEN (its C1 fall-through), so a failed run is recoverable."""
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         run_id, decision_id = await _seed_verification_failed(s, workspace_id)
         await s.commit()
 
@@ -253,7 +254,7 @@ async def test_mcp_resolve_allows_retry_action(db, workspace_id, user_id, regist
     assert out["status"] == DecisionStatus.RESOLVED.value
     assert out["resolution"] == "retry"
     assert out["run_status"] == RunStatus.OPEN.value
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         run = await s.get(ExecutionRun, run_id)
     assert run is not None and run.status is RunStatus.OPEN
 
@@ -264,7 +265,7 @@ async def test_mcp_resolve_allows_retry_action(db, workspace_id, user_id, regist
 async def test_mcp_list_pending_returns_question_options_and_actions(
     db, workspace_id, user_id, registry
 ) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", language="en"))
         _run_id, q_decision_id = await _seed_pending_question(
             s, workspace_id, question="Which DB?", options=["Postgres", "SQLite"]
@@ -300,7 +301,7 @@ async def test_mcp_list_pending_returns_question_options_and_actions(
 async def test_mcp_and_rest_resolve_produce_identical_outcomes(
     db, workspace_id, user_id, registry
 ) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         rest_run_id, rest_decision_id = await _seed_pending_question(s, workspace_id)
         mcp_run_id, mcp_decision_id = await _seed_pending_question(s, workspace_id)
         await s.commit()
@@ -309,7 +310,7 @@ async def test_mcp_and_rest_resolve_produce_identical_outcomes(
     app = create_app()
     app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_current_user_row] = lambda: SimpleNamespace(id=user_id)
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
 
     async def _session():
         async with db() as s:
@@ -340,7 +341,7 @@ async def test_mcp_and_rest_resolve_produce_identical_outcomes(
     assert rest_body["resolution"] == mcp_out["resolution"] == "Use Postgres"
     assert rest_body["run_status"] == mcp_out["run_status"] == RunStatus.OPEN.value
 
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         rest_run = await s.get(ExecutionRun, rest_run_id)
         mcp_run = await s.get(ExecutionRun, mcp_run_id)
     assert rest_run is not None and mcp_run is not None
@@ -366,7 +367,7 @@ async def test_mcp_resolve_unknown_checkpoint_raises(db, workspace_id, user_id, 
 
 
 async def test_mcp_resolve_requires_write_scope(db, workspace_id, user_id, registry) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         _run_id, decision_id = await _seed_pending_question(s, workspace_id)
         await s.commit()
     async with db() as s:
@@ -380,7 +381,7 @@ async def test_mcp_resolve_requires_write_scope(db, workspace_id, user_id, regis
 
 
 async def test_mcp_resolve_rejects_unknown_field(db, workspace_id, user_id, registry) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         _run_id, decision_id = await _seed_pending_question(s, workspace_id)
         await s.commit()
     async with db() as s:

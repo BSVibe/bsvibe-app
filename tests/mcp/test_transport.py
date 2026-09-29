@@ -33,6 +33,7 @@ from backend.identity.oauth_keys import reset_signing_key_for_tests
 from backend.mcp.streamable_http import build_streamable_http_app
 
 from .._support import db_engine, fake_current_user
+from ._rls import scoped_session
 
 pytestmark = pytest.mark.asyncio
 
@@ -178,7 +179,7 @@ async def test_streamable_app_delegates_to_manager_when_token_valid(db, monkeypa
     jti = uuid.uuid4()
     user_id = uuid.uuid4()
     workspace_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add(UserRow(id=user_id, supabase_user_id="t", email="t@e.co"))
         await s.flush()

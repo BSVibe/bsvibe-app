@@ -21,8 +21,9 @@ from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -60,7 +61,7 @@ async def registry() -> ToolRegistry:
 
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
     yield
@@ -255,7 +256,7 @@ async def test_workers_list_exposes_e13_fields(db, workspace_id, user_id, regist
 
 async def test_workers_list_isolates_workspaces(db, registry, seeded) -> None:
     other_workspace = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_workspace) as s:
         s.add(WorkspaceRow(id=other_workspace, name="other"))
         await s.commit()
 
