@@ -28,7 +28,8 @@ from backend.api.main import create_app
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -50,9 +51,9 @@ async def _seed_member(db, workspace_id: uuid.UUID, role: str, sub: str) -> None
         s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         user_id = uuid.uuid4()
         s.add(UserRow(id=user_id, supabase_user_id=sub, email="m@x"))
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(MembershipRow(id=uuid.uuid4(), user_id=user_id, workspace_id=workspace_id, role=role))
-        await s.commit()
+        await commit_per_workspace(s)
 
 
 def _client(app, db) -> httpx.AsyncClient:
@@ -108,11 +109,8 @@ async def ws_client(db, workspace_id):
     """JWT-authed client with workspace overridden (for list/revoke scoping)."""
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     app.dependency_overrides[get_current_user] = fake_current_user("ws-sub")
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     async with _client(app, db) as c:
         yield c
 
@@ -394,11 +392,8 @@ async def test_register_response_carries_created_at_and_status(db, workspace_id)
     app = create_app()
     _override_bearer(app, workspace_id)
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     app.dependency_overrides[get_current_user] = fake_current_user(sub)
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     try:
         async with _client(app, db) as c:
             await c.post(
@@ -449,11 +444,8 @@ async def test_list_response_carries_e13_fleet_detail(db, workspace_id) -> None:
 
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     app.dependency_overrides[get_current_user] = fake_current_user(sub)
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
 
     from backend.executors.dispatch import HEARTBEAT_FRESHNESS_S  # noqa: PLC0415
 
@@ -485,7 +477,7 @@ async def test_list_response_carries_e13_fleet_detail(db, workspace_id) -> None:
                 token_hash="h2",
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     async with _client(app, db) as c:
         r = await c.get("/api/v1/workers")

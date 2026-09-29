@@ -24,6 +24,7 @@ from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow
 
 from .._support import db_engine
+from .conftest import commit_per_workspace, flush_per_workspace
 
 # Async resolver tests get the asyncio mark via explicit decoration so the
 # small bearer-extractor sync tests don't trigger pytest-asyncio's "async-only"
@@ -80,11 +81,11 @@ async def test_resolve_succeeds_for_supabase_jwt(db, monkeypatch: pytest.MonkeyP
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         user_id = uuid.uuid4()
         s.add(UserRow(id=user_id, supabase_user_id=sub, email="x@x"))
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(
             MembershipRow(id=uuid.uuid4(), user_id=user_id, workspace_id=workspace_id, role="owner")
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     # Make the MCP path miss + the Supabase path succeed.
     _make_the_access_token_path_miss(monkeypatch)
@@ -105,7 +106,7 @@ async def test_resolve_fails_when_no_workspace_membership(
 
     async with db() as s:
         s.add(UserRow(id=uuid.uuid4(), supabase_user_id=sub, email="x@x"))
-        await s.commit()
+        await commit_per_workspace(s)
 
     _make_the_access_token_path_miss(monkeypatch)
     monkeypatch.setattr(

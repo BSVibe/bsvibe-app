@@ -25,6 +25,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
 from backend.workers.db import SettleDrainRow
 from backend.workflow.infrastructure.db import (
     Deliverable,
@@ -40,7 +41,8 @@ from backend.workflow.infrastructure.delivery.db import (
     SafeModeStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -60,15 +62,12 @@ def workspace_id() -> uuid.UUID:
 async def configured_client(db, workspace_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     async def _session():
         async with db() as s:
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     transport = httpx.ASGITransport(app=app)
@@ -103,7 +102,7 @@ async def _seed_run(
             updated_at=datetime.now(tz=UTC),
         )
     )
-    await s.flush()
+    await flush_per_workspace(s)
 
 
 async def test_list_newest_first_with_payload_mapping(configured_client, db, workspace_id) -> None:
@@ -135,7 +134,7 @@ async def test_list_newest_first_with_payload_mapping(configured_client, db, wor
                 created_at=base + timedelta(minutes=5),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get("/api/v1/deliverables")
     assert r.status_code == 200, r.text
@@ -185,7 +184,7 @@ async def test_list_workspace_scoped(configured_client, db, workspace_id) -> Non
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get("/api/v1/deliverables")
     assert r.status_code == 200, r.text
@@ -221,7 +220,7 @@ async def test_list_run_id_filter(configured_client, db, workspace_id) -> None:
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables?run_id={run_a}")
     assert r.status_code == 200, r.text
@@ -260,7 +259,7 @@ async def test_get_by_id_and_cross_workspace_404(configured_client, db, workspac
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{mine}")
     assert r.status_code == 200, r.text
@@ -327,7 +326,7 @@ async def test_report_returns_deliverable_with_verification(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -388,7 +387,7 @@ async def test_report_surfaces_written_from_settle_drains(
                 node_ref=f"/app/var/vault/us-1/{workspace_id}/{rel}",
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -428,7 +427,7 @@ async def test_written_note_title_uses_heading_casing(
                 node_ref=str(note_abs),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -487,7 +486,7 @@ async def test_report_references_are_concept_centric(configured_client, db, work
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -595,7 +594,7 @@ async def test_report_prior_decision_links_to_its_stored_note(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -663,7 +662,7 @@ async def test_report_reference_uses_structured_knowledge_ref_without_a_vault_sc
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -686,7 +685,7 @@ async def test_report_written_empty_before_drain(configured_client, db, workspac
         await _seed_deliverable(
             s, deliverable_id=deliverable_id, run_id=run_id, workspace_id=workspace_id
         )
-        await s.commit()
+        await commit_per_workspace(s)
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     assert r.json()["written"] == []
@@ -721,7 +720,7 @@ async def test_report_surfaces_held_delivery_for_approval(
                 expires_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -746,7 +745,7 @@ async def test_report_shipped_run_has_no_held_item(configured_client, db, worksp
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     body = r.json()
@@ -785,7 +784,7 @@ async def test_report_returns_cached_narrative(configured_client, db, workspace_
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -836,13 +835,13 @@ async def test_report_lazy_generates_and_caches_narrative(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
     assert "percent_change helper" in r.json()["narrative"]
     # It was cached on the deliverable payload.
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None and "percent_change helper" in row.payload.get("narrative", "")
 
@@ -865,7 +864,7 @@ async def test_report_empty_verification_does_not_error(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -924,7 +923,7 @@ async def test_report_surfaces_referenced_knowledge(configured_client, db, works
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -988,7 +987,7 @@ async def test_report_references_extracts_legacy_bsage_marker(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -1051,7 +1050,7 @@ async def test_report_references_deduped_across_verifications(
                 ),
             ]
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -1093,7 +1092,7 @@ async def test_report_references_empty_without_retrieved_knowledge(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -1117,7 +1116,7 @@ async def test_report_cross_workspace_404(configured_client, db, workspace_id) -
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{theirs}/report")
     assert r.status_code == 404
@@ -1169,7 +1168,7 @@ async def test_report_only_includes_own_run_verifications(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -1193,7 +1192,7 @@ async def test_limit_capped(configured_client, db, workspace_id) -> None:
                     created_at=datetime.now(tz=UTC),
                 )
             )
-        await s.commit()
+        await commit_per_workspace(s)
 
     # Over-cap and under-floor limits are clamped, not errored.
     r = await configured_client.get("/api/v1/deliverables?limit=99999")
@@ -1239,7 +1238,7 @@ async def test_report_verified_true_with_passed_verification(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -1268,7 +1267,7 @@ async def test_report_verified_false_for_hollow_deliverable(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -1308,7 +1307,7 @@ async def test_report_verified_false_when_only_failed_verification(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/deliverables/{deliverable_id}/report")
     assert r.status_code == 200, r.text
@@ -1359,7 +1358,7 @@ async def test_list_and_get_carry_verified_flag(configured_client, db, workspace
                 created_at=base,
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get("/api/v1/deliverables")
     assert r.status_code == 200, r.text
@@ -1408,7 +1407,7 @@ async def _seed_deliverable_with_refs(
             created_at=datetime.now(tz=UTC),
         )
     )
-    await s.commit()
+    await commit_per_workspace(s)
 
 
 @pytest.fixture
@@ -1683,7 +1682,7 @@ async def _seed_deliverable_with_payload(
             created_at=datetime.now(tz=UTC),
         )
     )
-    await s.commit()
+    await commit_per_workspace(s)
 
 
 async def test_diff_returns_stored_unified_diff(configured_client, db, workspace_id) -> None:

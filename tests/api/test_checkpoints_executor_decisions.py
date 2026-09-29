@@ -32,7 +32,8 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -54,15 +55,12 @@ def workspace_id() -> uuid.UUID:
 async def client(db, workspace_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     async def _session():
         async with db() as s:
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     transport = httpx.ASGITransport(app=app)
@@ -82,7 +80,7 @@ async def _seed_run(db, *, ws: uuid.UUID) -> uuid.UUID:
                 created_at=_NOW - timedelta(hours=4),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return run_id
 
 
@@ -102,7 +100,7 @@ async def _seed_decision(db, *, ws, run_id, kind: str, payload: dict) -> uuid.UU
                 created_at=_NOW - timedelta(hours=1),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return decision_id
 
 
@@ -189,7 +187,7 @@ async def test_pending_checkpoint_question_renders_in_workspace_language(db, wor
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_output_language] = lambda: "ko"
 

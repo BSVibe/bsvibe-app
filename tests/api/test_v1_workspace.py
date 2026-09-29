@@ -20,10 +20,12 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -40,15 +42,12 @@ async def client_with_ws(db):
     workspace_id = uuid.uuid4()
     user_id = uuid.uuid4()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     async def _session():
         async with db() as s:
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     async with db() as s:
@@ -61,11 +60,11 @@ async def client_with_ws(db):
             )
         )
         s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(
             MembershipRow(id=uuid.uuid4(), user_id=user_id, workspace_id=workspace_id, role="owner")
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -110,7 +109,7 @@ async def test_patch_workspace_renames_and_persists(client_with_ws) -> None:
     }
 
     # The row in the database actually changed.
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = (
             await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
         ).scalar_one()
@@ -132,7 +131,7 @@ async def test_patch_workspace_sets_audit_retention_days(client_with_ws) -> None
         "timezone": "UTC",
         "safe_mode": True,
     }
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = (
             await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
         ).scalar_one()
@@ -147,7 +146,7 @@ async def test_patch_workspace_sets_language(client_with_ws) -> None:
     r = await c.patch("/api/v1/workspace", json={"language": "ko"})
     assert r.status_code == 200, r.text
     assert r.json()["language"] == "ko"
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = (
             await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
         ).scalar_one()
@@ -165,7 +164,7 @@ async def test_patch_workspace_sets_timezone(client_with_ws) -> None:
     r = await c.patch("/api/v1/workspace", json={"timezone": "Asia/Seoul"})
     assert r.status_code == 200, r.text
     assert r.json()["timezone"] == "Asia/Seoul"
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = (
             await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
         ).scalar_one()
@@ -177,7 +176,7 @@ async def test_patch_workspace_sets_timezone(client_with_ws) -> None:
     # A non-existent IANA zone is rejected, never silently stored.
     bad = await c.patch("/api/v1/workspace", json={"timezone": "Mars/Phobos"})
     assert bad.status_code == 422
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = (
             await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
         ).scalar_one()
@@ -187,12 +186,12 @@ async def test_patch_workspace_sets_timezone(client_with_ws) -> None:
 async def test_patch_workspace_sets_safe_mode(client_with_ws) -> None:
     """L3 (#5) — the founder switches to Auto mode by PATCHing safe_mode=false;
     it persists and surfaces on the response. A name-only PATCH leaves it alone."""
-    c, _workspace_id, db = client_with_ws
+    c, workspace_id, db = client_with_ws
     # Switch to Auto (deliverables auto-dispatch instead of queueing).
     r = await c.patch("/api/v1/workspace", json={"safe_mode": False})
     assert r.status_code == 200, r.text
     assert r.json()["safe_mode"] is False
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = (await s.execute(select(WorkspaceRow))).scalar_one()
         assert row.safe_mode is False
     # A name-only PATCH must not flip the mode back.
@@ -206,7 +205,7 @@ async def test_patch_workspace_sets_safe_mode(client_with_ws) -> None:
 
 async def test_patch_workspace_unsets_audit_retention_days_to_forever(client_with_ws) -> None:
     """Lift Q1 — explicit ``null`` clears the retention back to forever (the default)."""
-    c, _workspace_id, db = client_with_ws
+    c, workspace_id, db = client_with_ws
     # First opt-in.
     r = await c.patch("/api/v1/workspace", json={"audit_retention_days": 14})
     assert r.status_code == 200
@@ -214,7 +213,7 @@ async def test_patch_workspace_unsets_audit_retention_days_to_forever(client_wit
     r = await c.patch("/api/v1/workspace", json={"audit_retention_days": None})
     assert r.status_code == 200, r.text
     assert r.json()["audit_retention_days"] is None
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = (await s.execute(select(WorkspaceRow))).scalar_one()
         assert row.audit_retention_days is None
 
@@ -273,7 +272,7 @@ async def _client_with_role(db, role: str):
     user_id = uuid.uuid4()
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
 
     async def _session():
         async with db() as s:
@@ -284,9 +283,9 @@ async def _client_with_role(db, role: str):
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="Acme", safe_mode=True, legal_basis="contract"))
         s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(MembershipRow(id=uuid.uuid4(), user_id=user_id, workspace_id=workspace_id, role=role))
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
     client = httpx.AsyncClient(transport=transport, base_url="http://test")
@@ -302,7 +301,7 @@ async def test_low_role_cannot_disable_safe_mode(db, role) -> None:
         r = await c.patch("/api/v1/workspace", json={"safe_mode": False})
         assert r.status_code == 403, r.text
     # The row is untouched — Safe Mode still on.
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = (
             await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
         ).scalar_one()
@@ -315,7 +314,7 @@ async def test_elevated_role_may_change_safe_mode(db, role) -> None:
     async with c:
         r = await c.patch("/api/v1/workspace", json={"safe_mode": False})
         assert r.status_code == 200, r.text
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         row = (
             await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
         ).scalar_one()

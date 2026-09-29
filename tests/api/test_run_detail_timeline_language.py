@@ -34,7 +34,8 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -59,7 +60,7 @@ async def configured_client(db, workspace_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -73,7 +74,7 @@ async def _seed(db, ws: uuid.UUID, language: str) -> uuid.UUID:
     async with db() as s:
         s.add(WorkspaceRow(id=ws, name="w", language=language))
         s.add(ExecutionRun(id=run_id, workspace_id=ws, status=RunStatus.REVIEW_READY, payload={}))
-        await s.flush()
+        await flush_per_workspace(s)
         events = [
             ("tool_call", {"tool": "file_write", "ok": True, "writes": ["calculator.py"]}),
             ("verify", {"outcome": "passed"}),
@@ -99,7 +100,7 @@ async def _seed(db, ws: uuid.UUID, language: str) -> uuid.UUID:
                     created_at=base + timedelta(minutes=i),
                 )
             )
-        await s.commit()
+        await commit_per_workspace(s)
     return run_id
 
 
@@ -148,7 +149,7 @@ async def test_a_workspace_row_that_does_not_exist_falls_back_to_english(
         s.add(
             ExecutionRun(id=run_id, workspace_id=workspace_id, status=RunStatus.RUNNING, payload={})
         )
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(
             ExecutionRunActivity(
                 id=uuid.uuid4(),
@@ -159,7 +160,7 @@ async def test_a_workspace_row_that_does_not_exist_falls_back_to_english(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text

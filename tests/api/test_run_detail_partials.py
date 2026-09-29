@@ -39,7 +39,8 @@ from backend.workflow.infrastructure.db import (
     ExecutionRun,
     RunStatus,
 )
-from tests._support import db_engine, fake_current_user
+from tests._support import db_engine, fake_current_user, publishing_workspace
+from tests.api.conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -59,15 +60,12 @@ def workspace_id() -> uuid.UUID:
 async def configured_client(db, workspace_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     async def _session():
         async with db() as s:
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     transport = httpx.ASGITransport(app=app)
@@ -86,7 +84,7 @@ async def _seed_run(s, *, run_id: uuid.UUID, ws: uuid.UUID, status: RunStatus) -
             updated_at=datetime.now(tz=UTC),
         )
     )
-    await s.flush()
+    await flush_per_workspace(s)
 
 
 async def test_partials_listed_and_terminal_separated(configured_client, db, workspace_id) -> None:
@@ -148,7 +146,7 @@ async def test_partials_listed_and_terminal_separated(configured_client, db, wor
                 created_at=t0 + timedelta(seconds=2),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -191,7 +189,7 @@ async def test_no_partials_unchanged_behavior(configured_client, db, workspace_i
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text

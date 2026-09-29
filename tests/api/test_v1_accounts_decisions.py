@@ -26,7 +26,7 @@ from backend.api.main import create_app
 from backend.config import get_settings
 from backend.router.accounts.models import AccountsBase
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -55,9 +55,6 @@ def account_id() -> uuid.UUID:
 async def client(db, workspace_id, account_id):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _acct() -> uuid.UUID:
         return account_id
 
@@ -66,7 +63,7 @@ async def client(db, workspace_id, account_id):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[require_account_id] = _acct
     app.dependency_overrides[get_db_session] = _session
 

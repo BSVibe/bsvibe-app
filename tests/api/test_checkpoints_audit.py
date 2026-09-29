@@ -34,7 +34,8 @@ from backend.workflow.infrastructure.db import (
 )
 from plugin.audit.models import AuditOutboxRecord
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -59,9 +60,6 @@ def founder_id() -> uuid.UUID:
 async def client(sf, workspace_id: uuid.UUID, founder_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -70,7 +68,7 @@ async def client(sf, workspace_id: uuid.UUID, founder_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -90,7 +88,7 @@ async def _seed_pending(sf, workspace_id):
             updated_at=datetime.now(tz=UTC),
         )
         s.add(run)
-        await s.flush()
+        await flush_per_workspace(s)
         decision = Decision(
             id=uuid.uuid4(),
             run_id=run.id,
@@ -100,7 +98,7 @@ async def _seed_pending(sf, workspace_id):
             status=DecisionStatus.PENDING,
         )
         s.add(decision)
-        await s.commit()
+        await commit_per_workspace(s)
         return run.id, decision.id
 
 

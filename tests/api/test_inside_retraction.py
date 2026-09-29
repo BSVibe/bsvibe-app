@@ -40,7 +40,7 @@ from backend.config import get_settings
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenWriter
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -109,9 +109,6 @@ async def client(
 ):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=actor_id)
 
@@ -132,7 +129,7 @@ async def client(
     )
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[build_retraction_writer] = _writer

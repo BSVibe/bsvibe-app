@@ -42,7 +42,7 @@ from backend.connectors.db import ConnectorAccountRow
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.infrastructure.intake.db import TriggerEventRow  # noqa: F401 — register table
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 # Deterministic 32-byte AES key for CredentialCipher in tests.
 TEST_KEY = b"0123456789abcdef0123456789abcdef"
@@ -74,7 +74,7 @@ def _make_client(
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(ws)
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_credential_cipher] = lambda: cipher
     transport = httpx.ASGITransport(app=app)
