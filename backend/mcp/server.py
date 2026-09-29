@@ -107,7 +107,7 @@ def build_server(
             # Tenant-isolation defense-in-depth — mirror REST get_workspace_id so
             # the agent surface is NOT on single-layer per-handler scoping:
             #   layer 2 — the ORM auto-filter contextvar (backend.data.scoping)
-            #   layer 3 — the Postgres RLS GUC (fail-open when unset → all rows)
+            #   layer 3 — the Postgres RLS GUC (fail-closed when unset → no rows)
             # Without this a future MCP tool that forgets its workspace filter is a
             # silent cross-tenant read/write with no net.
             ws_token = set_current_workspace_id(principal.workspace_id)

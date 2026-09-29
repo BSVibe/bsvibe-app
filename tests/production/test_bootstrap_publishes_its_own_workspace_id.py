@@ -1,6 +1,6 @@
 """워크스페이스 생성이 **자기 id 를 GUC 로 게시하고** 쓰는가 — #959 의 차단기.
 
-오늘 RLS 정책은 GUC 가 비어 있으면 통과시킨다(fail-open):
+RLS 정책은 GUC 가 비어 있으면 통과시켰다(fail-open, #959 ③ 에서 닫힘):
 
 ```sql
 USING ( GUC IS NULL OR GUC = '' OR id::text = GUC )
@@ -51,8 +51,9 @@ _GUC = "app.current_workspace_id"
 async def _poison_guc(session, foreign_id: uuid.UUID) -> None:
     """이 세션의 트랜잭션에 **남의** 워크스페이스 id 를 건다(`is_local=true`).
 
-    fail-open 탈출구는 *비어 있음* 에만 열린다 — 비어 있지 않은 값은 오늘도
-    `id::text = GUC` 를 강제한다. 즉 이 한 줄이 fail-closed 를 흉내 낸다.
+    fail-open 탈출구는 *비어 있음* 에만 열렸다 — 비어 있지 않은 값은 그때도
+    `id::text = GUC` 를 강제했다. 즉 이 한 줄이 fail-closed 를 흉내 냈다(③ 이후엔
+    빈 값도 같은 결과다).
     """
     conn = await session.connection()
     await conn.execute(text(f"SELECT set_config('{_GUC}', :v, true)"), {"v": str(foreign_id)})
