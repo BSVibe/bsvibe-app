@@ -27,6 +27,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from backend.workflow.application.runtime.product_bootstrap_runtime import (
     STATUS_COMPLETE,
@@ -50,19 +51,20 @@ async def session_factory():
 async def _seed_workspace_and_product(
     session_factory, *, workspace_id: uuid.UUID, product_id: uuid.UUID
 ) -> None:
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name="p",
-                slug="p",
-                repo_url="https://x/y",
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name="p",
+                    slug="p",
+                    repo_url="https://x/y",
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
 
 def _stub_settings(tmp_path: Path) -> None:
@@ -127,21 +129,22 @@ async def test_bootstrap_marks_failed_when_every_chunk_dropped(
         lambda **_kw: _AllChunksFailKnowledge(),
     )
 
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=fake_git,
+        )
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == STATUS_FAILED_INGEST
-        assert row.bootstrap_error is not None
-        assert "ingest failed" in row.bootstrap_error
-        assert "7" in row.bootstrap_error  # the chunk_failures count
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == STATUS_FAILED_INGEST
+            assert row.bootstrap_error is not None
+            assert "ingest failed" in row.bootstrap_error
+            assert "7" in row.bootstrap_error  # the chunk_failures count
 
 
 async def test_bootstrap_marks_complete_when_some_notes_written_despite_failures(
@@ -187,18 +190,19 @@ async def test_bootstrap_marks_complete_when_some_notes_written_despite_failures
         lambda **_kw: _PartialKnowledge(),
     )
 
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=fake_git,
+        )
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == STATUS_COMPLETE
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == STATUS_COMPLETE
 
 
 # ── Bug 1 ─────────────────────────────────────────────────────────────────────
@@ -252,14 +256,15 @@ async def test_bootstrap_runtime_threads_redis_into_resolver(
     # short-circuits to notes=0, chunk_failures=0 -> the runtime marks
     # ``complete`` (no chunks ran => no failures) per Bug 2 policy. That's
     # fine for Bug 1's purposes — we only need to observe the resolver call.
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=fake_git,
-        redis_client=sentinel_redis,
-    )
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=fake_git,
+            redis_client=sentinel_redis,
+        )
 
     assert spy.get("caller_id") == "knowledge.ingest", (
         f"expected the bootstrap path to call the resolver for caller_id "

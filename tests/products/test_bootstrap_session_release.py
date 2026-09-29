@@ -40,6 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.workflow.application.runtime.product_bootstrap_runtime as rt
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 
 from .._support import pg_url, use_real_pg
@@ -83,19 +84,20 @@ async def test_no_connection_held_across_bootstrap_ingest(
 
         workspace_id = uuid.uuid4()
         product_id = uuid.uuid4()
-        async with sf() as s:
-            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
-            await s.flush()
-            s.add(
-                ProductRow(
-                    id=product_id,
-                    workspace_id=workspace_id,
-                    name="p",
-                    slug=f"p-{product_id.hex[:8]}",
-                    repo_url="https://x/y",
+        with workspace_scope(workspace_id):
+            async with sf() as s:
+                s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
+                await s.flush()
+                s.add(
+                    ProductRow(
+                        id=product_id,
+                        workspace_id=workspace_id,
+                        name="p",
+                        slug=f"p-{product_id.hex[:8]}",
+                        repo_url="https://x/y",
+                    )
                 )
-            )
-            await s.commit()
+                await s.commit()
 
         settings = rt.get_settings()
         product_root = tmp_path / "product_ws"
@@ -136,22 +138,25 @@ async def test_no_connection_held_across_bootstrap_ingest(
 
         monkeypatch.setattr(rt, "resolve_via_caller", _reading_resolver)
 
-        job = asyncio.create_task(
-            rt.run_product_bootstrap_job(
-                product_id=product_id,
-                workspace_id=workspace_id,
-                repo_url="https://x/y",
-                session_factory=sf,
-                git_ops=fake_git,
+        # ``create_task`` copies this context — as the MCP tool's task inherits its caller's.
+        with workspace_scope(workspace_id):
+            job = asyncio.create_task(
+                rt.run_product_bootstrap_job(
+                    product_id=product_id,
+                    workspace_id=workspace_id,
+                    repo_url="https://x/y",
+                    session_factory=sf,
+                    git_ops=fake_git,
+                )
             )
-        )
         try:
             await asyncio.wait_for(parked.wait(), timeout=25)
 
             async def _heartbeat() -> int:
-                async with sf() as s:
-                    rows = (await s.execute(select(WorkspaceRow.id))).all()
-                    return len(rows)
+                with workspace_scope(workspace_id):
+                    async with sf() as s:
+                        rows = (await s.execute(select(WorkspaceRow.id))).all()
+                        return len(rows)
 
             got = await asyncio.wait_for(_heartbeat(), timeout=5)
             assert got >= 1, "concurrent DB query returned nothing while ingest parked"
@@ -161,12 +166,13 @@ async def test_no_connection_held_across_bootstrap_ingest(
                 await asyncio.wait_for(job, timeout=30)
 
         # The job reached a terminal state — NOT stuck at 'ingesting' (#680).
-        async with sf() as s:
-            row = await s.get(ProductRow, product_id)
-            assert row is not None
-            assert row.bootstrap_status != "ingesting", (
-                f"bootstrap stuck at 'ingesting' (error={row.bootstrap_error!r}) — "
-                f"the completion flip was lost to a reaped connection (#680)."
-            )
+        with workspace_scope(workspace_id):
+            async with sf() as s:
+                row = await s.get(ProductRow, product_id)
+                assert row is not None
+                assert row.bootstrap_status != "ingesting", (
+                    f"bootstrap stuck at 'ingesting' (error={row.bootstrap_error!r}) — "
+                    f"the completion flip was lost to a reaped connection (#680)."
+                )
     finally:
         await engine.dispose()

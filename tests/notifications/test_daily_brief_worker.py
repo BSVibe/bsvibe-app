@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 import backend.identity.workspaces_db  # noqa: F401
 import backend.notifications.db  # noqa: F401
 import backend.workflow.infrastructure.db  # noqa: F401
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.notifications.db import (
     NotificationEventRow,
@@ -80,11 +81,12 @@ async def _seed_workspace(
     language: str = "en",
     matrix: dict[str, dict[str, bool]] | None = None,
 ) -> None:
-    async with sf() as s:
-        s.add(WorkspaceRow(id=ws, name="Test WS", timezone=timezone, language=language))
-        if matrix is not None:
-            s.add(NotificationPrefsRow(workspace_id=ws, matrix=matrix))
-        await s.commit()
+    with workspace_scope(ws):
+        async with sf() as s:
+            s.add(WorkspaceRow(id=ws, name="Test WS", timezone=timezone, language=language))
+            if matrix is not None:
+                s.add(NotificationPrefsRow(workspace_id=ws, matrix=matrix))
+            await s.commit()
 
 
 async def _seed_run(
@@ -95,34 +97,36 @@ async def _seed_run(
     updated_at: datetime,
 ) -> uuid.UUID:
     run_id = uuid.uuid4()
-    async with sf() as s:
-        s.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=ws,
-                status=status,
-                payload={},
-                updated_at=updated_at,
+    with workspace_scope(ws):
+        async with sf() as s:
+            s.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=ws,
+                    status=status,
+                    payload={},
+                    updated_at=updated_at,
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
     return run_id
 
 
 async def _seed_pending_decision(
     sf: async_sessionmaker[AsyncSession], *, ws: uuid.UUID, run_id: uuid.UUID
 ) -> None:
-    async with sf() as s:
-        s.add(
-            Decision(
-                run_id=run_id,
-                workspace_id=ws,
-                decision="ask_user",
-                status=DecisionStatus.PENDING,
-                payload={},
+    with workspace_scope(ws):
+        async with sf() as s:
+            s.add(
+                Decision(
+                    run_id=run_id,
+                    workspace_id=ws,
+                    decision="ask_user",
+                    status=DecisionStatus.PENDING,
+                    payload={},
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
 
 async def _rows(sf: async_sessionmaker[AsyncSession], ws: uuid.UUID) -> list[NotificationEventRow]:

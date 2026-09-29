@@ -21,6 +21,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.scoping import workspace_scope
 from backend.identity.infrastructure.repositories import SqlAlchemyResourceBindingRepository
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from tests._support import db_engine
@@ -45,20 +46,21 @@ async def _seed_parents(
     """
     product_id = uuid.uuid4()
     connector_account_id = uuid.uuid4()
-    async with sf() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
-        await s.flush()
-        s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="Blog", slug="blog"))
-        s.add(
-            ConnectorAccountRow(
-                id=connector_account_id,
-                workspace_id=workspace_id,
-                connector="github",
-                webhook_token=f"tok-{uuid.uuid4().hex}",
-                signing_secret_ciphertext="cipher",
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
+            await s.flush()
+            s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="Blog", slug="blog"))
+            s.add(
+                ConnectorAccountRow(
+                    id=connector_account_id,
+                    workspace_id=workspace_id,
+                    connector="github",
+                    webhook_token=f"tok-{uuid.uuid4().hex}",
+                    signing_secret_ciphertext="cipher",
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
     return product_id, connector_account_id
 
 

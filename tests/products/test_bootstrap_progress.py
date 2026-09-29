@@ -22,6 +22,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from backend.knowledge._internal.events import Event, EventBus, EventType
 from backend.workflow.application.runtime.product_bootstrap_runtime import (
@@ -46,19 +47,20 @@ async def session_factory():
 async def _seed_workspace_and_product(
     session_factory, *, workspace_id: uuid.UUID, product_id: uuid.UUID
 ) -> None:
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name="p",
-                slug="p",
-                repo_url="https://x/y",
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name="p",
+                    slug="p",
+                    repo_url="https://x/y",
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
 
 def _stub_settings(tmp_path: Path) -> None:
@@ -87,53 +89,56 @@ async def test_chunk_done_event_increments_chunks_done_and_notes(
         session_factory, workspace_id=workspace_id, product_id=product_id
     )
 
-    sub = _BootstrapProgressSubscriber(session_factory=session_factory, product_id=product_id)
+    # The subscriber writes from inside the bootstrap job's task, which inherits
+    # the calling request's published workspace.
+    with workspace_scope(workspace_id):
+        sub = _BootstrapProgressSubscriber(session_factory=session_factory, product_id=product_id)
 
-    # Start event carries the chunk count.
-    await sub.on_event(
-        Event(
-            event_type=EventType.INGEST_COMPILE_BATCH_START,
-            payload={"source": "x", "item_count": 5, "chunk_count": 3},
+        # Start event carries the chunk count.
+        await sub.on_event(
+            Event(
+                event_type=EventType.INGEST_COMPILE_BATCH_START,
+                payload={"source": "x", "item_count": 5, "chunk_count": 3},
+            )
         )
-    )
 
-    # Two CHUNK_DONE events with notes.
-    await sub.on_event(
-        Event(
-            event_type=EventType.INGEST_COMPILE_BATCH_CHUNK_DONE,
-            payload={
-                "source": "x",
-                "chunk_index": 0,
-                "chunk_count": 3,
-                "notes_created": 2,
+        # Two CHUNK_DONE events with notes.
+        await sub.on_event(
+            Event(
+                event_type=EventType.INGEST_COMPILE_BATCH_CHUNK_DONE,
+                payload={
+                    "source": "x",
+                    "chunk_index": 0,
+                    "chunk_count": 3,
+                    "notes_created": 2,
+                    "notes_updated": 1,
+                },
+            )
+        )
+        await sub.on_event(
+            Event(
+                event_type=EventType.INGEST_COMPILE_BATCH_CHUNK_DONE,
+                payload={
+                    "source": "x",
+                    "chunk_index": 1,
+                    "chunk_count": 3,
+                    "notes_created": 3,
+                    "notes_updated": 0,
+                },
+            )
+        )
+
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_progress == {
+                "chunks_done": 2,
+                "chunks_total": 3,
+                "chunks_failed": 0,
+                "notes_created": 5,
                 "notes_updated": 1,
-            },
-        )
-    )
-    await sub.on_event(
-        Event(
-            event_type=EventType.INGEST_COMPILE_BATCH_CHUNK_DONE,
-            payload={
-                "source": "x",
-                "chunk_index": 1,
-                "chunk_count": 3,
-                "notes_created": 3,
-                "notes_updated": 0,
-            },
-        )
-    )
-
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_progress == {
-            "chunks_done": 2,
-            "chunks_total": 3,
-            "chunks_failed": 0,
-            "notes_created": 5,
-            "notes_updated": 1,
-            "phase": "ingesting",
-        }
+                "phase": "ingesting",
+            }
 
 
 async def test_chunk_failed_event_increments_failures(session_factory) -> None:
@@ -145,28 +150,29 @@ async def test_chunk_failed_event_increments_failures(session_factory) -> None:
         session_factory, workspace_id=workspace_id, product_id=product_id
     )
 
-    sub = _BootstrapProgressSubscriber(session_factory=session_factory, product_id=product_id)
+    with workspace_scope(workspace_id):
+        sub = _BootstrapProgressSubscriber(session_factory=session_factory, product_id=product_id)
 
-    await sub.on_event(
-        Event(
-            event_type=EventType.INGEST_COMPILE_BATCH_START,
-            payload={"chunk_count": 2},
+        await sub.on_event(
+            Event(
+                event_type=EventType.INGEST_COMPILE_BATCH_START,
+                payload={"chunk_count": 2},
+            )
         )
-    )
-    await sub.on_event(
-        Event(
-            event_type=EventType.INGEST_COMPILE_BATCH_CHUNK_FAILED,
-            payload={"chunk_count": 2, "chunk_index": 0},
+        await sub.on_event(
+            Event(
+                event_type=EventType.INGEST_COMPILE_BATCH_CHUNK_FAILED,
+                payload={"chunk_count": 2, "chunk_index": 0},
+            )
         )
-    )
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_progress is not None
-        assert row.bootstrap_progress["chunks_done"] == 1
-        assert row.bootstrap_progress["chunks_failed"] == 1
-        assert row.bootstrap_progress["chunks_total"] == 2
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_progress is not None
+            assert row.bootstrap_progress["chunks_done"] == 1
+            assert row.bootstrap_progress["chunks_failed"] == 1
+            assert row.bootstrap_progress["chunks_total"] == 2
 
 
 async def test_unrelated_event_is_silently_ignored(session_factory) -> None:
@@ -179,15 +185,16 @@ async def test_unrelated_event_is_silently_ignored(session_factory) -> None:
         session_factory, workspace_id=workspace_id, product_id=product_id
     )
 
-    sub = _BootstrapProgressSubscriber(session_factory=session_factory, product_id=product_id)
+    with workspace_scope(workspace_id):
+        sub = _BootstrapProgressSubscriber(session_factory=session_factory, product_id=product_id)
 
-    await sub.on_event(Event(event_type=EventType.NOTE_UPDATED, payload={"x": 1}))
+        await sub.on_event(Event(event_type=EventType.NOTE_UPDATED, payload={"x": 1}))
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        # Never touched — stays None.
-        assert row.bootstrap_progress is None
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            # Never touched — stays None.
+            assert row.bootstrap_progress is None
 
 
 async def test_write_failure_is_swallowed_not_raised(session_factory) -> None:
@@ -326,26 +333,27 @@ async def test_runtime_attaches_subscriber_and_persists_progress(
 
     monkeypatch.setattr(rt_mod, "build_bootstrap_knowledge", _build)
 
-    await run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=fake_git,
+        )
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == STATUS_COMPLETE
-        # Progress fully populated, both chunks done.
-        prog = row.bootstrap_progress
-        assert prog is not None
-        assert prog["chunks_done"] == 2
-        assert prog["chunks_total"] == 2
-        assert prog["chunks_failed"] == 0
-        assert prog["notes_created"] == 6
-        assert prog["notes_updated"] == 1
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == STATUS_COMPLETE
+            # Progress fully populated, both chunks done.
+            prog = row.bootstrap_progress
+            assert prog is not None
+            assert prog["chunks_done"] == 2
+            assert prog["chunks_total"] == 2
+            assert prog["chunks_failed"] == 0
+            assert prog["notes_created"] == 6
+            assert prog["notes_updated"] == 1
 
 
 # ── MCP surface ──────────────────────────────────────────────────────────────

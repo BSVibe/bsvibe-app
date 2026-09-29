@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import backend.connectors.db  # noqa: F401 — FK target for resource_bindings
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from tests._support import db_engine
 
@@ -28,34 +29,36 @@ async def session_factory():
 async def test_legal_basis_defaults_to_contract(session_factory) -> None:
     """A new row with no legal_basis provided defaults to ``'contract'``."""
     workspace_id = uuid.uuid4()
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
-        await s.commit()
-    async with session_factory() as s:
-        row = (
-            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
-        ).scalar_one()
-        assert row.legal_basis == "contract"
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
+            await s.commit()
+        async with session_factory() as s:
+            row = (
+                await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+            ).scalar_one()
+            assert row.legal_basis == "contract"
 
 
 async def test_legal_basis_persists_consent(session_factory) -> None:
     """Explicitly setting ``'consent'`` round-trips."""
     workspace_id = uuid.uuid4()
-    async with session_factory() as s:
-        s.add(
-            WorkspaceRow(
-                id=workspace_id,
-                name="t",
-                safe_mode=True,
-                legal_basis="consent",
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(
+                WorkspaceRow(
+                    id=workspace_id,
+                    name="t",
+                    safe_mode=True,
+                    legal_basis="consent",
+                )
             )
-        )
-        await s.commit()
-    async with session_factory() as s:
-        row = (
-            await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
-        ).scalar_one()
-        assert row.legal_basis == "consent"
+            await s.commit()
+        async with session_factory() as s:
+            row = (
+                await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == workspace_id))
+            ).scalar_one()
+            assert row.legal_basis == "consent"
 
 
 @pytest.mark.parametrize("invalid", ["legitimate_interest", "", "CONTRACT"])
