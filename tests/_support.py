@@ -121,13 +121,28 @@ async def _clean_all_rows(engine: AsyncEngine) -> None:
     a still-referenced parent because another suite left child rows) is marked
     aborted and would poison every subsequent statement in the same transaction.
     Isolating each statement keeps one skip from cascading.
+
+    On Postgres the DELETEs run as the table OWNER (:func:`migration_pg_url`),
+    not through ``engine``: that is the runtime role, and cleanup is test
+    infrastructure, not the app. Under the fail-closed RLS policy (#959 ③) a
+    runtime-role DELETE with no workspace GUC matches nothing — no error — and
+    rows pile up between tests.
     """
-    for table in reversed(Base.metadata.sorted_tables):
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(text(f'DELETE FROM "{table.name}"'))
-        except Exception:  # noqa: BLE001 - missing table / residual FK on shared PG
-            pass
+    owner = (
+        create_async_engine(migration_pg_url(), future=True)
+        if engine.dialect.name == "postgresql"
+        else engine
+    )
+    try:
+        for table in reversed(Base.metadata.sorted_tables):
+            try:
+                async with owner.begin() as conn:
+                    await conn.execute(text(f'DELETE FROM "{table.name}"'))
+            except Exception:  # noqa: BLE001 - missing table / residual FK on shared PG
+                pass
+    finally:
+        if owner is not engine:
+            await owner.dispose()
 
 
 @asynccontextmanager
