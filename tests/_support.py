@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import AsyncIterator, Callable
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -308,3 +309,30 @@ __all__ = [
     "pg_url",
     "use_real_pg",
 ]
+
+
+def publishing_workspace(
+    workspace_id: uuid.UUID,
+) -> Callable[..., Awaitable[uuid.UUID]]:
+    """A ``get_workspace_id`` override that publishes like the real dependency.
+
+    :func:`backend.api.deps.get_workspace_id` sets the workspace contextvar
+    (layer 2) AND the Postgres GUC on the request session (layer 3). An override
+    of ``lambda: ws`` does neither, so the route under test runs with an EMPTY
+    GUC — invisible while RLS is fail-open, zero rows once it is fail-closed
+    (#959 ③). Use this instead::
+
+        app.dependency_overrides[get_workspace_id] = publishing_workspace(ws)
+    """
+    from fastapi import Depends  # noqa: PLC0415
+
+    from backend.api.deps import get_db_session  # noqa: PLC0415
+    from backend.data.rls import set_workspace_guc  # noqa: PLC0415
+    from backend.data.scoping import set_current_workspace_id  # noqa: PLC0415
+
+    async def _publish(session: AsyncSession = Depends(get_db_session)) -> uuid.UUID:  # noqa: B008
+        set_current_workspace_id(workspace_id)
+        await set_workspace_guc(await session.connection(), workspace_id)
+        return workspace_id
+
+    return _publish
