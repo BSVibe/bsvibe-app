@@ -67,6 +67,7 @@ from backend.common.settle_kinds import (
     founder_authored_text,
 )
 from backend.config import get_settings
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
@@ -86,7 +87,7 @@ from backend.workflow.infrastructure.db import (
 )
 from plugin.audit.models import AuditOutboxRecord
 
-from ..._support import db_engine, fake_current_user
+from ..._support import db_engine, fake_current_user, publishing_workspace
 
 _ROOT = Path(__file__).resolve().parents[3]
 _PWA_CHECKPOINTS_TS = _ROOT / "apps" / "pwa" / "lib" / "api" / "checkpoints.ts"
@@ -159,33 +160,35 @@ async def _seed_merge_conflict_review(sf, workspace_id: uuid.UUID) -> tuple[uuid
     run_id = uuid.uuid4()
     decision_id = uuid.uuid4()
     async with sf() as s:
-        s.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=workspace_id,
-                status=RunStatus.RUNNING,
-                payload={"intent_text": "리포트에 기간 표시 추가"},
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+        async with workspace_session_scope(s, workspace_id):
+            s.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    status=RunStatus.RUNNING,
+                    payload={"intent_text": "리포트에 기간 표시 추가"},
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.flush()
-        s.add(
-            Decision(
-                id=decision_id,
-                run_id=run_id,
-                workspace_id=workspace_id,
-                decision="merge_conflict_review",
-                payload={"reason": "ambiguous_conflict"},
-                status=DecisionStatus.PENDING,
+            await s.flush()
+            s.add(
+                Decision(
+                    id=decision_id,
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    decision="merge_conflict_review",
+                    payload={"reason": "ambiguous_conflict"},
+                    status=DecisionStatus.PENDING,
+                )
             )
-        )
+            await s.flush()
         await s.commit()
     return run_id, decision_id
 
 
 async def _run_payload(sf, run_id: uuid.UUID) -> dict:
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         return dict(run.payload or {})
@@ -249,9 +252,6 @@ async def client(sf, workspace_id: uuid.UUID, founder_id: uuid.UUID):
     """진짜 REST 표면. seam 이 층을 건너뛰지 않도록 서비스를 직접 부르지 않는다."""
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -260,7 +260,7 @@ async def client(sf, workspace_id: uuid.UUID, founder_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -324,7 +324,7 @@ async def test_a_guided_retry_still_records_the_action_key_as_the_resolution(
     )
     assert outcome["resolution"] == ACTION_RETRY
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         decision = await s.get(Decision, decision_id)
         assert decision is not None
         assert decision.resolution == ACTION_RETRY
@@ -347,7 +347,7 @@ async def test_a_guided_retry_reopens_the_run(
         client, decision_id, {"action_key": ACTION_RETRY, "reason": GUIDANCE}
     )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.OPEN

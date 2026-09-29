@@ -18,6 +18,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.application.run_cleanup import (
     cancel_product_runs,
@@ -72,8 +73,9 @@ async def _seed_run(
         created_at=datetime.now(tz=UTC),
         updated_at=datetime.now(tz=UTC),
     )
-    session.add(run)
-    await session.flush()
+    async with workspace_session_scope(session, workspace_id):
+        session.add(run)
+        await session.flush()
     return run.id
 
 
@@ -93,8 +95,9 @@ async def _seed_deliverable(
         compensation_handles=handles,
         created_at=datetime.now(tz=UTC),
     )
-    session.add(d)
-    await session.flush()
+    async with workspace_session_scope(session, workspace_id):
+        session.add(d)
+        await session.flush()
     return d.id
 
 
@@ -114,8 +117,9 @@ async def _seed_decision(
         payload={},
         created_at=datetime.now(tz=UTC),
     )
-    session.add(d)
-    await session.flush()
+    async with workspace_session_scope(session, workspace_id):
+        session.add(d)
+        await session.flush()
     return d.id
 
 
@@ -135,8 +139,9 @@ async def _seed_safe_mode_item(
         expires_at=datetime.now(tz=UTC),
         created_at=datetime.now(tz=UTC),
     )
-    session.add(item)
-    await session.flush()
+    async with workspace_session_scope(session, workspace_id):
+        session.add(item)
+        await session.flush()
     return item.id
 
 
@@ -150,11 +155,12 @@ async def test_cancel_run_denies_pending_safe_mode_items(sf, workspace_id) -> No
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=RunStatus.RUNNING)
         item_id = await _seed_safe_mode_item(s, workspace_id, run_id)
-        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
         await s.commit()
     assert outcome.cancelled is True
     assert str(item_id) in outcome.safe_mode_items_resolved
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         item = await s.get(SafeModeQueueItemRow, item_id)
         assert item is not None and item.status is SafeModeStatus.DENIED
         assert item.decided_at is not None
@@ -164,11 +170,12 @@ async def test_cancel_run_not_cancellable_leaves_item_pending(sf, workspace_id) 
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
         item_id = await _seed_safe_mode_item(s, workspace_id, run_id)
-        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
         await s.commit()
     assert outcome.cancelled is False
     assert outcome.safe_mode_items_resolved == []
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.get(SafeModeQueueItemRow, item_id)).status is SafeModeStatus.PENDING
 
 
@@ -176,10 +183,11 @@ async def test_discard_denies_pending_safe_mode_items(sf, workspace_id) -> None:
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
         item_id = await _seed_safe_mode_item(s, workspace_id, run_id)
-        outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
         await s.commit()
     assert str(item_id) in outcome.safe_mode_items_resolved
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.get(SafeModeQueueItemRow, item_id)).status is SafeModeStatus.DENIED
 
 
@@ -190,11 +198,12 @@ async def test_cancel_product_runs_denies_pending_safe_mode_items(sf, workspace_
             s, workspace_id, status=RunStatus.REVIEW_READY, product_id=product_id
         )
         item_id = await _seed_safe_mode_item(s, workspace_id, run_id)
-        await cancel_product_runs(
-            s, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
-        )
+        async with workspace_session_scope(s, workspace_id):
+            await cancel_product_runs(
+                s, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
+            )
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.get(SafeModeQueueItemRow, item_id)).status is SafeModeStatus.DENIED
 
 
@@ -202,7 +211,8 @@ async def test_cancel_product_runs_denies_pending_safe_mode_items(sf, workspace_
 async def test_cancel_run_cancels_inflight(sf, workspace_id, status) -> None:
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=status)
-        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
         await s.commit()
     assert outcome.found is True
     assert outcome.cancelled is True
@@ -212,7 +222,8 @@ async def test_cancel_run_cancels_inflight(sf, workspace_id, status) -> None:
 async def test_cancel_run_review_ready_not_cancellable(sf, workspace_id) -> None:
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
-        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
     assert outcome.found is True
     assert outcome.cancelled is False
     assert outcome.status == "review_ready"
@@ -221,7 +232,8 @@ async def test_cancel_run_review_ready_not_cancellable(sf, workspace_id) -> None
 async def test_cancel_run_cross_workspace_not_found(sf, workspace_id) -> None:
     async with sf() as s:
         run_id = await _seed_run(s, uuid.uuid4(), status=RunStatus.RUNNING)
-        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
     assert outcome.found is False
 
 
@@ -233,14 +245,15 @@ async def test_cancel_run_resolves_pending_decisions(sf, workspace_id) -> None:
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=RunStatus.RUNNING)
         dec_id = await _seed_decision(s, workspace_id, run_id)
-        outcome = await cancel_run(
-            s, run_id=run_id, workspace_id=workspace_id, reason="mcp", actor_id=actor
-        )
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await cancel_run(
+                s, run_id=run_id, workspace_id=workspace_id, reason="mcp", actor_id=actor
+            )
         await s.commit()
 
     assert outcome.cancelled is True
     assert str(dec_id) in outcome.decisions_resolved
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         dec = await s.get(Decision, dec_id)
         assert dec.status is DecisionStatus.RESOLVED
         assert dec.resolved_at is not None
@@ -253,11 +266,12 @@ async def test_cancel_run_not_cancellable_leaves_decision_pending(sf, workspace_
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
         dec_id = await _seed_decision(s, workspace_id, run_id)
-        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
         await s.commit()
     assert outcome.cancelled is False
     assert outcome.decisions_resolved == []
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.get(Decision, dec_id)).status is DecisionStatus.PENDING
 
 
@@ -268,14 +282,15 @@ async def test_discard_cancels_review_ready_and_tombstones_handleless(sf, worksp
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
         d_id = await _seed_deliverable(s, workspace_id, run_id, handles=None)
-        outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
         await s.commit()
 
     assert outcome is not None
     assert outcome.cancelled is True
     assert outcome.status == "cancelled"
     assert str(d_id) in outcome.deliverables_retracted
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         deliv = await s.get(Deliverable, d_id)
         assert run.status is RunStatus.CANCELLED
@@ -294,13 +309,14 @@ async def test_discard_surfaces_deliverables_with_compensation_handles(sf, works
             run_id,
             handles=[{"plugin": "github", "artifact_type": "pr", "handle": {"n": 1}}],
         )
-        outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
         await s.commit()
 
     assert outcome.cancelled is True
     assert str(d_id) in outcome.deliverables_need_compensation
     assert str(d_id) not in outcome.deliverables_retracted
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         deliv = await s.get(Deliverable, d_id)
         assert deliv.retracted_at is None  # not faked
 
@@ -312,13 +328,14 @@ async def test_discard_resolves_pending_decisions(sf, workspace_id) -> None:
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
         dec_id = await _seed_decision(s, workspace_id, run_id)
-        outcome = await discard_run(
-            s, run_id=run_id, workspace_id=workspace_id, reason="mcp", actor_id=actor
-        )
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await discard_run(
+                s, run_id=run_id, workspace_id=workspace_id, reason="mcp", actor_id=actor
+            )
         await s.commit()
 
     assert str(dec_id) in outcome.decisions_resolved
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         dec = await s.get(Decision, dec_id)
         assert dec.status is DecisionStatus.RESOLVED
         assert dec.resolved_at is not None
@@ -329,7 +346,8 @@ async def test_discard_already_resolved_decision_untouched(sf, workspace_id) -> 
     async with sf() as s:
         run_id = await _seed_run(s, workspace_id, status=RunStatus.REVIEW_READY)
         dec_id = await _seed_decision(s, workspace_id, run_id, status=DecisionStatus.RESOLVED)
-        outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await discard_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
         await s.commit()
     assert str(dec_id) not in outcome.decisions_resolved
 
@@ -341,17 +359,21 @@ async def test_cancel_product_runs_resolves_pending_decisions(sf, workspace_id) 
             s, workspace_id, status=RunStatus.REVIEW_READY, product_id=product_id
         )
         dec_id = await _seed_decision(s, workspace_id, run_id)
-        await cancel_product_runs(
-            s, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
-        )
+        async with workspace_session_scope(s, workspace_id):
+            await cancel_product_runs(
+                s, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
+            )
         await s.commit()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.get(Decision, dec_id)).status is DecisionStatus.RESOLVED
 
 
 async def test_discard_unknown_returns_none(sf, workspace_id) -> None:
     async with sf() as s:
-        outcome = await discard_run(s, run_id=uuid.uuid4(), workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            outcome = await discard_run(
+                s, run_id=uuid.uuid4(), workspace_id=workspace_id, reason="mcp"
+            )
     assert outcome is None
 
 
@@ -429,9 +451,10 @@ async def test_cancel_aborts_mid_merge_worktree(sf, workspace_id, tmp_path, monk
             created_at=datetime.now(tz=UTC),
             updated_at=datetime.now(tz=UTC),
         )
-        s.add(run)
-        await s.flush()
-        outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
+        async with workspace_session_scope(s, workspace_id):
+            s.add(run)
+            await s.flush()
+            outcome = await cancel_run(s, run_id=run_id, workspace_id=workspace_id, reason="mcp")
         await s.commit()
 
     assert outcome.cancelled is True
@@ -456,13 +479,14 @@ async def test_cancel_product_runs_cancels_non_terminal_only(sf, workspace_id) -
         )
         # A run for a DIFFERENT product must be untouched.
         other_id = await _seed_run(s, workspace_id, status=RunStatus.OPEN, product_id=uuid.uuid4())
-        n = await cancel_product_runs(
-            s, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
-        )
+        async with workspace_session_scope(s, workspace_id):
+            n = await cancel_product_runs(
+                s, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
+            )
         await s.commit()
 
     assert n == 2  # open + review_ready
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await s.get(ExecutionRun, open_id)).status is RunStatus.CANCELLED
         assert (await s.get(ExecutionRun, rr_id)).status is RunStatus.CANCELLED
         assert (await s.get(ExecutionRun, shipped_id)).status is RunStatus.SHIPPED
@@ -502,7 +526,7 @@ async def test_reap_terminal_run_workspaces_removes_only_terminal(sf, workspace_
     async def fake_remover(pid, rid):
         removed.append((pid, rid))
 
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         reaped = await reap_terminal_run_workspaces(s, remover=fake_remover, runs_root=runs_root)
 
     assert set(reaped) == {shipped, failed, cancelled}
@@ -518,7 +542,7 @@ async def test_reap_terminal_run_workspaces_removes_only_terminal(sf, workspace_
 async def test_reap_terminal_run_workspaces_no_runs_dir_is_noop(sf, tmp_path):
     """A missing runs root (fresh box / not-yet-created) is a no-op, not an
     error."""
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         reaped = await reap_terminal_run_workspaces(
             s, remover=_unreachable_remover, runs_root=tmp_path / "does-not-exist"
         )
@@ -542,7 +566,7 @@ async def test_reap_terminal_run_workspaces_continues_on_remover_error(sf, works
         if rid == bad:
             raise OSError("device busy")
 
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         reaped = await reap_terminal_run_workspaces(s, remover=flaky_remover, runs_root=runs_root)
 
     assert reaped == [good]  # the failed one is not reported reaped, no raise
@@ -579,7 +603,7 @@ async def test_reap_removes_orphan_dirs_older_than_grace(sf, workspace_id, tmp_p
     async def fake_remover(pid, rid):
         removed.append(rid)
 
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         reaped = await reap_terminal_run_workspaces(
             s, remover=fake_remover, runs_root=runs_root, orphan_grace_s=24 * 3600
         )
@@ -605,7 +629,7 @@ async def test_reap_orphan_passes_none_product_id(sf, tmp_path):
     async def fake_remover(pid, rid):
         seen.append((pid, rid))
 
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         await reap_terminal_run_workspaces(
             s, remover=fake_remover, runs_root=runs_root, orphan_grace_s=24 * 3600
         )
@@ -629,27 +653,29 @@ async def test_reap_orphan_product_workspaces(sf, tmp_path):
     live = uuid.uuid4()
     ws_id = uuid.uuid4()
     async with sf() as s:
-        # PG enforces the products.workspace_id FK — seed the parent first.
-        s.add(
-            WorkspaceRow(
-                id=ws_id,
-                name="test-ws",
-                safe_mode=False,
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+        async with workspace_session_scope(s, ws_id):
+            # PG enforces the products.workspace_id FK — seed the parent first.
+            s.add(
+                WorkspaceRow(
+                    id=ws_id,
+                    name="test-ws",
+                    safe_mode=False,
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=live,
-                workspace_id=ws_id,
-                name="Live",
-                slug="live",
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=live,
+                    workspace_id=ws_id,
+                    name="Live",
+                    slug="live",
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
+            await s.flush()
         await s.commit()
 
     old_orphan = uuid.uuid4()
@@ -664,7 +690,7 @@ async def test_reap_orphan_product_workspaces(sf, tmp_path):
     async def fake_remover(pid):
         removed.append(pid)
 
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         reaped = await reap_orphan_product_workspaces(
             s, remover=fake_remover, products_root=products_root, grace_s=24 * 3600
         )
@@ -676,7 +702,7 @@ async def test_reap_orphan_product_workspaces(sf, tmp_path):
 
 
 async def test_reap_orphan_product_workspaces_no_root_is_noop(sf, tmp_path):
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         assert (await reap_orphan_product_workspaces(s, products_root=tmp_path / "nope")) == []
 
 
@@ -687,27 +713,29 @@ async def test_reap_orphan_product_workspaces_no_root_is_noop(sf, tmp_path):
 
 async def _seed_product(sf, *, product_id, ws_id, updated_at):
     async with sf() as s:
-        if not await s.get(WorkspaceRow, ws_id):
+        async with workspace_session_scope(s, ws_id):
+            if not await s.get(WorkspaceRow, ws_id):
+                s.add(
+                    WorkspaceRow(
+                        id=ws_id,
+                        name="ws",
+                        safe_mode=False,
+                        created_at=datetime.now(tz=UTC),
+                        updated_at=datetime.now(tz=UTC),
+                    )
+                )
+                await s.flush()
             s.add(
-                WorkspaceRow(
-                    id=ws_id,
-                    name="ws",
-                    safe_mode=False,
-                    created_at=datetime.now(tz=UTC),
-                    updated_at=datetime.now(tz=UTC),
+                ProductRow(
+                    id=product_id,
+                    workspace_id=ws_id,
+                    name=str(product_id)[:8],
+                    slug=str(product_id)[:8],
+                    created_at=updated_at,
+                    updated_at=updated_at,
                 )
             )
             await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=ws_id,
-                name=str(product_id)[:8],
-                slug=str(product_id)[:8],
-                created_at=updated_at,
-                updated_at=updated_at,
-            )
-        )
         await s.commit()
 
 
@@ -734,7 +762,7 @@ async def test_reap_idle_reclaims_only_after_a_clean_publish(sf, tmp_path):
     async def remover(pid):
         removed.append(pid)
 
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         reaped = await reap_idle_product_workspaces(
             s,
             publisher=publisher,
@@ -764,7 +792,7 @@ async def test_reap_idle_keeps_products_with_a_live_run(sf, workspace_id, tmp_pa
     async def publisher(pid):  # pragma: no cover — must not be reached
         raise AssertionError("a busy product must not even be published")
 
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         reaped = await reap_idle_product_workspaces(
             s,
             publisher=publisher,
@@ -787,7 +815,7 @@ async def test_reap_idle_keeps_recently_active_products(sf, workspace_id, tmp_pa
     async def publisher(pid):  # pragma: no cover
         raise AssertionError("a recently-active product must not be reclaimed")
 
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         reaped = await reap_idle_product_workspaces(
             s,
             publisher=publisher,
@@ -808,7 +836,7 @@ async def test_reap_idle_ignores_dirs_without_a_product_row(sf, tmp_path):
     async def publisher(pid):  # pragma: no cover
         raise AssertionError("an orphan dir is not this reaper's business")
 
-    async with sf() as s:
+    async with sf() as s, cross_tenant_session_read(s):
         reaped = await reap_idle_product_workspaces(
             s,
             publisher=publisher,

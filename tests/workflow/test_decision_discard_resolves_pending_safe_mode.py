@@ -43,6 +43,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.workflow.application._checkpoint_shared import ACTION_DISCARD
 from backend.workflow.application.checkpoint_resolution import resolve_checkpoint
 from backend.workflow.infrastructure.db import (
@@ -79,7 +80,7 @@ async def _seed(sf, workspace_id: uuid.UUID, *, items: int = 1):
     """REVIEW_READY 런 + pending Decision + ``items`` 개의 pending Safe Mode 항목."""
     run_id, decision_id = uuid.uuid4(), uuid.uuid4()
     item_ids: list[uuid.UUID] = []
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -138,7 +139,7 @@ async def test_decision_discard_resolves_the_runs_pending_safe_mode_item(
     """prod `0093fce6` 이 겪은 그 고아. 형님이 손으로 지워야 했던 것."""
     run_id, decision_id, _ = await _seed(sf, workspace_id)
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -164,7 +165,7 @@ async def test_decision_discard_resolves_every_pending_item_of_the_run(
     """멀티 아티팩트 런은 항목을 여러 개 남긴다 — 하나만 치우면 나머지가 고아다."""
     run_id, decision_id, _ = await _seed(sf, workspace_id, items=3)
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -190,7 +191,7 @@ async def test_the_automatic_cleanup_teaches_nothing(sf, workspace_id, founder_i
     """
     run_id, decision_id, _ = await _seed(sf, workspace_id, items=3)
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -202,7 +203,7 @@ async def test_the_automatic_cleanup_teaches_nothing(sf, workspace_id, founder_i
         )
         await s.commit()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         rows = (
             (
                 await s.execute(
@@ -222,7 +223,7 @@ async def test_a_run_without_pending_items_discards_cleanly(sf, workspace_id, fo
     """정리할 것이 없어도 폐기는 성공해야 한다 — prod 3건 중 2건이 이 경우였다."""
     run_id, decision_id, _ = await _seed(sf, workspace_id, items=0)
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -236,7 +237,7 @@ async def test_a_run_without_pending_items_discards_cleanly(sf, workspace_id, fo
 
     assert outcome is not None
     assert await _items(sf, run_id) == []
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.CANCELLED

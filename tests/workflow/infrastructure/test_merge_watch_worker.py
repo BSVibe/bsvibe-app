@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
 from backend.data import Base
+from backend.data.rls import workspace_session_scope
 from backend.storage.github_repo_lock import github_repo_lock
 from backend.workflow.application.delivery.connector_dispatch._github import GithubDeliveryDeps
 from backend.workflow.application.delivery.connector_dispatch._merge_watch import (
@@ -900,7 +901,7 @@ async def test_cancelled_run_closes_orphaned_pr_and_abandons() -> None:
         row.conflict_dispatched = True
         await _seed(sf, row)
         # The originating run was cancelled by the founder's discard.
-        async with sf() as s:
+        async with sf() as s, workspace_session_scope(s, row.workspace_id):
             s.add(
                 ExecutionRun(
                     id=row.run_id,

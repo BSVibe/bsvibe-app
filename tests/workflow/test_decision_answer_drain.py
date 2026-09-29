@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.connectors.decision_answer_queue import QUEUED_ANSWER_KEY, queue_answer
+from backend.data.rls import workspace_session_scope
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.workflow.application.decision_answer_drain import drain_queued_answers
@@ -31,26 +32,28 @@ pytestmark = pytest.mark.asyncio
 async def _seed(session, *, kind: str, payload: dict) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     ws = uuid.uuid4()
     owner = UserRow(id=uuid.uuid4(), supabase_user_id=f"sub-{uuid.uuid4().hex}")
-    session.add(WorkspaceRow(id=ws, name="WS", language="en"))
-    session.add(owner)
-    # Flush the FK TARGETS before the row that points at them. SQLAlchemy orders
-    # inserts per-mapper, not by cross-model FK dependency, so on PostgreSQL the
-    # membership can reach the wire before its user — SQLite's lax FK enforcement
-    # hides this entirely, which is why it only ever fails in CI.
-    await session.flush()
-    session.add(MembershipRow(user_id=owner.id, workspace_id=ws, role="owner"))
-    run = ExecutionRun(id=uuid.uuid4(), workspace_id=ws, status="running")
-    session.add(run)
-    await session.flush()
-    decision = Decision(
-        id=uuid.uuid4(),
-        run_id=run.id,
-        workspace_id=ws,
-        decision=kind,
-        payload=payload,
-        status=DecisionStatus.PENDING,
-    )
-    session.add(decision)
+    async with workspace_session_scope(session, ws):
+        session.add(WorkspaceRow(id=ws, name="WS", language="en"))
+        session.add(owner)
+        # Flush the FK TARGETS before the row that points at them. SQLAlchemy orders
+        # inserts per-mapper, not by cross-model FK dependency, so on PostgreSQL the
+        # membership can reach the wire before its user — SQLite's lax FK enforcement
+        # hides this entirely, which is why it only ever fails in CI.
+        await session.flush()
+        session.add(MembershipRow(user_id=owner.id, workspace_id=ws, role="owner"))
+        run = ExecutionRun(id=uuid.uuid4(), workspace_id=ws, status="running")
+        session.add(run)
+        await session.flush()
+        decision = Decision(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=ws,
+            decision=kind,
+            payload=payload,
+            status=DecisionStatus.PENDING,
+        )
+        session.add(decision)
+        await session.flush()
     await session.commit()
     return ws, decision.id, owner.id
 
@@ -60,19 +63,22 @@ async def test_a_queued_action_is_applied_and_cleared() -> None:
     async with db_engine() as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         async with sf() as session:
-            _ws, did, owner = await _seed(session, kind="human_review_required", payload={})
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            assert queue_answer(
-                decision, action_key="discard", answer="", actor_id=owner, connector="telegram"
-            )
+            ws, did, owner = await _seed(session, kind="human_review_required", payload={})
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                assert queue_answer(
+                    decision, action_key="discard", answer="", actor_id=owner, connector="telegram"
+                )
+                await session.flush()
             await session.commit()
 
             applied = await drain_queued_answers(session)
             assert applied == 1
 
             session.expire_all()
-            decision = await session.get(Decision, did)
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
             assert decision is not None
             assert decision.status == DecisionStatus.RESOLVED
             # Cleared — this is what makes a retried drain idempotent.
@@ -85,19 +91,26 @@ async def test_a_queued_option_resolves_with_its_text() -> None:
     async with db_engine() as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         async with sf() as session:
-            _ws, did, owner = await _seed(
+            ws, did, owner = await _seed(
                 session, kind="ask_user_question", payload={"options": options}
             )
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            queue_answer(
-                decision, action_key=None, answer=options[1], actor_id=owner, connector="telegram"
-            )
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                queue_answer(
+                    decision,
+                    action_key=None,
+                    answer=options[1],
+                    actor_id=owner,
+                    connector="telegram",
+                )
+                await session.flush()
             await session.commit()
 
             assert await drain_queued_answers(session) == 1
             session.expire_all()
-            decision = await session.get(Decision, did)
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
             assert decision is not None
             assert decision.resolution == options[1]
 
@@ -107,12 +120,14 @@ async def test_draining_twice_applies_once() -> None:
     async with db_engine() as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         async with sf() as session:
-            _ws, did, owner = await _seed(session, kind="human_review_required", payload={})
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            queue_answer(
-                decision, action_key="discard", answer="", actor_id=owner, connector="telegram"
-            )
+            ws, did, owner = await _seed(session, kind="human_review_required", payload={})
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                queue_answer(
+                    decision, action_key="discard", answer="", actor_id=owner, connector="telegram"
+                )
+                await session.flush()
             await session.commit()
 
             assert await drain_queued_answers(session) == 1
@@ -128,11 +143,12 @@ async def test_a_decision_with_no_queued_answer_is_untouched() -> None:
     async with db_engine() as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         async with sf() as session:
-            _ws, did, _owner = await _seed(session, kind="human_review_required", payload={})
+            ws, did, _owner = await _seed(session, kind="human_review_required", payload={})
             assert await drain_queued_answers(session) == 0
 
             session.expire_all()
-            decision = await session.get(Decision, did)
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
             assert decision is not None
             assert decision.status == DecisionStatus.PENDING
 
@@ -146,7 +162,7 @@ async def test_an_unreadable_queued_answer_is_dropped_not_retried_forever() -> N
     async with db_engine() as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         async with sf() as session:
-            _ws, did, _owner = await _seed(
+            ws, did, _owner = await _seed(
                 session,
                 kind="human_review_required",
                 payload={QUEUED_ANSWER_KEY: {"action_key": "discard"}},  # no actor_id
@@ -154,7 +170,8 @@ async def test_an_unreadable_queued_answer_is_dropped_not_retried_forever() -> N
             assert await drain_queued_answers(session) == 0
 
             session.expire_all()
-            decision = await session.get(Decision, did)
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
             assert decision is not None
             assert decision.status == DecisionStatus.PENDING
             assert QUEUED_ANSWER_KEY not in (decision.payload or {})
@@ -172,18 +189,20 @@ async def test_the_agent_worker_tick_drains() -> None:
     async with db_engine() as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         async with sf() as session:
-            _ws, did, owner = await _seed(session, kind="human_review_required", payload={})
-            decision = await session.get(Decision, did)
-            assert decision is not None
-            queue_answer(
-                decision, action_key="discard", answer="", actor_id=owner, connector="telegram"
-            )
+            ws, did, owner = await _seed(session, kind="human_review_required", payload={})
+            async with workspace_session_scope(session, ws):
+                decision = await session.get(Decision, did)
+                assert decision is not None
+                queue_answer(
+                    decision, action_key="discard", answer="", actor_id=owner, connector="telegram"
+                )
+                await session.flush()
             await session.commit()
 
         worker = AgentWorker(session_factory=sf)
         await worker._tick()
 
-        async with sf() as session:
+        async with sf() as session, workspace_session_scope(session, ws):
             decision = await session.get(Decision, did)
             assert decision is not None
             assert decision.status == DecisionStatus.RESOLVED

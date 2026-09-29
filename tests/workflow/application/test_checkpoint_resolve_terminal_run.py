@@ -19,6 +19,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.workflow.application._checkpoint_shared import ACTION_ACKNOWLEDGE
 from backend.workflow.application.checkpoint_resolution import resolve_checkpoint
 from backend.workflow.infrastructure.db import (
@@ -82,11 +83,11 @@ async def _seed_stalled(
 async def test_acknowledge_resolves_without_reviving_the_shipped_run(
     sf, workspace_id: uuid.UUID, founder_id: uuid.UUID
 ) -> None:
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run_id, decision_id = await _seed_stalled(s, workspace_id)
         await s.commit()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -100,7 +101,7 @@ async def test_acknowledge_resolves_without_reviving_the_shipped_run(
     assert outcome.status is DecisionStatus.RESOLVED
     # 접혔을 뿐, 런은 그대로 shipped 다 — 되살아나지 않는다.
     assert outcome.run_status is RunStatus.SHIPPED
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         decision = await s.get(Decision, decision_id)
     assert run is not None
@@ -116,11 +117,11 @@ async def test_free_text_reply_does_not_reopen_a_terminal_run(
 ) -> None:
     """PWA 는 one-click 버튼 옆에 자유 입력창도 항상 띄운다(``need-card__free-toggle``).
     그 경로로도 끝난 런이 다시 열리면 안 된다 — 버튼만 막는 것은 절반이다."""
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run_id, decision_id = await _seed_stalled(s, workspace_id, run_status=terminal)
         await s.commit()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -132,7 +133,7 @@ async def test_free_text_reply_does_not_reopen_a_terminal_run(
 
     assert outcome.status is DecisionStatus.RESOLVED
     assert outcome.run_status is terminal
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
     assert run is not None
     assert run.status is terminal
@@ -143,11 +144,11 @@ async def test_free_text_reply_still_resumes_a_paused_running_run(
 ) -> None:
     """가드는 terminal 런에만 붙는다 — Decision 에 파킹된 RUNNING 런의 재개
     (이 서비스의 본래 계약)는 그대로다."""
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run_id, decision_id = await _seed_stalled(s, workspace_id, run_status=RunStatus.RUNNING)
         await s.commit()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -158,7 +159,7 @@ async def test_free_text_reply_still_resumes_a_paused_running_run(
         await s.commit()
 
     assert outcome.run_status is RunStatus.OPEN
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
     assert run is not None
     assert run.status is RunStatus.OPEN
