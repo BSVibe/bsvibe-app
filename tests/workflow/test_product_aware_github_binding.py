@@ -37,9 +37,11 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.connector_dispatch import (
+    GithubBinding,
     build_github_workspace_provisioner,
     resolve_github_binding,
 )
@@ -66,9 +68,10 @@ def cipher() -> CredentialCipher:
 
 
 async def _seed_workspace(session: AsyncSession, workspace_id: uuid.UUID) -> None:
-    if await session.get(WorkspaceRow, workspace_id) is None:
-        session.add(WorkspaceRow(id=workspace_id, name="ws-681", safe_mode=False))
-        await session.flush()
+    async with workspace_session_scope(session, workspace_id):
+        if await session.get(WorkspaceRow, workspace_id) is None:
+            session.add(WorkspaceRow(id=workspace_id, name="ws-681", safe_mode=False))
+            await session.flush()
 
 
 async def _seed_product(
@@ -81,16 +84,18 @@ async def _seed_product(
 ) -> uuid.UUID:
     await _seed_workspace(session, workspace_id)
     product_id = uuid.uuid4()
-    session.add(
-        ProductRow(
-            id=product_id,
-            workspace_id=workspace_id,
-            name=slug,
-            slug=slug,
-            repo_url=repo_url,
-            product_metadata=metadata or {},
+    async with workspace_session_scope(session, workspace_id):
+        session.add(
+            ProductRow(
+                id=product_id,
+                workspace_id=workspace_id,
+                name=slug,
+                slug=slug,
+                repo_url=repo_url,
+                product_metadata=metadata or {},
+            )
         )
-    )
+        await session.flush()
     await session.commit()
     return product_id
 
@@ -125,9 +130,27 @@ async def _seed_binding(
     )
     if created_at is not None:
         row.created_at = created_at
-    session.add(row)
+    async with workspace_session_scope(session, workspace_id):
+        session.add(row)
+        await session.flush()
     await session.commit()
     return account_id
+
+
+async def _resolve(
+    session: AsyncSession, *, workspace_id: uuid.UUID, product_id: uuid.UUID | None = None
+) -> GithubBinding | None:
+    """Resolve inside the run's tenant scope, as every real caller does.
+
+    The agent worker, merge-watch and delivery all call the resolver with the
+    run's workspace already published (layer 2 contextvar + layer 3 GUC), so a
+    bare call here would read ``products`` blind — zero rows under fail-closed
+    RLS (#959).
+    """
+    async with workspace_session_scope(session, workspace_id):
+        return await resolve_github_binding(
+            session, workspace_id=workspace_id, product_id=product_id
+        )
 
 
 class TestProductSelectsTheBinding:
@@ -156,7 +179,7 @@ class TestProductSelectsTheBinding:
                 repo_url="https://github.com/blas1n/BStockReport",
                 slug="bstockreport",
             )
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
 
         assert binding is not None
         assert binding.repo == "blas1n/BStockReport"
@@ -182,7 +205,7 @@ class TestProductSelectsTheBinding:
                 repo_url="https://github.com/blas1n/BStockReport",
                 slug="bstockreport",
             )
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
 
         assert binding is not None
         assert binding.repo == "blas1n/BStockReport"
@@ -198,7 +221,7 @@ class TestProductSelectsTheBinding:
             product_id = await _seed_product(
                 s, workspace_id=ws, repo_url="blas1n/BStockReport", slug="bstockreport"
             )
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
 
         assert binding is None
 
@@ -213,7 +236,7 @@ class TestBackwardsCompatibleFallback:
         async with sf() as s:
             await _seed_binding(s, workspace_id=ws, repo="BSVibe/bsvibe-app")
             product_id = await _seed_product(s, workspace_id=ws, repo_url=None, slug="substrate")
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
 
         assert binding is not None and binding.repo == "BSVibe/bsvibe-app"
 
@@ -225,7 +248,7 @@ class TestBackwardsCompatibleFallback:
         async with sf() as s:
             await _seed_binding(s, workspace_id=ws, repo="BSVibe/bsvibe-app")
             product_id = await _seed_product(s, workspace_id=ws, repo_url="   ", slug="blank")
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
 
         assert binding is not None and binding.repo == "BSVibe/bsvibe-app"
 
@@ -237,7 +260,7 @@ class TestBackwardsCompatibleFallback:
         ws = uuid.uuid4()
         async with sf() as s:
             await _seed_binding(s, workspace_id=ws, repo="BSVibe/bsvibe-app")
-            binding = await resolve_github_binding(s, workspace_id=ws)
+            binding = await _resolve(s, workspace_id=ws)
 
         assert binding is not None and binding.repo == "BSVibe/bsvibe-app"
 
@@ -248,7 +271,7 @@ class TestBackwardsCompatibleFallback:
         ws = uuid.uuid4()
         async with sf() as s:
             await _seed_binding(s, workspace_id=ws, repo="BSVibe/bsvibe-app")
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=uuid.uuid4())
+            binding = await _resolve(s, workspace_id=ws, product_id=uuid.uuid4())
 
         assert binding is not None and binding.repo == "BSVibe/bsvibe-app"
 
@@ -274,7 +297,7 @@ class TestRepoFormRobustness:
         async with sf() as s:
             await _seed_binding(s, workspace_id=ws, repo="owner/name")
             product_id = await _seed_product(s, workspace_id=ws, repo_url=repo_url, slug="p")
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
 
         assert binding is not None, f"{repo_url} must match the owner/name binding"
         assert binding.repo == "owner/name"
@@ -288,7 +311,7 @@ class TestRepoFormRobustness:
         async with sf() as s:
             await _seed_binding(s, workspace_id=ws, repo="https://github.com/owner/name.git")
             product_id = await _seed_product(s, workspace_id=ws, repo_url="owner/name", slug="p")
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
 
         assert binding is not None
 
@@ -306,7 +329,7 @@ class TestRepoFormRobustness:
         async with sf() as s:
             await _seed_binding(s, workspace_id=ws, repo="someone-else/name")
             product_id = await _seed_product(s, workspace_id=ws, repo_url="owner/name", slug="p")
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
 
         assert binding is not None
         assert binding.repo == "owner/name"
@@ -345,7 +368,7 @@ class TestDeterministicPick:
             )
             product_id = await _seed_product(s, workspace_id=ws, repo_url="owner/name", slug="p")
             picks = {
-                (await resolve_github_binding(s, workspace_id=ws, product_id=product_id)).account.id  # type: ignore[union-attr]
+                (await _resolve(s, workspace_id=ws, product_id=product_id)).account.id  # type: ignore[union-attr]
                 for _ in range(5)
             }
 
@@ -365,7 +388,7 @@ class TestDeterministicPick:
                 s, workspace_id=ws, repo="b/two", created_at=datetime(2026, 2, 1, tzinfo=UTC)
             )
             picks = {
-                (await resolve_github_binding(s, workspace_id=ws)).account.id  # type: ignore[union-attr]
+                (await _resolve(s, workspace_id=ws)).account.id  # type: ignore[union-attr]
                 for _ in range(5)
             }
 
@@ -433,7 +456,8 @@ class TestProvisionerThreadsTheProduct:
         workspace_dir = tmp_path / str(run.id)
         workspace_dir.mkdir(parents=True)
 
-        async with sf() as s:
+        # The agent worker provisions inside the run's workspace scope.
+        async with sf() as s, workspace_session_scope(s, ws):
             await provision(s, run, workspace_dir)
 
         assert ops.cloned == ["https://github.com/blas1n/BStockReport.git"]
@@ -464,7 +488,8 @@ class TestProvisionerThreadsTheProduct:
         workspace_dir = tmp_path / str(run.id)
         workspace_dir.mkdir(parents=True)
 
-        async with sf() as s:
+        # The agent worker provisions inside the run's workspace scope.
+        async with sf() as s, workspace_session_scope(s, ws):
             await provision(s, run, workspace_dir)
 
         assert len(ops.cloned) == 1
@@ -491,7 +516,8 @@ class TestProvisionerThreadsTheProduct:
         workspace_dir = tmp_path / str(run.id)
         workspace_dir.mkdir(parents=True)
 
-        async with sf() as s:
+        # The agent worker provisions inside the run's workspace scope.
+        async with sf() as s, workspace_session_scope(s, ws):
             await provision(s, run, workspace_dir)
 
         assert ops.cloned == []
@@ -546,7 +572,7 @@ class TestConnectorIsCredentialNotRepo:
                 repo_url="https://github.com/blas1n/BStockReport",
                 slug="bstockreport",
             )
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
         assert binding is not None
         assert binding.account.id == account_id
         # The PRODUCT decides the repo — and its casing survives.
@@ -573,7 +599,7 @@ class TestConnectorIsCredentialNotRepo:
                 repo_url="https://github.com/blas1n/BStockReport",
                 slug="bstockreport",
             )
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
         assert binding is not None
         assert binding.account.id == pinned
         # The explicit pin is what carries a non-default base_branch.
@@ -592,8 +618,8 @@ class TestConnectorIsCredentialNotRepo:
             second = await _seed_product(
                 s, workspace_id=ws, repo_url="https://github.com/BSVibe/bsvibe-app", slug="b"
             )
-            one = await resolve_github_binding(s, workspace_id=ws, product_id=first)
-            two = await resolve_github_binding(s, workspace_id=ws, product_id=second)
+            one = await _resolve(s, workspace_id=ws, product_id=first)
+            two = await _resolve(s, workspace_id=ws, product_id=second)
         assert one is not None and two is not None
         assert one.account.id == account_id == two.account.id
         assert one.repo == "blas1n/BStockReport"
@@ -609,7 +635,7 @@ class TestConnectorIsCredentialNotRepo:
             product_id = await _seed_product(
                 s, workspace_id=ws, repo_url="https://github.com/blas1n/BStockReport"
             )
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
         assert binding is None
 
     async def test_substrate_only_product_keeps_the_workspace_target(
@@ -620,7 +646,7 @@ class TestConnectorIsCredentialNotRepo:
         async with sf() as s:
             await _seed_binding(s, workspace_id=ws, repo="BSVibe/bsvibe-app")
             product_id = await _seed_product(s, workspace_id=ws, repo_url=None)
-            binding = await resolve_github_binding(s, workspace_id=ws, product_id=product_id)
+            binding = await _resolve(s, workspace_id=ws, product_id=product_id)
         assert binding is not None
         assert binding.repo == "BSVibe/bsvibe-app"
 
@@ -631,7 +657,7 @@ class TestConnectorIsCredentialNotRepo:
         ws = uuid.uuid4()
         async with sf() as s:
             await _seed_binding(s, workspace_id=ws, repo=None)
-            binding = await resolve_github_binding(s, workspace_id=ws)
+            binding = await _resolve(s, workspace_id=ws)
         assert binding is None
 
 
@@ -668,9 +694,7 @@ async def test_client_attach_product_resolves_its_github_target(sf) -> None:
         )
         await _seed_binding(session, workspace_id=workspace_id, repo=None)
 
-        got = await resolve_github_binding(
-            session, workspace_id=workspace_id, product_id=product_id
-        )
+        got = await _resolve(session, workspace_id=workspace_id, product_id=product_id)
 
         assert got is not None, (
             "no binding means no PR for every client_attach run — the guard belongs "
@@ -691,9 +715,7 @@ async def test_server_sandbox_product_still_resolves_its_repo(sf) -> None:
         )
         await _seed_binding(session, workspace_id=workspace_id, repo=None)
 
-        got = await resolve_github_binding(
-            session, workspace_id=workspace_id, product_id=product_id
-        )
+        got = await _resolve(session, workspace_id=workspace_id, product_id=product_id)
 
         assert got is not None
         assert got.repo == "blas1n/BStockReport"

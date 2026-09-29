@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 # Register cross-domain tables (workspaces/products) on the shared Base.metadata.
 import backend.identity.workspaces_db  # noqa: F401
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.repositories import SqlAlchemyRunRepository
@@ -45,7 +46,7 @@ async def test_list_by_product_pg_filters_orders_and_limits() -> None:
         other_product_id = uuid.uuid4()
         now = datetime.now(tz=UTC)
 
-        async with maker() as session:
+        async with maker() as session, workspace_session_scope(session, workspace_id):
             # FK parents first: workspace → products → runs.
             session.add(WorkspaceRow(id=workspace_id, name="Acme", language="en"))
             await session.flush()
@@ -99,7 +100,7 @@ async def test_list_by_product_pg_filters_orders_and_limits() -> None:
             )
             await session.commit()
 
-        async with maker() as session:
+        async with maker() as session, workspace_session_scope(session, workspace_id):
             repo = SqlAlchemyRunRepository(session)
             rows = await repo.list_by_product(workspace_id, product_id)
 

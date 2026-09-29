@@ -27,6 +27,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.workflow.application.checkpoint_resolution import (
     CheckpointNotFound,
     CheckpointResolutionOutcome,
@@ -40,7 +41,7 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from ..._support import db_engine, fake_current_user
+from ..._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -99,11 +100,11 @@ async def test_resolve_pending_question_resolves_folds_and_resumes(
     """The core C2 contract, proven at the service layer: resolving a pending
     ask_user_question Decision ⇒ RESOLVED + answer folded into
     ``run.payload['resolved_decisions']`` + run RUNNING → OPEN."""
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run_id, decision_id = await _seed_pending_question(s, workspace_id)
         await s.commit()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -121,7 +122,7 @@ async def test_resolve_pending_question_resolves_folds_and_resumes(
     assert outcome.resolution == "Use Postgres"
     assert outcome.run_status is RunStatus.OPEN
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         decision = await s.get(Decision, decision_id)
         run = await s.get(ExecutionRun, run_id)
     assert decision is not None
@@ -145,7 +146,7 @@ async def test_resolve_unknown_checkpoint_raises_not_found(
     workspace_id: uuid.UUID,
     founder_id: uuid.UUID,
 ) -> None:
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         with pytest.raises(CheckpointNotFound):
             await resolve_checkpoint(
                 s,
@@ -161,11 +162,11 @@ async def test_resolve_empty_answer_no_action_raises_invalid(
     workspace_id: uuid.UUID,
     founder_id: uuid.UUID,
 ) -> None:
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         _run_id, decision_id = await _seed_pending_question(s, workspace_id)
         await s.commit()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         with pytest.raises(InvalidAction):
             await resolve_checkpoint(
                 s,
@@ -186,7 +187,7 @@ async def test_rest_endpoint_and_service_produce_identical_outcomes(
     status / resolution / run status / folded payload."""
     # Two identical seeds (same question) so we can drive one via REST and one
     # via the service and compare the resulting state.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         rest_run_id, rest_decision_id = await _seed_pending_question(s, workspace_id)
         svc_run_id, svc_decision_id = await _seed_pending_question(s, workspace_id)
         await s.commit()
@@ -195,7 +196,7 @@ async def test_rest_endpoint_and_service_produce_identical_outcomes(
     app = create_app()
     app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_current_user_row] = lambda: SimpleNamespace(id=founder_id)
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
 
     async def _session():
         async with sf() as s:
@@ -213,7 +214,7 @@ async def test_rest_endpoint_and_service_produce_identical_outcomes(
     rest_body = r.json()
 
     # Service path.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -229,7 +230,7 @@ async def test_rest_endpoint_and_service_produce_identical_outcomes(
     assert rest_body["run_status"] == outcome.run_status.value == RunStatus.OPEN.value
 
     # Identical persisted run payload fold (modulo the distinct ids).
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         rest_run = await s.get(ExecutionRun, rest_run_id)
         svc_run = await s.get(ExecutionRun, svc_run_id)
     assert rest_run is not None
