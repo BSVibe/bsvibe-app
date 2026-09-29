@@ -27,8 +27,9 @@ from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -72,7 +73,7 @@ async def registry() -> ToolRegistry:
 
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
@@ -90,7 +91,7 @@ async def test_bootstrap_cancel_flips_in_flight_to_failed(
     db, workspace_id, user_id, registry, seeded, in_flight_status
 ) -> None:
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,
@@ -117,7 +118,7 @@ async def test_bootstrap_cancel_flips_in_flight_to_failed(
     assert out["bootstrap_status"] == "failed"
     assert out["bootstrap_error"] == "cancelled by founder"
 
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         row = await s.get(ProductRow, pid)
         assert row is not None
         assert row.bootstrap_status == "failed"
@@ -132,7 +133,7 @@ async def test_bootstrap_cancel_terminal_status_raises(
     db, workspace_id, user_id, registry, seeded, terminal_status
 ) -> None:
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,
@@ -178,7 +179,7 @@ async def test_bootstrap_cancel_other_workspace_not_found(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
     other_ws = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_ws) as s:
         s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.flush()
         s.add(
@@ -209,7 +210,7 @@ async def test_bootstrap_cancel_requires_write_scope(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,
@@ -250,7 +251,7 @@ async def test_bootstrap_cancel_attempts_task_cancel(
     from backend.workflow.application.runtime import product_bootstrap_runtime as rt
 
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,
@@ -321,7 +322,7 @@ async def test_bootstrap_retry_resets_and_schedules(
     retryable_status,
 ) -> None:
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,
@@ -365,7 +366,7 @@ async def test_bootstrap_retry_resets_and_schedules(
     assert out["bootstrap_error"] is None
     assert out["bootstrap_progress"] is None
 
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         row = await s.get(ProductRow, pid)
         assert row is not None
         assert row.bootstrap_status == "pending"
@@ -382,7 +383,7 @@ async def test_bootstrap_retry_missing_repo_url_raises(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,
@@ -414,7 +415,7 @@ async def test_bootstrap_retry_in_flight_raises(
     db, workspace_id, user_id, registry, seeded, in_flight_status
 ) -> None:
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,
@@ -462,7 +463,7 @@ async def test_bootstrap_retry_requires_write_scope(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,
@@ -499,7 +500,7 @@ async def test_bootstrap_retry_vault_reset_requires_confirm(
 ) -> None:
     """Refusing without confirm_reset is the documented two-key guard."""
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,
@@ -531,7 +532,7 @@ async def test_bootstrap_retry_vault_reset_wipes_subtrees(
 ) -> None:
     """With both flags set, the resettable subtrees are removed before retry."""
     pid = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ProductRow(
                 id=pid,

@@ -28,8 +28,9 @@ from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -76,7 +77,7 @@ async def registry() -> ToolRegistry:
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
     """Seed the workspace BEFORE child rows so PG FK references resolve."""
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
     yield
@@ -450,7 +451,7 @@ async def test_create_requires_write_scope(db, workspace_id, user_id, registry, 
 async def test_list_workspace_scoped(db, workspace_id, user_id, registry, seeded) -> None:
     """A rule in another workspace must not leak into this principal's list."""
     other_ws = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_ws) as s:
         s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.commit()
 
@@ -638,7 +639,7 @@ async def test_compile_apply_creates_intent_rule_and_default(
     ]
 
     # The intent def + the workspace default both persisted.
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         from sqlalchemy import select
 
         from backend.embedding.db import IntentDefinitionRow
