@@ -18,7 +18,7 @@ from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry, ToolScopeDenied
 from backend.mcp.tools import register_all_tools
 
-from .._support import db_engine, use_real_pg
+from .._support import db_engine
 from ._rls import scoped_session
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
@@ -116,16 +116,6 @@ async def test_account_get_requires_read_scope(db, workspace_id, user_id, regist
 # ---------------------------------------------------------------------------
 # bsvibe_account_memberships_list
 # ---------------------------------------------------------------------------
-@pytest.mark.xfail(
-    use_real_pg(),
-    strict=True,
-    reason=(
-        "PRODUCT defect (#959): server.py publishes the principal's workspace as the RLS "
-        "GUC before dispatch, and account_tools._h_memberships_list reads `workspaces` "
-        "through it — so every OTHER membership's row is filtered out on Postgres. "
-        "Fail-open does not help: the GUC is set, not empty. SQLite has no RLS."
-    ),
-)
 async def test_memberships_list_returns_active_workspaces(
     db, workspace_id, user_id, registry, seeded
 ) -> None:

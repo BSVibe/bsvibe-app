@@ -140,3 +140,19 @@ async def test_the_star_guc_still_lets_a_claim_lock_rows(
             {"ids": list(ids)},
         )
         assert {r[0] for r in rows} == set(ids)
+
+
+async def test_the_session_read_puts_back_the_tenant_it_found(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Used inside an already-scoped transaction (an MCP tool runs under the
+    principal's workspace), the block must hand that workspace back — clearing
+    to '' would leave the rest of the transaction blind."""
+    from backend.data.rls import cross_tenant_session_read
+
+    a, _b = await _two_tenants(session_factory)
+    async with session_factory() as session:
+        await session.execute(text(f"SELECT set_config('{_GUC}', :v, true)"), {"v": str(a)})
+        async with cross_tenant_session_read(session):
+            assert await _guc(session) == "*"
+        assert await _guc(session) == str(a)

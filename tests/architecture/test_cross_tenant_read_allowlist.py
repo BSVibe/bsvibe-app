@@ -21,6 +21,9 @@ ALLOWED: dict[str, str] = {
     "backend/workflow/infrastructure/workers/auth_dependency_worker.py": "장애 공지 대상 테넌트 열거",
     "backend/knowledge/infrastructure/workers/settle_worker.py": "배치에 섞인 테넌트들의 정책 조회",
     "plugin/audit/retention_sweep.py": "보존 기간을 둔 테넌트 열거",
+    "backend/identity/infrastructure/repositories/workspace_repository_sql.py": (
+        "사용자의 워크스페이스 목록 — 자기 멤버십 조인이 범위를 좁힌다"
+    ),
     "backend/workflow/application/runtime/bootstrap_anchor_backfill.py": (
         "운영 CLI — 완료된 제품을 테넌트 가로질러 고른다"
     ),

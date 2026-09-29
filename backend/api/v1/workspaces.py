@@ -23,7 +23,8 @@ from backend.api.v1._identity_deps import (
     get_membership_repository,
     get_workspace_repository,
 )
-from backend.data.rls import workspace_session_scope
+from backend.data.rls import set_workspace_guc, workspace_session_scope
+from backend.data.scoping import set_current_workspace_id
 from backend.identity.db import MembershipRow, UserRow
 from backend.identity.domain.repositories import (
     MembershipRepository,
@@ -64,6 +65,7 @@ async def _owned_workspace(
     memberships: MembershipRepository,
     user: UserRow,
     workspace_id: uuid.UUID,
+    session: AsyncSession,
     *,
     minimum_role: str | None = None,
 ) -> WorkspaceRow:
@@ -77,8 +79,16 @@ async def _owned_workspace(
     does not apply; the role is checked here against the membership loaded for
     the PATH workspace. A member below ``minimum_role`` gets 403 (they already
     proved membership by getting past the 404, so the role refusal is honest).
+
+    #959 — once membership is proven the PATH workspace is published for the
+    rest of the request, the way ``get_workspace_id`` publishes the resolved
+    one: this router has no ``get_workspace_id``, so its GUC was empty and the
+    read below, and the route's commit, ran blind.
     """
     membership = await memberships.active_for_user_in_workspace(user.id, workspace_id)
+    if membership is not None:
+        set_current_workspace_id(workspace_id)
+        await set_workspace_guc(await session.connection(), workspace_id)
     row = await workspaces.get_live(workspace_id) if membership is not None else None
     if row is None or membership is None:
         raise HTTPException(
@@ -134,8 +144,9 @@ async def get_workspace(
     user: Annotated[UserRow, Depends(get_current_user_row)],
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repository)],
     memberships: Annotated[MembershipRepository, Depends(get_membership_repository)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WorkspaceResponse:
-    row = await _owned_workspace(workspaces, memberships, user, workspace_id)
+    row = await _owned_workspace(workspaces, memberships, user, workspace_id, session)
     return WorkspaceResponse.model_validate(row)
 
 
@@ -150,7 +161,9 @@ async def update_workspace(
 ) -> WorkspaceResponse:
     # H3 — safe_mode is the tenant-wide delivery approval gate; viewer/editor
     # must not flip it. admin (owner+admin) can.
-    row = await _owned_workspace(workspaces, memberships, user, workspace_id, minimum_role="admin")
+    row = await _owned_workspace(
+        workspaces, memberships, user, workspace_id, session, minimum_role="admin"
+    )
     for field in ("name", "safe_mode"):
         value = getattr(payload, field)
         if value is not None:
@@ -171,7 +184,9 @@ async def delete_workspace(
     # membership. Row is retained for the 30-day window; the hard purge +
     # full cascade is a retention-infra follow-up.
     # H3 — deleting the whole workspace is owner-only.
-    row = await _owned_workspace(workspaces, memberships, user, workspace_id, minimum_role="owner")
+    row = await _owned_workspace(
+        workspaces, memberships, user, workspace_id, session, minimum_role="owner"
+    )
     now = datetime.now(UTC)
     row.deleted_at = now
     membership = await memberships.active_for_user_in_workspace(user.id, workspace_id)

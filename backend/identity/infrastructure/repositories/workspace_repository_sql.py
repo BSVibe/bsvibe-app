@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.data.rls import cross_tenant_session_read
 from backend.identity.db import MembershipRow
 from backend.identity.workspaces_db import WorkspaceRow
 
@@ -48,8 +49,11 @@ class SqlAlchemyWorkspaceRepository:
             )
             .order_by(WorkspaceRow.created_at.desc())
         )
-        result = await self._session.execute(stmt)
-        return list(result.scalars().all())
+        # #959 — the caller's workspaces span tenants by definition; the join on
+        # their own memberships is what narrows the cross-tenant read.
+        async with cross_tenant_session_read(self._session):
+            result = await self._session.execute(stmt)
+            return list(result.scalars().all())
 
     async def list_active_policies(self) -> list[tuple[uuid.UUID, bool]]:
         """``(workspace_id, safe_mode)`` for every live workspace.
