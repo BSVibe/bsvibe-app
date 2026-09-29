@@ -135,7 +135,7 @@ async def ensure_user_bootstrapped(
         )
         # #959 — 자기가 만들 워크스페이스의 id 로 **먼저** 스코프를 건다.
         #
-        # RLS 정책은 오늘 빈 GUC 를 통과시키지만(fail-open), 그 탈출구를 닫는 순간
+        # RLS 정책은 빈 GUC 를 거절한다(fail-closed, #959 ③). 스코프 없이는
         # 이 INSERT 가 막힌다: 아직 없는 워크스페이스라 걸 GUC 가 없고
         # `WITH CHECK (id::text = GUC)` 가 거절한다 — 닭-달걀이다.
         #
