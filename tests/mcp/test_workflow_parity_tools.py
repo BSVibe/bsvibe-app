@@ -41,8 +41,9 @@ from backend.workflow.infrastructure.db import (
 )
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -78,7 +79,7 @@ async def registry() -> ToolRegistry:
 
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
         yield
@@ -96,7 +97,7 @@ def _principal(*, workspace_id: uuid.UUID, user_id: uuid.UUID, scopes: tuple[str
 
 async def _seed_run(db, workspace_id, *, status, payload=None) -> uuid.UUID:
     run_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -115,7 +116,7 @@ async def _seed_deliverable(
     db, workspace_id, run_id, *, payload=None, handles=None, retracted_at=None
 ) -> uuid.UUID:
     did = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(
             Deliverable(
                 id=did,
@@ -146,7 +147,7 @@ async def test_runs_retry_reopens_a_failed_run(db, workspace_id, user_id, regist
         out = await registry.call_tool("bsvibe_runs_retry", {"run_id": str(run_id)}, ctx)
     assert out["status"] == "open"
     assert out["retry_count"] == 1
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         run = await s.get(ExecutionRun, run_id)
         assert run.status is RunStatus.OPEN
         # The retry marker + restarted clock the REST route writes must be
@@ -167,7 +168,7 @@ async def test_runs_retry_is_refused_for_a_non_terminal_run(
         )
         with pytest.raises(ToolError, match="running|failed or cancelled"):
             await registry.call_tool("bsvibe_runs_retry", {"run_id": str(run_id)}, ctx)
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         assert (await s.get(ExecutionRun, run_id)).status is RunStatus.RUNNING
 
 
@@ -176,7 +177,7 @@ async def test_runs_retry_never_crosses_the_workspace_boundary(
 ) -> None:
     """Another workspace's failed run must read as not-found, never as retryable."""
     other = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other) as s:
         s.add(WorkspaceRow(id=other, name="other"))
         await s.commit()
     run_id = await _seed_run(db, other, status=RunStatus.FAILED)
@@ -187,7 +188,7 @@ async def test_runs_retry_never_crosses_the_workspace_boundary(
         )
         with pytest.raises(ToolError, match="not found"):
             await registry.call_tool("bsvibe_runs_retry", {"run_id": str(run_id)}, ctx)
-    async with db() as s:
+    async with scoped_session(db, other) as s:
         assert (await s.get(ExecutionRun, run_id)).status is RunStatus.FAILED
 
 
