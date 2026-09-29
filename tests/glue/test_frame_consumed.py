@@ -19,6 +19,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
 from backend.extensions.skill.loader import SkillLoader
 from backend.workflow.application.agent_loop import LoopTurn, RunOrchestrator
 from backend.workflow.application.agent_runner import AgentRunner
@@ -116,7 +117,7 @@ async def test_frame_skill_hint_reaches_loop_initial_context(
     skills_root = tmp_path / "skills" / str(workspace_id)
     _write_skill(skills_root, "prd-writer", "Draft a product requirements document")
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run_id = await _seed_request_and_run(
             session, workspace_id=workspace_id, text="i need a spec doc"
         )
@@ -164,7 +165,7 @@ async def test_frame_skill_hint_reaches_loop_initial_context(
     assert await agent.drive_once() == 1
 
     # The recorded frame is the richer LLM framing, persisted for B9b + delivery.
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         frame = run.payload["frame"]
@@ -233,7 +234,7 @@ async def test_already_framed_run_is_not_reframed(
     and reintroduces the re-frame-timeout failure mode. The existing frame is
     reused and the loop still drives."""
     workspace_id = uuid.uuid4()
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run_id = await _seed_request_and_run(
             session, workspace_id=workspace_id, text="build a thing"
         )
@@ -263,7 +264,7 @@ async def test_already_framed_run_is_not_reframed(
     assert recording_llm.calls != []
 
     # The pre-existing frame is preserved verbatim (not overwritten).
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert run.payload["frame"]["framed_intent"] == "already framed"
@@ -275,7 +276,7 @@ async def test_unframed_run_frames_exactly_once(
     """A fresh (unframed) run frames exactly once — the guard must not suppress
     the first, legitimate framing."""
     workspace_id = uuid.uuid4()
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run_id = await _seed_request_and_run(
             session, workspace_id=workspace_id, text="build a thing"
         )
@@ -288,7 +289,7 @@ async def test_unframed_run_frames_exactly_once(
     assert await agent.drive_once() == 1
 
     assert frame_llm.calls == 1
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         assert "frame" in (run.payload or {})
@@ -310,7 +311,7 @@ async def test_no_frame_llm_never_drives_the_loop(
         "Generate a weekly digest",
     )
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run_id = await _seed_request_and_run(
             session, workspace_id=workspace_id, text="buy groceries"
         )
@@ -340,7 +341,7 @@ async def test_no_frame_llm_never_drives_the_loop(
     agent = AgentWorker(session_factory=sf, execution=deps)
     assert await agent.drive_once() == 1
 
-    async with sf() as session:
+    async with sf() as session, workspace_session_scope(session, workspace_id):
         run = await session.get(ExecutionRun, run_id)
         assert run is not None
         # Paused, not driven: no terminal outcome, and no frame was recorded.

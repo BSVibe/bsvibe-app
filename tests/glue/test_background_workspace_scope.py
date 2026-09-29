@@ -24,6 +24,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.data import Base
+from backend.data.rls import workspace_session_scope
 from backend.data.scoping import current_workspace_id
 from backend.extensions.skill.loader import SkillLoader
 from backend.identity.workspaces_db import WorkspaceRow
@@ -54,7 +55,7 @@ def _deps(root: Path, orchestrator_factory) -> AgentExecutionDeps:  # noqa: ANN0
 
 
 async def _seed_workspace(sf: async_sessionmaker, ws_id: uuid.UUID) -> None:
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         s.add(
             WorkspaceRow(
                 id=ws_id,
@@ -69,7 +70,7 @@ async def _seed_workspace(sf: async_sessionmaker, ws_id: uuid.UUID) -> None:
 
 async def _seed_run(sf: async_sessionmaker, *, ws_id: uuid.UUID) -> uuid.UUID:
     run_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -83,7 +84,7 @@ async def _seed_run(sf: async_sessionmaker, *, ws_id: uuid.UUID) -> uuid.UUID:
         )
         await s.commit()
     # request_id=None + a pre-seeded frame → framing is skipped (no frame LLM).
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws_id):
         await s.execute(
             update(ExecutionRun).where(ExecutionRun.id == run_id).values(request_id=None)
         )

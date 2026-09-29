@@ -10,6 +10,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -40,8 +41,8 @@ async def session_factory():
 
 async def _seed_request(sm: async_sessionmaker[AsyncSession]) -> RequestRow:
     """Insert a TriggerEvent + Request and return the Request."""
-    async with sm() as s:
-        ws = uuid.uuid4()
+    ws = uuid.uuid4()
+    async with sm() as s, workspace_session_scope(s, ws):
         trig = TriggerEventRow(
             id=uuid.uuid4(),
             workspace_id=ws,
@@ -69,12 +70,12 @@ async def _seed_request(sm: async_sessionmaker[AsyncSession]) -> RequestRow:
 
 async def test_open_run_creates_execution_run(session_factory) -> None:
     req = await _seed_request(session_factory)
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         runner = AgentRunner(s)
         run_id = await runner.open_run(request=req)
         await s.commit()
 
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.OPEN
@@ -99,7 +100,7 @@ async def test_open_run_propagates_product_id_from_request(session_factory) -> N
     dropped product binding on every founder-direct run."""
     product_id = uuid.uuid4()
     ws = uuid.uuid4()
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, ws):
         trig = TriggerEventRow(
             id=uuid.uuid4(),
             workspace_id=ws,
@@ -125,12 +126,12 @@ async def test_open_run_propagates_product_id_from_request(session_factory) -> N
         s.add(req)
         await s.commit()
 
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, ws):
         runner = AgentRunner(s)
         run_id = await runner.open_run(request=req)
         await s.commit()
 
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, ws):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.product_id == product_id
@@ -142,7 +143,7 @@ async def test_open_run_propagates_tick_origin_kind_from_request(session_factory
     carries ``binding_id`` — so the DeliveryWorker can force Safe Mode for
     autonomous tick deliverables."""
     ws = uuid.uuid4()
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, ws):
         trig = TriggerEventRow(
             id=uuid.uuid4(),
             workspace_id=ws,
@@ -166,12 +167,12 @@ async def test_open_run_propagates_tick_origin_kind_from_request(session_factory
         s.add(req)
         await s.commit()
 
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, ws):
         runner = AgentRunner(s)
         run_id = await runner.open_run(request=req)
         await s.commit()
 
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, ws):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert isinstance(run.payload, dict)
@@ -180,11 +181,11 @@ async def test_open_run_propagates_tick_origin_kind_from_request(session_factory
 
 async def test_open_run_is_idempotent(session_factory) -> None:
     req = await _seed_request(session_factory)
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         runner = AgentRunner(s)
         first = await runner.open_run(request=req)
         await s.commit()
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         runner = AgentRunner(s)
         second = await runner.open_run(request=req)
         await s.commit()
@@ -193,13 +194,13 @@ async def test_open_run_is_idempotent(session_factory) -> None:
 
 async def test_transition_history(session_factory) -> None:
     req = await _seed_request(session_factory)
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         runner = AgentRunner(s)
         run_id = await runner.open_run(request=req)
         await runner.transition(run_id=run_id, to_status=RunStatus.RUNNING, reason="claim")
         await runner.transition(run_id=run_id, to_status=RunStatus.SHIPPED, reason="settled")
         await s.commit()
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run.status is RunStatus.SHIPPED
         history = (
@@ -227,14 +228,14 @@ async def test_transition_to_review_ready_does_not_mint_a_decision(
     will be auto-merged in W2; W1 just leaves them at REVIEW_READY with
     no founder-facing Decision attached."""
     req = await _seed_request(session_factory)
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         runner = AgentRunner(s)
         run_id = await runner.open_run(request=req)
         await runner.transition(run_id=run_id, to_status=RunStatus.RUNNING, reason="claim")
         await runner.transition(run_id=run_id, to_status=RunStatus.REVIEW_READY, reason="verified")
         await s.commit()
 
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         decisions = (
             (await s.execute(select(Decision).where(Decision.run_id == run_id))).scalars().all()
         )
@@ -243,11 +244,11 @@ async def test_transition_to_review_ready_does_not_mint_a_decision(
 
 async def test_transition_returns_false_for_same_status(session_factory) -> None:
     req = await _seed_request(session_factory)
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         runner = AgentRunner(s)
         run_id = await runner.open_run(request=req)
         await s.commit()
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, req.workspace_id):
         runner = AgentRunner(s)
         # OPEN → OPEN is a no-op
         ok = await runner.transition(run_id=run_id, to_status=RunStatus.OPEN)
@@ -264,7 +265,7 @@ async def test_agent_worker_claim_once_advances_open_requests(session_factory) -
     claimed = await worker.claim_once()
     assert claimed == 3
     # Each Request flipped to RUNNING and has a paired ExecutionRun
-    async with session_factory() as s:
+    async with session_factory() as s, cross_tenant_session_read(s):
         for r in requests:
             fresh = await s.get(RequestRow, r.id)
             assert fresh.status is RequestStatus.RUNNING
@@ -315,10 +316,11 @@ def _minimal_execution_deps() -> object:
 
 
 async def _seed_open_run(sm: async_sessionmaker[AsyncSession]) -> ExecutionRun:
-    async with sm() as s:
+    ws = uuid.uuid4()
+    async with sm() as s, workspace_session_scope(s, ws):
         run = ExecutionRun(
             id=uuid.uuid4(),
-            workspace_id=uuid.uuid4(),
+            workspace_id=ws,
             status=RunStatus.OPEN,
             payload={"frame": {"skill_match": None}},  # pre-framed → skip framing
             created_at=datetime.now(tz=UTC),
@@ -370,7 +372,7 @@ async def test_drive_once_yields_saturated_run_open_and_continues(session_factor
 
     # The saturated run is left OPEN — NOT failed, no decision state — so the
     # next drive_once re-picks it.
-    async with session_factory() as s:
+    async with session_factory() as s, workspace_session_scope(s, run1.workspace_id):
         fresh1 = await s.get(ExecutionRun, run1.id)
         assert fresh1.status is RunStatus.OPEN
         # No failure history row was written for the yielded run.

@@ -36,6 +36,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.knowledge.factory import KnowledgeFactory
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
@@ -44,7 +45,7 @@ from backend.knowledge.infrastructure.workers.settle_worker import (
 )
 from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -69,9 +70,6 @@ def founder_id() -> uuid.UUID:
 async def client(sf, workspace_id: uuid.UUID, founder_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -80,7 +78,7 @@ async def client(sf, workspace_id: uuid.UUID, founder_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -98,7 +96,7 @@ async def test_second_run_retriever_sees_prior_resolved_decision(
     """Phase A: resolve + drain → settle vault note. Phase B: NEW factory's
     retriever surfaces the resolved decision for an overlapping signal."""
     # Phase A — seed paused run with a pending Decision.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -162,7 +160,7 @@ async def test_second_run_workspace_isolation(
 ) -> None:
     """A decision resolved in workspace A never leaks to workspace B's retriever."""
     # Phase A — resolve in workspace_id (the test's caller workspace).
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,

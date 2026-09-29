@@ -42,6 +42,7 @@ from backend.api.deps import get_db_session
 from backend.api.main import create_app
 from backend.api.webhooks import get_credential_cipher, get_webhook_parser_registry
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.extensions.plugin.webhook_registry import WebhookParserRegistry
 from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
@@ -194,7 +195,7 @@ async def test_a_bound_delivery_stores_both_routing_keys(sf: Any, client: Any, c
     back to pass-through — the same silent failure, one hop later.
     """
     ws = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         account = await _seed_account(s, cipher, workspace_id=ws)
         await _seed_binding(s, account=account, resource_id=str(BOUND_CHAT_ID))
 
@@ -219,7 +220,7 @@ async def test_an_unbound_delivery_stores_neither_routing_key(sf: Any, client: A
     that can only miss.
     """
     ws = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         account = await _seed_account(s, cipher, workspace_id=ws)
         # A binding exists — for a DIFFERENT chat. This is the prod shape: one
         # bound 1:1 chat, every group chat unbound.
@@ -249,7 +250,7 @@ async def test_the_stored_event_reaches_the_binding_branch_in_receive(
     the row it actually persisted, and hand THAT row to ``receive()``.
     """
     ws = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         account = await _seed_account(s, cipher, workspace_id=ws)
         binding_id = await _seed_binding(
             s,
@@ -263,7 +264,7 @@ async def test_the_stored_event_reaches_the_binding_branch_in_receive(
     )
     assert resp.status_code == 202, resp.text
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         row = (await s.execute(select(TriggerEventRow))).scalars().one()
         outcome = await receive(s, row)
 
@@ -284,7 +285,7 @@ async def test_a_non_matching_filter_drops_the_event(sf: Any, client: Any, ciphe
     branch that reads ``trigger.filters`` was unreachable from the route.
     """
     ws = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         account = await _seed_account(s, cipher, workspace_id=ws)
         await _seed_binding(
             s,
@@ -298,7 +299,7 @@ async def test_a_non_matching_filter_drops_the_event(sf: Any, client: Any, ciphe
     )
     assert resp.status_code == 202, resp.text
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         row = (await s.execute(select(TriggerEventRow))).scalars().one()
         outcome = await receive(s, row)
 
@@ -313,7 +314,7 @@ async def test_a_matching_filter_passes_the_event(sf: Any, client: Any, cipher) 
     rejection test and look correct.
     """
     ws = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         account = await _seed_account(s, cipher, workspace_id=ws)
         binding_id = await _seed_binding(
             s,
@@ -327,7 +328,7 @@ async def test_a_matching_filter_passes_the_event(sf: Any, client: Any, cipher) 
     )
     assert resp.status_code == 202, resp.text
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         row = (await s.execute(select(TriggerEventRow))).scalars().one()
         outcome = await receive(s, row)
 
@@ -344,7 +345,7 @@ async def test_an_empty_filter_still_acts_on_everything(sf: Any, client: Any, ci
     was always supposed to carry.
     """
     ws = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         account = await _seed_account(s, cipher, workspace_id=ws)
         binding_id = await _seed_binding(
             s, account=account, resource_id=str(BOUND_CHAT_ID), trigger={"filters": {}}
@@ -355,7 +356,7 @@ async def test_an_empty_filter_still_acts_on_everything(sf: Any, client: Any, ci
     )
     assert resp.status_code == 202, resp.text
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, ws):
         row = (await s.execute(select(TriggerEventRow))).scalars().one()
         outcome = await receive(s, row)
 

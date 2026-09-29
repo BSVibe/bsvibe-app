@@ -31,6 +31,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -39,7 +40,7 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -64,9 +65,6 @@ def workspace_id() -> uuid.UUID:
 async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -75,7 +73,7 @@ async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -91,7 +89,7 @@ async def _seed_run(
     *,
     failure_reason: str | None = None,
 ) -> uuid.UUID:
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -130,7 +128,7 @@ async def test_retry_failed_run_reopens(client, sf, workspace_id) -> None:
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "open"
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.OPEN
@@ -142,7 +140,7 @@ async def test_retry_cancelled_run_reopens(client, sf, workspace_id) -> None:
     run_id = await _seed_run(sf, workspace_id, RunStatus.CANCELLED)
     resp = await client.post(f"/api/v1/runs/{run_id}/retry")
     assert resp.status_code == 200, resp.text
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.OPEN
 
@@ -152,7 +150,7 @@ async def test_retry_records_history(client, sf, workspace_id) -> None:
 
     run_id = await _seed_run(sf, workspace_id, RunStatus.FAILED, failure_reason="boom")
     await client.post(f"/api/v1/runs/{run_id}/retry")
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         rows = (
             (
                 await s.execute(
@@ -214,7 +212,7 @@ async def test_run_detail_no_failure_reason_when_running(client, sf, workspace_i
 
 
 async def test_verification_failed_decision_offers_retry_action(client, sf, workspace_id) -> None:
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -245,7 +243,7 @@ async def test_verification_failed_decision_offers_retry_action(client, sf, work
 
 
 async def test_resolve_verification_failed_with_retry_reopens(client, sf, workspace_id) -> None:
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -276,7 +274,7 @@ async def test_resolve_verification_failed_with_retry_reopens(client, sf, worksp
     assert resp.status_code == 200, resp.text
     assert resp.json()["run_status"] == "open"
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.OPEN
         decision = await s.get(Decision, decision_id)

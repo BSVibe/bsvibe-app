@@ -24,6 +24,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
+from backend.data.scoping import workspace_scope
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.db import (
     Deliverable,
@@ -62,7 +64,7 @@ async def _seed_deliverable(
     workspace_id = uuid.uuid4()
     run_id = uuid.uuid4()
     deliverable_id = uuid.uuid4()
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -113,15 +115,17 @@ async def test_capture_persists_compensation_handle_on_success(sf) -> None:
     )
     dispatcher = _RecordingDispatcher(result)
 
-    await dispatch_delivery(
-        dispatcher,
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            dispatcher,
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None
         assert row.compensation_handles, "expected compensation_handles populated"
@@ -152,14 +156,16 @@ async def test_capture_skips_failed_actions(sf) -> None:
         delivered_at=datetime.now(tz=UTC),
         error="rate limited",
     )
-    await dispatch_delivery(
-        _RecordingDispatcher(result),
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
-    async with sf() as s:
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            _RecordingDispatcher(result),
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None
         # Nothing captured — column stays None (or empty list, by impl).
@@ -183,14 +189,16 @@ async def test_capture_skips_actions_without_handle(sf) -> None:
         ],
         delivered_at=datetime.now(tz=UTC),
     )
-    await dispatch_delivery(
-        _RecordingDispatcher(result),
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="page",
-        session_factory=sf,
-    )
-    async with sf() as s:
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            _RecordingDispatcher(result),
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="page",
+            session_factory=sf,
+        )
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None
         assert not row.compensation_handles
@@ -219,14 +227,16 @@ async def test_capture_records_multiple_handles_for_multi_action_dispatch(sf) ->
         ],
         delivered_at=datetime.now(tz=UTC),
     )
-    await dispatch_delivery(
-        _RecordingDispatcher(result),
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
-    async with sf() as s:
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            _RecordingDispatcher(result),
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None
         captured = list(row.compensation_handles or [])

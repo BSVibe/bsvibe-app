@@ -27,6 +27,8 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.data.rls import workspace_session_scope
+from backend.data.scoping import workspace_scope
 from backend.workflow.application.run_delivery_resolution import (
     AUTO_RESOLVED_DELIVERABLE_SHIPPED,
     SYSTEM_AUTO_RESOLVE_ACTOR_ID,
@@ -114,7 +116,7 @@ async def _seed_paused_run(
     run_id = uuid.uuid4()
     deliverable_id = uuid.uuid4()
     decision_id: uuid.UUID | None = None
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         s.add(
             ExecutionRun(
                 id=run_id,
@@ -175,17 +177,19 @@ async def test_delivery_resolves_pending_review_decision_and_ships_run(sf) -> No
     workspace_id, run_id, deliverable_id, decision_id = await _seed_paused_run(sf)
     dispatcher = _RecordingDispatcher(_success_result(workspace_id, deliverable_id))
 
-    await dispatch_delivery(
-        dispatcher,
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            dispatcher,
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
 
     assert dispatcher.calls == 1  # NO re-delivery
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         decision = await s.get(Decision, decision_id)
         assert decision is not None
         assert decision.status is DecisionStatus.RESOLVED
@@ -218,15 +222,17 @@ async def test_two_hop_transition_uses_valid_state_machine_path(sf) -> None:
     workspace_id, run_id, deliverable_id, _ = await _seed_paused_run(sf)
     dispatcher = _RecordingDispatcher(_success_result(workspace_id, deliverable_id))
 
-    await dispatch_delivery(
-        dispatcher,
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            dispatcher,
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         hops = (
             (
                 await s.execute(
@@ -248,14 +254,16 @@ async def test_verification_failed_kind_also_resolved(sf) -> None:
     workspace_id, run_id, deliverable_id, decision_id = await _seed_paused_run(
         sf, decision_kind="verification_failed"
     )
-    await dispatch_delivery(
-        _RecordingDispatcher(_success_result(workspace_id, deliverable_id)),
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
-    async with sf() as s:
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            _RecordingDispatcher(_success_result(workspace_id, deliverable_id)),
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         decision = await s.get(Decision, decision_id)
         assert decision is not None
         assert decision.status is DecisionStatus.RESOLVED
@@ -269,9 +277,9 @@ async def test_verified_run_without_pending_decision_is_untouched(sf) -> None:
     workspace_id, run_id, deliverable_id, _ = await _seed_paused_run(
         sf, run_status=RunStatus.REVIEW_READY, decision_kind=None
     )
-    resolved = await _run_helper(sf, deliverable_id)
+    resolved = await _run_helper(sf, workspace_id, deliverable_id)
     assert resolved is False
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY  # unchanged
@@ -283,7 +291,7 @@ async def test_verified_run_without_pending_decision_is_untouched(sf) -> None:
 
 async def test_missing_deliverable_is_noop(sf) -> None:
     """A deliverable_id with no row (purged run / no run linkage) → no-op."""
-    resolved = await _run_helper(sf, uuid.uuid4())
+    resolved = await _run_helper(sf, uuid.uuid4(), uuid.uuid4())
     assert resolved is False
 
 
@@ -292,9 +300,9 @@ async def test_already_shipped_run_is_idempotent_noop(sf) -> None:
     workspace_id, run_id, deliverable_id, _ = await _seed_paused_run(
         sf, run_status=RunStatus.SHIPPED, decision_kind=None
     )
-    resolved = await _run_helper(sf, deliverable_id)
+    resolved = await _run_helper(sf, workspace_id, deliverable_id)
     assert resolved is False
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.SHIPPED
 
@@ -304,11 +312,11 @@ async def test_second_delivery_after_resolve_is_noop(sf) -> None:
     nothing (the decision is already resolved, the run already terminal)."""
     workspace_id, run_id, deliverable_id, decision_id = await _seed_paused_run(sf)
     dispatcher = _RecordingDispatcher(_success_result(workspace_id, deliverable_id))
-    first = await _run_helper(sf, deliverable_id)
-    second = await _run_helper(sf, deliverable_id)
+    first = await _run_helper(sf, workspace_id, deliverable_id)
+    second = await _run_helper(sf, workspace_id, deliverable_id)
     assert first is True
     assert second is False
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         decision = await s.get(Decision, decision_id)
         assert decision is not None and decision.status is DecisionStatus.RESOLVED
     # keep dispatcher referenced (helper path bypasses it); silence lint
@@ -318,14 +326,16 @@ async def test_second_delivery_after_resolve_is_noop(sf) -> None:
 async def test_failed_dispatch_does_not_ship_run(sf) -> None:
     """A wholly-failed dispatch (nothing shipped) must NOT resolve/ship the run."""
     workspace_id, run_id, deliverable_id, decision_id = await _seed_paused_run(sf)
-    await dispatch_delivery(
-        _RecordingDispatcher(_failed_result(workspace_id, deliverable_id)),
-        workspace_id=workspace_id,
-        deliverable_id=deliverable_id,
-        artifact_type="pr",
-        session_factory=sf,
-    )
-    async with sf() as s:
+    # The DeliveryWorker publishes the row's workspace around this call.
+    with workspace_scope(workspace_id):
+        await dispatch_delivery(
+            _RecordingDispatcher(_failed_result(workspace_id, deliverable_id)),
+            workspace_id=workspace_id,
+            deliverable_id=deliverable_id,
+            artifact_type="pr",
+            session_factory=sf,
+        )
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         decision = await s.get(Decision, decision_id)
         assert decision is not None
         assert decision.status is DecisionStatus.PENDING  # untouched
@@ -338,7 +348,7 @@ async def test_caller_session_path_resolves_and_ships(sf) -> None:
     ships within the caller's transaction."""
     workspace_id, run_id, deliverable_id, decision_id = await _seed_paused_run(sf)
     dispatcher = _RecordingDispatcher(_success_result(workspace_id, deliverable_id))
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await dispatch_delivery(
             dispatcher,
             workspace_id=workspace_id,
@@ -346,16 +356,19 @@ async def test_caller_session_path_resolves_and_ships(sf) -> None:
             artifact_type="pr",
             session=s,
         )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         decision = await s.get(Decision, decision_id)
         assert decision is not None and decision.status is DecisionStatus.RESOLVED
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.SHIPPED
 
 
-async def _run_helper(sf_: async_sessionmaker, deliverable_id: uuid.UUID) -> bool:
-    """Drive the application helper directly in its own committed session."""
-    async with sf_() as s:
+async def _run_helper(
+    sf_: async_sessionmaker, workspace_id: uuid.UUID, deliverable_id: uuid.UUID
+) -> bool:
+    """Drive the application helper directly in its own committed session —
+    scoped to the workspace, as every real caller's session is."""
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         resolved = await auto_resolve_run_on_delivery(s, deliverable_id=deliverable_id)
         await s.commit()
     return resolved

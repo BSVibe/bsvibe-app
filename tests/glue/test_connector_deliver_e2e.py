@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.extensions.plugin.loader import PluginLoader
 from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
@@ -78,38 +79,39 @@ async def _seed_verified_deliverable(session: AsyncSession, workspace_id: uuid.U
     Product × ConnectorAccount pair, so a product-less run resolves no targets
     (deliberately: "unknown product" must not mean "every target").
     """
-    product_id = await session.scalar(
-        select(ProductRow.id).where(ProductRow.workspace_id == workspace_id)
-    )
-    run = ExecutionRun(
-        id=uuid.uuid4(),
-        workspace_id=workspace_id,
-        product_id=product_id,
-        status=RunStatus.REVIEW_READY,
-        payload={"intent_text": "publish the spec"},
-    )
-    session.add(run)
-    await session.flush()
-    summary = "Quarterly Spec\nThe spec body, line two.\nLine three."
-    deliverable = Deliverable(
-        id=uuid.uuid4(),
-        run_id=run.id,
-        workspace_id=workspace_id,
-        deliverable_type=DeliverableType.CODE,
-        payload={"artifact_refs": ["spec.md"], "summary": summary},
-    )
-    session.add(deliverable)
-    await session.flush()
-    session.add(
-        DeliveryEventRow(
+    async with workspace_session_scope(session, workspace_id):
+        product_id = await session.scalar(
+            select(ProductRow.id).where(ProductRow.workspace_id == workspace_id)
+        )
+        run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
-            deliverable_id=deliverable.id,
-            artifact_type=DeliverableType.CODE.value,
-            payload={"artifact_refs": ["spec.md"], "summary": summary[:500]},
+            product_id=product_id,
+            status=RunStatus.REVIEW_READY,
+            payload={"intent_text": "publish the spec"},
         )
-    )
-    await session.commit()
+        session.add(run)
+        await session.flush()
+        summary = "Quarterly Spec\nThe spec body, line two.\nLine three."
+        deliverable = Deliverable(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=workspace_id,
+            deliverable_type=DeliverableType.CODE,
+            payload={"artifact_refs": ["spec.md"], "summary": summary},
+        )
+        session.add(deliverable)
+        await session.flush()
+        session.add(
+            DeliveryEventRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                deliverable_id=deliverable.id,
+                artifact_type=DeliverableType.CODE.value,
+                payload={"artifact_refs": ["spec.md"], "summary": summary[:500]},
+            )
+        )
+        await session.commit()
     return deliverable.id
 
 
@@ -128,33 +130,34 @@ async def _bind_delivery_target(
     tier) enforces them — SQLite does not — so seed the workspace + product
     parents IN FK ORDER first, with matching ids, before the child binding.
     """
-    if await session.get(WorkspaceRow, workspace_id) is None:
-        # safe_mode=False — these are Direct-path delivery tests (the WorkspaceRow
-        # default is Safe Mode ON, which would hold the delivery in the queue
-        # instead of delivering out, so an explicit False is required here).
-        session.add(WorkspaceRow(id=workspace_id, name="delivery-test-ws", safe_mode=False))
+    async with workspace_session_scope(session, workspace_id):
+        if await session.get(WorkspaceRow, workspace_id) is None:
+            # safe_mode=False — these are Direct-path delivery tests (the WorkspaceRow
+            # default is Safe Mode ON, which would hold the delivery in the queue
+            # instead of delivering out, so an explicit False is required here).
+            session.add(WorkspaceRow(id=workspace_id, name="delivery-test-ws", safe_mode=False))
+            await session.flush()
+        product_id = uuid.uuid4()
+        session.add(
+            ProductRow(
+                id=product_id,
+                workspace_id=workspace_id,
+                name="delivery-test-product",
+                slug=uuid.uuid4().hex[:12],
+            )
+        )
         await session.flush()
-    product_id = uuid.uuid4()
-    session.add(
-        ProductRow(
-            id=product_id,
-            workspace_id=workspace_id,
-            name="delivery-test-product",
-            slug=uuid.uuid4().hex[:12],
+        session.add(
+            ResourceBindingRow(
+                id=uuid.uuid4(),
+                workspace_id=workspace_id,
+                product_id=product_id,
+                connector_account_id=account_id,
+                resource_id="r1",
+                selection=selection or {},
+            )
         )
-    )
-    await session.flush()
-    session.add(
-        ResourceBindingRow(
-            id=uuid.uuid4(),
-            workspace_id=workspace_id,
-            product_id=product_id,
-            connector_account_id=account_id,
-            resource_id="r1",
-            selection=selection or {},
-        )
-    )
-    await session.commit()
+        await session.commit()
 
 
 async def _seed_notion_connector(
@@ -249,7 +252,7 @@ async def test_no_connector_account_no_external_call_no_error(
     assert await worker.drain_once() == 1
     assert not route.called
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         # The in-app Deliverable is untouched.
         deliverable = await s.get(Deliverable, deliverable_id)
         assert deliverable is not None

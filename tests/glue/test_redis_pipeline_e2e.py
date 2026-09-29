@@ -49,6 +49,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.config import Settings
+from backend.data.rls import workspace_session_scope
 from backend.extensions.skill.loader import SkillLoader
 from backend.workers import emit as emit_mod
 from backend.workers.emit import (
@@ -72,7 +73,7 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
 )
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 
-from .._support import BuildFrameLlm, db_engine, fake_current_user
+from .._support import BuildFrameLlm, db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -224,9 +225,6 @@ async def client(sf: Any, founder_id: uuid.UUID, workspace_id: uuid.UUID, redis_
     module-level cache the route reads, which is cleaner than mutating env."""
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -235,7 +233,7 @@ async def client(sf: Any, founder_id: uuid.UUID, workspace_id: uuid.UUID, redis_
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -263,7 +261,7 @@ async def seeded_product(
     from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 
     product_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             WorkspaceRow(
                 id=workspace_id,
@@ -353,7 +351,7 @@ async def test_full_direct_path_flows_via_redis(
         )
         == 1
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         requests = (await s.execute(select(RequestRow))).scalars().all()
     assert len(requests) == 1 and requests[0].status is RequestStatus.OPEN
     # IntakeWorker (PR #53) emitted the ``agent`` wake-up for the new Request.
@@ -367,7 +365,7 @@ async def test_full_direct_path_flows_via_redis(
         await _drain_stream(consumer, stream=STREAM_AGENT, group="agent_worker", tick=agent._tick)
         >= 1
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         assert run.status is RunStatus.REVIEW_READY
         run_id = run.id
@@ -515,7 +513,7 @@ async def test_orchestrator_verified_survives_redis_emit_failure(
     # drive_once must NOT raise even though the deliver/settle emit fails.
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         assert run.status is RunStatus.REVIEW_READY
         assert (await s.execute(select(Deliverable))).scalar_one() is not None

@@ -31,6 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import (
     ProductRow,
     ResourceBindingRow,
@@ -105,7 +106,7 @@ async def _seed_run(
         # PT3 — a tick-origin run carries the ``kind`` marker on its payload
         # exactly as open_run propagates it from the Request.
         run_payload["kind"] = origin_kind
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         s.add(WorkspaceRow(id=workspace_id, name="acme", safe_mode=safe_mode))
         await s.flush()
         if output_mode is not None:

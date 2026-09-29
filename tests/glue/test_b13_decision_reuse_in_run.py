@@ -50,6 +50,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.knowledge.factory import KnowledgeFactory
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
@@ -70,7 +71,7 @@ from backend.workflow.infrastructure.db import (
     WorkStepStatus,
 )
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
-from tests._support import db_engine, fake_current_user
+from tests._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -136,9 +137,6 @@ async def client(
 ) -> Any:
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -147,7 +145,7 @@ async def client(
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -168,7 +166,7 @@ async def test_resolved_decision_seeds_b6_and_folds_into_b3_on_next_run(
     (a) the LLM's first-turn messages (B6 seed) AND
     (b) the persisted VerificationResult.contract (B3 verify-time fold)."""
     # ----------------- Phase A: resolve + settle into the vault ------------
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run1 = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -255,7 +253,7 @@ async def test_resolved_decision_seeds_b6_and_folds_into_b3_on_next_run(
         ]
     )
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run2 = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -292,7 +290,7 @@ async def test_resolved_decision_seeds_b6_and_folds_into_b3_on_next_run(
 
     # (b) B3 verify-time fold delta — the persisted VerificationResult's
     # contract JSON contains the resolved decision text as a judge criterion.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         vr = (
             await s.execute(select(VerificationResult).where(VerificationResult.run_id == run2_id))
         ).scalar_one()

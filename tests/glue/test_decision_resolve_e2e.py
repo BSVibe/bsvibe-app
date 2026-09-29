@@ -41,6 +41,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.extensions.skill.loader import SkillLoader
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn, RunOrchestrator
@@ -58,7 +59,7 @@ from backend.workflow.infrastructure.intake.db import (
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
 from backend.workflow.infrastructure.workers.agent_worker import AgentExecutionDeps, AgentWorker
 
-from .._support import BuildFrameLlm, db_engine, fake_current_user
+from .._support import BuildFrameLlm, db_engine, fake_current_user, publishing_workspace
 
 _GH_KEY = b"0123456789abcdef0123456789abcdef"
 
@@ -165,7 +166,7 @@ async def _seed_open_request(
     sf_: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
 ) -> uuid.UUID:
     """Seed an OPEN Request so AgentWorker.claim_once mints an ExecutionRun."""
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         trigger = TriggerEventRow(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -192,9 +193,6 @@ async def _seed_open_request(
 async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -203,7 +201,7 @@ async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -246,7 +244,7 @@ async def test_pause_resolve_resume_to_review_ready(
     holder.current = _ask_script()
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         run_id = run.id
         assert run.status is RunStatus.RUNNING  # paused, not terminal
@@ -276,7 +274,7 @@ async def test_pause_resolve_resume_to_review_ready(
     assert body["resolution"] == "Use Postgres"
     assert body["run_status"] == "open"
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         decision = await s.get(Decision, decision_id)
         assert decision is not None
         assert decision.status is DecisionStatus.RESOLVED
@@ -305,7 +303,7 @@ async def test_pause_resolve_resume_to_review_ready(
     holder.current = _complete_script()
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY
@@ -416,7 +414,7 @@ async def test_pause_resolve_resume_github_run_reuses_checkout(
     bare = await _make_bare_remote(tmp_path)
     workspace_root = tmp_path / "runs"
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await _seed_github_connector(s, cipher, workspace_id)
 
     holder = _LlmHolder()
@@ -432,7 +430,7 @@ async def test_pause_resolve_resume_github_run_reuses_checkout(
     holder.current = _ask_script()
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = (await s.execute(select(ExecutionRun))).scalar_one()
         run_id = run.id
         assert run.status is RunStatus.RUNNING
@@ -444,7 +442,7 @@ async def test_pause_resolve_resume_github_run_reuses_checkout(
     assert (checkout / ".git").exists()
 
     # 3. Resolve the Decision → run RUNNING → OPEN (re-picked by drive_once).
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
@@ -454,7 +452,7 @@ async def test_pause_resolve_resume_github_run_reuses_checkout(
         )
         await s.commit()
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.OPEN
 
@@ -464,7 +462,7 @@ async def test_pause_resolve_resume_github_run_reuses_checkout(
     holder.current = _complete_script()
     assert await agent.drive_once() == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.REVIEW_READY
@@ -479,7 +477,7 @@ async def test_resolve_cross_workspace_checkpoint_404(
 ) -> None:
     """A pending Decision in a different workspace is not resolvable → 404."""
     other_ws = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, other_ws):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=other_ws,
@@ -521,7 +519,7 @@ async def test_resolve_rejects_empty_answer(
     sf: async_sessionmaker[AsyncSession],
     workspace_id: uuid.UUID,
 ) -> None:
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         run = ExecutionRun(
             id=uuid.uuid4(),
             workspace_id=workspace_id,

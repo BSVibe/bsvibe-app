@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.identity.infrastructure.repositories import SqlAlchemyResourceBindingRepository
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.application.stages.intake import (
@@ -57,7 +58,7 @@ async def _seed_workspace_product_account(
     """FK-safe parent seeding — returns (product_id, connector_account_id)."""
     product_id = uuid.uuid4()
     account_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         await s.flush()
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="Blog", slug="blog"))
@@ -159,7 +160,7 @@ async def test_receive_resolves_binding_and_populates_routing_hints(sf: Any) -> 
     """Receive: (account, resource_id) → binding → product_id + selection echo."""
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
@@ -181,7 +182,7 @@ async def test_receive_resolves_binding_and_populates_routing_hints(sf: Any) -> 
             "action": "opened",
         },
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await receive(s, row)
 
     assert isinstance(outcome, ReceiveOutcome)
@@ -199,7 +200,7 @@ async def test_receive_applies_filter_pass(sf: Any) -> None:
     """Filter ``{"action": "opened"}`` MATCHES → outcome passes."""
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
@@ -220,7 +221,7 @@ async def test_receive_applies_filter_pass(sf: Any) -> None:
             "action": "opened",
         },
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await receive(s, row)
     assert outcome.filtered_out is False
     assert outcome.product_id == product_id
@@ -230,7 +231,7 @@ async def test_receive_applies_filter_reject(sf: Any) -> None:
     """Filter ``{"action": "opened"}`` REJECTS ``action=closed`` → filtered_out."""
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
@@ -251,7 +252,7 @@ async def test_receive_applies_filter_reject(sf: Any) -> None:
             "action": "closed",
         },
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await receive(s, row)
     assert outcome.filtered_out is True
     assert outcome.reason is not None
@@ -273,7 +274,7 @@ async def test_receive_no_binding_pass_through(sf: Any) -> None:
             "action": "opened",
         },
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await receive(s, row)
     assert outcome.filtered_out is False
     assert outcome.product_id is None
@@ -289,7 +290,7 @@ async def test_receive_direct_trigger_pass_through(sf: Any) -> None:
         trigger_kind=TriggerKind.DIRECT,
         payload={"text": "hi there"},
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await receive(s, row)
     assert outcome.filtered_out is False
     assert outcome.product_id is None
@@ -307,7 +308,7 @@ async def test_receive_schedule_trigger_pass_through(sf: Any) -> None:
         trigger_kind=TriggerKind.SCHEDULE,
         payload={"cron_expr": "0 9 * * MON"},
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         outcome = await receive(s, row)
     assert outcome.filtered_out is False
     assert outcome.product_id is None
@@ -322,7 +323,7 @@ async def test_receive_filter_multi_key_must_all_match(sf: Any) -> None:
     """Filters are dict AND — every key/value must match for a pass."""
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
@@ -346,7 +347,7 @@ async def test_receive_filter_multi_key_must_all_match(sf: Any) -> None:
             "github_event": "pull_request",
         },
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await receive(s, matching)).filtered_out is False
 
     partial = _make_trigger_row(
@@ -360,7 +361,7 @@ async def test_receive_filter_multi_key_must_all_match(sf: Any) -> None:
             "github_event": "issues",  # no-match → reject
         },
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         assert (await receive(s, partial)).filtered_out is True
 
 
@@ -373,7 +374,7 @@ async def test_intake_worker_creates_request_with_routing_hints(sf: Any) -> None
     """End-to-end: TriggerEventRow → drain_once → RequestRow w/ product_id."""
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
@@ -386,7 +387,7 @@ async def test_intake_worker_creates_request_with_routing_hints(sf: Any) -> None
         await s.commit()
 
     # Land an inbound TriggerEvent the worker will drain.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             _make_trigger_row(
                 workspace_id=workspace_id,
@@ -405,7 +406,7 @@ async def test_intake_worker_creates_request_with_routing_hints(sf: Any) -> None
     drained = await IntakeWorker(session_factory=sf).drain_once()
     assert drained == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         reqs = (await s.execute(select(RequestRow))).scalars().all()
     assert len(reqs) == 1
     req = reqs[0]
@@ -421,7 +422,7 @@ async def test_intake_worker_skips_request_on_filter_reject(sf: Any) -> None:
     """
     workspace_id = uuid.uuid4()
     product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         repo = SqlAlchemyResourceBindingRepository(s)
         await repo.create(
             workspace_id=workspace_id,
@@ -442,7 +443,7 @@ async def test_intake_worker_skips_request_on_filter_reject(sf: Any) -> None:
             "action": "closed",  # filter rejects
         },
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(trig)
         await s.commit()
         trig_id = trig.id
@@ -451,7 +452,7 @@ async def test_intake_worker_skips_request_on_filter_reject(sf: Any) -> None:
     # drain_once returns ROWS PROCESSED (incl. filter rejects), not Requests created.
     assert drained == 1
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         reqs = (await s.execute(select(RequestRow))).scalars().all()
         # NO Request was minted (the filter rejected).
         assert reqs == []
@@ -474,7 +475,7 @@ async def test_intake_worker_no_binding_falls_through(sf: Any) -> None:
     _product_id, account_id = await _seed_workspace_product_account(sf, workspace_id=workspace_id)
     # No binding seeded.
 
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             _make_trigger_row(
                 workspace_id=workspace_id,
@@ -491,7 +492,7 @@ async def test_intake_worker_no_binding_falls_through(sf: Any) -> None:
 
     drained = await IntakeWorker(session_factory=sf).drain_once()
     assert drained == 1
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         reqs = (await s.execute(select(RequestRow))).scalars().all()
     assert len(reqs) == 1
     assert reqs[0].payload.get("product_id") is None
@@ -500,7 +501,7 @@ async def test_intake_worker_no_binding_falls_through(sf: Any) -> None:
 async def test_intake_worker_direct_trigger_preserves_request(sf: Any) -> None:
     """Direct trigger (no connector context) → Request is minted unchanged."""
     workspace_id = uuid.uuid4()
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             _make_trigger_row(
                 workspace_id=workspace_id,
@@ -513,7 +514,7 @@ async def test_intake_worker_direct_trigger_preserves_request(sf: Any) -> None:
 
     drained = await IntakeWorker(session_factory=sf).drain_once()
     assert drained == 1
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         reqs = (await s.execute(select(RequestRow))).scalars().all()
     assert len(reqs) == 1
     # The original payload survives (no routing hints injected).

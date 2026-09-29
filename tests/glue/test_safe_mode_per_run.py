@@ -35,6 +35,7 @@ from backend.api.deps import (
 )
 from backend.api.main import create_app
 from backend.api.v1.safemode import get_delivery_dispatcher
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
@@ -54,7 +55,7 @@ from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorkerConfig,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -99,9 +100,6 @@ def sink() -> _SinkDispatcher:
 async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID, sink: _SinkDispatcher):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -110,7 +108,7 @@ async def client(sf, founder_id: uuid.UUID, workspace_id: uuid.UUID, sink: _Sink
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_delivery_dispatcher] = lambda: sink
@@ -135,7 +133,7 @@ async def _seed_run_with_n_artifacts(
     only one we cross."""
     run_id = uuid.uuid4()
     deliverables: list[uuid.UUID] = []
-    async with sf_() as s:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
         s.add(WorkspaceRow(id=workspace_id, name="acme", safe_mode=safe_mode))
         s.add(
             ExecutionRun(
