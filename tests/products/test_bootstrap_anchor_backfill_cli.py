@@ -15,6 +15,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.config import get_settings
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from backend.workflow.application.runtime.bootstrap_anchor_backfill import run_backfill
 
@@ -80,22 +81,23 @@ async def _seed_product(
     slug: str,
     status: str = "complete",
 ) -> None:
-    async with session_factory() as s:
-        existing = await s.get(WorkspaceRow, workspace_id)
-        if existing is None:
-            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
-            await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name=slug,
-                slug=slug,
-                repo_url="https://x/y",
-                bootstrap_status=status,
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            existing = await s.get(WorkspaceRow, workspace_id)
+            if existing is None:
+                s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
+                await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name=slug,
+                    slug=slug,
+                    repo_url="https://x/y",
+                    bootstrap_status=status,
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
 
 async def test_backfill_by_product_slug_creates_anchors(session_factory, tmp_path: Path):

@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.executors.db  # noqa: F401 — register tables on the shared Base
 from backend.config import get_settings
+from backend.data.scoping import workspace_scope
 from backend.knowledge.infrastructure.workers.settle_worker import (
     KnowledgeSettleSink,
     SettleWorker,
@@ -79,38 +80,39 @@ def _ollama_up() -> bool:
 async def _seed_settle_activity(sf, *, workspace_id: uuid.UUID, summary: str) -> None:
     from tests._support import agent_knowledge_payload  # noqa: PLC0415
 
-    async with sf() as s:
-        run_id = uuid.uuid4()
-        s.add(
-            ExecutionRun(
-                id=run_id,
-                workspace_id=workspace_id,
-                request_id=uuid.uuid4(),
-                status=RunStatus.REVIEW_READY,
-                payload={"intent_text": "harden the payment checkout flow"},
-                created_at=datetime.now(tz=UTC),
-                updated_at=datetime.now(tz=UTC),
+    with workspace_scope(workspace_id):
+        async with sf() as s:
+            run_id = uuid.uuid4()
+            s.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    request_id=uuid.uuid4(),
+                    status=RunStatus.REVIEW_READY,
+                    payload={"intent_text": "harden the payment checkout flow"},
+                    created_at=datetime.now(tz=UTC),
+                    updated_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.flush()
-        s.add(
-            ExecutionRunActivity(
-                id=uuid.uuid4(),
-                run_id=run_id,
-                workspace_id=workspace_id,
-                activity_type="settle",
-                payload={
-                    "verified": True,
-                    "artifact_refs": ["backend/payments/checkout.py"],
-                    "summary": summary,
-                    "intent_text": "harden the payment checkout flow",
-                    # v2 — the agent declared knowledge, so this deposits a note.
-                    "agent_knowledge": agent_knowledge_payload(summary),
-                },
-                created_at=datetime.now(tz=UTC),
+            await s.flush()
+            s.add(
+                ExecutionRunActivity(
+                    id=uuid.uuid4(),
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    activity_type="settle",
+                    payload={
+                        "verified": True,
+                        "artifact_refs": ["backend/payments/checkout.py"],
+                        "summary": summary,
+                        "intent_text": "harden the payment checkout flow",
+                        # v2 — the agent declared knowledge, so this deposits a note.
+                        "agent_knowledge": agent_knowledge_payload(summary),
+                    },
+                    created_at=datetime.now(tz=UTC),
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
 
 
 async def test_full_knowledge_accumulation_from_empty_e2e(tmp_path: Path) -> None:
