@@ -29,7 +29,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
-from backend.data.rls import workspace_session_scope
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import (
     RequestRow,
@@ -119,11 +119,16 @@ async def _statuses(
     factory: async_sessionmaker[AsyncSession], ids: list[uuid.UUID]
 ) -> set[RunStatus]:
     async with factory() as session:
-        rows = await session.execute(
-            select(ExecutionRun.workspace_id, ExecutionRun.id).where(ExecutionRun.id.in_(ids))
-        )
+        async with cross_tenant_session_read(session):
+            rows = (
+                await session.execute(
+                    select(ExecutionRun.workspace_id, ExecutionRun.id).where(
+                        ExecutionRun.id.in_(ids)
+                    )
+                )
+            ).all()
         out: set[RunStatus] = set()
-        for ws, rid in rows.all():
+        for ws, rid in rows:
             async with workspace_session_scope(session, ws):
                 run = await session.get(ExecutionRun, rid)
                 assert run is not None
@@ -234,7 +239,7 @@ async def test_a_row_held_by_another_session_is_skipped(
     if kind == "requests":
         for ws in tenants:
             await _seed_request(session_factory, ws)
-        async with session_factory() as s:
+        async with session_factory() as s, cross_tenant_session_read(s):
             held_id = (
                 await s.execute(text("SELECT id FROM requests ORDER BY created_at LIMIT 1"))
             ).scalar_one()

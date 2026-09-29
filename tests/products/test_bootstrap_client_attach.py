@@ -20,6 +20,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import backend.workflow.application.runtime.product_bootstrap_runtime as rt
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 
 from .._support import db_engine
@@ -35,20 +36,21 @@ async def session_factory():
 
 async def _seed(session_factory, *, metadata: dict[str, Any]) -> tuple[uuid.UUID, uuid.UUID]:
     workspace_id, product_id = uuid.uuid4(), uuid.uuid4()
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name="p",
-                slug=f"p-{product_id.hex[:8]}",
-                repo_url="https://x/y",
-                product_metadata=metadata,
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=False))
+            await s.flush()
+            s.add(
+                ProductRow(
+                    id=product_id,
+                    workspace_id=workspace_id,
+                    name="p",
+                    slug=f"p-{product_id.hex[:8]}",
+                    repo_url="https://x/y",
+                    product_metadata=metadata,
+                )
             )
-        )
-        await s.commit()
+            await s.commit()
     return workspace_id, product_id
 
 
@@ -66,22 +68,23 @@ async def test_bootstrap_skips_clone_for_client_attach_product(
     fake_git = MagicMock()
     fake_git.clone = AsyncMock()
 
-    await rt.run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
-
-    fake_git.clone.assert_not_awaited()
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == rt.STATUS_SKIPPED_CLIENT_ATTACH, (
-            "a client_attach product's source must not be cloned/ingested server-side "
-            f"(status={row.bootstrap_status!r})"
+    with workspace_scope(workspace_id):
+        await rt.run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=fake_git,
         )
+
+        fake_git.clone.assert_not_awaited()
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == rt.STATUS_SKIPPED_CLIENT_ATTACH, (
+                "a client_attach product's source must not be cloned/ingested server-side "
+                f"(status={row.bootstrap_status!r})"
+            )
 
 
 async def test_bootstrap_still_clones_for_server_sandbox_product(
@@ -99,12 +102,13 @@ async def test_bootstrap_still_clones_for_server_sandbox_product(
     # Stop right after the clone — this test only pins that cloning still happens.
     monkeypatch.setattr(rt, "build_bootstrap_knowledge", lambda **_kw: None)
 
-    await rt.run_product_bootstrap_job(
-        product_id=product_id,
-        workspace_id=workspace_id,
-        repo_url="https://x/y",
-        session_factory=session_factory,
-        git_ops=fake_git,
-    )
+    with workspace_scope(workspace_id):
+        await rt.run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=fake_git,
+        )
 
     fake_git.clone.assert_awaited()

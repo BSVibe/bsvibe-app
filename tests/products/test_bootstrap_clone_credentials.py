@@ -24,6 +24,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.connectors.db import ConnectorAccountRow, ConnectorsBase
+from backend.data.scoping import workspace_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.runtime.product_bootstrap_runtime import (
@@ -75,34 +76,42 @@ async def _seed(
     connector: str = "github",
     is_active: bool = True,
 ) -> None:
-    async with session_factory() as s:
-        s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
-        await s.flush()
-        s.add(
-            ProductRow(
-                id=product_id,
-                workspace_id=workspace_id,
-                name="p",
-                slug="p",
-                repo_url="https://github.com/owner/private-repo",
-            )
-        )
-        if with_connector:
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
+            await s.flush()
             s.add(
-                ConnectorAccountRow(
-                    id=uuid.uuid4(),
+                ProductRow(
+                    id=product_id,
                     workspace_id=workspace_id,
-                    connector=connector,
-                    webhook_token=uuid.uuid4().hex,
-                    signing_secret_ciphertext=CredentialCipher(KEY).encrypt(TOKEN),
-                    # Bootstrap clones the PRODUCT's repo, not the delivery
-                    # target — an empty delivery_config must not disqualify the
-                    # credential (this is what `resolve_github_binding` would).
-                    delivery_config={},
-                    is_active=is_active,
+                    name="p",
+                    slug="p",
+                    repo_url="https://github.com/owner/private-repo",
                 )
             )
-        await s.commit()
+            if with_connector:
+                s.add(
+                    ConnectorAccountRow(
+                        id=uuid.uuid4(),
+                        workspace_id=workspace_id,
+                        connector=connector,
+                        webhook_token=uuid.uuid4().hex,
+                        signing_secret_ciphertext=CredentialCipher(KEY).encrypt(TOKEN),
+                        # Bootstrap clones the PRODUCT's repo, not the delivery
+                        # target — an empty delivery_config must not disqualify the
+                        # credential (this is what `resolve_github_binding` would).
+                        delivery_config={},
+                        is_active=is_active,
+                    )
+                )
+            await s.commit()
+
+
+async def _run_job(**kwargs) -> None:
+    """Run the job the way ``schedule_product_bootstrap`` does — its task inherits
+    the calling MCP request's published workspace."""
+    with workspace_scope(kwargs["workspace_id"]):
+        await run_product_bootstrap_job(**kwargs)
 
 
 def _sandbox_workspace_root(tmp_path) -> None:
@@ -126,7 +135,7 @@ async def test_clone_uses_github_connector_token(session_factory, tmp_path):
     # Fail after the credential is read — this test only pins the clone call.
     fake_git.clone = AsyncMock(side_effect=GitError("stop after clone"))
 
-    await run_product_bootstrap_job(
+    await _run_job(
         product_id=product_id,
         workspace_id=workspace_id,
         repo_url="https://github.com/owner/private-repo",
@@ -152,7 +161,7 @@ async def test_clone_stays_anonymous_without_connector(session_factory, tmp_path
     fake_git = MagicMock()
     fake_git.clone = AsyncMock(side_effect=GitError("stop after clone"))
 
-    await run_product_bootstrap_job(
+    await _run_job(
         product_id=product_id,
         workspace_id=workspace_id,
         repo_url="https://github.com/owner/public-repo",
@@ -179,7 +188,7 @@ async def test_inactive_connector_is_not_used(session_factory, tmp_path):
     fake_git = MagicMock()
     fake_git.clone = AsyncMock(side_effect=GitError("stop after clone"))
 
-    await run_product_bootstrap_job(
+    await _run_job(
         product_id=product_id,
         workspace_id=workspace_id,
         repo_url="https://github.com/owner/private-repo",
@@ -205,7 +214,7 @@ async def test_non_github_connector_is_not_used(session_factory, tmp_path):
     fake_git = MagicMock()
     fake_git.clone = AsyncMock(side_effect=GitError("stop after clone"))
 
-    await run_product_bootstrap_job(
+    await _run_job(
         product_id=product_id,
         workspace_id=workspace_id,
         repo_url="https://github.com/owner/private-repo",
@@ -234,7 +243,7 @@ async def test_failed_clone_without_credential_names_the_cause(session_factory, 
     fake_git = MagicMock()
     fake_git.clone = AsyncMock(side_effect=GitError("Cloning into '/app/var/products/x'..."))
 
-    await run_product_bootstrap_job(
+    await _run_job(
         product_id=product_id,
         workspace_id=workspace_id,
         repo_url="https://github.com/owner/private-repo",
@@ -242,12 +251,13 @@ async def test_failed_clone_without_credential_names_the_cause(session_factory, 
         git_ops=fake_git,
     )
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == STATUS_FAILED_CLONE
-        assert row.bootstrap_error is not None
-        # The hint names the missing piece, not just the git noise.
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == STATUS_FAILED_CLONE
+            assert row.bootstrap_error is not None
+            # The hint names the missing piece, not just the git noise.
         assert "github" in row.bootstrap_error.lower()
 
 
@@ -267,7 +277,7 @@ async def test_failed_clone_with_credential_has_no_missing_credential_hint(
     fake_git = MagicMock()
     fake_git.clone = AsyncMock(side_effect=GitError("repository not found"))
 
-    await run_product_bootstrap_job(
+    await _run_job(
         product_id=product_id,
         workspace_id=workspace_id,
         repo_url="https://github.com/owner/missing-repo",
@@ -275,9 +285,10 @@ async def test_failed_clone_with_credential_has_no_missing_credential_hint(
         git_ops=fake_git,
     )
 
-    async with session_factory() as s:
-        row = await s.get(ProductRow, product_id)
-        assert row is not None
-        assert row.bootstrap_status == STATUS_FAILED_CLONE
-        assert row.bootstrap_error is not None
-        assert "connect" not in row.bootstrap_error.lower()
+    with workspace_scope(workspace_id):
+        async with session_factory() as s:
+            row = await s.get(ProductRow, product_id)
+            assert row is not None
+            assert row.bootstrap_status == STATUS_FAILED_CLONE
+            assert row.bootstrap_error is not None
+            assert "connect" not in row.bootstrap_error.lower()
