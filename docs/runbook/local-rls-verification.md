@@ -89,26 +89,30 @@ RLS 정책은 비대칭이다 — 빈 GUC 는 **fail-open**, **다른** 워크�
 제품 코드까지 가지도 못한다). 위 절차로 PG 를 올린 뒤 owner 로:
 
 ```sql
--- 빈 GUC 로 강제 표를 건드린 질의를 기록한다. 판정은 fail-open 그대로(항상 true).
--- 키 없는 append-only: ON CONFLICT 카운터는 두 세션이 같은 로그 행 락을 다퉈 교착을 만들었다(09-28).
-DROP TABLE IF EXISTS rls_probe_log;
-CREATE TABLE rls_probe_log (tbl text, q text);
-GRANT ALL ON rls_probe_log TO bsvibe_app;
+-- 빈 GUC 로 강제 표를 건드린 질의를 **서버 로그**에 남긴다. 판정은 fail-open 그대로(항상 true).
 CREATE OR REPLACE FUNCTION rls_probe(t text) RETURNS boolean
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER AS $$
 BEGIN
   IF coalesce(current_setting('app.current_workspace_id', true), '') = '' THEN
-    INSERT INTO rls_probe_log VALUES (t, left(regexp_replace(current_query(), '\s+', ' ', 'g'), 600));
+    RAISE LOG 'RLSPROBE|%|%', t, left(regexp_replace(current_query(), '\s+', ' ', 'g'), 600);
   END IF;
   RETURN true;
 END $$;
 ```
 
 정책 6개를 `USING (rls_probe('<t>') AND <기존식>) WITH CHECK (rls_probe('<t>') AND <기존식>)` 로 다시 만든다.
+런 시작 시각을 적어 두고 끝나면 `docker logs --since <T0> pg-rls-check 2>&1 | grep -o 'RLSPROBE|.*'` 로 뽑는다.
 
-⚠️ **첫 판은 테스트를 교착시켰다** — `ON CONFLICT DO UPDATE` 카운터였는데, 같은 질의를 도는 두 세션이
-**같은 로그 행 락**을 다퉜다(하나는 `idle in transaction` 으로 테스트를 기다리고 있었다). 반드시 **키 없는 append-only**.
-그리고 긴 런에는 **출력 정지 감시**를 걸어라 — 이걸 안 걸어서 4시간을 잃었다.
+🚨 **로그를 표에 INSERT 하지 마라 — 롤백이 기록을 지운다** (09-29). 09-28 판은 `rls_probe_log` 표에
+INSERT 했다. 그 INSERT 는 **측정 대상과 같은 트랜잭션**이라, 읽기만 하고 끝나는 세션(SQLAlchemy 는 닫을 때
+rollback)의 블라인드 기록이 통째로 사라졌다 — 전체 스위트에서 **약 920건**(6337 → 7260). 09-28 의 「11곳」도
+이 장치로 센 것이다. 드러난 경위: production 계층 블라인드 **0**이 나왔는데, 반드시 찍혀야 할 테스트 헬퍼의
+블라인드 조회까지 0 이었다 — **양성 대조군을 롤백되는 세션에 걸어라**(아래 대조군).
+
+⚠️ 그 전 판(`ON CONFLICT DO UPDATE` 카운터)은 두 세션이 **같은 로그 행 락**을 다퉈 테스트를 교착시켰다
+(09-28, 4시간). `RAISE LOG` 는 락도 트랜잭션도 없다. 긴 런에는 그래도 **출력 정지 감시**를 걸어라.
+
+⚠️ 정책식은 **행마다** 평가된다 — 빈 표에 대한 블라인드 SELECT 는 프로브를 부르지 않는다. 대조군은 행을 하나 넣고.
 
 ### 2. 발행 지점 태그 — SQL 주석으로 파이썬 호출 지점을 DB 까지 실어 보낸다
 
@@ -176,18 +180,29 @@ def _tag(conn, cursor, statement, parameters, context, executemany):  # type: ig
 테스트가 서비스 함수를 **직접** 부르면 prod 에선 라우트가 세워 줄 스코프를 건너뛴다 ⇒ 테스트가 만든 블라인드.
 prod 에서 실제로 블라인드인 건 **배경 워커 진입점**을 거친 것뿐이다.
 
-```sql
-with t as (select tbl, substring(q from '/\*site:([^|]*)\|') site,
-                  substring(q from '\|entry:([^|]*)\|') entry,
-                  upper(split_part(regexp_replace(q,'^/\*[^*]*\*/ ',''),' ',1)) verb
-           from rls_probe_log where q like '/*site:backend/%')
-select entry, string_agg(distinct tbl||'.'||verb||'@'||site, ', ') from t group by 1 order by 1;
+```python
+import collections, re, sys
+c = collections.Counter()
+for line in open(sys.argv[1]):  # docker logs 에서 뽑은 RLSPROBE 줄
+    m = re.match(r"RLSPROBE\|(\w+)\|/\*site:([^|]*)\|entry:([^|]*)\|test:([^*]*)\*/ (\w+)", line)
+    if m and m[2].startswith(("backend/", "plugin/")):
+        c[m[3].split(":")[0]] += 1
+for entry, n in c.most_common():
+    print(n, entry)
 ```
+
+**API·MCP 진입점의 블라인드는 대부분 테스트가 만든 것이다** (09-29 판정): API 테스트는 `get_workspace_id` 를
+override 하고, MCP 테스트는 `registry.call_tool` 을 직접 불러 GUC 를 세우는 `mcp/server.py` 를 건너뛴다.
+판별자는 **`tests/production/*`** — 실제 인증 경로를 override 없이 돈다. 거기서 제품 코드 블라인드가 0 이면
+API/MCP 는 닫힌 것이다. prod 에서도 블라인드인 건 **사용자 세션이 없는 경로**다: 배경 워커 · 웹훅 · 운영 CLI.
 
 ### 대조군 (둘 다 없으면 숫자를 쓰지 마라)
 
 * **장치**: 런 **전후**로 정책에 프로브가 6/6 붙어 있는지 센다 — `tests/data/test_rls_pg.py` 는
   **스키마를 DROP 하고 마이그레이션을 다시 돌려** 정책을 원복시킨다. 측정 코퍼스에서 빼라
-* **프로브**: bsvibe_app 으로 블라인드 SELECT 1회는 기록되고, GUC 를 세운 SELECT 는 안 기록되는지
+* **프로브**: bsvibe_app 으로 **`BEGIN; <블라인드 SELECT>; ROLLBACK;`** 은 기록되고, GUC 를 세운 SELECT 는
+  안 기록되는지. 롤백 대조군이 없으면 09-28 의 결함(롤백이 기록을 지움)을 못 잡는다
+* **코퍼스 안 양성 대조군**: 결과 집합에 **반드시 있어야 할** 블라인드 하나를 먼저 찾아라
+  (09-29: `test_queue_claims_cross_tenant._statuses`). 그게 0 이면 숫자 전체를 버려라
 * ⚠️ fail-closed 변환을 손으로 쓸 때 **GUC 이름**을 틀리기 쉽다(`app.current_workspace_id`). 틀려도 `''` 부재만
   세는 카운터는 6/6 을 준다 — 카운터에 `qual LIKE '%app.current_workspace_id%' AND with_check = qual` 까지 넣어라
