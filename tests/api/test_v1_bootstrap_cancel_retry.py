@@ -19,7 +19,8 @@ from backend.api.main import create_app
 from backend.identity.db import MembershipRow, UserRow  # noqa: F401
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -35,26 +36,23 @@ async def client_with_ws(db):
     app = create_app()
     workspace_id = uuid.uuid4()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     async def _session():
         async with db() as s:
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="test", safe_mode=True))
         user = UserRow(id=uuid.uuid4(), supabase_user_id="test-user", email="t@example.com")
         s.add(user)
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(
             MembershipRow(id=uuid.uuid4(), user_id=user.id, workspace_id=workspace_id, role="owner")
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -87,7 +85,7 @@ async def _seed_product(
                 bootstrap_progress=progress,
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return pid
 
 

@@ -36,7 +36,7 @@ from backend.embedding.service import EmbeddedExample
 from backend.router.accounts.models import ModelAccount
 from backend.router.routing.run_routing.nl_compile import CompiledCondition
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -104,7 +104,7 @@ async def client(maker, workspace_id, account_id) -> AsyncIterator[httpx.AsyncCl
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[require_account_id] = lambda: account_id
     app.dependency_overrides[get_db_session] = _session
 

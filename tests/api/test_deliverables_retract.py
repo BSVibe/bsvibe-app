@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from backend.api.deps import get_current_user, get_db_session, get_workspace_id
 from backend.api.main import create_app
 from backend.api.v1.deliverables import get_retract_handler
+from backend.data.rls import workspace_session_scope
 from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
@@ -34,7 +35,8 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -87,15 +89,12 @@ def retractor() -> _RecordingRetractor:
 async def client(sf, workspace_id: uuid.UUID, retractor: _RecordingRetractor):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     async def _session():
         async with sf() as s:
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_retract_handler] = lambda: retractor
 
@@ -126,7 +125,7 @@ async def _seed_deliverable(
                 updated_at=datetime.now(tz=UTC),
             )
         )
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(
             Deliverable(
                 id=deliverable_id,
@@ -139,7 +138,7 @@ async def _seed_deliverable(
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return deliverable_id
 
 
@@ -176,7 +175,7 @@ async def test_retract_calls_compensate_and_marks_retracted(
     assert call["workspace_id"] == workspace_id
 
     # DB state: retracted_at populated.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None
         assert row.retracted_at is not None
@@ -198,7 +197,7 @@ async def test_retract_without_handle_returns_400(
     assert resp.status_code == 400, resp.text
     assert "no_compensation_handle" in resp.text
     assert retractor.calls == []
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None
         assert row.retracted_at is None
@@ -225,7 +224,7 @@ async def test_retract_dispatch_failure_returns_502_and_not_retracted(
     resp = await client.post(f"/api/v1/deliverables/{deliverable_id}/retract")
     assert resp.status_code == 502, resp.text
     assert "github 500" in resp.text or "compensate_failed" in resp.text
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(Deliverable, deliverable_id)
         assert row is not None
         assert row.retracted_at is None

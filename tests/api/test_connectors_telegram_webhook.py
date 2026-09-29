@@ -32,7 +32,7 @@ from backend.api.webhooks import get_credential_cipher
 from backend.connectors.db import ConnectorAccountRow
 from backend.router.accounts.crypto import CredentialCipher
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 TEST_KEY = b"0123456789abcdef0123456789abcdef"
 
@@ -84,7 +84,7 @@ def _make_client(
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(ws)
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_credential_cipher] = lambda: cipher
     app.dependency_overrides[get_telegram_client_factory] = lambda: lambda _token: telegram

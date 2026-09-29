@@ -16,6 +16,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.identity.db import MembershipRow, UserRow  # noqa: F401 — register tables
 from backend.identity.workspaces_db import WorkspacesBase
 from backend.workflow.infrastructure.db import (  # noqa: F401 — register run tables
@@ -24,7 +25,8 @@ from backend.workflow.infrastructure.db import (  # noqa: F401 — register run 
     RunStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -41,15 +43,12 @@ async def client_with_ws(db):
     app = create_app()
     workspace_id = uuid.uuid4()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     async def _session():
         async with db() as s:
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     # Seed the workspace row so /api/v1/products has a parent, plus an owner
@@ -61,11 +60,11 @@ async def client_with_ws(db):
         s.add(WorkspaceRow(id=workspace_id, name="test", safe_mode=True))
         user = UserRow(id=uuid.uuid4(), supabase_user_id="test-user", email="t@example.com")
         s.add(user)
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(
             MembershipRow(id=uuid.uuid4(), user_id=user.id, workspace_id=workspace_id, role="owner")
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -83,7 +82,7 @@ async def test_workspaces_full_lifecycle(db) -> None:
     # (SQLite doesn't enforce it, but real Postgres does).
     async with db() as s:
         s.add(UserRow(id=uuid.uuid4(), supabase_user_id="test-user", email="t@x"))
-        await s.commit()
+        await commit_per_workspace(s)
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_current_user] = fake_current_user("test-user")
@@ -191,13 +190,13 @@ async def test_delete_product_cascade_cancels_runs(client_with_ws, db) -> None:
             updated_at=_dt.datetime.now(_dt.UTC),
         )
         s.add_all([open_run, shipped_run])
-        await s.commit()
+        await commit_per_workspace(s)
         open_id, shipped_id = open_run.id, shipped_run.id
 
     r = await c.delete(f"/api/v1/products/{product_id}")
     assert r.status_code == 204, r.text
 
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         assert (await s.get(ExecutionRun, open_id)).status is RunStatus.CANCELLED
         assert (await s.get(ExecutionRun, shipped_id)).status is RunStatus.SHIPPED
 
@@ -340,13 +339,13 @@ async def test_product_workspace_isolation(db) -> None:
     async with db() as s:
         s.add(WorkspaceRow(id=ws_a, name="a", safe_mode=True))
         s.add(WorkspaceRow(id=ws_b, name="b", safe_mode=True))
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(ProductRow(id=product_id, workspace_id=ws_a, name="A's blog", slug="a-blog"))
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
     # Workspace B's view
-    app.dependency_overrides[get_workspace_id] = lambda: ws_b
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(ws_b)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get("/api/v1/products")
         assert r.json() == []
@@ -439,7 +438,7 @@ async def test_the_api_refuses_a_region(db) -> None:
 
     async with db() as s:
         s.add(UserRow(id=uuid.uuid4(), supabase_user_id="test-user", email="t@x"))
-        await s.commit()
+        await commit_per_workspace(s)
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_current_user] = fake_current_user("test-user")
@@ -479,9 +478,9 @@ async def _plural_client_with_role(db, role: str, *, subject: str = "test-user")
         s.add(WorkspaceRow(id=workspace_id, name="Acme", safe_mode=True))
         user = UserRow(id=uuid.uuid4(), supabase_user_id=subject, email=f"{subject}@example.com")
         s.add(user)
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(MembershipRow(id=uuid.uuid4(), user_id=user.id, workspace_id=workspace_id, role=role))
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test"), workspace_id
@@ -497,7 +496,7 @@ async def test_plural_low_role_cannot_patch_safe_mode(db, role) -> None:
     async with c:
         r = await c.patch(f"/api/v1/workspaces/{ws_id}", json={"safe_mode": False})
         assert r.status_code == 403, r.text
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, ws_id):
         row = (await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == ws_id))).scalar_one()
         assert row.safe_mode is True
 
@@ -511,7 +510,7 @@ async def test_plural_non_owner_cannot_delete(db, role) -> None:
     async with c:
         r = await c.delete(f"/api/v1/workspaces/{ws_id}")
         assert r.status_code == 403, r.text
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, ws_id):
         row = (await s.execute(select(WorkspaceRow).where(WorkspaceRow.id == ws_id))).scalar_one()
         assert row.deleted_at is None
 

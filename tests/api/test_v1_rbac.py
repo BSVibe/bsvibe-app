@@ -21,6 +21,7 @@ from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 
 from .._support import db_engine, fake_current_user
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -40,10 +41,10 @@ async def _seed(db, role: str) -> tuple[uuid.UUID, str]:
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         s.add(UserRow(id=user_id, supabase_user_id=supabase_user_id, email="m@x"))
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(MembershipRow(id=uuid.uuid4(), user_id=user_id, workspace_id=workspace_id, role=role))
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="P", slug="p"))
-        await s.commit()
+        await commit_per_workspace(s)
     return product_id, supabase_user_id
 
 

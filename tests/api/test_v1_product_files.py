@@ -22,7 +22,8 @@ from backend.config import get_settings
 from backend.identity.db import MembershipRow, UserRow  # noqa: F401 — register tables
 from backend.storage.product_workspace import product_workspace_path
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -59,18 +60,18 @@ async def client_ws(db):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="t", safe_mode=True))
         user = UserRow(id=uuid.uuid4(), supabase_user_id="u", email="u@x")
         s.add(user)
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(
             MembershipRow(id=uuid.uuid4(), user_id=user.id, workspace_id=workspace_id, role="owner")
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:

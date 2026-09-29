@@ -39,7 +39,8 @@ from backend.knowledge.graph.writer_core import GardenWriter
 from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
 from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun, RunStatus
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -66,9 +67,6 @@ def vault_root(tmp_path: Path) -> Path:
 async def client(sf, workspace_id: uuid.UUID, vault_root: Path):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=uuid.uuid4())
 
@@ -82,7 +80,7 @@ async def client(sf, workspace_id: uuid.UUID, vault_root: Path):
         return ResolvedDecisionsRetriever(FileSystemStorage(root))
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[build_decisions_retriever] = _retriever
@@ -105,7 +103,7 @@ async def _seed_pending(
             updated_at=datetime.now(tz=UTC),
         )
         s.add(run)
-        await s.flush()
+        await flush_per_workspace(s)
         decision = Decision(
             id=uuid.uuid4(),
             run_id=run.id,
@@ -115,7 +113,7 @@ async def _seed_pending(
             status=DecisionStatus.PENDING,
         )
         s.add(decision)
-        await s.commit()
+        await commit_per_workspace(s)
         return decision.id
 
 

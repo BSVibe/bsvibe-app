@@ -20,11 +20,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from backend.api.deps import get_current_user, get_db_session, get_workspace_id
 from backend.api.main import create_app
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
 from backend.identity.default_account import set_default_model_account_if_unset
 from backend.identity.workspaces_db import WorkspaceRow, WorkspacesBase
 from backend.router.accounts.models import AccountsBase
 
-from .._support import db_engine, fake_current_user, memory_session
+from .._support import db_engine, fake_current_user, memory_session, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -77,12 +79,12 @@ async def client(db):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: ws_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(ws_id)
     app.dependency_overrides[get_db_session] = _session
 
     async with db() as s:
         s.add(WorkspaceRow(id=ws_id, name="Acme", safe_mode=True))
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -101,12 +103,12 @@ async def test_rest_first_account_becomes_default_second_does_not(client) -> Non
     assert r1.status_code == 201, r1.text
     first_id = uuid.UUID(r1.json()["id"])
 
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, ws_id):
         ws = await s.get(WorkspaceRow, ws_id)
         assert ws.default_account_id == first_id  # first account auto-set
 
     r2 = await c.post("/api/v1/accounts", json={**body, "label": "secondary"})
     assert r2.status_code == 201, r2.text
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, ws_id):
         ws = await s.get(WorkspaceRow, ws_id)
         assert ws.default_account_id == first_id  # unchanged by the second

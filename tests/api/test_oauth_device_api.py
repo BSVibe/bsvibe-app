@@ -39,7 +39,8 @@ from backend.identity.oauth_keys import reset_signing_key_for_tests
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.shared.oauth_client_ids import DEVICE_CLIENT_ID
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -69,7 +70,7 @@ async def seeded_user(db, workspace_id) -> AsyncIterator[UserRow]:
         s.add(WorkspaceRow(id=workspace_id, name="t-ws"))
         user = UserRow(supabase_user_id="test-user", email="t@example.com")
         s.add(user)
-        await s.commit()
+        await commit_per_workspace(s)
         yield user
 
 
@@ -82,7 +83,7 @@ async def client(db, workspace_id, seeded_user) -> AsyncIterator[httpx.AsyncClie
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_current_user_row] = lambda: seeded_user
 
@@ -294,7 +295,7 @@ async def test_lookup_marks_a_registered_client_verified_with_its_name(
                 allowed_scopes=["mcp:read"],
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     started = await _start_as(client, "dcr-registered-tool")
     body = await _lookup(client, started["user_code"])
@@ -344,7 +345,7 @@ async def test_lookup_does_not_vouch_for_a_revoked_client(client, db, workspace_
                 revoked_at=datetime.now(UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     started = await _start_as(client, "dcr-revoked-tool")
     body = await _lookup(client, started["user_code"])

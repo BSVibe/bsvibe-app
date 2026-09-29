@@ -48,6 +48,7 @@ from backend.identity.workspaces_db import WorkspaceRow
 from backend.shared.authz.settings import get_settings as get_authz_settings
 
 from .._support import db_engine
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -83,9 +84,9 @@ async def seeded(db) -> AsyncIterator[tuple[UserRow, uuid.UUID]]:
         s.add(ws)
         user = UserRow(supabase_user_id=f"sb-{uuid.uuid4()}", email="t@example.com")
         s.add(user)
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(MembershipRow(user_id=user.id, workspace_id=ws.id, role="owner"))
-        await s.commit()
+        await commit_per_workspace(s)
         yield user, ws.id
 
 
@@ -129,7 +130,7 @@ async def _mcp_token(db, user: UserRow, workspace_id: uuid.UUID, scope: list[str
             scope=scope,
             issuer=ISSUER,
         )
-        await s.commit()
+        await commit_per_workspace(s)
         return pair.access_token
 
 
@@ -176,7 +177,7 @@ async def test_run_scoped_token_cannot_mint_even_with_admin(client, db, seeded) 
         token = await issue_run_task_token(
             s, run_id=uuid.uuid4(), workspace_id=ws, user_id=user.id, issuer=ISSUER
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await client.post("/api/v1/oauth/pats", json={"name": "escalate"}, headers=_auth(token))
     assert r.status_code == 403
@@ -193,7 +194,7 @@ async def test_revoked_mcp_token_is_rejected(client, db, seeded) -> None:
             .where(OAuthAccessTokenRow.id == uuid.UUID(claims["jti"]))
             .values(revoked_at=datetime.now(UTC))
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await client.post("/api/v1/oauth/pats", json={"name": "dead"}, headers=_auth(token))
     assert r.status_code == 401

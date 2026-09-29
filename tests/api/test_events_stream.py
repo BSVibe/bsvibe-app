@@ -36,6 +36,7 @@ from backend.identity.workspaces_db import WorkspaceRow
 from backend.shared.authz.settings import get_settings as get_auth_settings
 
 from .._support import db_engine
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -85,7 +86,7 @@ async def _seed_member(db, workspace_id: uuid.UUID, sub: str, role: str = "owner
         s.add(WorkspaceRow(id=workspace_id, name="ws", safe_mode=True))
         user_id = uuid.uuid4()
         s.add(UserRow(id=user_id, supabase_user_id=sub, email="m@example.com"))
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(
             MembershipRow(
                 id=uuid.uuid4(),
@@ -94,7 +95,7 @@ async def _seed_member(db, workspace_id: uuid.UUID, sub: str, role: str = "owner
                 role=role,
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
 
 def _client(app, db) -> httpx.AsyncClient:

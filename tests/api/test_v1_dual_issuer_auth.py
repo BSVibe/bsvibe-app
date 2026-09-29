@@ -48,6 +48,7 @@ from backend.identity.workspaces_db import WorkspaceRow
 from backend.shared.authz.settings import get_settings as get_authz_settings
 
 from .._support import db_engine
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -79,9 +80,9 @@ async def _seed_user_with_workspace(db, *, name: str) -> tuple[UserRow, uuid.UUI
         s.add(ws)
         user = UserRow(supabase_user_id=f"sb-{uuid.uuid4()}", email=f"{name}@example.com")
         s.add(user)
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(MembershipRow(user_id=user.id, workspace_id=ws.id, role="owner"))
-        await s.commit()
+        await commit_per_workspace(s)
         return user, ws.id
 
 
@@ -131,7 +132,7 @@ async def _cli_token(db, user: UserRow, workspace_id: uuid.UUID, scope: list[str
             scope=scope,
             issuer=ISSUER,
         )
-        await s.commit()
+        await commit_per_workspace(s)
         return pair.access_token
 
 
@@ -190,7 +191,7 @@ async def test_run_scoped_task_token_cannot_reach_v1(client, db, seeded) -> None
         token = await issue_run_task_token(
             s, run_id=uuid.uuid4(), workspace_id=ws, user_id=user.id, issuer=ISSUER
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await client.get("/api/v1/products", headers=_auth(token))
 
@@ -234,7 +235,7 @@ async def test_revoked_access_token_is_rejected(client, db, seeded) -> None:
             .where(OAuthAccessTokenRow.id == uuid.UUID(claims["jti"]))
             .values(revoked_at=datetime.now(UTC))
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await client.get("/api/v1/products", headers=_auth(token))
 
@@ -256,7 +257,7 @@ async def test_row_expiry_is_enforced_even_when_the_jwt_still_looks_fresh(
             .where(OAuthAccessTokenRow.id == uuid.UUID(claims["jti"]))
             .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await client.get("/api/v1/products", headers=_auth(token))
 
@@ -272,9 +273,9 @@ async def test_token_scopes_to_its_wsp_claim_not_the_users_first_membership(clie
     async with db() as s:
         ws_b = WorkspaceRow(name="ws-b")
         s.add(ws_b)
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(MembershipRow(user_id=user.id, workspace_id=ws_b.id, role="owner"))
-        await s.commit()
+        await commit_per_workspace(s)
         ws_b_id = ws_b.id
 
     token_b = await _cli_token(db, user, ws_b_id, CLI_SCOPES)
@@ -296,7 +297,7 @@ async def test_token_for_a_workspace_the_user_left_is_rejected(client, db, seede
             .where(MembershipRow.user_id == user.id, MembershipRow.workspace_id == ws)
             .values(left_at=datetime.now(UTC))
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await client.get("/api/v1/products", headers=_auth(token))
 

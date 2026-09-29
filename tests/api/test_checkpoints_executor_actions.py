@@ -32,6 +32,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -45,7 +46,8 @@ from backend.workflow.infrastructure.db import (
     WorkStepStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -68,9 +70,6 @@ async def client(db, workspace_id: uuid.UUID):
     app = create_app()
     founder_id = uuid.uuid4()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -80,7 +79,7 @@ async def client(db, workspace_id: uuid.UUID):
 
     app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_current_user_row] = _user_row
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     transport = httpx.ASGITransport(app=app)
@@ -113,7 +112,7 @@ async def _seed_run_with_step(db, *, ws: uuid.UUID) -> tuple[uuid.UUID, uuid.UUI
                 created_at=_NOW - timedelta(hours=2),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return run_id, step_id
 
 
@@ -133,7 +132,7 @@ async def _seed_executor_decision(
                 created_at=_NOW - timedelta(minutes=10),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return decision_id
 
 
@@ -259,7 +258,7 @@ async def test_resolve_ship_promotes_workstep_creates_deliverable_and_ships_run(
     assert body["resolution"] == "ship"
     assert body["run_status"] == "shipped"
 
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         # WorkStep was promoted.
         step = await s.get(WorkStep, step_id)
         assert step is not None
@@ -305,7 +304,7 @@ async def test_resolve_discard_abandons_run_with_no_deliverable(client, db, work
     assert r.json()["resolution"] == "discard"
     assert r.json()["run_status"] == "cancelled"
 
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None
         assert run.status is RunStatus.CANCELLED

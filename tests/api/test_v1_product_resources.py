@@ -29,7 +29,8 @@ from backend.identity.workspaces_db import (
     WorkspacesBase,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -52,14 +53,16 @@ async def client_with_product(db):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     async with db() as s:
         s.add(WorkspaceRow(id=workspace_id, name="test", safe_mode=True))
-        await s.flush()  # workspace must INSERT before the product (PG FK; SQLite ignores)
+        await flush_per_workspace(
+            s
+        )  # workspace must INSERT before the product (PG FK; SQLite ignores)
         s.add(ProductRow(id=product_id, workspace_id=workspace_id, name="Blog", slug="blog"))
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -187,9 +190,9 @@ async def test_resource_workspace_isolation(db) -> None:
     async with db() as s:
         s.add(WorkspaceRow(id=ws_a, name="a", safe_mode=True))
         s.add(WorkspaceRow(id=ws_b, name="b", safe_mode=True))
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(ProductRow(id=product_id, workspace_id=ws_a, name="A blog", slug="a-blog"))
-        await s.flush()
+        await flush_per_workspace(s)
         s.add(
             ProductResourceRow(
                 id=resource_id,
@@ -199,12 +202,12 @@ async def test_resource_workspace_isolation(db) -> None:
                 title="A's repo",
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     transport = httpx.ASGITransport(app=app)
 
     # Workspace B can't see workspace A's product at all → 404 on its resources.
-    app.dependency_overrides[get_workspace_id] = lambda: ws_b
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(ws_b)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get(f"/api/v1/products/{product_id}/resources")
         assert r.status_code == 404
@@ -212,7 +215,7 @@ async def test_resource_workspace_isolation(db) -> None:
         assert r.status_code == 404
 
     # Workspace A sees its own resource.
-    app.dependency_overrides[get_workspace_id] = lambda: ws_a
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(ws_a)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get(f"/api/v1/products/{product_id}/resources")
         assert r.status_code == 200
