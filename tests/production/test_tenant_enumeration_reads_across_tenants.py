@@ -21,14 +21,11 @@ stopped enumerating cannot pass by reading nothing.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import ORMExecuteState, Session
 
 from backend.data.rls import workspace_session_scope
 from backend.knowledge.infrastructure.workers.settle_worker import Settlement, SettleWorker
@@ -38,40 +35,9 @@ from backend.workflow.infrastructure.workers.auth_dependency_worker import AuthD
 from backend.workflow.infrastructure.workers.daily_brief_worker import DailyBriefWorker
 from plugin.audit.retention_sweep import AuditRetentionSweepRunner
 
-from .conftest import bootstrap_tenant, requires_real_pg
+from .conftest import PoliciedRead, bootstrap_tenant, requires_real_pg
 
 pytestmark = [pytest.mark.asyncio, requires_real_pg]
-
-_POLICIED = frozenset(
-    {"workspaces", "requests", "execution_runs", "execution_decisions", "deliverables", "products"}
-)
-
-# (policied tables the SELECT touched, GUC it ran under)
-_Read = tuple[frozenset[str], str]
-
-
-@pytest.fixture
-def policied_reads() -> Iterator[list[_Read]]:
-    reads: list[_Read] = []
-
-    def _record(state: ORMExecuteState) -> None:
-        if not state.is_select:
-            return
-        tables = frozenset(m.local_table.name for m in state.all_mappers) & _POLICIED
-        if not tables:
-            return
-        guc = (
-            state.session.connection()
-            .execute(text("SELECT current_setting('app.current_workspace_id', true)"))
-            .scalar()
-        )
-        reads.append((tables, guc or ""))
-
-    event.listen(Session, "do_orm_execute", _record)
-    try:
-        yield reads
-    finally:
-        event.remove(Session, "do_orm_execute", _record)
 
 
 async def _two_tenants(factory: async_sessionmaker[AsyncSession]) -> list[uuid.UUID]:
@@ -81,13 +47,13 @@ async def _two_tenants(factory: async_sessionmaker[AsyncSession]) -> list[uuid.U
     ]
 
 
-def _assert_scoped_enumeration(reads: list[_Read]) -> None:
+def _assert_scoped_enumeration(reads: list[PoliciedRead]) -> None:
     assert any("workspaces" in t and guc == "*" for t, guc in reads), reads
     assert [r for r in reads if r[1] == ""] == []
 
 
 async def test_daily_brief(
-    session_factory: async_sessionmaker[AsyncSession], policied_reads: list[_Read]
+    session_factory: async_sessionmaker[AsyncSession], policied_reads: list[PoliciedRead]
 ) -> None:
     await _two_tenants(session_factory)
     policied_reads.clear()
@@ -96,7 +62,7 @@ async def test_daily_brief(
 
 
 async def test_auth_dependency_announce(
-    session_factory: async_sessionmaker[AsyncSession], policied_reads: list[_Read]
+    session_factory: async_sessionmaker[AsyncSession], policied_reads: list[PoliciedRead]
 ) -> None:
     await _two_tenants(session_factory)
 
@@ -111,7 +77,7 @@ async def test_auth_dependency_announce(
 
 
 async def test_audit_retention_sweep(
-    session_factory: async_sessionmaker[AsyncSession], policied_reads: list[_Read]
+    session_factory: async_sessionmaker[AsyncSession], policied_reads: list[PoliciedRead]
 ) -> None:
     await _two_tenants(session_factory)
     policied_reads.clear()
@@ -162,7 +128,7 @@ async def _seed_settle(factory: async_sessionmaker[AsyncSession], ws: uuid.UUID)
 
 async def test_settle_resolves_policies_across_tenants(
     session_factory: async_sessionmaker[AsyncSession],
-    policied_reads: list[_Read],
+    policied_reads: list[PoliciedRead],
     tmp_path: Path,
 ) -> None:
     tenants = await _two_tenants(session_factory)

@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from backend.workflow.application.product_tick_planner import ProductTickPlanner
 
 from backend.config import Settings, get_settings
-from backend.data.rls import workspace_session_scope
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.data.scoping import workspace_scope
 from backend.dispatch.adapter import ExecutorCapacitySaturated
 from backend.extensions.skill.loader import SkillLoader
@@ -566,9 +566,14 @@ class AgentWorker(BaseWorker):
         )
 
         async with self._session_factory() as session:
-            reaped = await reap_terminal_run_workspaces(session)
-            reaped_products = await reap_orphan_product_workspaces(session)
-            reaped_products += await reap_idle_product_workspaces(session)
+            # #959 — "which dirs are still alive" is asked of every tenant's
+            # runs and products at once. Blind, a fail-closed policy would
+            # answer "none" and the sweep would delete live work. The block
+            # writes nothing to the DB (advisory lock + filesystem + store).
+            async with cross_tenant_session_read(session):
+                reaped = await reap_terminal_run_workspaces(session)
+                reaped_products = await reap_orphan_product_workspaces(session)
+                reaped_products += await reap_idle_product_workspaces(session)
             # removers are filesystem-only (no DB writes), but commit to release
             # the short read txn promptly (parity with _reap_stale_claims).
             await session.commit()
