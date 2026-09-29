@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.api.deps import get_db_session, get_workspace_id
+from backend.data.scoping import current_workspace_id
 
 from ._support import db_engine, publishing_workspace, use_real_pg
 
@@ -29,11 +30,17 @@ pytestmark = [
 ]
 
 
-def _app(sf: async_sessionmaker[AsyncSession]) -> FastAPI:
+def _app(sf: async_sessionmaker[AsyncSession], *, begun: bool = False) -> FastAPI:
+    """``begun`` puts a query on the request session BEFORE the workspace is
+    resolved — the real shape (auth reads ``memberships`` first), in which the
+    transaction's ``after_begin`` already fired with no workspace and only an
+    explicit GUC publication covers the rest of it."""
     app = FastAPI()
 
     async def _session():  # type: ignore[no-untyped-def]
         async with sf() as s:
+            if begun:
+                await s.execute(text("SELECT 1"))
             yield s
 
     @app.get("/guc")
@@ -44,7 +51,8 @@ def _app(sf: async_sessionmaker[AsyncSession]) -> FastAPI:
         value = (
             await session.execute(text("SELECT current_setting('app.current_workspace_id', true)"))
         ).scalar_one()
-        return {"ws": str(ws), "guc": value or ""}
+        scoped = current_workspace_id.get()
+        return {"ws": str(ws), "guc": value or "", "layer2": str(scoped) if scoped else ""}
 
     app.dependency_overrides[get_db_session] = _session
     return app
@@ -60,7 +68,15 @@ async def test_the_publishing_override_arms_the_guc_on_the_route_session() -> No
     async with db_engine() as (engine, _pg):
         app = _app(async_sessionmaker(engine, expire_on_commit=False))
         app.dependency_overrides[get_workspace_id] = publishing_workspace(ws)
-        assert await _call(app) == {"ws": str(ws), "guc": str(ws)}
+        assert await _call(app) == {"ws": str(ws), "guc": str(ws), "layer2": str(ws)}
+
+
+async def test_it_arms_the_guc_even_when_the_transaction_already_began() -> None:
+    ws = uuid.uuid4()
+    async with db_engine() as (engine, _pg):
+        app = _app(async_sessionmaker(engine, expire_on_commit=False), begun=True)
+        app.dependency_overrides[get_workspace_id] = publishing_workspace(ws)
+        assert (await _call(app))["guc"] == str(ws)
 
 
 async def test_control_a_bare_lambda_override_leaves_the_guc_empty() -> None:
@@ -69,4 +85,4 @@ async def test_control_a_bare_lambda_override_leaves_the_guc_empty() -> None:
     async with db_engine() as (engine, _pg):
         app = _app(async_sessionmaker(engine, expire_on_commit=False))
         app.dependency_overrides[get_workspace_id] = lambda: ws
-        assert await _call(app) == {"ws": str(ws), "guc": ""}
+        assert await _call(app) == {"ws": str(ws), "guc": "", "layer2": ""}
