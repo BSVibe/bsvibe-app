@@ -29,8 +29,9 @@ from backend.mcp.tools import register_all_tools
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -77,7 +78,7 @@ def _principal(*, workspace_id: uuid.UUID, user_id: uuid.UUID) -> McpPrincipal:
 async def _seed(db, *, workspace_id: uuid.UUID, user_id: uuid.UUID, cap: int | None, held: int):
     now = datetime.now(tz=UTC)
     product_id = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", max_concurrent_runs=cap))
         s.add(UserRow(id=user_id, supabase_user_id="test-user", email="t@example.com"))
         await s.flush()

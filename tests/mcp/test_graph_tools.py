@@ -24,8 +24,9 @@ from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 @pytest_asyncio.fixture
@@ -73,7 +74,7 @@ async def registry() -> ToolRegistry:
 @pytest_asyncio.fixture
 async def seeded_graph(db, workspace_id) -> AsyncIterator[Path]:
     """Plant a small graph.json under the workspace's vault."""
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
@@ -345,7 +346,7 @@ async def test_search_filters_by_kind(db, workspace_id, user_id, registry, seede
 async def graph_with_external(db, workspace_id) -> AsyncIterator[Path]:
     """A graph where an external import stub (BaseModel) shares the query
     substring with an internal node — for the F8 external-exclusion check."""
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()
@@ -412,7 +413,7 @@ async def test_search_includes_external_when_kind_requested(
 
 
 async def test_no_graph_yet_returns_clean_error(db, workspace_id, user_id, registry) -> None:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         ws = WorkspaceRow(id=workspace_id, name="ws")
         s.add(ws)
         await s.commit()

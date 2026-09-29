@@ -27,8 +27,9 @@ from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
 
 from .._support import db_engine
+from ._rls import scoped_session
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
 
 
 class _StubEmbedder:
@@ -91,7 +92,7 @@ async def registry() -> ToolRegistry:
 
 @pytest_asyncio.fixture
 async def seeded(db, workspace_id) -> AsyncIterator[None]:
-    async with db() as s:
+    async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         await s.commit()
     yield
@@ -214,7 +215,7 @@ async def test_delete_unknown_errors(db, workspace_id, user_id, registry, seeded
 
 async def test_list_workspace_scoped(db, workspace_id, user_id, registry, seeded) -> None:
     other_ws = uuid.uuid4()
-    async with db() as s:
+    async with scoped_session(db, other_ws) as s:
         s.add(WorkspaceRow(id=other_ws, name="other"))
         await s.commit()
 
