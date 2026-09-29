@@ -39,9 +39,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.api.webhooks import _binding_for_event, _resource_id_for
 from backend.connectors.db import ConnectorAccountRow
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, WorkspaceRow
 
 from .._support import db_engine
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -55,8 +57,12 @@ async def _product_id_from_binding(
     on), because the route also has to stamp those routing keys onto the payload
     it stores for the Receive stage. Every assertion below is about WHICH product
     a delivery lands on, so it reads that one field off the result.
+
+    Called under the account's workspace scope, as the route calls it — the
+    route publishes the account's workspace before resolving (#959).
     """
-    resolved = await _binding_for_event(session, account=account, payload=payload)
+    async with workspace_session_scope(session, account.workspace_id):
+        resolved = await _binding_for_event(session, account=account, payload=payload)
     return None if resolved is None else resolved[0].product_id
 
 
@@ -75,7 +81,7 @@ async def _seed(
     # Flush each FK LEVEL before the rows that point at it. SQLAlchemy orders
     # inserts per-mapper, not by cross-model FK dependency, and SQLite's lax FK
     # enforcement hides every violation here until PostgreSQL runs it.
-    await session.flush()
+    await flush_per_workspace(session)
     product = ProductRow(
         id=uuid.uuid4(),
         workspace_id=ws,
@@ -97,7 +103,7 @@ async def _seed(
     # Flush the FK targets before the row that points at them — SQLAlchemy orders
     # inserts per-mapper, not by cross-model FK dependency, and SQLite's lax FK
     # enforcement hides the resulting violation until CI runs it on PostgreSQL.
-    await session.flush()
+    await flush_per_workspace(session)
     session.add(
         ResourceBindingRow(
             id=uuid.uuid4(),
@@ -107,7 +113,7 @@ async def _seed(
             resource_id=resource_id,
         )
     )
-    await session.commit()
+    await commit_per_workspace(session)
     return account, product.id
 
 
@@ -219,7 +225,7 @@ async def test_a_connector_with_no_binding_at_all_is_quiet(sf) -> None:
     async with sf() as session:
         ws = uuid.uuid4()
         session.add(WorkspaceRow(id=ws, name="WS", language="ko"))
-        await session.flush()
+        await flush_per_workspace(session)
         account = ConnectorAccountRow(
             id=uuid.uuid4(),
             workspace_id=ws,
@@ -230,7 +236,7 @@ async def test_a_connector_with_no_binding_at_all_is_quiet(sf) -> None:
             is_active=True,
         )
         session.add(account)
-        await session.commit()
+        await commit_per_workspace(session)
         resolved = await _product_id_from_binding(session, account=account, payload={"chat_id": 1})
     assert resolved is None
 
@@ -248,8 +254,9 @@ async def test_github_still_resolves_by_repo(sf) -> None:
         _account, product_id = await _seed(
             session, connector="github", resource_id="unused-for-this-test"
         )
-        ws = (await session.get(ProductRow, product_id)).workspace_id
-        resolved = await _product_id_for_repo(session, ws, "blas1n/BStockReport")
+        async with workspace_session_scope(session, _account.workspace_id):
+            ws = (await session.get(ProductRow, product_id)).workspace_id
+            resolved = await _product_id_for_repo(session, ws, "blas1n/BStockReport")
     assert resolved == product_id
 
 

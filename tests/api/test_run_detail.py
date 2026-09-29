@@ -42,7 +42,8 @@ from backend.workflow.infrastructure.db import (
     VerificationResult,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -62,15 +63,12 @@ def workspace_id() -> uuid.UUID:
 async def configured_client(db, workspace_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     async def _session():
         async with db() as s:
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     transport = httpx.ASGITransport(app=app)
@@ -96,7 +94,7 @@ async def _seed_run(
             updated_at=datetime.now(tz=UTC),
         )
     )
-    await s.flush()
+    await flush_per_workspace(s)
 
 
 async def test_detail_returns_trigger_context(configured_client, db, workspace_id) -> None:
@@ -117,7 +115,7 @@ async def test_detail_returns_trigger_context(configured_client, db, workspace_i
                 "extra_noise": {"ignored": True},
             },
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -154,7 +152,7 @@ async def test_detail_includes_decisions_block(configured_client, db, workspace_
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -198,7 +196,7 @@ async def test_detail_includes_latest_verification(configured_client, db, worksp
                 created_at=base + timedelta(minutes=5),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -224,7 +222,7 @@ async def test_detail_includes_deliverable_id(configured_client, db, workspace_i
                 created_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -237,7 +235,7 @@ async def test_detail_cross_workspace_404(configured_client, db, workspace_id) -
     theirs = uuid.uuid4()
     async with db() as s:
         await _seed_run(s, run_id=theirs, ws=other_ws, status=RunStatus.RUNNING)
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{theirs}/detail")
     assert r.status_code == 404
@@ -252,7 +250,7 @@ async def test_detail_sparse_payload_degrades_calmly(configured_client, db, work
     run_id = uuid.uuid4()
     async with db() as s:
         await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.OPEN, payload={})
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -282,7 +280,7 @@ async def test_detail_tolerates_non_string_payload_values(
             status=RunStatus.RUNNING,
             payload={"source": 123, "intent_text": ["not", "a", "string"], "text": "fallback"},
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -316,7 +314,7 @@ async def _seed_activity(
             created_at=created_at,
         )
     )
-    await s.flush()
+    await flush_per_workspace(s)
 
 
 async def test_detail_returns_activity_timeline_in_order(
@@ -356,7 +354,7 @@ async def test_detail_returns_activity_timeline_in_order(
             payload={"verified": True, "artifact_refs": ["calculator.py"], "summary": "done"},
             created_at=base + timedelta(minutes=3),
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -403,7 +401,7 @@ async def test_detail_timeline_filters_noise(configured_client, db, workspace_id
             payload={"outcome": "passed", "commands": 1},
             created_at=base + timedelta(seconds=30),
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -444,7 +442,7 @@ async def test_detail_timeline_synthesized_when_no_activities(
                 created_at=base + timedelta(minutes=2),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -471,7 +469,7 @@ async def test_detail_timeline_source_recorded_when_activities_exist(
             payload={"outcome": "passed", "commands": 1},
             created_at=datetime.now(tz=UTC),
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -486,7 +484,7 @@ async def test_detail_timeline_empty_when_nothing_to_show(
     run_id = uuid.uuid4()
     async with db() as s:
         await _seed_run(s, run_id=run_id, ws=workspace_id, status=RunStatus.OPEN, payload={})
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text
@@ -509,7 +507,7 @@ async def test_detail_timeline_tolerates_odd_payload(configured_client, db, work
             payload={"tool": 123, "ok": "yes", "writes": "not-a-list"},
             created_at=datetime.now(tz=UTC),
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
     assert r.status_code == 200, r.text

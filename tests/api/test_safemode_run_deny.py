@@ -24,7 +24,7 @@ from backend.identity.db import UserRow
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.infrastructure.delivery.db import SafeModeStatus
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -51,7 +51,7 @@ async def client(db, workspace_id):
 
     app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_current_user_row] = lambda: user
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:

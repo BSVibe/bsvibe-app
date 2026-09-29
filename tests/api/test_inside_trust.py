@@ -40,7 +40,8 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace, flush_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -115,9 +116,6 @@ async def client(
 
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     async def _session():
         async with sf() as s:
             yield s
@@ -131,7 +129,7 @@ async def client(
         return _NOW
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[build_trust_service] = _trust_service
     app.dependency_overrides[get_now] = _now
@@ -184,7 +182,7 @@ async def test_fleet_lists_one_entry_per_product(
                 _make_run(workspace_id, p3, created_at=_NOW - timedelta(days=1)),
             ]
         )
-        await s.commit()
+        await commit_per_workspace(s)
     r = await client.get("/api/v1/inside/trust/fleet")
     assert r.status_code == 200, r.text
     body = r.json()
@@ -225,9 +223,9 @@ async def test_product_trust_detail_shape(
     )
     async with sf() as s:
         s.add(run)
-        await s.flush()
+        await flush_per_workspace(s)
         s.add_all([decision, drain])
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await client.get(f"/api/v1/inside/trust/{product_id}")
     assert r.status_code == 200, r.text

@@ -20,7 +20,8 @@ from backend.api.main import create_app
 from backend.embedding.db import GatewayEmbeddingBase, IntentDefinitionRow
 from backend.workflow.infrastructure.db import ExecutionBase, ExecutionRun, RunStatus
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -48,9 +49,6 @@ def account_id() -> uuid.UUID:
 async def configured_client(db, workspace_id: uuid.UUID, account_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _acct() -> uuid.UUID:
         return account_id
 
@@ -59,7 +57,7 @@ async def configured_client(db, workspace_id: uuid.UUID, account_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[require_account_id] = _acct
     app.dependency_overrides[get_db_session] = _session
 
@@ -78,7 +76,7 @@ async def test_intents_list(configured_client, db, workspace_id, account_id) -> 
                 name="summarize",
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     r = await configured_client.get("/api/v1/intents")
     assert r.status_code == 200, r.text
     body = r.json()
@@ -111,7 +109,7 @@ async def test_runs_list_and_get(configured_client, db, workspace_id) -> None:
                 updated_at=datetime.now(tz=UTC),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get("/api/v1/runs")
     assert r.status_code == 200, r.text
@@ -171,7 +169,7 @@ async def test_runs_list_filters_by_product(configured_client, db, workspace_id)
                     updated_at=base - timedelta(hours=hours),
                 )
             )
-        await s.commit()
+        await commit_per_workspace(s)
 
     r = await configured_client.get(f"/api/v1/runs?product_id={product_id}&limit=2")
     assert r.status_code == 200, r.text

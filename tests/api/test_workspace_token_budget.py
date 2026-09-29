@@ -49,6 +49,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.application.workspace_token_budget import (
     DEFAULT_MONTHLY_TOKEN_BUDGET,
@@ -57,7 +58,8 @@ from backend.workflow.application.workspace_token_budget import (
 )
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -87,9 +89,6 @@ async def client(
 ) -> AsyncIterator[httpx.AsyncClient]:
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -98,7 +97,7 @@ async def client(
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -139,7 +138,7 @@ async def _seed(
     """
     product_id = uuid.uuid4()
     now = datetime.now(tz=UTC)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(WorkspaceRow(id=workspace_id, name="budgeted", created_at=now, updated_at=now))
         await s.flush()
         # An INSERT cannot say "unlimited": the default is DDL-side and
@@ -239,7 +238,7 @@ async def test_spend_before_the_window_does_not_count(sf, client, workspace_id) 
     # Companion: the same rows summed WITHOUT the window DO blow the budget, so
     # the 202 above is the window doing work — not a workspace that was under
     # the limit either way.
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         lifetime = await sum_workspace_tokens_since(
             s, workspace_id, datetime(1970, 1, 1, tzinfo=UTC)
         )
@@ -343,8 +342,8 @@ async def test_a_new_workspace_starts_on_the_default_budget(sf, workspace_id) ->
     now = datetime.now(tz=UTC)
     async with sf() as s:
         s.add(WorkspaceRow(id=workspace_id, name="fresh", created_at=now, updated_at=now))
-        await s.commit()
-    async with sf() as s:
+        await commit_per_workspace(s)
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(WorkspaceRow, workspace_id)
         assert row is not None
         assert row.monthly_token_budget == DEFAULT_MONTHLY_TOKEN_BUDGET
@@ -418,7 +417,7 @@ async def test_the_run_cap_still_answers_first_when_both_would_refuse(
             (1, RunStatus.REVIEW_READY, _inside()),
         ),
     )
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         await s.execute(
             update(WorkspaceRow)
             .where(WorkspaceRow.id == workspace_id)

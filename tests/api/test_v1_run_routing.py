@@ -14,7 +14,7 @@ from backend.api.deps import get_current_user, get_db_session, get_workspace_id
 from backend.api.main import create_app
 from backend.identity.db import MembershipRow, UserRow  # noqa: F401 — register tables
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -37,7 +37,7 @@ async def client(db):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     transport = httpx.ASGITransport(app=app)

@@ -37,10 +37,12 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -70,9 +72,6 @@ async def client(
 ) -> AsyncIterator[httpx.AsyncClient]:
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -81,7 +80,7 @@ async def client(
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -103,7 +102,7 @@ async def _seed(
     """
     product_id = uuid.uuid4()
     now = datetime.now(tz=UTC)
-    async with sf() as s:
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         s.add(
             WorkspaceRow(
                 id=workspace_id,
@@ -273,8 +272,8 @@ async def test_a_new_workspace_starts_on_the_free_cap(sf, workspace_id) -> None:
     now = datetime.now(tz=UTC)
     async with sf() as s:
         s.add(WorkspaceRow(id=workspace_id, name="fresh", created_at=now, updated_at=now))
-        await s.commit()
-    async with sf() as s:
+        await commit_per_workspace(s)
+    async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(WorkspaceRow, workspace_id)
         assert row is not None
         assert row.max_concurrent_runs == DEFAULT_MAX_CONCURRENT_RUNS

@@ -31,6 +31,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -42,7 +43,8 @@ from backend.workflow.infrastructure.db import (
     WorkStepStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,9 +67,6 @@ async def client(db, workspace_id: uuid.UUID):
     app = create_app()
     founder_id = uuid.uuid4()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -77,7 +76,7 @@ async def client(db, workspace_id: uuid.UUID):
 
     app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_current_user_row] = _user_row
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_db_session] = _session
 
     transport = httpx.ASGITransport(app=app)
@@ -109,7 +108,7 @@ async def _seed_run_with_step(db, *, ws: uuid.UUID) -> uuid.UUID:
                 created_at=_NOW - timedelta(hours=1),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return run_id
 
 
@@ -127,7 +126,7 @@ async def _seed_decision(db, *, ws: uuid.UUID, run_id: uuid.UUID, payload: dict)
                 created_at=_NOW - timedelta(minutes=5),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return decision_id
 
 
@@ -159,7 +158,7 @@ async def test_retry_resumes_run_to_open(client, db, workspace_id) -> None:
     assert r.status_code == 200, r.text
     assert r.json()["run_status"] == "open"
 
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.OPEN
 
@@ -172,6 +171,6 @@ async def test_discard_cancels_run(client, db, workspace_id) -> None:
     assert r.status_code == 200, r.text
     assert r.json()["run_status"] == "cancelled"
 
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         run = await s.get(ExecutionRun, run_id)
         assert run is not None and run.status is RunStatus.CANCELLED

@@ -23,13 +23,15 @@ import backend.router.accounts.account_models  # noqa: F401
 import backend.router.accounts.models  # noqa: F401
 import backend.router.routing.run_routing.db  # noqa: F401
 from backend.api.v1.run_routing import ApplyError, ApplyProposal, apply_proposals
+from backend.data.rls import workspace_session_scope
 from backend.embedding.db import IntentDefinitionRow
 from backend.embedding.service import EmbeddedExample
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.models import ModelAccount
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
 
-from .._support import db_engine
+from .._support import db_engine, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -82,7 +84,7 @@ async def seeded(maker, workspace_id) -> AsyncIterator[dict[str, ModelAccount]]:
     async with maker() as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws"))
         s.add_all([opus, sonnet])
-        await s.commit()
+        await commit_per_workspace(s)
     yield {"opus": opus, "sonnet": sonnet}
 
 
@@ -110,7 +112,7 @@ async def test_apply_category_creates_intent_and_rule(
         intent_examples=["write a marketing email", "plan a campaign", "draft copy"],
         condition={"field": "classified_intent", "operator": "eq", "value": "marketing"},
     )
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         created = await apply_proposals(
             s, workspace_id=workspace_id, account_id=account_id, proposals=[proposal]
         )
@@ -154,7 +156,7 @@ async def test_apply_complexity_creates_plain_rule(maker, workspace_id, account_
         target="opus",
         condition={"field": "estimated_tokens", "operator": "gt", "value": 2000},
     )
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         await apply_proposals(
             s, workspace_id=workspace_id, account_id=account_id, proposals=[proposal]
         )
@@ -192,13 +194,13 @@ async def test_apply_default_sets_workspace_default(
     maker, workspace_id, account_id, seeded
 ) -> None:
     proposal = ApplyProposal(name="rest → opus", target="opus", is_default=True)
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         created = await apply_proposals(
             s, workspace_id=workspace_id, account_id=account_id, proposals=[proposal]
         )
     # Default sets the workspace pointer — no rule row is created for it.
     assert created == []
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         ws = await s.get(WorkspaceRow, workspace_id)
         assert ws is not None
         assert ws.default_account_id == seeded["opus"].id
@@ -218,7 +220,7 @@ async def test_apply_caller_creates_rule(maker, workspace_id, account_id, seeded
     proposal = ApplyProposal(
         name="design → opus", target="opus", caller_id="workflow.settle.extract"
     )
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         await apply_proposals(
             s, workspace_id=workspace_id, account_id=account_id, proposals=[proposal]
         )
@@ -252,12 +254,12 @@ async def test_apply_mixed_batch(maker, workspace_id, account_id, seeded) -> Non
         ),
         ApplyProposal(name="rest → sonnet", target="sonnet", is_default=True),
     ]
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         created = await apply_proposals(
             s, workspace_id=workspace_id, account_id=account_id, proposals=proposals
         )
     assert len(created) == 2  # category + condition (default sets the pointer)
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         ws = await s.get(WorkspaceRow, workspace_id)
         assert ws is not None
         assert ws.default_account_id == seeded["sonnet"].id
@@ -292,7 +294,7 @@ async def test_apply_is_atomic_on_unknown_target(maker, workspace_id, account_id
         ),
     ]
     with pytest.raises(ApplyError):
-        async with maker() as s:
+        async with maker() as s, workspace_session_scope(s, workspace_id):
             await apply_proposals(
                 s, workspace_id=workspace_id, account_id=account_id, proposals=proposals
             )
@@ -362,7 +364,7 @@ async def test_apply_endpoint_round_trip(maker, workspace_id, account_id, seeded
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[require_account_id] = lambda: account_id
     app.dependency_overrides[get_db_session] = _session
 
@@ -391,7 +393,7 @@ async def test_apply_endpoint_round_trip(maker, workspace_id, account_id, seeded
     assert len(body["created"]) == 1
     assert body["created"][0]["target"] == "opus"
 
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         ws = await s.get(WorkspaceRow, workspace_id)
         assert ws is not None and ws.default_account_id == seeded["sonnet"].id
 
@@ -416,7 +418,7 @@ async def test_apply_endpoint_unknown_target_422(maker, workspace_id, account_id
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = lambda: workspace_id
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[require_account_id] = lambda: account_id
     app.dependency_overrides[get_db_session] = _session
 
@@ -455,7 +457,7 @@ async def test_apply_persists_the_founders_own_clause(
         condition={"field": "stage", "operator": "eq", "value": "design"},
         source_text="설계 단계는 opus로 보내라",
     )
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         created = await apply_proposals(
             s, workspace_id=workspace_id, account_id=account_id, proposals=[proposal]
         )
@@ -485,7 +487,7 @@ async def test_apply_without_a_clause_still_creates_the_rule(
         target="sonnet",
         condition={"field": "estimated_tokens", "operator": "gt", "value": 5000},
     )
-    async with maker() as s:
+    async with maker() as s, workspace_session_scope(s, workspace_id):
         created = await apply_proposals(
             s, workspace_id=workspace_id, account_id=account_id, proposals=[proposal]
         )

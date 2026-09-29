@@ -32,6 +32,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.data.rls import workspace_session_scope
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -40,7 +41,8 @@ from backend.workflow.infrastructure.db import (
     RunStatus,
 )
 
-from .._support import db_engine, fake_current_user
+from .._support import db_engine, fake_current_user, publishing_workspace
+from .conftest import commit_per_workspace
 
 pytestmark = pytest.mark.asyncio
 
@@ -67,9 +69,6 @@ def founder_id() -> uuid.UUID:
 async def client(db, workspace_id: uuid.UUID, founder_id: uuid.UUID):
     app = create_app()
 
-    def _ws() -> uuid.UUID:
-        return workspace_id
-
     def _user_row() -> SimpleNamespace:
         return SimpleNamespace(id=founder_id)
 
@@ -78,7 +77,7 @@ async def client(db, workspace_id: uuid.UUID, founder_id: uuid.UUID):
             yield s
 
     app.dependency_overrides[get_current_user] = fake_current_user()
-    app.dependency_overrides[get_workspace_id] = _ws
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
     app.dependency_overrides[get_current_user_row] = _user_row
     app.dependency_overrides[get_db_session] = _session
 
@@ -99,7 +98,7 @@ async def _seed_run(db, *, ws: uuid.UUID) -> uuid.UUID:
                 created_at=_NOW - timedelta(hours=2),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return run_id
 
 
@@ -119,7 +118,7 @@ async def _seed_ask_user_question_decision(
                 created_at=_NOW - timedelta(minutes=10),
             )
         )
-        await s.commit()
+        await commit_per_workspace(s)
     return decision_id
 
 
@@ -224,7 +223,7 @@ async def test_resolve_accepts_off_list_answer_as_other_freetext(client, db, wor
     assert body["status"] == "resolved"
 
     # The Decision is now resolved with the off-list answer verbatim.
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, workspace_id):
         d = await s.get(Decision, cp)
         assert d is not None
         assert d.status is DecisionStatus.RESOLVED
