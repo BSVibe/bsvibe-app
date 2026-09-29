@@ -21,8 +21,8 @@ Both halves of that were measured on a probe PG against the previous
 
 * **residue** — the value outlived the transaction on a POOLED connection, so
   the next checkout inherited it. That is not merely untidy: the queue poller's
-  claim query was then workspace-less and RLS-fail-open, so an inherited
-  GUC made it fail CLOSED and runs stopped being claimed for every other
+  claim query is deliberately workspace-less and RLS-fail-open, so an inherited
+  GUC makes it fail CLOSED and runs stop being claimed for every other
   workspace. (Same mechanism as the intermittent-signup failure argued in #959
   §4: ``POST /api/auth/login`` INSERTs a workspace on whatever connection it
   gets.)
@@ -90,11 +90,11 @@ async def set_workspace_guc(conn: AsyncConnection, workspace_id: uuid.UUID) -> N
 
 
 async def clear_workspace_guc(conn: AsyncConnection) -> None:
-    """Return the GUC to empty — no tenant — for the rest of the txn.
+    """Return the GUC to the fail-OPEN empty value for the rest of the txn.
 
-    The policy is fail-CLOSED (#959 ③): an empty guc sees nothing, and a guc
-    left on the WRONG workspace sees that workspace only. The second is why
-    this exists: a loop that publishes
+    The policy reads ``current_setting(guc, true) IS NULL OR = '' OR col = it``,
+    so an EMPTY guc is permissive and a guc set to the WRONG workspace is
+    fail-CLOSED. That asymmetry is why this exists: a loop that publishes
     workspace A and then queries workspace B **in the same transaction** gets
     zero rows back — silently, as a wrong count rather than an error.
 
@@ -131,8 +131,8 @@ def _publish_workspace_guc(
     Runs for EVERY session, sync or async (async sessions dispatch listeners
     inside the greenlet, so the sync ``execute`` here is correct). When no
     workspace is bound the hook does nothing at all — a workspace-less path
-    sees no tenant's rows (the policy is fail-closed, #959 ③) unless it asks
-    for :func:`cross_tenant_read`. alembic and boot scripts run as the owner.
+    (the queue poller's claim, alembic, boot scripts) stays fail-open exactly
+    as before and pays no extra round trip.
     """
     workspace_id = current_workspace_id.get()
     if workspace_id is not None:
@@ -206,14 +206,14 @@ async def workspace_session_scope(
     first iteration (any ``async with session_factory()`` wrapping a ``for``)
     has already armed it with an EMPTY workspace and never re-arms.
 
-    Empty is fail-closed, so the first iteration already reads nothing. And on
+    Empty is fail-open, so that alone is only a missing guard. The damage is on
     the NEXT iteration: once any transaction re-begins while workspace A is
     scoped, workspace B's queries in that transaction match a GUC of A and come
     back **empty** — a wrong count, not an error.
 
     So this publishes the GUC explicitly (the same thing ``api/deps.py`` and
     ``mcp/server.py`` do after resolving a request's workspace) and clears it on
-    the way out, leaving the transaction with no tenant for whatever runs next.
+    the way out, leaving the transaction fail-open for whatever runs next.
     """
     with workspace_scope(workspace_id):
         conn = await session.connection()

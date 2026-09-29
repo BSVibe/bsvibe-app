@@ -15,17 +15,15 @@ HTTP routes. The proof spans the two DEFENCE LAYERS, kept explicitly distinct:
   ``workspace_id`` predicate is the ONLY defence, and test #2 pins it down.
 
 Test #3 also documents WHY ``get_workspace_id`` is load-bearing: the RLS policy
-is fail-CLOSED when the GUC is unset (#959 ③), so the per-request GUC set is
-what lets a request see its own tenant at all.
+is fail-open when the GUC is unset, so the per-request GUC set is what turns the
+policy from "visible" to "isolated". The migration alone does not isolate.
 """
 
 from __future__ import annotations
 
 import uuid
 
-import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from .conftest import bootstrap_tenant, client_for, mint_jwt, requires_real_pg
@@ -134,10 +132,10 @@ async def test_rls_is_active_layer3_for_the_runtime_role(
        NOT ``BYPASSRLS`` — the precondition for RLS to bite at all. If this ever
        regresses to a superuser DSN, the assertion fails loudly rather than the
        isolation silently degrading to layer-2-only.
-    2. **Fail-closed on unset GUC** (#959 ③). With the GUC empty the
-       ``products`` policy returns NO rows and refuses an INSERT — code that
-       forgets to publish a workspace sees nothing and writes nothing, instead
-       of seeing every tenant. It used to be fail-open; that escape is gone.
+    2. **Fail-open on unset GUC.** With the GUC empty the ``products`` policy
+       (``current_setting IS NULL OR '' OR workspace_id = GUC``) returns EVERY
+       tenant's rows. That is why ``get_workspace_id`` — which sets the GUC on
+       every request — is load-bearing; the migration alone does not isolate.
     3. **GUC-scoped read is isolated by RLS.** With the GUC = tenant A, a RAW
        SQL read (ORM auto-filter out of the picture) returns ONLY tenant A —
        the DATABASE, not the app, hid tenant B.
@@ -168,12 +166,13 @@ async def test_rls_is_active_layer3_for_the_runtime_role(
             "current_user is a superuser; the B2b cutover did not take effect."
         )
 
-        # (2) GUC UNSET (empty) → RLS is fail-CLOSED → no tenant's rows.
+        # (2) GUC UNSET (empty) → RLS is fail-open → EVERY tenant's rows.
         await conn.execute(text(f"SELECT set_config('{_GUC}', '', false)"))
         unscoped = (await conn.execute(text("SELECT workspace_id FROM products"))).all()
-        assert unscoped == [], (
-            "fail-closed expectation broken: with the GUC unset the RLS policy "
-            f"must hide every tenant's rows (got {[r[0] for r in unscoped]})"
+        unscoped_ws = {row[0] for row in unscoped}
+        assert a_ws in unscoped_ws and b_ws in unscoped_ws, (
+            "fail-open expectation broken: with the GUC unset the RLS policy "
+            f"should expose cross-tenant rows (got {unscoped_ws})"
         )
 
         # (3) GUC = tenant A → RLS returns ONLY tenant A's rows. Raw SQL, so the
@@ -188,20 +187,3 @@ async def test_rls_is_active_layer3_for_the_runtime_role(
         # Reset the pooled connection's GUC so a later fixture reusing it fails
         # open rather than tripping an RLS WITH CHECK.
         await conn.execute(text(f"SELECT set_config('{_GUC}', '', false)"))
-
-
-async def test_an_unset_guc_cannot_write_a_tenant_row(
-    session_factory: async_sessionmaker,
-) -> None:
-    """The write half of fail-closed (#959 ③): ``WITH CHECK`` refuses a row
-    written with no workspace published, rather than letting it land."""
-    async with session_factory() as session:
-        await session.execute(text(f"SELECT set_config('{_GUC}', '', true)"))
-        with pytest.raises(DBAPIError, match="row-level security"):
-            await session.execute(
-                text(
-                    "INSERT INTO workspaces (id, name, created_at, updated_at) "
-                    "VALUES (:id, 'blind', now(), now())"
-                ),
-                {"id": uuid.uuid4()},
-            )

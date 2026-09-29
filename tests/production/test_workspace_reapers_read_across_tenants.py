@@ -8,7 +8,7 @@ to DELETE from ``var/runs`` and ``var/products`` by asking ``execution_runs`` an
 * ``reap_orphan_product_workspaces`` — a dir with no visible product row is dead
 * ``reap_idle_product_workspaces`` — a product with a visible live run is busy
 
-The probe caught them reading with an EMPTY GUC. Fail-open then; under the
+The probe caught them reading with an EMPTY GUC. Fail-open today; under the
 fail-closed policy (#959 ③) every row is invisible, so every day-old run dir
 reads as an orphan and every product as dead — the sweep would delete live work.
 
@@ -99,7 +99,7 @@ async def test_the_reapers_read_runs_and_products_across_tenants(
     policied_reads.clear()
     assert await AgentWorker(session_factory=session_factory)._reap_terminal_run_workspaces() == 0
 
-    # Live work survived — under fail-closed a blind read would have deleted it.
+    # Live work survived (fail-open today — this alone cannot flip; the GUC can).
     assert len(list(runs_root.iterdir())) == 2
     assert len(list(products_root.iterdir())) == 2
 
