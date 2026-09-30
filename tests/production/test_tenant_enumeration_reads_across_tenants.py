@@ -8,8 +8,8 @@ RLS-forced table — before they scope each one:
 * ``AuditRetentionSweepRunner.fire_due``
 * ``SettleWorker.drain_once`` (``_resolve_workspaces``)
 
-The 2026-09-28 probe caught all four reading it with an EMPTY GUC. Empty is
-fail-open today, so they see every tenant; under the fail-closed policy (#959 ③)
+The 2026-09-28 probe caught all four reading it with an EMPTY GUC. Empty was
+fail-open then, so they saw every tenant; under the fail-closed policy (#959 ③)
 the same read returns zero rows — no error, the loop just has nobody to serve.
 
 The proposition, measured at every ORM SELECT that touches a policied table:

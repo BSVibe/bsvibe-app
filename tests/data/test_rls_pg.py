@@ -250,12 +250,12 @@ async def test_background_scope_isolates_then_releases_the_connection() -> None:
     Three assertions on ONE pooled connection (``pool_size=1``, so "the next
     session" is provably the same physical connection):
 
-    1. **fail-open** — with no workspace context the queue poller sees BOTH
-       workspaces. This is the load ``compose.prod.yaml:155-157`` documents,
-       not a gap: the claim query must cross tenants.
+    1. **cross-tenant by name** — the queue poller asks with
+       ``cross_tenant_read()`` and sees BOTH workspaces; a session with no
+       workspace context sees NEITHER (fail-closed, #959 ③).
     2. **isolated** — inside ``workspace_scope(A)`` the database returns only
        A's rows, with no explicit GUC call anywhere in the caller.
-    3. **released** — after the scope exits, the poller is fail-open AGAIN.
+    3. **released** — after the scope exits, the poller sees both AGAIN.
        Residue here would stop every other workspace's runs from being claimed.
 
     Runs through the freshly-minted non-superuser role so ``BYPASSRLS`` cannot
@@ -265,6 +265,7 @@ async def test_background_scope_isolates_then_releases_the_connection() -> None:
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from backend.data.rls import cross_tenant_read
     from backend.data.scoping import workspace_scope
 
     url = _skip_if_no_pg()
@@ -313,10 +314,15 @@ async def test_background_scope_isolates_then_releases_the_connection() -> None:
             rows = (await session.execute(text("SELECT workspace_id FROM products"))).all()
             return {str(r[0]) for r in rows}
 
+    async def _poller_sees() -> set[str]:
+        with cross_tenant_read():
+            return await _visible()
+
     try:
-        # 1. fail-open before
-        before = await _visible()
-        assert {str(ws_a), str(ws_b)} <= before, f"poller not fail-open: {before}"
+        # 1. the poller crosses tenants by name; nothing else does
+        before = await _poller_sees()
+        assert {str(ws_a), str(ws_b)} <= before, f"poller cannot cross tenants: {before}"
+        assert await _visible() == set(), "an unscoped session must see no tenant (fail-closed)"
 
         # 2. isolated inside the scope — no explicit GUC call in this caller
         with workspace_scope(ws_a):
@@ -325,8 +331,8 @@ async def test_background_scope_isolates_then_releases_the_connection() -> None:
                 scoped = {str(r[0]) for r in rows}
         assert scoped == {str(ws_a)}, f"background scope did not isolate: {scoped}"
 
-        # 3. fail-open again — the connection carries no residue
-        after = await _visible()
+        # 3. the poller sees both again — the connection carries no residue
+        after = await _poller_sees()
         assert {str(ws_a), str(ws_b)} <= after, (
             f"GUC residue blinded the poller — runs of other workspaces stop being claimed: {after}"
         )
