@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.config import Settings, get_settings
-from backend.data.rls import workspace_session_scope
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.identity.workspaces_db import load_workspace_language
 from backend.notifications.copy import TRIGGERED_LINK, notification_copy
 from backend.notifications.emit import emit_notification
@@ -277,10 +277,15 @@ class IntakeWorker(BaseWorker):
         for a small batch.
         """
         repo = SqlAlchemyIdempotencyRepository(session)
-        rows = await TRIGGER_EVENTS.consume(
-            consumer_id="worker:intake_worker",
-            claim=lambda: repo.list_undrained(limit=self._cfg.batch_size),
-        )
+        # #959 — "already drained" is ``NOT EXISTS (requests …)`` over every
+        # tenant. Read blind, the EXISTS sees no request and every drained
+        # trigger reads as new: fail-closed re-drained 50 old triggers each tick
+        # on 2026-09-29. A blind read inside a negation does not go quiet — it acts.
+        async with cross_tenant_session_read(session):
+            rows = await TRIGGER_EVENTS.consume(
+                consumer_id="worker:intake_worker",
+                claim=lambda: repo.list_undrained(limit=self._cfg.batch_size),
+            )
         for r in rows:
             if (r.payload or {}).get(RECEIVE_FILTERED_KEY) is not None:
                 continue
