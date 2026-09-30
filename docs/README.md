@@ -8,6 +8,7 @@
 
 | 파일 | 역할 |
 |---|---|
+| **[SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)** | How BSVibe works end to end: topology, the lifecycle of one run, how Claude Code is driven, verification, delivery, knowledge, limits. Structure cites files; §10 is a dated snapshot (prod numbers + open-issue map) refreshed in place. |
 | **[STATUS.md](./STATUS.md)** | **Master Status SoT.** 전체 상태·아키텍처·구현 표·운영. 모든 세션은 여기서 시작한다. Living — in-place 갱신, 새 status 파일 만들지 말 것. |
 | **[HANDOFF.md](./HANDOFF.md)** | 가장 최근 세션 인수인계. **최신 1건만 유지** — 새 세션이 끝나면 이 파일을 덮어쓰고, **덮어쓰기 전에 직전 판을 [Notion 아카이브](https://app.notion.com/p/3d9edf4af708814aa578ddb83643bbca) 로 옮긴다.** |
 | **[audit/multiuser-readiness-2026-09-10.md](./audit/multiuser-readiness-2026-09-10.md)** | 다중 사용자 준비도 감사. 게이트 0~4 로드맵이 여기 있다. 열린 작업은 GitHub 이슈. |
