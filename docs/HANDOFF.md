@@ -43,28 +43,27 @@
 | **새 도구** | `tools/rls-canary/`: 문장 단위 블라인드 전수(`blindstmt_plugin.py`) · 배포 전 차분 카나리(`run_case.sh`, prod 덤프 open/closed 행 증가 비교) |
 | **로컬 fail-closed 전체 스위트** | 983 → 0 실패(명제 교체 1 제외) — 그러나 이것만으로는 부족했다(§0) |
 
-## §Ⅱ — prod 지금 상태
+## §Ⅱ — prod 지금 상태 (09-30 04:06 UTC)
 
 | | |
 |---|---|
-| `alembic_version` | `rls_star_reads_only` — **fail-open**(빈 GUC 통과), `'*'` 는 SELECT·UPDATE USING 에만 |
-| 정책 | 명령별 24개(표 6 × 4) |
-| 워커 | 떠 있음, 사고 후 요청·런 증가 0 |
-| #1093 | **미머지** — 머지 전엔 fail-open 이라 무해(인테이크가 요청을 본다) |
+| `alembic_version` | **`rls_fail_closed`** — #1095(`3608118`) 로 ③ 재시도 완료. 빈 GUC 탈출구 0개 |
+| 배포 후 10분 | requests 1281 · execution_runs 303 **그대로**(30초 간격 20회) · 워커 에러 0 |
+| 정상 읽기 | MCP `runs_list` 가 현재 워크스페이스 런을 돌려준다(GUC 경로 살아 있음) |
+
+### ③ 재시도 증거 (#1095 본문에 전부)
+* 배포 전 차분 카나리(오늘 prod 덤프): open = closed = `delta={}`
+* 음성 대조 `2fd0c95`(수정 전) closed: 틱마다 intake 50 · claim 10 — **카나리 판별력이 오늘 스냅샷에서도 있다**
+* 로컬 fail-closed 전체 7256 통과 · 블라인드 문장 전수에서 prod 지점은 `get_output_language` 하나(테스트가 `get_workspace_id` 를 GUC 없는 스텁으로 덮은 아티팩트), **부정 조건 0**
 
 ## §Ⅲ — 다음 세션이 할 것
 
-1. **#1093 머지** 확인(CI) — 인테이크 스캔 교차 읽기
-2. **③ 재시도** — 순서를 지켜라:
-   1. `tools/rls-canary/run_case.sh` 로 **배포 전** 카나리: 최신 prod 덤프 open/closed, 행 증가가 같아야 한다(덤프는 지워라)
-   2. #1091 을 되살리는 PR(마이그레이션 `rls_fail_closed` + 명제 교체 테스트 + 독스트링 정정 — #1092 의 역)
-   3. 배포 직후 센서는 에러 로그가 아니라 **행 증가율**(requests·execution_runs 생성 수) — 사고 때 에러는 0 이었다
-   4. 되돌리기: entrypoint 가 부팅마다 `alembic upgrade head` → downgrade **와** revert 둘 다
-3. 카나리가 안 덮는 것: 외부 부작용 워커(알림 · 전달 · 릴레이 · merge-watch · 인증 프로브)의 「일이 있을 때」 경로 — 필요하면 스텁 발신자로 카나리에 추가
-4. 이월: 자격증명 로테이션 3건 · #1047 그룹방 바인딩 · #937 cold-boot · #1042 잔여 · #954 · #949 · #957
+1. **며칠 지켜보기** — 행 증가율이 평소(사람이 만든 요청만)와 같은가. 되돌리기는 prod `alembic downgrade -1` **와** revert PR 둘 다(entrypoint 가 부팅마다 upgrade head)
+2. 카나리가 안 덮는 것: 외부 부작용 워커(알림 · 전달 · 릴레이 · merge-watch · 인증 프로브)의 「일이 있을 때」 경로 — 실제로 일이 생긴 뒤 행이 처리되는지 확인
+3. 이월: 자격증명 로테이션 3건 · #1047 그룹방 바인딩 · #937 cold-boot · #1042 잔여 · #954 · #949 · #957
 
 ### 별건 후보
-* 🆕 **로컬 `pg-rls-check`(5459) 가 `rls_fail_closed` 에 멈춰 있다** — main 코드가 모르는 revision. 새로 만들어라
+* 🆕 테스트가 `get_workspace_id` 를 GUC 없는 스텁으로 덮으면 fail-closed 에서 블라인드가 된다(`tests/api/test_inside_concept_detail.py`) — 「0 / 없음」 단언이 잘못된 이유로 통과할 수 있는 같은 계열
 * 🆕 에이전트가 짚은 빈틈: fail-closed 에서 원래 통과하던 테스트 중 **「0 / 없음」을 블라인드로 단언**하는 것은 잘못된 이유로 통과할 수 있다(고친 파일 밖은 미감사)
 * 이월: `list_active_policies` prod 호출자 없음 · `schedule_product_bootstrap` 스코프 전파는 코드 추론 · `/api/v1/workers/result` 가 None 에 뭘 돌려주나 · `delivery_events` 0행 · 묵은 `online` 워커 행
 
