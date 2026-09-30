@@ -291,9 +291,12 @@ def test_the_route_asks_the_binding_before_the_repo_fallback() -> None:
 
     from backend.api import webhooks
 
-    # The route delegates the whole "which product" decision to one resolver...
-    route = inspect.getsource(webhooks.receive_connector_webhook)
-    assert "_resolve_inbound_product" in route, "the route never resolves a product"
+    # Both ingress routes land through one helper, and that helper delegates the
+    # whole "which product" decision to one resolver...
+    for route_fn in (webhooks.receive_connector_webhook, webhooks.receive_github_app_webhook):
+        assert "_land_trigger" in inspect.getsource(route_fn), f"{route_fn.__name__} bypasses it"
+    lander = inspect.getsource(webhooks._land_trigger)
+    assert "_resolve_inbound_product(" in lander, "the route never resolves a product"
 
     # ...and inside it, the binding is asked before the repo inference.
     source = inspect.getsource(webhooks._resolve_inbound_product)
