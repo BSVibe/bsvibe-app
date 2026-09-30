@@ -78,6 +78,19 @@ RLS 정책은 비대칭이다 — 빈 GUC 는 **fail-open**, **다른** 워크�
 
 ---
 
+## 🚨 먼저 이것 — 문장 단위 장치와 배포 전 카나리 (2026-09-30)
+
+아래 「행 단위 프로브」는 정책식 안에서 불린다 — **평가할 행이 없으면 아예 안 불린다**. 09-29 fail-closed
+배포 사고의 원인(`list_undrained` 의 `NOT EXISTS (requests …)`)이 그래서 빠졌다: 테스트에서 트리거를
+드레인할 때 `requests` 가 비어 있었다.
+
+* **전수**: `tools/rls-canary/blindstmt_plugin.py` — 연결별로 GUC 를 추적해, GUC 가 빈 연결에서 강제 표를
+  언급하는 SQL **문장**을 행 유무와 무관하게 기록한다(사용법은 `tools/rls-canary/README.md`).
+  09-30 전체 스위트: 제품 사이트 52건, 부정 조건은 `list_undrained` 하나(#1093 에서 수정)
+* **배포 전 카나리**: `tools/rls-canary/run_case.sh` — prod 덤프 두 벌(open/closed)에서 같은 틱을 돌려
+  **행 증가가 같은지**. 로컬 스위트 초록은 「스위트가 밟는 경로」의 증거일 뿐이다
+* ⚠️ **부정 안의 블라인드 읽기는 0행으로 조용해지지 않고 행동한다** — `NOT EXISTS`·`notin_`·「없으면 만든다」
+
 ## 블라인드 접근을 **런타임으로** 세기 (2026-09-28, #959)
 
 *"강제 표를 GUC 없이 읽는 곳이 어디냐"* 를 grep 으로 세면 내가 아는 곳만 나온다. 09-28 에 인수인계가
@@ -100,7 +113,7 @@ BEGIN
 END $$;
 ```
 
-정책 6개를 `USING (rls_probe('<t>') AND <기존식>) WITH CHECK (rls_probe('<t>') AND <기존식>)` 로 다시 만든다.
+정책(09-29 부터 명령별 24개 — 표 6 × SELECT·UPDATE·INSERT·DELETE)을 `USING (rls_probe('<t>') AND <기존식>)` (+ `WITH CHECK` 도 같은 모양)로 다시 만든다.
 런 시작 시각을 적어 두고 끝나면 `docker logs --since <T0> pg-rls-check 2>&1 | grep -o 'RLSPROBE|.*'` 로 뽑는다.
 
 🚨 **로그를 표에 INSERT 하지 마라 — 롤백이 기록을 지운다** (09-29). 09-28 판은 `rls_probe_log` 표에
