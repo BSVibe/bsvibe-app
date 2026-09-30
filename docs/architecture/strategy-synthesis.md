@@ -2,8 +2,8 @@
 
 > Date: 2026-05-19 (2026-05-20 정리 반영)
 > Status: **Strategy SoT.** 형제 문서:
-> [docs/architecture/ux-design.md](docs/architecture/ux-design.md) (UX SoT)
-> 및 [docs/architecture/workflow-backend.md](docs/architecture/workflow-backend.md)
+> [docs/architecture/ux-design.md](ux-design.md) (UX SoT)
+> 및 [docs/architecture/workflow-backend.md](workflow-backend.md)
 > (workflow + backend SoT). 원 기록: `Trust_Measurement_Design_2026-05-19.md`.
 > 결정은 §11에서 **[locked]** / **[open]** / **[parked]** 로 표기. 아키텍처
 > open은 모두 닫혔고, 남은 [parked]는 타깃/슬로건.
@@ -377,7 +377,7 @@ substrate (Notion)도 얇은 governance layer (Paperclip)도 이걸 앉힐 자�
 ## 13. OS workflow — Workflow + Backend 문서에 lock
 
 OS workflow는 이 문서의 초기 draft에서 잠정적으로 스케치됐고, 이후
-**[docs/architecture/workflow-backend.md §1](docs/architecture/workflow-backend.md) 에 lock 됨**:
+**[docs/architecture/workflow-backend.md §1](workflow-backend.md) 에 lock 됨**:
 *Receive → Frame → Agent loop ↻ → ε*, 그리고 **Deliver** 와 **Settle** 는
 agent loop이 시종일관 방출하는 연속적인 사이드 채널.
 
@@ -398,7 +398,7 @@ UX-first (founder의 교정): workflow를 먼저 설계하면 UX가 레거시 BS
 그것을 서비스하기 위해 도출된다.
 
 6개 moment (UX 설계 scaffold — 상세는
-[docs/architecture/ux-design.md](docs/architecture/ux-design.md) 참조):
+[docs/architecture/ux-design.md](ux-design.md) 참조):
 
 1. **Direct** — 아이디어/지시를 최소 마찰로 던짐.
 2. **Passive trigger** — founder가 자리 비운 사이 email / issue가 작업을 깨움.
@@ -415,7 +415,7 @@ glass box, 절대 org chart 아님. Craft bar = Notion 수준의 calm.
 문서 세트가 이제 implementation-ready. 형제 SoT 3개:
 
 - **이 문서** — 전략 (포지셔닝, layer, 경쟁, [parked] 타깃/슬로건)
-- **[docs/architecture/ux-design.md](docs/architecture/ux-design.md)** — UX surface, 6 moment, Stitch mockup
-- **[docs/architecture/workflow-backend.md](docs/architecture/workflow-backend.md)** — workflow, backend topology, data model, 스키마, GDPR, 보상, bootstrap, 시퀀스 다이어그램, Phase 0 acceptance criteria
+- **[docs/architecture/ux-design.md](ux-design.md)** — UX surface, 6 moment, Stitch mockup
+- **[docs/architecture/workflow-backend.md](workflow-backend.md)** — workflow, backend topology, data model, 스키마, GDPR, 보상, bootstrap, 시퀀스 다이어그램, Phase 0 acceptance criteria
 
 구현은 Workflow §12 — Phase 0 monorepo skeleton 에서 시작.
