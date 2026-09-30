@@ -48,6 +48,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session
 from backend.config import get_settings
+from backend.connectors.auth.app_credentials import get_app_credentials
+from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.handshake import handshake_response
 from backend.connectors.interactions import interaction_callback
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
@@ -56,20 +58,19 @@ from backend.extensions.plugin.webhook_registry import (
     WebhookParserRegistry,
     get_default_registry,
 )
-from backend.identity.workspaces_db import ProductRow
+from backend.identity.workspaces_db import ProductRow, ResourceBindingRow
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.shared.wire_kinds import (
     PAYLOAD_KEY_CONNECTOR_ACCOUNT_ID,
     PAYLOAD_KEY_RESOURCE_ID,
 )
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
-from backend.workflow.application.intake.webhook import WebhookReceiver
+from backend.workflow.application.intake.webhook import WebhookOutcome, WebhookReceiver
 from bsvibe_sdk import WebhookSignatureError
 
-if TYPE_CHECKING:  # pragma: no cover — annotation only, so this module keeps the
-    # narrow runtime import surface R2c guards (see the contract in pyproject).
-    from backend.connectors.db import ConnectorAccountRow
-    from backend.identity.workspaces_db import ResourceBindingRow
+if TYPE_CHECKING:  # pragma: no cover — annotation only
+    from backend.extensions.plugin.webhook_registry import ConnectorParser
+    from backend.workflow.domain.incoming import TriggerEvent
 
 logger = structlog.get_logger(__name__)
 
@@ -351,25 +352,36 @@ async def receive_connector_webhook(  # noqa: PLR0911 — 404/401/handshake/call
         reply = handshake_response(connector, raw_body)
         if reply is not None:
             return JSONResponse(status_code=status.HTTP_200_OK, content=reply)
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={"accepted": True, "skipped": True},
-        )
+        return _skipped()
 
-    # Valid TriggerEvent → persist via the existing intake receiver (idempotent
-    # on (workspace_id, source, idempotency_key)). source = the connector name.
-    # The parser already computed a stable idempotency_key (e.g. Slack event_id,
-    # GitHub delivery id); thread it through the header the receiver honours so
-    # a redelivery collapses regardless of header presence on the wire.
-    # The payload we STORE — ``_resolve_inbound_product`` stamps the Receive
-    # stage's routing keys onto it when the founder's binding matches.
+    outcome = await _land_trigger(session, account=account, event=event)
+    await session.commit()
+    if not outcome.duplicate:
+        await _wake_intake(event.workspace_id)
+
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={"accepted": True, "duplicate": outcome.duplicate},
+    )
+
+
+async def _land_trigger(
+    session: AsyncSession, *, account: ConnectorAccountRow, event: TriggerEvent
+) -> WebhookOutcome:
+    """Persist one verified TriggerEvent on the existing intake receiver.
+
+    Idempotent on ``(workspace_id, source, idempotency_key)``. The parser already
+    computed a stable idempotency_key (e.g. Slack event_id, GitHub delivery id);
+    it is threaded through the header the receiver honours so a redelivery
+    collapses regardless of header presence on the wire. The payload STORED is
+    the one ``_resolve_inbound_product`` stamps the Receive stage's routing keys
+    onto when the founder's binding matches. The caller commits.
+    """
     payload: dict[str, Any] = dict(event.payload or {})
     product_id = await _resolve_inbound_product(
         session, account=account, parsed_product_id=event.product_id, payload=payload
     )
-
-    receiver = WebhookReceiver(session)
-    outcome = await receiver.handle(
+    return await WebhookReceiver(session).handle(
         workspace_id=event.workspace_id,
         source=event.source,
         headers={"X-Idempotency-Key": event.idempotency_key},
@@ -377,24 +389,120 @@ async def receive_connector_webhook(  # noqa: PLR0911 — 404/401/handshake/call
         product_id=product_id,
         trace_id=event.trace_id,
     )
+
+
+async def _wake_intake(workspace_id: uuid.UUID) -> None:
+    """AFTER the TriggerEvent is durable, wake the IntakeWorker consumer on the
+    ``intake`` stream (same gated + soft-fail contract as the Direct path). In
+    db_polling (default) no Redis client is built and this is a pure no-op."""
+    settings = get_settings()
+    await emit_stream_notification(
+        get_emit_redis_client(settings),
+        settings=settings,
+        stream=STREAM_INTAKE,
+        fields={"workspace_id": str(workspace_id)},
+    )
+
+
+# ---------------------------------------------------------------------------
+# GitHub App ingress — ``POST /api/webhooks/github``
+# ---------------------------------------------------------------------------
+
+#: The App manifest registers its hook at ``{issuer}/api/webhooks/github``. An App
+#: delivery carries no per-account token, so the App's own webhook secret is the
+#: auth and the founder's Product × Connector binding names the workspace.
+_GITHUB = "github"
+
+#: Stands in for a workspace while the delivery is only being VERIFIED — the
+#: parser needs one to build an event, and this event is never stored.
+_UNRESOLVED_WORKSPACE = uuid.UUID(int=0)
+
+
+async def _github_accounts_bound_to(session: AsyncSession, repo: str) -> list[ConnectorAccountRow]:
+    """Every active github account whose binding names ``repo``.
+
+    One App serves every workspace, and each binding is its own stated intent,
+    so a repo two workspaces bound lands in both. No binding → nothing: routing
+    on ``repo_url`` alone would hand a repo to whichever workspace shares its name.
+    """
+    bound = select(ResourceBindingRow.connector_account_id).where(
+        ResourceBindingRow.resource_id == repo
+    )
+    stmt = select(ConnectorAccountRow).where(
+        ConnectorAccountRow.connector == _GITHUB,
+        ConnectorAccountRow.is_active.is_(True),
+        ConnectorAccountRow.id.in_(bound),
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+@router.post("/webhooks/github")
+async def receive_github_app_webhook(  # noqa: PLR0911 — 404/401/skip/accept branches
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+    parsers: Annotated[WebhookParserRegistry, Depends(get_webhook_parser_registry)],
+) -> Any:
+    """Ingest one GitHub App webhook delivery (PUBLIC).
+
+    * 404 — no github parser, or no App webhook secret to verify against
+    * 401 — signature verification failed
+    * 202 — accepted (one trigger per bound workspace), or a benign skip
+    """
+    parser: ConnectorParser | None = parsers.get(_GITHUB)
+    if parser is None:
+        return _not_found()
+    app = await get_app_credentials(session, provider=_GITHUB, cipher=cipher)
+    if app is None or not app.webhook_secret:
+        return _not_found()
+    secret = app.webhook_secret
+
+    raw_body = await request.body()
+    headers = dict(request.headers)
+    try:
+        probe = parser(
+            workspace_id=_UNRESOLVED_WORKSPACE, headers=headers, raw_body=raw_body, secret=secret
+        )
+    except WebhookSignatureError:
+        logger.info("github_app_webhook_signature_rejected")
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "signature verification failed"},
+        )
+    if probe is None:
+        return _skipped()
+
+    repo = (probe.payload or {}).get("repo")
+    accounts = await _github_accounts_bound_to(session, str(repo)) if repo else []
+    if not accounts:
+        logger.info("github_app_webhook_unbound", repo=repo)
+        return _skipped()
+
+    landed: list[tuple[uuid.UUID, bool]] = []
+    for account in accounts:
+        event = parser(
+            workspace_id=account.workspace_id, headers=headers, raw_body=raw_body, secret=secret
+        )
+        if event is None:  # pragma: no cover — same bytes the probe accepted
+            continue
+        outcome = await _land_trigger(session, account=account, event=event)
+        landed.append((account.workspace_id, outcome.duplicate))
     await session.commit()
 
-    # AFTER the TriggerEvent is durable, wake the IntakeWorker consumer on the
-    # ``intake`` stream (same gated + soft-fail contract as the Direct path). A
-    # redelivery that collapsed (duplicate) landed no new row → no emit. In
-    # db_polling (default) no Redis client is built and this is a pure no-op.
-    if not outcome.duplicate:
-        settings = get_settings()
-        await emit_stream_notification(
-            get_emit_redis_client(settings),
-            settings=settings,
-            stream=STREAM_INTAKE,
-            fields={"workspace_id": str(event.workspace_id)},
-        )
-
+    for workspace_id, duplicate in landed:
+        if not duplicate:
+            await _wake_intake(workspace_id)
+    logger.info("github_app_webhook_accepted", repo=repo, workspaces=len(landed))
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
-        content={"accepted": True, "duplicate": outcome.duplicate},
+        content={"accepted": True, "duplicate": all(dup for _, dup in landed)},
+    )
+
+
+def _skipped() -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={"accepted": True, "skipped": True},
     )
 
 
@@ -409,5 +517,6 @@ __all__ = [
     "get_credential_cipher",
     "get_webhook_parser_registry",
     "receive_connector_webhook",
+    "receive_github_app_webhook",
     "router",
 ]

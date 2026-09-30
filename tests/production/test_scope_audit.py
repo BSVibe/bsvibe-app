@@ -90,6 +90,7 @@ WORKSPACELESS_ALLOWLIST: dict[str, str] = {
     "POST /api/v1/workers/claim": "worker-token authed; scoped by worker identity — the claim's conditional UPDATE requires worker_id to match (#965), the same H1 binding as /result, and every refusal returns the identical `claimed: false`",
     # --- Public webhook ingress ----------------------------------------------
     "POST /api/webhooks/{connector}/{webhook_token}": "public webhook ingress; workspace resolved from the per-connector webhook token, not a session",
+    "POST /api/webhooks/github": "public GitHub App ingress; signed by the App webhook secret, workspace resolved from the founder's repo binding on an active github account, not a session",
     # --- Membership-scoped multi-workspace surface (§3) -----------------------
     # The ONE legitimate place scoping is by caller MEMBERSHIP, not the GUC:
     # every row access is gated on an active Membership (get_current_user_row +

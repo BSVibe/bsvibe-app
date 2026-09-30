@@ -22,13 +22,16 @@ _CONVERSIONS_URL = "https://api.github.com/app-manifests/{code}/conversions"
 _HTTP_TIMEOUT = 10.0
 
 # Least-privilege defaults for what bsvibe does today: open PRs against the
-# bound repo (contents + pull_requests write, metadata read).
+# bound repo (contents + pull_requests write, metadata read), and read the
+# issues whose events start runs (``issues`` / ``issue_comment`` are delivered
+# only to an App holding the issues permission).
 _DEFAULT_PERMISSIONS = {
     "contents": "write",
     "pull_requests": "write",
+    "issues": "read",
     "metadata": "read",
 }
-_DEFAULT_EVENTS = ["push", "pull_request"]
+_DEFAULT_EVENTS = ["push", "pull_request", "issues", "issue_comment"]
 
 
 @dataclass(frozen=True)
