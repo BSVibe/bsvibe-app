@@ -114,6 +114,11 @@ def parse_webhook(
     # Skip bot-authored events to avoid self-trigger loops.
     if (body.get("sender") or {}).get("type") == "Bot":
         return None
+    # ...but BSVibe opens its PRs with the founder's token, so GitHub names a
+    # USER as the sender and the check above never fires. The head branch is the
+    # marker every such delivery carries.
+    if event == "pull_request" and _is_own_branch(body):
+        return None
 
     if not delivery:
         raise WebhookError("missing X-GitHub-Delivery header")
@@ -141,6 +146,17 @@ def parse_webhook(
         trace_id=delivery,
         intent_text=intent_text,
     )
+
+
+#: Branches BSVibe itself pushes: the delivery branch a PR is opened from
+#: (``run_branch_name`` → ``bsvibe/run-<id>``) and the run worktree branch
+#: (``bsvibe/run/<id>``).
+_OWN_BRANCH_PREFIXES = ("bsvibe/run-", "bsvibe/run/")
+
+
+def _is_own_branch(body: dict[str, Any]) -> bool:
+    head = ((body.get("pull_request") or {}).get("head") or {}).get("ref") or ""
+    return str(head).startswith(_OWN_BRANCH_PREFIXES)
 
 
 def _join_text(parts: list[Any]) -> str | None:
