@@ -290,7 +290,7 @@ mockup은 v1 baseline moment 이후 3번의 refinement pass를 거쳤다. 그 pa
   (doc preview / image / slide thumbnail / email body / file metadata).
 - Stitch design-system 추출 → 통합 design token.
 - 이 surface들을 서비스하는 OS workflow는
-  [docs/architecture/workflow-backend.md §1](docs/architecture/workflow-backend.md) 에 lock 됨.
+  [docs/architecture/workflow-backend.md §1](workflow-backend.md) 에 lock 됨.
 - Ratchet 철회는 UX home (Inside-graph 노드 상세 "Retract") + backend home
   (Workflow §11.4 BSupervisor signal)을 가짐.
 - Parked: 타깃 사용자, 슬로건 — moment + Synthesis §9의 경쟁 분석으로 이제
