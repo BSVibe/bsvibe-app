@@ -1,78 +1,72 @@
-# BSVibe 세션 인수인계 — 2026-09-30
+# BSVibe session handoff — 2026-09-30 (evening)
 
-**배포 지형** — 둘이 다르다. 헷갈리면 "배포했는데 왜 안 바뀌지"로 한 시간 쓴다.
+**Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
-| | 어떻게 나가나 |
+| | How it ships |
 |---|---|
-| **컨테이너 스택**(backend·worker) | ✅ **autodeploy 가 2분마다** 올린다 — `_infra/scripts/autodeploy.sh` 의 **별도 블록**(171행~). `PROJECTS` 배열엔 없다(그거 보고 "안 된다"로 오판하기 쉽다). 상태: `_infra/logs/bsvibe-app.deployed` |
-| **PWA** | Vercel 이 main 머지에 자동 배포 |
-| **호스트 워커 2대** | 🔴 **autodeploy 안 된다.** `main` 을 `git pull` 하고 `launchctl kickstart -k gui/501/com.bsvibe.worker-{admin,mac-mini-e2e}` 후 **프로세스 시작 시각**으로 확인. plist 를 고쳤으면 `bootout`+`bootstrap` |
+| **Container stack** (backend · worker) | ✅ **autodeploy every 2 min** — a **separate block** in `_infra/scripts/autodeploy.sh` (line ~171). It is not in the `PROJECTS` array (easy to misread as "not deployed"). State: `_infra/logs/bsvibe-app.deployed` |
+| **PWA** | Vercel on merge to main |
+| **Host executor workers (2)** | 🔴 **not autodeployed.** `git pull` on `main`, then `launchctl kickstart -k gui/501/com.bsvibe.worker-{admin,mac-mini-e2e}` and check the **process start time**. If you changed the plist: `bootout` + `bootstrap` |
 
-⚠️ **프론트와 백엔드를 한 PR 에 담으면 창이 생긴다** — Vercel 은 즉시, 백엔드는 폴러가 2분마다. 09-28 오전 #1061 이 실제로 그랬다(검색창은 살아 있는데 엔드포인트는 아직 없음).
+⚠️ **A PR that touches both frontend and backend opens a window** — Vercel ships at once, the backend poller every 2 min.
 
-**열린 작업은 이 문서가 아니라 GitHub 이슈에 있다.**
+**Open work lives in GitHub issues, not in this document.**
+**How the whole system works: [SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)** — read §4 before touching anything about executors.
 
-> 🧭 **이 헤더에 전이적인 것을 적지 마라.** 자기 자신을 가리키는 필드는 머지하는
-> 순간 거짓이 된다 — 값을 갱신하는 걸로는 못 고치고 **필드를 없애야** 고쳐진다.
+> 🧭 **Never put anything transitive in this header.** A field that points at itself becomes
+> false the moment it merges — updating the value does not fix it; **removing the field** does.
+
+> 🐙 **Opening an issue or a PR on `BSVibe/bsvibe-app` now starts a prod run** (§Ⅱ). To file
+> record-only issues/PRs, pause the binding filter first (§Ⅳ) — and ask 형님 each time.
 
 ---
 
-## §0 — 오늘 한 줄: **부정 안의 블라인드 읽기는 조용해지지 않는다 — 행동한다**
+## §0 — One line: **the agent was capable; the harness around it was the limit**
 
-#959 ③(RLS fail-closed)을 prod 에 냈고, **3초 뒤** IntakeWorker 가 6월 트리거 50개를 틱마다 다시 드레인했다
-(요청 1000 · 런 10). `list_undrained` 의 `NOT EXISTS (requests …)` 가 워크스페이스 없이 돌며 아무 요청도 못 봐
-"처리됨"이 "미처리"로 뒤집혔다. 블라인드 읽기의 위험을 「조용한 0행」으로만 셌다 — 부정 조건 안에서는 반대다.
-로컬 fail-closed 전체 스위트 0 실패는 **스위트가 밟는 경로**의 증거일 뿐이었고, 그 한계를 적어 두고도 배포 판단에 넣지 않았다.
+The GitHub App path went live and ran end to end twice (issue → run → Safe Mode → PR →
+merge-watch auto-merge). Then a real engineering issue (#1102, a concurrency bug) stopped:
+the framer split it into two chained runs, the first Claude Code session wrote a correct red
+test in 7 min and **3.06M prompt tokens**, and the per-run ceiling (2M) halted the chain
+before the fix. Claude Code did exactly what it was told. BSVibe's wrapper — step split,
+tool restriction, a fresh session per round, a ceiling that counts cache reads at full weight
+and fires after the session — is what failed. That became the briefing
+([SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)) and issues #1102–#1116.
 
-### 사고 처리 (09-29 UTC)
-| 시각 | |
-|---|---|
-| 14:50:52 | #1091 배포 |
-| 14:51 | 카나리 direct 가 런 상한에 막히며 발견 |
-| 14:52:21 | prod `alembic downgrade -1` |
-| 14:52:44 | 워커 컨테이너 정지 → 증가 0 |
-| — | 형님 승인 정리: 요청 1000 → `abandoned`, 런 10 → `cancelled`(이력). Decision·Deliverable 0, 실행기 태스크 2(파일 변경·PR 없음) |
-| — | #1092 revert 머지 → 워커 재기동 후 증가 0 확인 |
-
-## §Ⅰ — 이 세션의 산출물 (09-29 ~ 09-30)
+## §Ⅰ — What this session produced
 
 | | |
 |---|---|
-| **머지** | #1081 `'*'` 가 DELETE 를 열던 구멍(prod 확인) · #1082 pwa 플레이크 · #1083 테스트 정리를 소유자로 · #1084 `publishing_workspace` · #1085~#1089 테스트 137파일 스코프(서브에이전트 5, 각각 로컬 fail-closed 로 독립 재검증) · #1090 워크스페이스 라우터 + MCP 목록(prod 에서 **지금도** 현재 워크스페이스 하나만 주던 것) · #1091 ③ → **#1092 revert** |
-| **열림** | #1093 인테이크 재드레인 수정 · (이 PR) 인수인계 + `tools/rls-canary/` |
-| **새 도구** | `tools/rls-canary/`: 문장 단위 블라인드 전수(`blindstmt_plugin.py`) · 배포 전 차분 카나리(`run_case.sh`, prod 덤프 open/closed 행 증가 비교) |
-| **로컬 fail-closed 전체 스위트** | 983 → 0 실패(명제 교체 1 제외) — 그러나 이것만으로는 부족했다(§0) |
+| **Merged** | #1095 RLS fail-closed retry (③) · #1096 handoff · #1098 GitHub App webhook ingress `POST /api/webhooks/github` + manifest `issues`/`issue_comment` · #1100 (BSVibe-made, from issue #1099) · #1101 skip PRs from BSVibe's own branches · #1117 `docs/SYSTEM_OVERVIEW.md` |
+| **Issues filed** | #1102–#1116 (map in [SYSTEM_OVERVIEW.md §10.3](./SYSTEM_OVERVIEW.md)) |
+| **Notion** | Handoff archive was **eight sessions behind** (last archived 09-21 pm). All eight moved as verbatim `.md` attachments |
 
-## §Ⅱ — prod 지금 상태 (09-30 04:06 UTC)
+### ③ fail-closed — done this time
+* Pre-deploy differential canary on a fresh prod dump: open = closed = zero row growth
+* **Positive control on the same dump:** pre-fix code (`2fd0c95`) closed → intake 50 · claim 10 per tick (the 09-29 incident). The canary still discriminates
+* Local fail-closed full suite 7256 passed; blind-statement census: zero negation sites
+* Post-deploy 10 min + ~12 h of 30-min checks: `rls_fail_closed`, no row growth beyond human-made runs, zero errors
+
+## §Ⅱ — Prod right now
 
 | | |
 |---|---|
-| `alembic_version` | **`rls_fail_closed`** — #1095(`3608118`) 로 ③ 재시도 완료. 빈 GUC 탈출구 0개 |
-| 배포 후 10분 | requests 1281 · execution_runs 303 **그대로**(30초 간격 20회) · 워커 에러 0 |
-| 정상 읽기 | MCP `runs_list` 가 현재 워크스페이스 런을 돌려준다(GUC 경로 살아 있음) |
+| `alembic_version` | `rls_fail_closed` |
+| GitHub ingress | App `bsvibe` has Issues read + Issues/Issue comment events (형님 changed them 09-30). Binding `c50e7217…` (`BSVibe/bsvibe-app` → product BSVibe) has `trigger.filters = {}` → **every opened/edited issue and every PR from a non-`bsvibe/run…` branch becomes a run**, outside the run cap and token budget (#1113) |
+| Runs in flight | none |
 
-### ③ 재시도 증거 (#1095 본문에 전부)
-* 배포 전 차분 카나리(오늘 prod 덤프): open = closed = `delta={}`
-* 음성 대조 `2fd0c95`(수정 전) closed: 틱마다 intake 50 · claim 10 — **카나리 판별력이 오늘 스냅샷에서도 있다**
-* 로컬 fail-closed 전체 7256 통과 · 블라인드 문장 전수에서 prod 지점은 `get_output_language` 하나(테스트가 `get_workspace_id` 를 GUC 없는 스텁으로 덮은 아티팩트), **부정 조건 0**
+## §Ⅲ — Next
 
-## §Ⅲ — 다음 세션이 할 것
+1. **Decide how BSVibe wraps Claude Code** ([SYSTEM_OVERVIEW.md §4](./SYSTEM_OVERVIEW.md), §10.3). Most of #1103 · #1104 · #1106 · #1114 resolve differently depending on it — decide before fixing any of them. 형님 said on 09-30 he wants to understand the internal design first; the overview is the starting point.
+2. **#1113 opt-in** — which issues become work. `trigger.filters` already supports key-equality (proven today); a label-based filter is the cheapest interim.
+3. Correctness issues that do not depend on (1): #1102 / #1110 (one state machine with DB compare-and-set), #1107 (sandbox shared per product — reproduce first), #1108, #1111, #1112, #1105.
+4. Carried over: credential rotation ×3 · #1047 · #937 cold-boot · #1042 · #954 · #949 · #957.
 
-1. **며칠 지켜보기** — 행 증가율이 평소(사람이 만든 요청만)와 같은가. 되돌리기는 prod `alembic downgrade -1` **와** revert PR 둘 다(entrypoint 가 부팅마다 upgrade head)
-2. 카나리가 안 덮는 것: 외부 부작용 워커(알림 · 전달 · 릴레이 · merge-watch · 인증 프로브)의 「일이 있을 때」 경로 — 실제로 일이 생긴 뒤 행이 처리되는지 확인
-3. 이월: 자격증명 로테이션 3건 · #1047 그룹방 바인딩 · #937 cold-boot · #1042 잔여 · #954 · #949 · #957
+## §Ⅳ — Discipline that paid off
 
-### 별건 후보
-* 🆕 테스트가 `get_workspace_id` 를 GUC 없는 스텁으로 덮으면 fail-closed 에서 블라인드가 된다(`tests/api/test_inside_concept_detail.py`) — 「0 / 없음」 단언이 잘못된 이유로 통과할 수 있는 같은 계열
-* 🆕 에이전트가 짚은 빈틈: fail-closed 에서 원래 통과하던 테스트 중 **「0 / 없음」을 블라인드로 단언**하는 것은 잘못된 이유로 통과할 수 있다(고친 파일 밖은 미감사)
-* 이월: `list_active_policies` prod 호출자 없음 · `schedule_product_bootstrap` 스코프 전파는 코드 추론 · `/api/v1/workers/result` 가 None 에 뭘 돌려주나 · `delivery_events` 0행 · 묵은 `online` 워커 행
-
-## §Ⅳ — 이 세션에서 값을 한 규율
-
-* **🚨⭐⭐⭐ 부정 조건은 따로 센다.** NOT EXISTS · notin_ · 「없으면 만든다」 안의 블라인드 읽기는 행동을 만든다
-* **🔬⭐⭐⭐ 측정 장치의 양성 대조군을 결과 안에서.** 행 단위 프로브는 행이 없으면 안 불리고(09-30), 같은 트랜잭션에 쓰면 롤백에 지워진다(09-29). 문장 단위로 재라
-* **🧪⭐⭐ 배포 전 차분 카나리.** 같은 스냅샷 · 같은 코드 · 정책만 다르게 → 행 증가가 같은가. 음성 대조(수정 전 코드)로 카나리가 사고를 잡는지 먼저 증명했다
-* **✂️⭐⭐ 절단 매트릭스는 지점마다** — 공유 함수는 호출자 수만큼(#1090 목록 절단이 REST·MCP 둘 다 빨강)
-* **🤝⭐ 서브에이전트 PR 은 독립 재검증** — 공용 스크래치의 같은 파일명(`env.sh`)을 서로 덮어썼다. 에이전트엔 유일한 파일명을 줘라
-* **🔓 머지는 형님의 머지 지시가 대화에 있어야 통과한다** — 「머지해」 · 조건부 질문에 대한 「응」은 통과, 「아직이야?」는 막혔다
-* **🧯 배포 디렉터리에 커밋하지 않았다.** 전부 워크트리에서
+* **🐙⭐⭐ Filing issues/PRs on bsvibe-app is now a prod action.** Record-only: set the binding filter to a non-matching value (`bsvibe_bindings_update`, `{"filters":{"github_event":"__paused__"}}`), confirm the trigger row carries `_received_filtered` and `requests` did not grow, then restore `{"filters":{}}`. The auto-mode classifier blocks the binding change unless 형님 OKs it in the conversation.
+* **🛑⭐⭐ Cancelling a run does not stop its session.** A run cancelled at 10:41 kept its Claude Code session alive until 10:52 (6.4M tokens) with its run-scoped MCP token still valid (#1106). Cancel only before the executor task exists (~25 s after the request), or expect to pay.
+* **🔬⭐⭐ Canary with a positive control, on the same snapshot.** A "no change" canary is only evidence if the known-bad code turns it red on that very dump.
+* **🧾⭐ Re-verify subagent reports before acting.** Of the audit claims turned into issues, one was wrong ("`output_mode` has no reader" — `delivery_worker` reads it; the real defect was #1108).
+* **🪞 A source-text guard matched my own docstring.** Cutting the call left the guard green because the helper's docstring named the function; narrowed to the call form `_resolve_inbound_product(`.
+* **🗄 `SELECT DISTINCT` over a JSON column fails on Postgres** (`could not identify an equality operator for type json`) — SQLite never tells you. Use `IN (subquery)`.
+* **🧯 Nothing was committed in the deploy directory.** Every change went through a worktree.
