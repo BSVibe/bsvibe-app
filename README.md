@@ -2,9 +2,8 @@
 
 BSVibe AI agent OS — unified monorepo (PWA + FastAPI backend).
 
-This is the Phase 0 skeleton. The full architecture context is in
-`docs/architecture/workflow-backend.md` (§2.2 layout,
-§12 Phase 0 spec).
+**How the system works end to end:** [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md).
+**Current state and open work:** [docs/STATUS.md](docs/STATUS.md) · [docs/README.md](docs/README.md) (index) · GitHub issues.
 
 ## Prerequisites
 
