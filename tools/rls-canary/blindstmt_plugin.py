@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
-import os, re, sys
+import os
+import re
+import sys
+
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
@@ -25,7 +28,7 @@ _state: dict[int, dict[str, str]] = {}
 
 
 def _frames():
-    import greenlet
+    import greenlet  # noqa: PLC0415 — only when a statement is recorded
 
     f = sys._getframe(3)
     g = greenlet.getcurrent()

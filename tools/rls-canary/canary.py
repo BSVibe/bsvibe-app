@@ -5,6 +5,8 @@ Run it against two restores of the same prod snapshot (policy open vs closed)
 and compare: the deltas must be identical.
 """
 
+# ruff: noqa: PLC0415, S608 — imports follow the env set in main() (settings read paths at
+# import); table names come from pg_tables, not input.
 from __future__ import annotations
 
 import asyncio
