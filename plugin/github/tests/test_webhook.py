@@ -263,3 +263,44 @@ class TestParseWebhook:
                 raw_body=b"{not json",
                 secret=None,
             )
+
+
+class TestOwnPullRequestsDoNotRetrigger:
+    """BSVibe opens its PRs with the founder's token, so GitHub names a USER as the
+    sender and the bot skip above never fires. Measured 2026-09-30: PR #1100
+    (``bsvibe/run-cd5bbe79``) came back as ``pull_request/opened`` and opened a new
+    run on its own PR. The head branch is the one marker every such delivery
+    carries."""
+
+    @staticmethod
+    def _pr(head_ref: str, action: str = "opened") -> bytes:
+        return json.dumps(
+            {
+                "action": action,
+                "repository": {"full_name": "o/r"},
+                "pull_request": {"number": 1, "title": "t", "head": {"ref": head_ref}},
+                "sender": {"login": "founder", "type": "User"},
+            }
+        ).encode()
+
+    def _parse(self, body: bytes):
+        return parse_webhook(
+            workspace_id=WORKSPACE,
+            headers=_headers("pull_request", body=body),
+            raw_body=body,
+            secret=SECRET,
+        )
+
+    @pytest.mark.parametrize("action", ["opened", "synchronize", "edited", "reopened"])
+    def test_a_pr_from_a_delivery_branch_is_skipped(self, action: str) -> None:
+        # PR #1100's head, verbatim. That this prefix matches what the delivery
+        # side actually generates is pinned in tests/api/test_github_app_webhook.py
+        # (plugins may not import backend internals).
+        assert self._parse(self._pr("bsvibe/run-cd5bbe79", action)) is None
+
+    def test_a_pr_from_a_run_worktree_branch_is_skipped(self) -> None:
+        assert self._parse(self._pr(f"bsvibe/run/{uuid.uuid4()}")) is None
+
+    def test_a_founders_own_branch_still_triggers(self) -> None:
+        evt = self._parse(self._pr("feat/something"))
+        assert isinstance(evt, TriggerEvent)

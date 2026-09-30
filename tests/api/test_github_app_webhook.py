@@ -323,6 +323,41 @@ async def test_an_uninteresting_event_is_skipped(
     assert await _rows(sf) == []
 
 
+# ── BSVibe's own PRs do not come back as work ─────────────────────────────────
+
+
+async def test_a_pr_bsvibe_opened_does_not_land_a_trigger(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    """BSVibe opens PRs with the founder's token, so the sender is a USER. 2026-09-30:
+    PR #1100 came back as ``pull_request/opened`` and opened a run on itself. The
+    branch comes from the delivery side's own ``run_branch_name`` so the parser's
+    marker cannot drift from what is really pushed."""
+    from backend.workflow.application.delivery.connector_dispatch._github import (
+        run_branch_name,
+    )
+
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    await _seed_bound_repo(sf, cipher)
+    body = json.dumps(
+        {
+            "action": "opened",
+            "pull_request": {
+                "number": 1100,
+                "title": "t",
+                "head": {"ref": run_branch_name(uuid.uuid4())},
+            },
+            "repository": {"full_name": REPO},
+            "sender": {"login": "blas1n", "type": "User"},
+        }
+    ).encode()
+
+    resp = await _post(client, body, event="pull_request")
+
+    assert resp.status_code == 202
+    assert await _rows(sf) == []
+
+
 # ── the App asks GitHub for what the route consumes ──────────────────────────
 
 
