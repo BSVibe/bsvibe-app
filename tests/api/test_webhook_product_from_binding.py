@@ -45,8 +45,6 @@ from backend.identity.workspaces_db import ProductRow, ResourceBindingRow, Works
 from .._support import db_engine
 from .conftest import commit_per_workspace, flush_per_workspace
 
-pytestmark = pytest.mark.asyncio
-
 
 async def _product_id_from_binding(
     session: AsyncSession, *, account: ConnectorAccountRow, payload: dict[str, Any]
