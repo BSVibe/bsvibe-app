@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-09-30 (evening)
+# BSVibe session handoff — 2026-10-01
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,45 +21,61 @@
 
 ---
 
-## §0 — One line: **the agent was capable; the harness around it was the limit**
+## §0 — One line: **#1106 is fixed on a branch; it is waiting on a PR that is itself a prod action**
 
-The GitHub App path went live and ran end to end twice (issue → run → Safe Mode → PR →
-merge-watch auto-merge). Then a real engineering issue (#1102, a concurrency bug) stopped:
-the framer split it into two chained runs, the first Claude Code session wrote a correct red
-test in 7 min and **3.06M prompt tokens**, and the per-run ceiling (2M) halted the chain
-before the fix. Claude Code did exactly what it was told. BSVibe's wrapper — step split,
-tool restriction, a fresh session per round, a ceiling that counts cache reads at full weight
-and fires after the session — is what failed. That became the briefing
-([SYSTEM_OVERVIEW.md](./SYSTEM_OVERVIEW.md)) and issues #1102–#1116.
+형님 settled the central design question from the last handoff: **BSVibe keeps wrapping Claude
+Code the way it does now** (built-ins off, MCP work tools only). #1106 (cancel does not stop the
+session) is fixed on `claude/bridge-cse_01UcAKMcioBCqfkBrsKF8adZ` (commit `71ff937`). No PR yet,
+because opening one starts a prod run and this session had no sanctioned way to pause the
+binding filter.
 
-## §Ⅰ — What this session produced
+## §Ⅰ — Decisions (형님, 2026-10-01)
 
 | | |
 |---|---|
-| **Merged** | #1095 RLS fail-closed retry (③) · #1096 handoff · #1098 GitHub App webhook ingress `POST /api/webhooks/github` + manifest `issues`/`issue_comment` · #1100 (BSVibe-made, from issue #1099) · #1101 skip PRs from BSVibe's own branches · #1117 `docs/SYSTEM_OVERVIEW.md` |
-| **Issues filed** | #1102–#1116 (map in [SYSTEM_OVERVIEW.md §10.3](./SYSTEM_OVERVIEW.md)) |
-| **Notion** | Handoff archive was **eight sessions behind** (last archived 09-21 pm). All eight moved as verbatim `.md` attachments |
+| **Wrapping stays** | Claude Code and the real files live on **different machines**. Files may sit on the BSVibe server while a local Claude Code connects to them. So built-in tools are out; the MCP work tools are the surface. Don't propose "let Claude Code use its own tools" again |
+| **No `--resume`** | Continuity belongs to **BSVibe, not the executor**. A user may split work so the next step runs on codex or another executor, and a Claude Code session file cannot cross that boundary. Make BSVibe's handoff between rounds and steps smaller and executor-neutral instead |
 
-### ③ fail-closed — done this time
-* Pre-deploy differential canary on a fresh prod dump: open = closed = zero row growth
-* **Positive control on the same dump:** pre-fix code (`2fd0c95`) closed → intake 50 · claim 10 per tick (the 09-29 incident). The canary still discriminates
-* Local fail-closed full suite 7256 passed; blind-statement census: zero negation sites
-* Post-deploy 10 min + ~12 h of 30-min checks: `rls_fail_closed`, no row growth beyond human-made runs, zero errors
+How the open issues resolve under this:
 
-## §Ⅱ — Prod right now
-
-| | |
+| Issue | Direction |
 |---|---|
-| `alembic_version` | `rls_fail_closed` |
-| GitHub ingress | App `bsvibe` has Issues read + Issues/Issue comment events (형님 changed them 09-30). Binding `c50e7217…` (`BSVibe/bsvibe-app` → product BSVibe) has `trigger.filters = {}` → **every opened/edited issue and every PR from a non-`bsvibe/run…` branch becomes a run**, outside the run cap and token budget (#1113) |
-| Runs in flight | none |
+| #1114 | `--max-turns` only. Replace the full re-rendered transcript with a BSVibe-owned summary (pairs with #1103) |
+| #1103 | The framer keeps one TDD unit (test + fix) in one run. When it does split, it leaves a handoff any executor can read: explored, touched, verify state |
+| #1104 | Weight cache reads by real cost; enforce **mid-session** from stream-json usage, then kill the process |
+| #1106 | ✅ on the branch (§Ⅱ) |
+
+## §Ⅱ — #1106 on the branch (not merged)
+
+* **Session kill:** `await_completion` takes an `abandon_if` probe, asked every poll tick after the terminal read. `ExecutorAdapter` passes a run-status probe for run-bound turns. On cancel it does three things: closes the task row (`failed`, `abandoned:`), sends `cancel_task` to the worker, and raises `RunCancelledDuringTurn` (not retryable)
+* **Drive loop:** `_loop_turn.take_turn` ends both the between-turns cancel and the mid-turn cancel as "cancelled". It was split out because `_drive_loop.py` sat at exactly the 600-LOC guard
+* **Token refusal:** `load_run`, the gate every work tool passes through, refuses cancelled / failed / shipped runs
+* **No worker change.** The Lift E14 cancel handling is reused, so backend autodeploy is enough
+* **Verified:**
+  * RED → GREEN, plus a wire-cut on each of the three call-site wires (each one turns its own test red, collection intact)
+  * Full suite 7203 passed · import-linter 6/6 · ruff · mypy
+* **Checklist:** `docs/e2e/cancel-reaches-the-executor-session-checklist.md` (post-deploy items unchecked)
+* **Known gaps:**
+  * The degraded pure-DB poll (pub/sub failed) has no probe
+  * A backend restart mid-wait loses the kill, though the token refusal still holds
 
 ## §Ⅲ — Next
 
-1. **Decide how BSVibe wraps Claude Code** ([SYSTEM_OVERVIEW.md §4](./SYSTEM_OVERVIEW.md), §10.3). Most of #1103 · #1104 · #1106 · #1114 resolve differently depending on it — decide before fixing any of them. 형님 said on 09-30 he wants to understand the internal design first; the overview is the starting point.
-2. **#1113 opt-in** — which issues become work. `trigger.filters` already supports key-equality (proven today); a label-based filter is the cheapest interim.
-3. Correctness issues that do not depend on (1): #1102 / #1110 (one state machine with DB compare-and-set), #1107 (sandbox shared per product — reproduce first), #1108, #1111, #1112, #1105.
-4. Carried over: credential rotation ×3 · #1047 · #937 cold-boot · #1042 · #954 · #949 · #957.
+1. **Authenticate the BSVibe MCP.** It was added at **user scope** this session (`claude mcp add --scope user bsvibe https://api.bsvibe.dev/mcp`), so every worktree sees it. It shows `Needs authentication` until `/mcp` is run once in an interactive session.
+2. **Open the #1106 PR as record-only.** Pause → confirm → PR → confirm → restore:
+   * `bsvibe_bindings_update` `c50e7217…` → `{"filters":{"github_event":"__paused__"}}`
+   * Confirm the filter took
+   * Open the PR
+   * Confirm the trigger row carries `_received_filtered` and `requests` did not grow
+   * Restore `{"filters":{}}`
+   * 형님 OK'd this on 10-01, but ask again in the new session
+3. **Merge, then run the post-deploy E2E** from the checklist. That means starting a run on purpose and cancelling it after its executor task is `dispatched`:
+   * expect `executor_adapter_run_cancelled_mid_turn` → `dispatch_cancel_xadd_succeeded` → `worker_task_cancel_started`
+   * expect the task row `failed`/`abandoned:`
+   * expect no accepted `mcp_work_tool` calls afterwards
+   * This is a prod run, so ask first
+4. Then #1104 + #1114 together (both in `backend/executors/worker/claude_code.py`), then #1103.
+5. Still open from before: #1113 opt-in (label filter is the cheapest interim) · #1102/#1110 state machine · #1107 · #1108 · #1111 · #1112 · #1105 · carry-overs (credential rotation ×3 · #1047 · #937 · #1042 · #954 · #949 · #957).
 
 ## §Ⅳ — Discipline that paid off
 
@@ -70,3 +86,9 @@ and fires after the session — is what failed. That became the briefing
 * **🪞 A source-text guard matched my own docstring.** Cutting the call left the guard green because the helper's docstring named the function; narrowed to the call form `_resolve_inbound_product(`.
 * **🗄 `SELECT DISTINCT` over a JSON column fails on Postgres** (`could not identify an equality operator for type json`) — SQLite never tells you. Use `IN (subquery)`.
 * **🧯 Nothing was committed in the deploy directory.** Every change went through a worktree.
+* **🔐 This session could not reach prod, by design.**
+  * A `docker --context colima exec bsvibe-prod-postgres-1 psql …` read was refused by the auto-mode classifier as a production read
+  * Self-adding a settings allow rule for it was refused too
+  * Use the BSVibe MCP (§Ⅲ-1); don't route around the classifier
+* **🐳 The default docker context on this host is `colima-palworld`.** The prod stack is on `colima`. Pass `--context colima`; never `docker context use`, because sibling scripts depend on the current context.
+* **📏 `_drive_loop.py` was at exactly 600 lines** (`test_h2a_decomposition`). Any addition there needs a sub-split. `_loop_turn.py` is the precedent and is registered in that guard.
