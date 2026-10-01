@@ -206,6 +206,7 @@ class _Run:
         self.id = uuid.uuid4()
         self.workspace_id = uuid.uuid4()
         self.product_id = uuid.uuid4()
+        self.status = "running"  # a finished run is refused (#1106)
         self.payload: dict[str, Any] = {}
 
 

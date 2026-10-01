@@ -26,6 +26,7 @@ from backend.workflow.application._loop_context import (
     settle_client_attach,
     system_prompt_for,
 )
+from backend.workflow.application._loop_turn import take_turn
 from backend.workflow.application.audit_events import (
     DecisionPending,
     LlmTurn,
@@ -239,30 +240,12 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     while await should_continue_round(orch, run, attempt, registry, tracker, messages, _cycle):
         this_cycle = _cycle
         _cycle += 1
-        # Cooperative cancel — stop at the turn boundary if the run was cancelled
-        # mid-flight, instead of dispatching another (expensive) LLM/executor
-        # turn and burning the round budget. The transition-time guard alone let
-        # a cancelled run keep turning to exhaustion (dogfood dd2bd3a3).
-        if await orch._run_cancelled(run):
+        turn = await take_turn(orch, run, messages, tools_schema)
+        if turn is None:  # cancelled — between turns, or mid-turn (#1106)
             await orch._audit(
                 run, attempt, LoopTerminal, {"outcome": "cancelled", "cycle": this_cycle}
             )
             return orch._cancelled_result(run, work_step, attempt, written_paths, final_text)
-        # Drive-session-release (B) — release the pooled DB connection for the
-        # duration of the (up to 30-minute) executor turn. Committing at the turn
-        # boundary ends the orchestrator session's open transaction, so NO
-        # connection is held idle-in-transaction across the ``complete()`` await
-        # — the pool-exhaustion outage this refactor fixes. The engine uses
-        # ``expire_on_commit=False`` (see runtime/lifecycle.py) so every loaded
-        # ORM attribute survives the commit; post-turn writes autobegin a fresh
-        # short transaction. Nothing between this commit and ``complete()``
-        # touches the DB. ``claimed_at`` is refreshed here as a heartbeat so a
-        # legitimately long multi-turn drive is never mistaken for a stale claim
-        # and reaped by ``AgentWorker`` (the lease is 2× the executor timeout, so
-        # a single turn is always safe; the heartbeat covers many turns).
-        run.claimed_at = datetime.now(UTC)
-        await orch._session.commit()
-        turn = await orch._llm.complete(messages=messages, tools=tools_schema)
         final_text = turn.content or final_text
         # 게이트 1 — meter this turn's tokens onto the run; stop on a Decision if
         # the run crossed the per-run ceiling (see ``token_budget``).

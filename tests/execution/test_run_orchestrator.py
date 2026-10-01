@@ -311,6 +311,46 @@ async def test_cancel_between_turns_stops_loop(tmp_path: Path) -> None:
         assert status is RunStatus.CANCELLED
 
 
+async def test_cancel_during_an_executor_turn_ends_the_loop_as_cancelled(tmp_path: Path) -> None:
+    """#1106 — a cancel that lands DURING an executor turn is noticed by the adapter, which
+    kills the session and raises :class:`RunCancelledDuringTurn`. That is the run's cancel
+    arriving early, not an executor failure: the loop ends exactly as a between-turns cancel
+    does, and the run stays CANCELLED."""
+    from sqlalchemy import update
+
+    from backend.dispatch.adapter import RunCancelledDuringTurn
+
+    class _CancelledMidTurnLlm:
+        def __init__(self, session: Any, run_id: Any) -> None:
+            self._session = session
+            self._run_id = run_id
+            self.calls = 0
+
+        async def complete(
+            self, *, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+        ) -> LoopTurn:
+            self.calls += 1
+            await self._session.execute(
+                update(ExecutionRun)
+                .where(ExecutionRun.id == self._run_id)
+                .values(status=RunStatus.CANCELLED)
+            )
+            await self._session.flush()
+            raise RunCancelledDuringTurn("run cancelled while its executor turn was running")
+
+    async with memory_session() as session:
+        run = await _make_run(session)
+        llm = _CancelledMidTurnLlm(session, run.id)
+        orch = RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+        result = await orch.run(run=run, workspace_dir=tmp_path)
+
+        assert llm.calls == 1
+        assert result.outcome == "needs_decision"
+        assert "cancelled" in result.summary.lower()
+        status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run.id))
+        assert status is RunStatus.CANCELLED
+
+
 # --------------------------------------------------------------------------
 # Verified-deliverable summary — titled by the founder intent, NOT the
 # agent's raw streaming narration.

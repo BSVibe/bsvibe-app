@@ -31,7 +31,7 @@ from backend.workflow.application.tool_registry import (
 from backend.workflow.application.tool_registry import (
     assemble_run_tool_registry,
 )
-from backend.workflow.infrastructure.db import ExecutionRun
+from backend.workflow.infrastructure.db import TERMINAL_RUN_STATUSES, ExecutionRun
 from backend.workflow.infrastructure.sandbox import get_sandbox_manager
 from backend.workflow.infrastructure.tools import ToolRegistry
 
@@ -108,6 +108,11 @@ async def load_run(run_id: uuid.UUID, ctx: ToolContext) -> ExecutionRun:
             token_workspace=str(ctx.principal.workspace_id),
         )
         raise ToolError("this run belongs to another workspace")
+    if run.status in TERMINAL_RUN_STATUSES:
+        # #1106 — the token outlives the run: a session cancelled at 10:41 kept editing its
+        # worktree until 10:52 (measured 2026-09-30). A finished run accepts no more work.
+        logger.info("mcp_work_run_finished", run_id=str(run_id), status=run.status.value)
+        raise ToolError(f"run {run_id} is {run.status.value} — stop working on it")
     return run
 
 
