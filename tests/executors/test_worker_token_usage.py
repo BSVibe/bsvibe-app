@@ -83,8 +83,9 @@ def test_claude_code_extracts_usage_from_its_result_event() -> None:
 
     The final ``{"type": "result", ..., "usage": {...}}`` event carries the
     turn's token counts; the worker's line loop parsed every event and threw
-    this one away. Cache reads/creations are input tokens the account is billed
-    for, so they count toward the ceiling too.
+    this one away. Cache reads/creations count toward the ceiling too — weighted
+    by what they cost (#1104: a read is a tenth, a 5-minute write 1.25×), so the
+    figure is in input-token equivalents.
     """
     from backend.executors.worker.claude_code import _claude_extract_usage
 
@@ -100,7 +101,8 @@ def test_claude_code_extracts_usage_from_its_result_event() -> None:
             },
         }
     )
-    assert usage == (11 + 5 + 7, 22)
+    # 11 + ceil(5×1.25) + ceil(7×0.1)
+    assert usage == (11 + 7 + 1, 22)
 
 
 def test_claude_code_ignores_events_that_are_not_the_result() -> None:

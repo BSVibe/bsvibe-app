@@ -368,6 +368,13 @@ class Settings(BaseSettings):
     # real distribution.
     agent_max_run_tokens: int = 2_000_000
 
+    # #1114 — ``--max-turns`` for an agentic executor session (one Claude Code session is one
+    # BSVibe round). Until this, a session's only in-session bound was the worker's 2-hour
+    # timeout. Reaching it ends the round normally; verification judges what the agent left in
+    # the worktree. ``0`` = no flag. The run's token ceiling travels with the task too, as the
+    # run's REMAINING budget (#1104), so the worker can stop a session as it crosses it.
+    executor_agent_max_turns: int = 60
+
     # The MACHINE's verification-stack bound (감사 §Ⅱ, 2026-09-10). Distinct
     # from ``workspaces.verify_stack_slots``, which is a PLAN TIER: the tier
     # says how many concurrent verifications a workspace's plan buys, this says

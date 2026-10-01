@@ -645,6 +645,42 @@ class ExecutorAdapter:
 
         return _cancelled
 
+    async def _session_limits(
+        self, session: AsyncSession, *, agentic: bool
+    ) -> tuple[int | None, int | None]:
+        """``(token_budget, max_turns)`` for the worker to enforce INSIDE the session.
+
+        #1104 — the run's ceiling was checked only after a turn came back, so a session that
+        crossed it ran to completion first (run ``92b76fba``: 3,055,575 input tokens on a 2M
+        ceiling). The worker gets what is LEFT of the run's budget and stops the session as it
+        crosses it; the drive loop's own check then fires on the usage it reports.
+
+        Never below 1: a run already at its ceiling must be stopped, and ``0`` reads as
+        "unbounded" on the worker. Read from the committed row, so it can trail the run by the
+        turn being accounted — the backend's own check is still the ceiling of record.
+        Both ``None`` for a chat turn: a single completion with its own deadline.
+        """
+        if not agentic or self.run_id is None:
+            return None, None
+        max_turns = self.settings.executor_agent_max_turns or None
+        cap = self.settings.agent_max_run_tokens
+        if cap <= 0:
+            return None, max_turns
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+
+        stmt = select(ExecutionRun.usage_prompt_tokens, ExecutionRun.usage_completion_tokens).where(
+            ExecutionRun.id == self.run_id
+        )
+        if self.session_factory is not None:
+            async with self.session_factory() as short:
+                row = (await short.execute(stmt)).first()
+        else:
+            row = (await session.execute(stmt)).first()
+        used = (row[0] or 0) + (row[1] or 0) if row is not None else 0
+        return max(cap - used, 1), max_turns
+
     async def _work_tool_surface(
         self, session: AsyncSession, *, agentic: bool
     ) -> dict[str, Any] | None:
@@ -742,6 +778,7 @@ class ExecutorAdapter:
         # EVERY execution model gets that same surface, client_attach included: which
         # MACHINE a work tool runs on is the sandbox's business, not the surface's.
         mcp = await self._work_tool_surface(session, agentic=agentic)
+        token_budget, max_turns = await self._session_limits(session, agentic=agentic)
         # Lift E9 — per-caller chat timeout. ``self.timeout_s`` is set from
         # :attr:`CallerSpec.default_timeout_s` at construction time (see
         # :func:`adapter_for`); ``None`` keeps the legacy global
@@ -762,6 +799,8 @@ class ExecutorAdapter:
             worker_id=worker.id,
             mcp=mcp,
             timeout_s=effective_timeout_s,
+            token_budget=token_budget,
+            max_turns=max_turns,
         )
         # Commit before awaiting — the worker reports its result on a
         # SEPARATE session over HTTP (/api/v1/workers/result), whose
@@ -782,6 +821,8 @@ class ExecutorAdapter:
                 worker_id=worker.id,
                 mcp=mcp,
                 timeout_s=remaining_s,
+                token_budget=token_budget,
+                max_turns=max_turns,
             )
 
         try:

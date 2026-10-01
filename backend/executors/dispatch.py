@@ -453,6 +453,8 @@ def _build_dispatch_payload(
     mcp: dict[str, Any] | None,
     env: Mapping[str, str] | None,
     timeout_s: float | None,
+    token_budget: int | None = None,
+    max_turns: int | None = None,
 ) -> dict[str, Any]:
     """The flat-strings stream payload for one dispatch of ``task``.
 
@@ -487,6 +489,13 @@ def _build_dispatch_payload(
     # listening any more instead of holding its slot to its own 3600s.
     if timeout_s is not None:
         payload["timeout_s"] = str(timeout_s)
+    # #1104 / #1114 — the session's in-flight bounds: what is left of the run's token ceiling
+    # and the agentic turn limit. Same omit-when-absent rule; the worker then runs unbounded,
+    # as before.
+    if token_budget is not None:
+        payload["token_budget"] = str(token_budget)
+    if max_turns is not None:
+        payload["max_turns"] = str(max_turns)
     # Agent run vs. chat turn (Redis Streams take flat strings only). Always
     # emitted — the worker defaults a MISSING key to the agent run, so silence
     # would quietly restore the pre-fix behaviour for chat turns.
@@ -518,6 +527,8 @@ async def dispatch_task(
     action: str = "execute",
     env: Mapping[str, str] | None = None,
     timeout_s: float | None = None,
+    token_budget: int | None = None,
+    max_turns: int | None = None,
 ) -> str:
     """XADD ``task`` onto the worker's stream + mark it ``dispatched``.
 
@@ -561,7 +572,15 @@ async def dispatch_task(
     from the payload when ``None`` (Streams reject it, and an older worker
     keeps its own default).
     """
-    payload = _build_dispatch_payload(task, action=action, mcp=mcp, env=env, timeout_s=timeout_s)
+    payload = _build_dispatch_payload(
+        task,
+        action=action,
+        mcp=mcp,
+        env=env,
+        timeout_s=timeout_s,
+        token_budget=token_budget,
+        max_turns=max_turns,
+    )
     task_id, executor_type = task.id, task.executor_type
     task.worker_id = worker_id
     task.status = "dispatched"
@@ -597,6 +616,8 @@ async def redispatch_task(
     action: str = "execute",
     env: Mapping[str, str] | None = None,
     timeout_s: float | None = None,
+    token_budget: int | None = None,
+    max_turns: int | None = None,
 ) -> str:
     """XADD ``task`` onto the worker's stream AGAIN — the #965 retry path.
 
@@ -611,7 +632,15 @@ async def redispatch_task(
     budget for ``timeout_s`` — the worker measures that from when it starts, so
     re-sending the original would let the retry outlive the caller waiting on it.
     """
-    payload = _build_dispatch_payload(task, action=action, mcp=mcp, env=env, timeout_s=timeout_s)
+    payload = _build_dispatch_payload(
+        task,
+        action=action,
+        mcp=mcp,
+        env=env,
+        timeout_s=timeout_s,
+        token_budget=token_budget,
+        max_turns=max_turns,
+    )
     msg_id = await redis.xadd(
         worker_stream(worker_id),
         payload,
