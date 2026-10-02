@@ -53,10 +53,14 @@
 - `main` 에서 `git pull` 하고 `launchctl kickstart -k gui/501/com.bsvibe.worker-{admin,mac-mini-e2e}` 실행
 - **프로세스 시작 시각**으로 재시작을 확인한다
 
-- [ ] 디스패치 페이로드에 `token_budget`·`max_turns` 가 실린다(워커 `task_received` 직후 컨텍스트, 또는 Redis 스트림 항목)
-- [ ] 정상 에이전트 런의 `executor_tasks.usage_prompt_tokens` 가 새 단위로 기록된다. 같은 규모 과제의 이전 값보다 크게 작아야 한다(캐시 읽기 비중만큼)
-- [ ] 턴 한도: 큰 과제에서 `claude_code_max_turns_reached` 가 찍히면 태스크는 `done` 이고 재시도(`executor_adapter_chat_retry`)가 없다
-- [ ] 예산 kill: 낮춘 상한으로 런을 한 번 돌린다. 확인할 것:
+- [x] 디스패치 페이로드에 `token_budget`·`max_turns` 가 실린다(워커 `task_received` 직후 컨텍스트, 또는 Redis 스트림 항목)
+  - **2026-10-02 실측:** `max_turns` — 에이전트 세션 명령줄에 `--max-turns 60`(`ps`, 런 `bed0d316`). `token_budget` — 워커는 평소엔 값을 찍지 않지만, 예산 kill 런에서 `claude_code_token_budget_exhausted token_budget=12701`(상한 15,000 − frame 턴 사용량)로 도착이 확인됐다
+- [x] 정상 에이전트 런의 `executor_tasks.usage_prompt_tokens` 가 새 단위로 기록된다. 같은 규모 과제의 이전 값보다 크게 작아야 한다(캐시 읽기 비중만큼)
+  - 런 `bed0d316`(파일 하나 읽고 3줄 요약): 런 합계 입력 22,431 · 출력 1,845. 옛 단위의 agentic claude_code p50 은 33,015. 원시 캐시 분해가 저장되지 않아 정확한 대조는 아니다 — 방향만 맞다
+- [ ] 턴 한도: (2026-10-02 미관측 — 60턴에 닿는 런이 아직 없다) 큰 과제에서 `claude_code_max_turns_reached` 가 찍히면 태스크는 `done` 이고 재시도(`executor_adapter_chat_retry`)가 없다
+- [x] 예산 kill: 낮춘 상한으로 런을 한 번 돌린다. 확인할 것:
+  - **2026-10-02 실측 (런 `ad744131`, 워커 컨테이너만 `BSVIBE_AGENT_MAX_RUN_TOKENS=15000` override 로 재생성 후 복원):** 세션 시작 약 13초 뒤 `claude_code_token_budget_exhausted`(budget 12,701 · 세션 누적 13,554) → 태스크 `success: true`, 재시도 없음 → `run_token_cap_reached` Decision("15910 tokens, ceiling 15000"). 초과 910(6%). 09-30 은 상한 2M 런이 3.05M 까지 다 쓰고 멈췄다
+  - ⚠️ 상한 env 는 compose 에 배선돼 있지 않다 — `.env.prod` 에 한 줄 넣어서는 컨테이너에 닿지 않는다. 낮추려면 `worker.environment` override 파일로 워커만 재생성
   - `claude_code_token_budget_exhausted` 가 찍힌다
   - 태스크 `done`
   - 이어서 `run_token_cap_reached` Decision 이 생긴다
