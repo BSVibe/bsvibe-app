@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-01
+# BSVibe session handoff — 2026-10-02
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,13 +21,16 @@
 
 ---
 
-## §0 — One line: **#1106 is fixed on a branch; it is waiting on a PR that is itself a prod action**
+## §0 — One line: **two fixes on one branch, both waiting on a PR that is itself a prod action**
 
-형님 settled the central design question from the last handoff: **BSVibe keeps wrapping Claude
-Code the way it does now** (built-ins off, MCP work tools only). #1106 (cancel does not stop the
-session) is fixed on `claude/bridge-cse_01UcAKMcioBCqfkBrsKF8adZ` (commit `71ff937`). No PR yet,
-because opening one starts a prod run and this session had no sanctioned way to pause the
-binding filter.
+Branch **`claude/bridge-cse_01824DHDZL1TUghFq1diRT1t`** carries both (it contains the #1106 branch):
+
+| Commit | What |
+|---|---|
+| `71ff937` | #1106 — cancelling a run kills its executor session and refuses its token |
+| `8f74c3b` | #1104 + #1114 — in-session token budget, cost-weighted usage, `--max-turns` |
+
+Neither is on `main`. No PR yet: the BSVibe MCP was not usable in the session that built them (§Ⅲ-1).
 
 ## §Ⅰ — Decisions (형님, 2026-10-01)
 
@@ -44,40 +47,65 @@ How the open issues resolve under this:
 | #1103 | The framer keeps one TDD unit (test + fix) in one run. When it does split, it leaves a handoff any executor can read: explored, touched, verify state |
 | #1104 | Weight cache reads by real cost; enforce **mid-session** from stream-json usage, then kill the process |
 | #1106 | ✅ on the branch (§Ⅱ) |
+| #1104 + #1114 | ✅ on the branch (§Ⅱ), except: raw cache breakdown not stored · transcript-summary half goes with #1103 |
 
-## §Ⅱ — #1106 on the branch (not merged)
+## §Ⅱ — What is on the branch (not merged)
 
-* **Session kill:** `await_completion` takes an `abandon_if` probe, asked every poll tick after the terminal read. `ExecutorAdapter` passes a run-status probe for run-bound turns. On cancel it does three things: closes the task row (`failed`, `abandoned:`), sends `cancel_task` to the worker, and raises `RunCancelledDuringTurn` (not retryable)
-* **Drive loop:** `_loop_turn.take_turn` ends both the between-turns cancel and the mid-turn cancel as "cancelled". It was split out because `_drive_loop.py` sat at exactly the 600-LOC guard
-* **Token refusal:** `load_run`, the gate every work tool passes through, refuses cancelled / failed / shipped runs
-* **No worker change.** The Lift E14 cancel handling is reused, so backend autodeploy is enough
+**#1106** (`71ff937`) — unchanged from the 10-01 handoff:
+* the awaiter's `abandon_if` run-status probe → `cancel_task` → `RunCancelledDuringTurn` (not retryable)
+* `load_run` refuses cancelled / failed / shipped runs
+* no worker change
+* checklist: `docs/e2e/cancel-reaches-the-executor-session-checklist.md`
+
+**#1104 + #1114** (`8f74c3b`) — checklist `docs/e2e/executor-session-limits-checklist.md`:
+* **Unit:** claude_code usage is weighted by cost, in input-token equivalents. Cache read ×0.1; cache write ×2 for the 1h TTL, ×1.25 for 5m. Raw sums had stopped run `92b76fba` at 3.05M on a task that finished normally
+* **Moment:**
+  * The adapter dispatches the run's **remaining** budget as `token_budget` (`cap − used`, min 1), with `max_turns`, on the #965 redelivery too
+  * The worker tallies assistant `message.usage`, deduped by `message.id`, and kills the process group at the budget
+  * The turn ends **done**, not failed (failed is retried), so the drive loop's existing cap check raises the Decision
+* **`--max-turns`:** `executor_agent_max_turns`, default **60** — a guess, tune it from prod data. `error_max_turns` + exit 1 is mapped to a normal finish
 * **Verified:**
-  * RED → GREEN, plus a wire-cut on each of the three call-site wires (each one turns its own test red, collection intact)
-  * Full suite 7203 passed · import-linter 6/6 · ruff · mypy
-* **Checklist:** `docs/e2e/cancel-reaches-the-executor-session-checklist.md` (post-deploy items unchecked)
-* **Known gaps:**
-  * The degraded pure-DB poll (pub/sub failed) has no probe
-  * A backend restart mid-wait loses the kill, though the token refusal still holds
+  * Real-CLI probe (2.1.286, one haiku turn)
+  * RED → GREEN
+  * Wire-cut on 8 wires, each red on its own test
+  * Full suite 7218 passed · import-linter 6/6 · ruff · mypy
+* **⚠️ This one changes the WORKER.** After merge, restart both host workers (top table). A backend-only deploy sends the keys to workers that ignore them
+* **Gaps:**
+  * Raw cache breakdown is not stored (no columns)
+  * opencode takes agentic turns (#1000) but ignores both limits
+  * codex and opencode still count cache at equal weight
 
 ## §Ⅲ — Next
 
-1. **Authenticate the BSVibe MCP.** It was added at **user scope** this session (`claude mcp add --scope user bsvibe https://api.bsvibe.dev/mcp`), so every worktree sees it. It shows `Needs authentication` until `/mcp` is run once in an interactive session.
-2. **Open the #1106 PR as record-only.** Pause → confirm → PR → confirm → restore:
+1. **BSVibe MCP in a FRESH session.** 형님 re-authenticated on 10-02, and the token works: initialize → 200 against `/mcp/`. But:
+   * A session's MCP tool list is fixed at its start, so the session that ran the auth never saw the tools
+   * The **credential stores are split.** `~/.claude/.credentials.json` has the valid bsvibe token. The macOS keychain item `Claude Code-credentials` has every one of its 22 `mcpOAuth` entries with an **empty** token, bsvibe included
+   * `claude mcp get/list` read the keychain, so they still say `Needs authentication`. Don't trust that line; check whether `bsvibe_*` tools appear (ToolSearch `+bsvibe`)
+   * If they don't, the empty keychain entry is the suspect. Deleting it touches 형님's credential store, so ask first
+2. **Open the PR as record-only** (one PR for the branch, or #1106 first). Pause → confirm → PR → confirm → restore:
    * `bsvibe_bindings_update` `c50e7217…` → `{"filters":{"github_event":"__paused__"}}`
-   * Confirm the filter took
-   * Open the PR
-   * Confirm the trigger row carries `_received_filtered` and `requests` did not grow
-   * Restore `{"filters":{}}`
-   * 형님 OK'd this on 10-01, but ask again in the new session
-3. **Merge, then run the post-deploy E2E** from the checklist. That means starting a run on purpose and cancelling it after its executor task is `dispatched`:
-   * expect `executor_adapter_run_cancelled_mid_turn` → `dispatch_cancel_xadd_succeeded` → `worker_task_cancel_started`
-   * expect the task row `failed`/`abandoned:`
-   * expect no accepted `mcp_work_tool` calls afterwards
-   * This is a prod run, so ask first
-4. Then #1104 + #1114 together (both in `backend/executors/worker/claude_code.py`), then #1103.
+   * confirm the filter took
+   * open the PR
+   * confirm the trigger row carries `_received_filtered` and `requests` did not grow
+   * restore `{"filters":{}}`
+   * **ask 형님 each time**
+3. **Merge → restart the host workers → post-deploy E2E** from both checklists. Those include deliberate prod runs (a cancel mid-turn; a lowered cap), so ask first.
+4. Then #1103 (framer keeps one TDD unit per run; executor-neutral handoff), together with the summary half of #1114.
 5. Still open from before: #1113 opt-in (label filter is the cheapest interim) · #1102/#1110 state machine · #1107 · #1108 · #1111 · #1112 · #1105 · carry-overs (credential rotation ×3 · #1047 · #937 · #1042 · #954 · #949 · #957).
+6. **New, unexamined:** prod backend logs show `supabase_token_failed` (password grant, 400) about **every 62 s**, plus `/api/auth/login` 401, from this host's IPv6. Some probe or script logging in with a stale password, most likely. Not investigated.
 
 ## §Ⅳ — Discipline that paid off
+
+* **🧪⭐⭐ Probe the real CLI before wiring a bound.**
+  * `claude --max-turns` exits **1** with `result/error_max_turns`. Behind a "failed → retry" adapter, the bound would re-run the round it just stopped
+  * Each content block repeats its message's usage under one `message.id`, and its `output_tokens` is a partial snapshot
+  * Cache writes are 1h TTL (2×)
+  * The probe was one haiku turn; the fixtures copy its events verbatim (skill `a-bound-reported-as-failure-is-retried-past`)
+* **🔑⭐ "Needs authentication" can be a client store split, not a dead token.**
+  * Read the server log: the token exchange returned 200 and the calls that followed returned 200
+  * The 401s that followed were other processes sending **no** token
+  * The `/mcp` → `/mcp/` 307 is FastAPI's slash redirect and is harmless
+
 
 * **🐙⭐⭐ Filing issues/PRs on bsvibe-app is now a prod action.** Record-only: set the binding filter to a non-matching value (`bsvibe_bindings_update`, `{"filters":{"github_event":"__paused__"}}`), confirm the trigger row carries `_received_filtered` and `requests` did not grow, then restore `{"filters":{}}`. The auto-mode classifier blocks the binding change unless 형님 OKs it in the conversation.
 * **🛑⭐⭐ Cancelling a run does not stop its session.** A run cancelled at 10:41 kept its Claude Code session alive until 10:52 (6.4M tokens) with its run-scoped MCP token still valid (#1106). Cancel only before the executor task exists (~25 s after the request), or expect to pay.
