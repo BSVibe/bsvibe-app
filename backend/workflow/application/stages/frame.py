@@ -219,7 +219,9 @@ _STEPS_INSTRUCTION = (
     "translate one, and never use a name absent from the list. Return exactly "
     "ONE step when the request is best done in a single pass; that is the "
     "common case. Split only when a later step genuinely needs an earlier "
-    "step's output to exist first. The stages below are a SET, not a sequence "
+    "step's output to exist first. A failing test and the fix that makes it "
+    "pass are ONE step, never two — a numbered list in the request is not a "
+    "reason to split. The stages below are a SET, not a sequence "
     "— their listed order means nothing; you decide the order, and you may use "
     "a stage once, several times, or not at all.\nStages this workspace "
     "distinguishes:\n"
@@ -463,7 +465,37 @@ def _resolve_steps(  # noqa: PLR0911 — one guard per way a split can be invali
             logger.info("frame_stage_step_missing_intent", stage=stage)
             return []
         steps.append(FrameStep(stage=stage, intent=intent.strip()))
-    return steps
+    return _merge_adjacent_same_stage(steps)
+
+
+def _merge_adjacent_same_stage(steps: list[FrameStep]) -> list[FrameStep]:
+    """Fold consecutive steps that name the SAME stage into one (#1103).
+
+    A split buys exactly one thing: a different stage label, so the founder's
+    rules can route that step to a different model. Two adjacent steps on the
+    same stage route to the same model, so splitting them buys nothing — and it
+    costs a fresh executor session that re-explores from scratch. Prod run
+    ``92b76fba`` paid 3,055,575 input tokens for the first half of such a split
+    ("write the failing test", then "fix it", both ``implement``) and shipped a
+    red test on its own.
+
+    Only ADJACENT steps fold: a step after a different stage is there because it
+    needs that stage's output first. Every intent is kept, in order — dropping
+    one would ship part of the work as the whole.
+    """
+    merged: list[tuple[str, list[str]]] = []
+    for step in steps:
+        if merged and merged[-1][0] == step.stage:
+            merged[-1][1].append(step.intent)
+        else:
+            merged.append((step.stage, [step.intent]))
+    return [FrameStep(stage=stage, intent=_join_intents(intents)) for stage, intents in merged]
+
+
+def _join_intents(intents: list[str]) -> str:
+    if len(intents) == 1:
+        return intents[0]
+    return "\n".join(f"{i}. {intent}" for i, intent in enumerate(intents, start=1))
 
 
 def _extract_text(request: RequestRow) -> str:

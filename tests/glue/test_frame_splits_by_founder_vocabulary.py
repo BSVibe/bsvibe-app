@@ -233,13 +233,15 @@ class TestTheSplitIsBounded:
         assert framed.steps == []
 
     async def test_a_stage_may_repeat_within_the_cap(self, tmp_path: Path) -> None:
-        """양성 대조군 — 상한은 개수만 본다. 같은 단계를 두 번 쓰는 건 정상이다."""
+        """양성 대조군 — 상한은 개수만 본다. 같은 단계를 두 번 쓰는 건 정상이다.
+        (이웃한 같은 단계는 하나로 합쳐진다 — #1103, test_frame_keeps_one_unit_in_one_run.
+        그래서 반복은 다른 단계를 사이에 둔다.)"""
         llm = _StubFrameLlm(
             _frame_json(
                 steps=[
+                    {"stage": "impl", "intent": "스캐폴드"},
                     {"stage": "design", "intent": "설계"},
                     {"stage": "impl", "intent": "구현"},
-                    {"stage": "impl", "intent": "마무리 구현"},
                 ]
             )
         )
@@ -247,7 +249,7 @@ class TestTheSplitIsBounded:
             request=_request(),
             config=FrameConfig(skill_loader=_loader(tmp_path), llm=llm, stage_vocabulary=_VOCAB),
         )
-        assert [s.stage for s in framed.steps] == ["design", "impl", "impl"]
+        assert [s.stage for s in framed.steps] == ["impl", "design", "impl"]
 
 
 # ---------------------------------------------------------------------------
