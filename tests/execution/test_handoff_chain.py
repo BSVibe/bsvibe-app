@@ -197,7 +197,10 @@ async def test_spawn_inlines_the_prior_steps_output(tmp_path: Any) -> None:
 
 
 async def test_spawn_inlines_none_when_the_output_is_unreadable(tmp_path: Any) -> None:
-    """refs 는 있는데 읽을 파일이 없으면 정직하게 None — 다음 스텝은 그래도 간다."""
+    """refs 는 있는데 읽을 파일이 없으면 내용을 지어내지 않는다 — 다음 스텝은 그래도 간다.
+
+    (#1103 이후 인계는 건드린 파일 목록을 싣는다. 파일을 읽을 수 없어도 "어디를
+    봐야 하는가"는 정직한 정보다. 지어내면 안 되는 것은 그 파일의 **내용**이다.)"""
     from types import SimpleNamespace
 
     settings = SimpleNamespace(
@@ -212,7 +215,9 @@ async def test_spawn_inlines_none_when_the_output_is_unreadable(tmp_path: Any) -
         )
 
         nxt = (await _spawned(s, exclude=first.id))[0]
-        assert nxt.payload["prior_output_text"] is None
+        text = nxt.payload["prior_output_text"]
+        assert "- docs/spec.md" in text
+        assert "### docs/spec.md" not in text  # no section = no invented contents
         assert nxt.payload["prior_artifact_refs"] == ["docs/spec.md"]
 
 
@@ -236,3 +241,103 @@ async def test_the_founders_full_request_survives_every_step() -> None:
         nxt = (await _spawned(s, exclude=first.id))[0]
         assert nxt.payload["intent_text"] == original
         assert nxt.payload["step_intent"] == "설계대로 결제 엔드포인트를 구현한다"
+
+
+# ---------------------------------------------------------------------------
+# #1103 — the handoff carries what the prior session LEARNED, not only its files
+# ---------------------------------------------------------------------------
+#
+# A split hands the next step to a FRESH executor session — possibly a different
+# executor (codex, opencode). Continuity is BSVibe's, never the CLI's session
+# store, so whatever the next session should not have to rediscover has to ride
+# on the payload as plain text: what the prior step reported, which files it
+# touched, and whether its verification passed. The file contents alone made
+# run 92b76fba's would-be second step start its exploration from zero.
+
+
+async def _seed_report_and_verdict(
+    s: Any, run: ExecutionRun, *, summary: str, outcome: str = "passed"
+) -> None:
+    from backend.workflow.infrastructure.db import VerificationOutcome, VerificationResult
+
+    s.add(
+        Deliverable(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=run.workspace_id,
+            deliverable_type=DeliverableType.CODE,
+            payload={"artifact_refs": ["tests/test_race.py"], "summary": summary},
+            created_at=datetime.now(tz=UTC),
+        )
+    )
+    s.add(
+        VerificationResult(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=run.workspace_id,
+            outcome=VerificationOutcome(outcome),
+            contract={},
+            result={},
+            created_at=datetime.now(tz=UTC),
+        )
+    )
+    await s.flush()
+
+
+async def test_the_handoff_carries_the_prior_steps_own_report(tmp_path: Any) -> None:
+    from types import SimpleNamespace
+
+    settings = SimpleNamespace(
+        product_workspace_root=str(tmp_path / "products"),
+        run_workspace_root=str(tmp_path / "runs"),
+    )
+    async with memory_session() as s:
+        first = await _seed_run(s, steps=_STEPS)
+        await _seed_report_and_verdict(
+            s, first, summary="경합은 transition() 의 identity map 읽기에서 난다"
+        )
+
+        await AgentRunner(s, settings=settings).transition(  # type: ignore[arg-type]
+            run_id=first.id, to_status=RunStatus.REVIEW_READY
+        )
+
+        text = (await _spawned(s, exclude=first.id))[0].payload["prior_output_text"]
+        assert "경합은 transition() 의 identity map 읽기에서 난다" in text
+
+
+async def test_the_handoff_names_the_files_the_prior_step_touched(tmp_path: Any) -> None:
+    from types import SimpleNamespace
+
+    settings = SimpleNamespace(
+        product_workspace_root=str(tmp_path / "products"),
+        run_workspace_root=str(tmp_path / "runs"),
+    )
+    async with memory_session() as s:
+        first = await _seed_run(s, steps=_STEPS)
+        await _seed_report_and_verdict(s, first, summary="테스트를 썼다")
+
+        await AgentRunner(s, settings=settings).transition(  # type: ignore[arg-type]
+            run_id=first.id, to_status=RunStatus.REVIEW_READY
+        )
+
+        text = (await _spawned(s, exclude=first.id))[0].payload["prior_output_text"]
+        assert "tests/test_race.py" in text
+
+
+async def test_the_handoff_states_the_prior_steps_verification(tmp_path: Any) -> None:
+    from types import SimpleNamespace
+
+    settings = SimpleNamespace(
+        product_workspace_root=str(tmp_path / "products"),
+        run_workspace_root=str(tmp_path / "runs"),
+    )
+    async with memory_session() as s:
+        first = await _seed_run(s, steps=_STEPS)
+        await _seed_report_and_verdict(s, first, summary="테스트를 썼다", outcome="inconclusive")
+
+        await AgentRunner(s, settings=settings).transition(  # type: ignore[arg-type]
+            run_id=first.id, to_status=RunStatus.REVIEW_READY
+        )
+
+        text = (await _spawned(s, exclude=first.id))[0].payload["prior_output_text"]
+        assert "inconclusive" in text

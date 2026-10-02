@@ -46,7 +46,10 @@ from backend.identity.workspaces_db import load_workspace_language
 from backend.notifications.copy import notification_copy
 from backend.notifications.emit import emit_notification
 from backend.workflow.application.agent_loop import LoopResult, RunCompute
-from backend.workflow.application.handoff import capture_prior_step_output
+from backend.workflow.application.handoff import (
+    capture_prior_step_output,
+    compose_step_handoff,
+)
 from backend.workflow.domain.repositories import DeliverableRepository, RunRepository
 from backend.workflow.infrastructure.db import (
     ExecutionRun,
@@ -591,11 +594,16 @@ class AgentRunner:
         # durable: reading refs at the next run's DISPATCH time raced worktree
         # cleanup + a held run whose output never reached main (findings
         # 2026-07-01, D-2). refs kept for provenance / back-compat fallback.
-        output_text = capture_prior_step_output(
-            product_id=run.product_id,
-            prior_run_id=run.id,
-            refs=refs,
-            settings=self._settings,
+        output_text = compose_step_handoff(
+            reports=await self._prior_reports(run.id),
+            touched=refs,
+            verification=await self._prior_verification(run.id),
+            output_text=capture_prior_step_output(
+                product_id=run.product_id,
+                prior_run_id=run.id,
+                refs=refs,
+                settings=self._settings,
+            ),
         )
         nxt_run = ExecutionRun(
             id=uuid.uuid4(),
@@ -650,6 +658,32 @@ class AgentRunner:
             artifact_refs=len(refs),
             has_prior_output=output_text is not None,
         )
+
+    async def _prior_reports(self, run_id: uuid.UUID) -> list[str]:
+        """What this run's deliverable(s) say it found and did (#1103)."""
+        rows = await self._deliverables.list_by_run_id(run_id)
+        reports: list[str] = []
+        for row in rows:
+            row_payload = row.payload if isinstance(row.payload, dict) else {}
+            summary = row_payload.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                reports.append(summary)
+        return reports
+
+    async def _prior_verification(self, run_id: uuid.UUID) -> str | None:
+        """The outcome of this run's LATEST verification, or ``None`` (#1103)."""
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.workflow.infrastructure.db import VerificationResult  # noqa: PLC0415
+
+        stmt = (
+            select(VerificationResult.outcome)
+            .where(VerificationResult.run_id == run_id)
+            .order_by(VerificationResult.created_at.desc())
+            .limit(1)
+        )
+        outcome = (await self._session.execute(stmt)).scalar_one_or_none()
+        return str(outcome) if outcome is not None else None
 
     async def _prior_artifact_refs(self, run_id: uuid.UUID) -> list[str]:
         """The artifact_refs this run's deliverable(s) produced — what the next

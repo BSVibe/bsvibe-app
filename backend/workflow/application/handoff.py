@@ -107,6 +107,48 @@ def capture_prior_step_output(
     return _PRIOR_OUTPUT_PREAMBLE + "\n\n".join(sections) if sections else None
 
 
+#: Cap on the prior step's own report — it is a summary, and a runaway one must
+#: not crowd the next step's prompt.
+_MAX_REPORT_CHARS = 4000
+
+
+def compose_step_handoff(
+    *,
+    reports: list[str],
+    touched: list[str],
+    verification: str | None,
+    output_text: str | None,
+) -> str | None:
+    """The executor-neutral handoff a split leaves for its next step (#1103).
+
+    The next step runs in a FRESH session — possibly on another executor — so
+    continuity is BSVibe's: what the prior session learned has to travel as
+    plain text, or the next one rediscovers it from zero (the cost #1103
+    measured on run ``92b76fba``). Three things a fresh session cannot see on
+    its own:
+
+    * the prior step's own report — what it found and did;
+    * the files it touched — where to look first;
+    * its verification outcome — whether it left the tree green.
+
+    The prior output's file contents (``output_text``) follow. ``None`` only
+    when there is nothing at all to hand over."""
+    parts: list[str] = []
+    report = "\n\n".join(r.strip() for r in reports if r.strip())
+    if report:
+        parts.append("## What the prior step reported\n" + report[:_MAX_REPORT_CHARS])
+    if touched:
+        parts.append("## Files the prior step touched\n" + "\n".join(f"- {t}" for t in touched))
+    if verification:
+        parts.append(f"## The prior step's verification\n{verification}")
+    if not parts:
+        return output_text
+    head = _PRIOR_OUTPUT_PREAMBLE + "\n\n".join(parts)
+    if output_text:
+        return head + "\n\n" + output_text[len(_PRIOR_OUTPUT_PREAMBLE) :]
+    return head
+
+
 def read_prior_step_context(run: ExecutionRun, settings: Settings) -> str | None:
     """The prior step's output text to seed this run's context, or ``None``.
 
@@ -140,4 +182,4 @@ def read_prior_step_context(run: ExecutionRun, settings: Settings) -> str | None
     return _PRIOR_OUTPUT_PREAMBLE + "\n\n".join(sections) if sections else None
 
 
-__all__ = ["capture_prior_step_output", "read_prior_step_context"]
+__all__ = ["capture_prior_step_output", "compose_step_handoff", "read_prior_step_context"]

@@ -76,10 +76,22 @@ def _intent_directive(run: ExecutionRun) -> str:
     step_intent = payload.get("step_intent")
     if not isinstance(step_intent, str) or not step_intent.strip():
         return directive
+    if _plan_length(payload) == 1:
+        # #1103 — a one-step plan is the whole request. Telling the agent it is
+        # "ONE step" of something larger made run 92b76fba stop after the test
+        # and hand the fix to a "next step" that the plan did not have.
+        return directive
     return (
         f"{directive}\n\n"
         f"This run is ONE step of that request. Your part of it: {step_intent.strip()}"
     )
+
+
+def _plan_length(payload: dict[str, Any]) -> int | None:
+    """How many steps the frame's plan has, or ``None`` when it carries none."""
+    frame = payload.get("frame")
+    steps = frame.get("steps") if isinstance(frame, dict) else None
+    return len(steps) if isinstance(steps, list) else None
 
 
 def _intent_title(run: ExecutionRun) -> str:
