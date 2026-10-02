@@ -6,6 +6,9 @@ second way to end in cancel. Both live here so they cannot drift apart:
 * at the turn boundary — the run was cancelled between turns (dogfood dd2bd3a3);
 * mid-turn — the adapter saw the cancel while the executor session ran, told the
   worker to kill it, and raised :class:`RunCancelledDuringTurn` (#1106).
+
+Also the hand-over a failed round leaves for the next one (#1114,
+:func:`failed_round_messages`).
 """
 
 from __future__ import annotations
@@ -54,3 +57,37 @@ async def take_turn(
         # worker to kill the session.
         return None
     return turn
+
+
+def failed_round_messages(
+    *, report: str | None, failure: str, written_paths: list[str], hint: str = ""
+) -> list[dict[str, Any]]:
+    """What a round that failed verification hands to the next round (#1114).
+
+    An executor round is a whole fresh CLI session — no ``--resume``, because
+    continuity is BSVibe's and the next round may run on another executor. What
+    the next session knows about this one is exactly what lands here. The loop
+    used to append only the failure, so the round's own report was dropped and
+    nothing named the files already changed: the next session re-explored from
+    zero. Now it gets, in conversation order, the round's report, then the
+    failure with the run's changed files. The failure stays LAST — it is what
+    the agent must act on (``test_verification_feedback``).
+    """
+    messages: list[dict[str, Any]] = []
+    if report and report.strip():
+        messages.append({"role": "assistant", "content": report})
+    changed = (
+        "\nFiles this run has changed so far:\n" + "\n".join(f"- {p}" for p in written_paths)
+        if written_paths
+        else ""
+    )
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"Verification FAILED. Details:\n{failure}{changed}\n"
+                "Fix the problem and try again, then send your summary." + hint
+            ),
+        }
+    )
+    return messages
