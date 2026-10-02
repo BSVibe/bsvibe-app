@@ -26,7 +26,7 @@ from backend.workflow.application._loop_context import (
     settle_client_attach,
     system_prompt_for,
 )
-from backend.workflow.application._loop_turn import take_turn
+from backend.workflow.application._loop_turn import failed_round_messages, take_turn
 from backend.workflow.application.audit_events import (
     DecisionPending,
     LlmTurn,
@@ -535,15 +535,13 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         # passed]" and repeated the identical failure 16 times.
         vresult = verdict.result if isinstance(verdict.result, dict) else {}
         hint = _review.stuck_review_hint(count=(fail_streak := fail_streak + 1), run=run)
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "Verification FAILED. Details:\n"
-                    f"{render_verification_failure(vresult)}\n"
-                    "Fix the problem and try again, then send your summary." + hint
-                ),
-            }
+        messages.extend(
+            failed_round_messages(
+                report=turn.content,
+                failure=render_verification_failure(vresult),
+                written_paths=written_paths,
+                hint=hint,
+            )
         )
 
     # Cycle cap reached without a passing verdict → stuck → Decision (§6). ``_cycle`` at

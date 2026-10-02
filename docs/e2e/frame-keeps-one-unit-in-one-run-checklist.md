@@ -49,8 +49,13 @@
 
 워커 변경 없음. 백엔드 autodeploy 만으로 반영된다.
 
-- [ ] 형님 워크스페이스의 단계 룰(`design` / `implement`)이 그대로인 상태에서, 번호 목록으로
+- [x] 형님 워크스페이스의 단계 룰(`design` / `implement`)이 그대로인 상태에서, 번호 목록으로
   "테스트를 쓰고 → 고친다"를 적은 요청 하나가 **런 하나**로 끝난다
+  - **2026-10-02 실측 (런 `66d4b25e`, `588d986`):** 런 하나가 `implement` 룰로 sonnet 에 라우팅,
+    산출물에 테스트(`tests/glue/test_join_intents_skips_blank.py`)와 수정(`frame.py`)이 함께,
+    검증 passed, `handoff_next_step_spawned` 없음. 입력 86,264 토큰(92b76fba 의 테스트 절반 3,055,575).
+    관측 후 폐기
+  - 미확인: `payload.frame.steps` 와 프롬프트 문구 자체는 MCP 로 노출되지 않아 결과로만 판정했다
   - `payload.frame.steps` 가 한 개거나, 두 개여도 단계가 서로 다르다
   - 에이전트 프롬프트(첫 user 메시지)에 "This run is ONE step" 이 없다
   - 산출물에 테스트와 수정이 함께 있다
@@ -61,9 +66,7 @@
 
 ## 남은 틈
 
-- **라운드 경계의 전체 대화 재주입은 그대로다** (#1114 의 요약 절반). 검증 실패로 다음 라운드가
-  열리면 `adapter._render_prompt` 가 지금까지의 대화를 통째로 새 세션에 넣는다. 이번 변경은
-  **스텝** 경계만 다룬다
+- **라운드 경계** (#1114 의 요약 절반)는 별도 변경이 다룬다 — `docs/e2e/round-handoff-after-failed-verify-checklist.md`
 - 앞 스텝의 `summary` 는 에이전트가 쓴 보고라 탐색 내역(읽은 파일)을 다 담지는 않는다.
   실행기 중립적으로 탐색 내역을 남기려면 work 도구 호출(`file_read` · `file_list`) 로그에서
   뽑아야 한다
