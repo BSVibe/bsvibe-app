@@ -94,6 +94,9 @@ _AWAIT_POLL_INTERVAL_S = 2.0
 #: Supplied by the caller because only the caller still holds the ephemeral
 #: parts of the payload (the run-scoped MCP token, an exec task's ``env``).
 RedeliverFn = Callable[[float], Awaitable[None]]
+#: ``await_completion``'s ``abandon_if`` — asked once per poll tick; ``True``
+#: means the caller no longer wants this task's result (#1106).
+AbandonFn = Callable[[], Awaitable[bool]]
 
 #: Protocol version a worker must announce (``X-BSVibe-Worker-Protocol``) before
 #: the backend will redeliver anything to it. Version 1 — the default, and what
@@ -106,6 +109,18 @@ _CLAIM_PROTOCOL_VERSION = 2
 #: is to catch a task that was acked into the void, not to race a worker that is
 #: about to pick it up on its next tick.
 _REDELIVER_AFTER_S = 30.0
+
+
+class TaskAbandoned(Exception):
+    """Raised when :func:`await_completion`'s ``abandon_if`` says stop waiting.
+
+    The task row has already been closed ``failed`` (if it was still in flight).
+    Signalling the worker is the caller's job — it holds the ``worker_id``.
+    """
+
+    def __init__(self, message: str, *, task_id: uuid.UUID | None = None) -> None:
+        super().__init__(message)
+        self.task_id = task_id
 
 
 class TaskTimeout(Exception):
@@ -438,6 +453,8 @@ def _build_dispatch_payload(
     mcp: dict[str, Any] | None,
     env: Mapping[str, str] | None,
     timeout_s: float | None,
+    token_budget: int | None = None,
+    max_turns: int | None = None,
 ) -> dict[str, Any]:
     """The flat-strings stream payload for one dispatch of ``task``.
 
@@ -472,6 +489,13 @@ def _build_dispatch_payload(
     # listening any more instead of holding its slot to its own 3600s.
     if timeout_s is not None:
         payload["timeout_s"] = str(timeout_s)
+    # #1104 / #1114 — the session's in-flight bounds: what is left of the run's token ceiling
+    # and the agentic turn limit. Same omit-when-absent rule; the worker then runs unbounded,
+    # as before.
+    if token_budget is not None:
+        payload["token_budget"] = str(token_budget)
+    if max_turns is not None:
+        payload["max_turns"] = str(max_turns)
     # Agent run vs. chat turn (Redis Streams take flat strings only). Always
     # emitted — the worker defaults a MISSING key to the agent run, so silence
     # would quietly restore the pre-fix behaviour for chat turns.
@@ -503,6 +527,8 @@ async def dispatch_task(
     action: str = "execute",
     env: Mapping[str, str] | None = None,
     timeout_s: float | None = None,
+    token_budget: int | None = None,
+    max_turns: int | None = None,
 ) -> str:
     """XADD ``task`` onto the worker's stream + mark it ``dispatched``.
 
@@ -546,7 +572,15 @@ async def dispatch_task(
     from the payload when ``None`` (Streams reject it, and an older worker
     keeps its own default).
     """
-    payload = _build_dispatch_payload(task, action=action, mcp=mcp, env=env, timeout_s=timeout_s)
+    payload = _build_dispatch_payload(
+        task,
+        action=action,
+        mcp=mcp,
+        env=env,
+        timeout_s=timeout_s,
+        token_budget=token_budget,
+        max_turns=max_turns,
+    )
     task_id, executor_type = task.id, task.executor_type
     task.worker_id = worker_id
     task.status = "dispatched"
@@ -582,6 +616,8 @@ async def redispatch_task(
     action: str = "execute",
     env: Mapping[str, str] | None = None,
     timeout_s: float | None = None,
+    token_budget: int | None = None,
+    max_turns: int | None = None,
 ) -> str:
     """XADD ``task`` onto the worker's stream AGAIN — the #965 retry path.
 
@@ -596,7 +632,15 @@ async def redispatch_task(
     budget for ``timeout_s`` — the worker measures that from when it starts, so
     re-sending the original would let the retry outlive the caller waiting on it.
     """
-    payload = _build_dispatch_payload(task, action=action, mcp=mcp, env=env, timeout_s=timeout_s)
+    payload = _build_dispatch_payload(
+        task,
+        action=action,
+        mcp=mcp,
+        env=env,
+        timeout_s=timeout_s,
+        token_budget=token_budget,
+        max_turns=max_turns,
+    )
     msg_id = await redis.xadd(
         worker_stream(worker_id),
         payload,
@@ -992,6 +1036,78 @@ async def _fail_orphaned_dispatched_row(
         f"no worker result arrived within {timeout_s:g}s; "
         "the awaiting backend gave up and closed this task"
     )
+    flipped = await _close_dispatched_row(
+        task_id, session=session, session_factory=session_factory, error_message=error_message
+    )
+    if flipped:
+        logger.warning(
+            "executor_task_timed_out_unreported",
+            task_id=str(task_id),
+            timeout_s=timeout_s,
+        )
+    return flipped
+
+
+async def _after_an_unfinished_tick(
+    task_id: uuid.UUID,
+    *,
+    abandon_if: AbandonFn | None,
+    redeliver: RedeliverFn | None,
+    redeliver_due: bool,
+    deadline: float,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+) -> bool:
+    """What :func:`await_completion` does on a tick that found no result yet.
+
+    First the caller's ``abandon_if`` (#1106): ``True`` closes the row and raises
+    :class:`TaskAbandoned`. Then redelivery (#965) — at most once, and only for a
+    row positively known never to have been picked up; re-sending on every tick
+    would pile copies of one task onto the worker's stream. The caller passes
+    ``redeliver=None`` once it has settled. Returns True iff redelivery settled
+    on this tick.
+    """
+    if abandon_if is not None and await _probe_says_abandon(task_id, abandon_if):
+        await _close_dispatched_row(
+            task_id,
+            session=session,
+            session_factory=session_factory,
+            error_message="abandoned: the awaiting caller no longer wants this result",
+        )
+        raise TaskAbandoned(f"executor task {task_id} abandoned", task_id=task_id)
+    if redeliver is None or not redeliver_due:
+        return False
+    await _maybe_redeliver(
+        task_id,
+        redeliver=redeliver,
+        deadline=deadline,
+        session=session,
+        session_factory=session_factory,
+    )
+    return True
+
+
+async def _probe_says_abandon(task_id: uuid.UUID, abandon_if: AbandonFn) -> bool:
+    try:
+        return bool(await abandon_if())
+    except Exception:  # noqa: BLE001 — see await_completion: a blip means keep waiting
+        logger.warning("executor_abandon_probe_failed", task_id=str(task_id), exc_info=True)
+        return False
+
+
+async def _close_dispatched_row(
+    task_id: uuid.UUID,
+    *,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    error_message: str,
+) -> bool:
+    """Best-effort conditional ``dispatched`` → ``failed``, in its own short session.
+
+    The one write both give-up paths share — the timeout above and an
+    ``abandon_if`` in :func:`await_completion`. Any failure is logged and
+    swallowed: each caller's contract is the exception it is about to raise.
+    """
     try:
         if session_factory is not None:
             async with session_factory() as short:
@@ -1004,19 +1120,9 @@ async def _fail_orphaned_dispatched_row(
                 session, task_id, error_message=error_message
             )
             await session.flush()
-    except Exception:  # noqa: BLE001 — the TaskTimeout is the contract, not this
-        logger.warning(
-            "executor_timeout_flip_failed",
-            task_id=str(task_id),
-            exc_info=True,
-        )
+    except Exception:  # noqa: BLE001 — the caller's raise is the contract, not this
+        logger.warning("executor_task_close_failed", task_id=str(task_id), exc_info=True)
         return False
-    if flipped:
-        logger.warning(
-            "executor_task_timed_out_unreported",
-            task_id=str(task_id),
-            timeout_s=timeout_s,
-        )
     return flipped
 
 
@@ -1065,6 +1171,7 @@ async def await_completion(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     redeliver: RedeliverFn | None = None,
     redeliver_after_s: float = _REDELIVER_AFTER_S,
+    abandon_if: AbandonFn | None = None,
 ) -> ExecutorTaskRow:
     """Wait for ``task:{id}:done``, with a periodic DB poll as a safety net.
 
@@ -1104,6 +1211,14 @@ async def await_completion(
     worker slot to report into the void.
 
     ``None`` (the default) keeps the pre-#965 behaviour exactly.
+
+    ``abandon_if`` (#1106) — asked on every poll tick, AFTER the terminal read,
+    so a result that is already in always wins. ``True`` closes the row and
+    raises :class:`TaskAbandoned`. Without it a run cancelled mid-turn kept its
+    Claude Code session alive for 11 minutes and 6.4M prompt tokens (measured
+    2026-09-30): nothing in this wait asked whether the result was still wanted.
+    A probe that raises is logged and treated as "keep waiting" — a DB blip must
+    not kill a working session.
     """
     started = asyncio.get_event_loop().time()
     polls = 0
@@ -1142,22 +1257,20 @@ async def await_completion(
             )
             if row is not None:
                 return row
-            # #965 — at most once, and only for a row positively known never to
-            # have been picked up. Re-sending on every tick would pile copies of
-            # one task onto the worker's stream.
-            if (
-                redeliver is not None
-                and not redelivery_settled
-                and asyncio.get_event_loop().time() - started >= redeliver_after_s
-            ):
-                redelivery_settled = True
-                await _maybe_redeliver(
+            redelivery_settled = (
+                await _after_an_unfinished_tick(
                     task_id,
-                    redeliver=redeliver,
+                    abandon_if=abandon_if,
+                    redeliver=redeliver if not redelivery_settled else None,
+                    redeliver_due=asyncio.get_event_loop().time() - started >= redeliver_after_s,
                     deadline=deadline,
                     session=session,
                     session_factory=session_factory,
                 )
+                or redelivery_settled
+            )
+    except TaskAbandoned:
+        raise
     except Exception:  # noqa: BLE001 — a pub/sub hiccup degrades to the DB poll
         logger.warning("executor_await_pubsub_failed", task_id=str(task_id), exc_info=True)
         # Degrade to a pure DB poll for the remaining budget.
@@ -1234,6 +1347,8 @@ async def _poll_until_terminal(
 
 __all__ = [
     "HEARTBEAT_FRESHNESS_S",
+    "AbandonFn",
+    "TaskAbandoned",
     "TaskTimeout",
     "await_completion",
     "cancel_task",

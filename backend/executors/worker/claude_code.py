@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import shutil
 import sys
 import tempfile
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -446,6 +448,10 @@ class ClaudeCodeExecutor:
             )
             return
         allowed_tools = [str(t) for t in (context.get("allowed_tools") or [])]
+        limits = _SessionLimits(
+            token_budget=_positive_int(context.get("token_budget")),
+            max_turns=_positive_int(context.get("max_turns")) if agentic else None,
+        )
         # The config carries the run-scoped bearer token, so it reaches the CLI as a
         # 0600 FILE rather than on argv, where ``ps`` shows it to anything running as
         # this user for the whole task. Written once (not per retry) and removed in the
@@ -454,7 +460,7 @@ class ClaudeCodeExecutor:
         mcp_config_path = _write_mcp_config(mcp_config) if mcp_config else ""
         try:
             async for chunk in self._execute_with_config(
-                prompt, workspace, system, model, agentic, mcp_config_path, allowed_tools
+                prompt, workspace, system, model, agentic, mcp_config_path, allowed_tools, limits
             ):
                 yield chunk
         finally:
@@ -473,6 +479,7 @@ class ClaudeCodeExecutor:
         agentic: bool,
         mcp_config_path: str,
         allowed_tools: list[str],
+        limits: _SessionLimits | None = None,
     ) -> AsyncIterator[ExecutionChunk]:
         """The retry loop, with the run's MCP config already staged on disk."""
         attempts_remaining = self._rate_limit_retries
@@ -492,6 +499,9 @@ class ClaudeCodeExecutor:
                     agentic,
                     mcp_config_path,
                     allowed_tools,
+                    # A fresh tally per subprocess: a rate-limit retry is a new session, and
+                    # the backend meters only what the terminal chunk reports.
+                    limits=(limits or _SessionLimits()).fresh(),
                 ):
                     if chunk.delta:
                         had_delta = True
@@ -536,6 +546,7 @@ class ClaudeCodeExecutor:
         agentic: bool = True,
         mcp_config_path: str = "",
         allowed_tools: list[str] | None = None,
+        max_turns: int | None = None,
     ) -> list[str]:
         # ⚠️ This comment described a LOCAL AGENT RUN that "inherits the host
         # operator's harness (CLAUDE.md / skills / memory) BY DESIGN". **#984
@@ -595,6 +606,9 @@ class ClaudeCodeExecutor:
             cmd_args += ["--append-system-prompt" if agentic else "--system-prompt", system]
         if model:
             cmd_args += ["--model", model]
+        if max_turns:
+            # #1114 — the only in-session bound used to be the 2-hour timeout.
+            cmd_args += ["--max-turns", str(max_turns)]
         return cmd_args
 
     async def _run_once(
@@ -608,8 +622,12 @@ class ClaudeCodeExecutor:
         agentic: bool = True,
         mcp_config_path: str = "",
         allowed_tools: list[str] | None = None,
+        *,
+        limits: _SessionLimits,
     ) -> AsyncIterator[ExecutionChunk]:
-        cmd_args = self._build_cmd(system, model, agentic, mcp_config_path, allowed_tools)
+        cmd_args = self._build_cmd(
+            system, model, agentic, mcp_config_path, allowed_tools, limits.max_turns
+        )
         # Inject a worker-managed OAuth bearer so a launchd-spawned claude (which
         # can't read the Keychain) authenticates instead of falling back to a
         # stale on-disk token → 401. Soft-fail + off the event loop (the helper
@@ -665,19 +683,22 @@ class ClaudeCodeExecutor:
                     parsed = _safe_json(line)
                     if parsed is None:
                         continue
-                    # T2b-4 — do not trust the deny flags; check what the CLI actually
-                    # exposed. A tool we did not sanction means the agent has hands we never
-                    # gave it (a new built-in in a CLI upgrade, say) and could reach the
-                    # user's filesystem. Stop it, do not merely report it.
-                    abort = _unsanctioned_abort(parsed, mcp_config_path, allowed_tools)
-                    if abort is not None:
-                        _kill_process_group(process)
-                        yield abort
-                        return
                     rate_status, usage = _scrape_event(parsed, rate_status, usage)
                     delta = _claude_extract_delta(parsed)
                     if delta:
                         yield ExecutionChunk(delta=delta)
+                    # Two reasons to stop the session mid-stream, both killed rather than
+                    # merely reported. T2b-4 — do not trust the deny flags; check what the CLI
+                    # actually exposed: a tool we did not sanction means hands we never gave
+                    # it (a new built-in in a CLI upgrade, say) that could reach the user's
+                    # filesystem. #1104 — the run's token budget ran out.
+                    stop = _unsanctioned_abort(
+                        parsed, mcp_config_path, allowed_tools
+                    ) or limits.stop_chunk(parsed, process.pid)
+                    if stop is not None:
+                        _kill_process_group(process)
+                        yield stop
+                        return
             except asyncio.CancelledError:
                 # Lift E15 — kill the process GROUP before the inner
                 # ``finally``'s ``process.wait()`` blocks for the full
@@ -696,7 +717,9 @@ class ClaudeCodeExecutor:
                     timeout=max(0.1, deadline - asyncio.get_event_loop().time()),
                 )
                 await stderr_task
-            yield _terminal_chunk(rc, "".join(stderr_buf), rate_status, usage)
+            yield _terminal_chunk(
+                0 if limits.reached_max_turns(rc) else rc, "".join(stderr_buf), rate_status, usage
+            )
         except TimeoutError:
             # ``TimeoutError`` is a subclass of ``OSError`` (3.11) — re-raise so
             # ``execute`` surfaces the explicit total-timeout message rather than
@@ -802,9 +825,7 @@ def _claude_extract_usage(event: dict[str, Any]) -> tuple[int, int] | None:
     ``{"type": "result", ..., "usage": {...}}``; the worker parsed that line
     like any other and dropped it, which is why an executor run metered zero.
 
-    Cache creation and cache reads are input tokens the account is billed for,
-    so they belong in the prompt total — a ceiling that ignored them would let a
-    heavily-cached agent run far past its budget.
+    The prompt figure is in INPUT-TOKEN EQUIVALENTS — see :func:`_weighted_prompt`.
 
     Returns ``None`` (never ``(0, 0)``) for an event that carries no usage, so
     the caller can tell "this turn reported nothing" from "this turn cost
@@ -815,12 +836,126 @@ def _claude_extract_usage(event: dict[str, Any]) -> tuple[int, int] | None:
     usage = event.get("usage")
     if not isinstance(usage, dict):
         return None
-    prompt = (
-        usage_int(usage.get("input_tokens"))
-        + usage_int(usage.get("cache_creation_input_tokens"))
-        + usage_int(usage.get("cache_read_input_tokens"))
-    )
-    return prompt, usage_int(usage.get("output_tokens"))
+    return _weighted_prompt(usage), usage_int(usage.get("output_tokens"))
+
+
+#: What a cached token costs relative to a plain input token (Anthropic pricing, every model).
+#: A cache READ is a tenth; a cache WRITE is 1.25× for the 5-minute TTL and 2× for the 1-hour
+#: TTL — and the CLI writes 1-hour entries (measured, 2.1.286: ``ephemeral_1h_input_tokens``).
+_CACHE_READ_WEIGHT = 0.1
+_CACHE_WRITE_5M_WEIGHT = 1.25
+_CACHE_WRITE_1H_WEIGHT = 2.0
+
+
+def _weighted_prompt(usage: dict[str, Any]) -> int:
+    """A usage block's input side, weighted by what each kind of token costs (#1104).
+
+    The raw sum ``input + cache_creation + cache_read`` used to stand in for it. Claude Code
+    re-reads the whole conversation from cache on every turn, so that sum grows faster than
+    the turn count while the bill does not: run ``92b76fba`` metered 3,055,575 "input" tokens,
+    and crossed a 2M ceiling meant for runaways on a task that finished normally.
+
+    Rounded UP, so a ceiling never rounds a real cost away.
+    """
+    plain = usage_int(usage.get("input_tokens"))
+    read = math.ceil(usage_int(usage.get("cache_read_input_tokens")) * _CACHE_READ_WEIGHT)
+    split = usage.get("cache_creation")
+    if isinstance(split, dict):
+        written = math.ceil(
+            usage_int(split.get("ephemeral_5m_input_tokens")) * _CACHE_WRITE_5M_WEIGHT
+            + usage_int(split.get("ephemeral_1h_input_tokens")) * _CACHE_WRITE_1H_WEIGHT
+        )
+    else:
+        # No TTL split: assume the cheaper write rather than guess at the dearer one.
+        written = math.ceil(
+            usage_int(usage.get("cache_creation_input_tokens")) * _CACHE_WRITE_5M_WEIGHT
+        )
+    return plain + read + written
+
+
+def _positive_int(value: Any) -> int | None:
+    """A limit off the task payload (flat strings), or ``None`` for absent / zero / garbage."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+@dataclass
+class _SessionLimits:
+    """The bounds a session runs under, and what it has spent so far (#1104, #1114).
+
+    ``token_budget`` is what the RUN has left, in the same weighted unit the run is metered in.
+    The terminal ``result`` usage arrives only when the session is over, which is too late to
+    stop anything; every assistant message carries its own ``usage`` while the session runs.
+    Every content block of one message repeats that message's usage under the same
+    ``message.id`` (measured), so the tally keys on the id. Its ``output_tokens`` is a
+    streaming snapshot and runs low; the input side, which dominates an agent session, is
+    exact.
+    """
+
+    token_budget: int | None = None
+    max_turns: int | None = None
+    _per_message: dict[str, tuple[int, int]] = field(default_factory=dict)
+    _result_subtype: str | None = None
+
+    def fresh(self) -> _SessionLimits:
+        return _SessionLimits(token_budget=self.token_budget, max_turns=self.max_turns)
+
+    def spent(self) -> tuple[int, int]:
+        prompt = sum(p for p, _ in self._per_message.values())
+        completion = sum(c for _, c in self._per_message.values())
+        return prompt, completion
+
+    def observe(self, event: dict[str, Any]) -> bool:
+        """Fold ``event`` in; ``True`` when the session has now spent its budget."""
+        kind = event.get("type")
+        if kind == "result":
+            subtype = event.get("subtype")
+            self._result_subtype = subtype if isinstance(subtype, str) else None
+            return False
+        if kind != "assistant":
+            return False
+        message = event.get("message")
+        if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+            return False
+        usage = message["usage"]
+        key = str(message.get("id") or f"anon-{len(self._per_message)}")
+        seen = self._per_message.get(key, (0, 0))
+        self._per_message[key] = (
+            max(seen[0], _weighted_prompt(usage)),
+            max(seen[1], usage_int(usage.get("output_tokens"))),
+        )
+        return self.token_budget is not None and sum(self.spent()) >= self.token_budget
+
+    def stop_chunk(self, event: dict[str, Any], pid: int) -> ExecutionChunk | None:
+        """Fold ``event`` in; the terminal chunk when the session must stop here, else ``None``.
+
+        The round ends like a finished turn — NOT a failure, which the adapter would retry in a
+        fresh session. The run's own ceiling sees this usage and stops on its Decision."""
+        if not self.observe(event):
+            return None
+        prompt, completion = self.spent()
+        logger.warning(
+            "claude_code_token_budget_exhausted",
+            pid=pid,
+            token_budget=self.token_budget,
+            usage_prompt_tokens=prompt,
+            usage_completion_tokens=completion,
+        )
+        return ExecutionChunk(
+            done=True, usage_prompt_tokens=prompt, usage_completion_tokens=completion
+        )
+
+    def reached_max_turns(self, rc: int) -> bool:
+        """The CLI exits 1 on ``error_max_turns`` (measured). That is the bound working, not a
+        failure: the agent's work is already in the run's worktree, so the round ends and
+        verification judges it. Read as a failure, the adapter would re-run the round."""
+        if rc == 0 or self._result_subtype != "error_max_turns":
+            return False
+        logger.info("claude_code_max_turns_reached", max_turns=self.max_turns)
+        return True
 
 
 def _claude_extract_delta(event: dict[str, Any]) -> str:

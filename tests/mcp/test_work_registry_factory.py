@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from backend.mcp.api import McpPrincipal, ToolContext, ToolError
+from backend.workflow.infrastructure.db import RunStatus
 from backend.workflow.infrastructure.tools import ToolError as WorkToolError
 
 pytestmark = pytest.mark.asyncio
@@ -52,6 +53,7 @@ class _Run:
         self.id = run_id
         self.workspace_id = workspace_id
         self.product_id = uuid.uuid4()
+        self.status = RunStatus.RUNNING  # a finished run is refused (#1106)
         # The run carries the work tools' per-run latches between MCP calls (T2b-2).
         self.payload: dict[str, object] = {}
 

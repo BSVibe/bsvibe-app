@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -53,6 +54,7 @@ __all__ = [
     "ChatToolCall",
     "ExecutorAdapter",
     "ExecutorAdapterUnavailable",
+    "RunCancelledDuringTurn",
     "ExecutorCapacitySaturated",
     "LiteLLMAdapter",
     "ModelAccountAdapter",
@@ -258,6 +260,15 @@ class ExecutorAdapterUnavailable(RuntimeError):
     def __init__(self, *args: object, retryable: bool = False) -> None:
         super().__init__(*args)
         self.retryable = retryable
+
+
+class RunCancelledDuringTurn(ExecutorAdapterUnavailable):
+    """The run an executor turn worked for was cancelled while the turn ran (#1106).
+
+    The worker has been told to kill the session. Never retryable. A SUBCLASS of
+    :class:`ExecutorAdapterUnavailable` so callers that only know the broad type still
+    stop; the drive loop catches it by name and ends the run as cancelled, not failed.
+    """
 
 
 class ExecutorCapacitySaturated(ExecutorAdapterUnavailable):
@@ -608,6 +619,68 @@ class ExecutorAdapter:
         # Unreachable — the loop returns or raises on the final attempt.
         raise AssertionError("executor chat retry loop exited without result")
 
+    def _run_cancelled_probe(self, session: AsyncSession) -> Callable[[], Awaitable[bool]] | None:
+        """The awaiter's ``abandon_if`` for a turn that works FOR a run — ``None`` otherwise.
+
+        Reads only the status column, in its own short session when a factory is wired, so
+        the probe holds no pooled connection across the turn (the drive-session-release rule
+        the awaiter itself follows)."""
+        run_id = self.run_id
+        if run_id is None:
+            return None
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.workflow.infrastructure.db import ExecutionRun, RunStatus  # noqa: PLC0415
+
+        factory = self.session_factory
+        stmt = select(ExecutionRun.status).where(ExecutionRun.id == run_id)
+
+        async def _cancelled() -> bool:
+            if factory is not None:
+                async with factory() as short:
+                    status = await short.scalar(stmt)
+            else:
+                status = await session.scalar(stmt)
+            return status == RunStatus.CANCELLED
+
+        return _cancelled
+
+    async def _session_limits(
+        self, session: AsyncSession, *, agentic: bool
+    ) -> tuple[int | None, int | None]:
+        """``(token_budget, max_turns)`` for the worker to enforce INSIDE the session.
+
+        #1104 — the run's ceiling was checked only after a turn came back, so a session that
+        crossed it ran to completion first (run ``92b76fba``: 3,055,575 input tokens on a 2M
+        ceiling). The worker gets what is LEFT of the run's budget and stops the session as it
+        crosses it; the drive loop's own check then fires on the usage it reports.
+
+        Never below 1: a run already at its ceiling must be stopped, and ``0`` reads as
+        "unbounded" on the worker. Read from the committed row, so it can trail the run by the
+        turn being accounted — the backend's own check is still the ceiling of record.
+        Both ``None`` for a chat turn: a single completion with its own deadline.
+        """
+        if not agentic or self.run_id is None:
+            return None, None
+        max_turns = self.settings.executor_agent_max_turns or None
+        cap = self.settings.agent_max_run_tokens
+        if cap <= 0:
+            return None, max_turns
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+
+        stmt = select(ExecutionRun.usage_prompt_tokens, ExecutionRun.usage_completion_tokens).where(
+            ExecutionRun.id == self.run_id
+        )
+        if self.session_factory is not None:
+            async with self.session_factory() as short:
+                row = (await short.execute(stmt)).first()
+        else:
+            row = (await session.execute(stmt)).first()
+        used = (row[0] or 0) + (row[1] or 0) if row is not None else 0
+        return max(cap - used, 1), max_turns
+
     async def _work_tool_surface(
         self, session: AsyncSession, *, agentic: bool
     ) -> dict[str, Any] | None:
@@ -705,6 +778,7 @@ class ExecutorAdapter:
         # EVERY execution model gets that same surface, client_attach included: which
         # MACHINE a work tool runs on is the sandbox's business, not the surface's.
         mcp = await self._work_tool_surface(session, agentic=agentic)
+        token_budget, max_turns = await self._session_limits(session, agentic=agentic)
         # Lift E9 — per-caller chat timeout. ``self.timeout_s`` is set from
         # :attr:`CallerSpec.default_timeout_s` at construction time (see
         # :func:`adapter_for`); ``None`` keeps the legacy global
@@ -725,6 +799,8 @@ class ExecutorAdapter:
             worker_id=worker.id,
             mcp=mcp,
             timeout_s=effective_timeout_s,
+            token_budget=token_budget,
+            max_turns=max_turns,
         )
         # Commit before awaiting — the worker reports its result on a
         # SEPARATE session over HTTP (/api/v1/workers/result), whose
@@ -745,6 +821,8 @@ class ExecutorAdapter:
                 worker_id=worker.id,
                 mcp=mcp,
                 timeout_s=remaining_s,
+                token_budget=token_budget,
+                max_turns=max_turns,
             )
 
         try:
@@ -760,7 +838,23 @@ class ExecutorAdapter:
                 # NO pooled connection is held idle-in-transaction across the
                 # turn. This is the fix for the pool-exhaustion outage.
                 session_factory=self.session_factory,
+                abandon_if=self._run_cancelled_probe(session),
             )
+        except dispatch.TaskAbandoned as exc:
+            # #1106 — the run this turn works for was cancelled. Kill the session on the
+            # worker (the same signal the timeout path sends) and stop: re-dispatching a
+            # cancelled run's turn is exactly the waste this exists to end.
+            logger.info(
+                "executor_adapter_run_cancelled_mid_turn",
+                workspace_id=str(self.workspace_id),
+                run_id=str(self.run_id),
+                worker_id=str(worker.id),
+                task_id=str(task.id),
+            )
+            await dispatch.cancel_task(self.redis, worker_id=worker.id, task_id=task.id)
+            raise RunCancelledDuringTurn(
+                f"run {self.run_id} was cancelled while executor task {task.id} was running"
+            ) from exc
         except dispatch.TaskTimeout as exc:
             # Lift E14 — signal the worker so it stops running the
             # now-abandoned subprocess. The dogfood symptom (bsvibe-app

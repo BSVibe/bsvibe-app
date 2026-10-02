@@ -596,6 +596,10 @@ async def handle_task(
         # agentic shape (the CLI's own local tools).
         "mcp_config": task.get("mcp_config") or "",
         "allowed_tools": [t for t in str(task.get("allowed_tools") or "").split() if t],
+        # #1104 / #1114 — the session's in-flight bounds, raw off the payload; the executor
+        # parses them (absent → unbounded, the pre-fix behaviour).
+        "token_budget": task.get("token_budget"),
+        "max_turns": task.get("max_turns"),
     }
 
     # Lift E14 — register the asyncio Task this handler runs in so the

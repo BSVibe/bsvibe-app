@@ -359,15 +359,15 @@ was the limit. Cancelling another run did not stop its live session, which ran
 
 | Area | Issues |
 |---|---|
-| **How BSVibe wraps Claude Code** (the central design decision) | #1103 step split · #1104 ceiling unit · #1114 no in-session bound |
+| **How BSVibe wraps Claude Code** (decided 2026-10-01: keep it) | #1103 step split · #1104 ceiling unit · #1114 no in-session bound |
 | Cancellation and the run state machine | #1102 cancel overwritten · #1106 cancel does not stop the session · #1109 `shipped` reopens · #1110 six writers bypass `transition()` |
 | Isolation | #1107 sandbox container shared per product |
 | Delivery gates | #1108 next step loses Safe Mode gates · #1111 "shipped" notification fires early · #1112 checkpoint `ship` opens no PR |
 | Checkpoints | #1105 dead end (same family as #1074) |
 | Operations | #1113 every issue becomes a run, outside caps · #1115 `review_ready` occupies the cap · #1116 codex leftovers, three branch schemes |
 
-**The decision most of these hang on (§4):** keep driving Claude Code as a
-tool-restricted, one-shot session per round, or lean on Claude Code's own loop
-(built-in tools, session continuity). It trades isolation and the client_attach
-privacy contract against cost and speed; #1103, #1104, #1106 and #1114 resolve
-differently depending on the answer.
+**The decision these hung on (§4) — settled 2026-10-01:** keep the current wrapping
+(built-ins off, MCP work tools only). Claude Code and the real files are assumed to live on
+different machines. Continuity across rounds and steps belongs to BSVibe, not to Claude Code's
+own session (`--resume` is out), because the next step may run on another executor. #1103,
+#1104 and #1114 are fixed inside this wrapping; see [HANDOFF.md](./HANDOFF.md) §Ⅰ.
