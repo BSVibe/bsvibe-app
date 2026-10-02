@@ -34,12 +34,15 @@
 
 워커 쪽 변경은 없다. 워커의 cancel 처리(Lift E14)는 이미 있다. 그래서 백엔드 autodeploy 만으로 반영된다.
 
-- [ ] 런 하나를 시작하고 실행기 태스크가 `dispatched` 된 뒤 취소한다. 확인할 것:
+- [x] 런 하나를 시작하고 실행기 태스크가 `dispatched` 된 뒤 취소한다. 확인할 것:
+  - **2026-10-02 실측 (런 `0f55f136`, `6aa29fe`):** 03:04:49.98 `run_cancelled` → 50.59 `executor_adapter_run_cancelled_mid_turn` · `dispatch_cancel_xadd_succeeded` → 53.73 취소 뒤 도구 호출이 `mcp_work_run_finished` 로 거절 → 53.95 워커 `worker_task_cancel_started` · `worker_subprocess_terminate_sent` → 57 프로세스 소멸. 취소 후 약 4초(09-30 은 11분 · 640만 토큰). 런은 `cancelled` 유지, Decision 없음, 총 946 토큰
+  - 루프 로그의 `agent_runner_loop_complete outcome=needs_decision` 은 의도된 것이다 — `_cancelled_result` 가 상태 전이 없는 결과값으로 매핑한다(감사 이벤트는 `cancelled`)
+  - ⚠️ 미확인: `executor_tasks.error_message` 의 `abandoned:` — prod DB 조회가 auto-mode 분류기에 막힌다
   - 수 초 안에 로그에 `executor_adapter_run_cancelled_mid_turn` → `dispatch_cancel_xadd_succeeded` → (워커) `worker_task_cancel_started` 가 찍힌다
   - `executor_tasks` 행이 `failed` 가 되고 `error_message` 에 `abandoned:` 가 들어간다
   - 취소 이후 그 런의 `mcp_work_tool` 호출이 없다. 들어온다면 `mcp_work_run_finished` 로 거절돼야 한다
   - ⚠️ prod 런을 일부러 여는 행동이므로 형님 OK 를 받은 뒤 진행한다
-- [ ] 회귀 관측: 취소하지 않은 런은 계속 완료된다(`abandoned:` 행이 취소 런에만 생긴다)
+- [x] 회귀 관측: 취소하지 않은 런은 계속 완료된다 — 같은 배포에서 런 `bed0d316` 이 `review_ready` · 검증 통과(2026-10-02). `abandoned:` 행 분포는 DB 조회 불가로 미확인
 
 ## 남은 틈
 
