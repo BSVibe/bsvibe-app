@@ -296,8 +296,8 @@ class AgentRunner:
         if run.status is RunStatus.CANCELLED and to_status is not RunStatus.OPEN:
             return False
         from_status = run.status
-        run.status = to_status
-        run.updated_at = datetime.now(tz=UTC)
+        if not await self._compare_and_set_status(run, from_status, to_status):
+            return False
         self._session.add(
             ExecutionRunHistory(
                 id=uuid.uuid4(),
@@ -362,6 +362,47 @@ class AgentRunner:
         # last step.
         if to_status is RunStatus.REVIEW_READY:
             await self._maybe_spawn_next_step(run)
+        return True
+
+    async def _compare_and_set_status(
+        self, run: ExecutionRun, from_status: RunStatus, to_status: RunStatus
+    ) -> bool:
+        """Move ``run`` from ``from_status`` to ``to_status`` only if the DATABASE
+        still holds ``from_status`` (#1102).
+
+        ``run`` comes from the session's identity map, and the drive loop commits
+        with ``expire_on_commit=False`` — so its ``status`` can be minutes stale.
+        Prod run ``5044c88a`` was cancelled by the founder's request (another
+        session); the loop's copy still said ``running``, the guard above passed,
+        and the ORM's unconditional ``UPDATE … SET status`` wrote ``review_ready``
+        over the cancel. A conditional UPDATE lets the database decide: zero rows
+        means another writer moved the run first, and this transition is a no-op.
+        On that path the in-memory copy is refreshed so the caller sees the truth.
+        """
+        from sqlalchemy import update  # noqa: PLC0415
+        from sqlalchemy.orm.attributes import set_committed_value  # noqa: PLC0415
+
+        now = datetime.now(tz=UTC)
+        result = await self._session.execute(
+            update(ExecutionRun)
+            .where(ExecutionRun.id == run.id, ExecutionRun.status == from_status)
+            .values(status=to_status, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:  # type: ignore[attr-defined]
+            await self._session.refresh(run, attribute_names=["status", "updated_at"])
+            logger.info(
+                "agent_runner_transition_lost_race",
+                run_id=str(run.id),
+                expected_status=from_status.value,
+                actual_status=run.status.value,
+                to_status=to_status.value,
+            )
+            return False
+        # Mirror the row into the held object without marking it dirty — a dirty
+        # ``status`` would flush a second, unconditional UPDATE.
+        set_committed_value(run, "status", to_status)
+        set_committed_value(run, "updated_at", now)
         return True
 
     async def _emit_run_failed(self, run: ExecutionRun, reason: str | None) -> None:
