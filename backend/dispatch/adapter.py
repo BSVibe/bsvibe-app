@@ -670,15 +670,21 @@ class ExecutorAdapter:
 
         from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
 
-        stmt = select(ExecutionRun.usage_prompt_tokens, ExecutionRun.usage_completion_tokens).where(
-            ExecutionRun.id == self.run_id
-        )
+        stmt = select(
+            ExecutionRun.usage_prompt_tokens,
+            ExecutionRun.usage_completion_tokens,
+            ExecutionRun.payload,
+        ).where(ExecutionRun.id == self.run_id)
         if self.session_factory is not None:
             async with self.session_factory() as short:
                 row = (await short.execute(stmt)).first()
         else:
             row = (await session.execute(stmt)).first()
         used = (row[0] or 0) + (row[1] or 0) if row is not None else 0
+        # #1105 — the founder may have granted this run more than the base ceiling.
+        from backend.workflow.domain.run_token_cap import effective_run_token_cap  # noqa: PLC0415
+
+        cap = effective_run_token_cap(cap, row[2] if row is not None else None)
         return max(cap - used, 1), max_turns
 
     async def _work_tool_surface(
