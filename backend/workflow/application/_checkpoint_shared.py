@@ -72,6 +72,12 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "This task kept failing to start, so BSVibe stopped retrying — try again, or let it go?",
         "ko": "이 작업이 계속 시작되지 못해서 재시도를 멈췄어요 — 다시 해볼까요, 접을까요?",
     },
+    # #1105 — the run hit its token ceiling. Was blank (prod fb38eb66): the founder
+    # could only discard.
+    "run_token_cap_reached": {
+        "en": "This task used up its token budget before finishing — give it more budget to keep going, or let it go?",
+        "ko": "이 작업이 끝나기 전에 토큰 예산을 다 썼어요 — 예산을 더 주고 이어갈까요, 접을까요?",
+    },
 }
 
 
@@ -158,6 +164,15 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
     # only honest answers are another attempt or letting the run go.
     "run_drive_failed": [
         DecisionAction(key=ACTION_RETRY, label_en="Try again", label_ko="다시 시도"),
+        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
+    ],
+    # #1105 — ``retry`` here GRANTS budget (``checkpoint_resolution``): usage
+    # accumulates on the run, so a plain resume would hit the same ceiling on its
+    # first turn. No ``ship`` — the work never reached verification.
+    "run_token_cap_reached": [
+        DecisionAction(
+            key=ACTION_RETRY, label_en="Add budget & continue", label_ko="예산 늘려 계속"
+        ),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
     "verification_failed": [

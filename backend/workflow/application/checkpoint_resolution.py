@@ -37,12 +37,18 @@ from backend.common.settle_kinds import (
 from backend.workflow.application._checkpoint_shared import (
     ACTION_ACKNOWLEDGE,
     ACTION_DISCARD,
+    ACTION_RETRY,
     ACTION_SHIP,
     _decision_actions,
     _decision_options,
     _question_text,
 )
 from backend.workflow.application.audit_events import DecisionResolved
+from backend.workflow.domain.run_token_cap import (
+    TOKEN_CAP_DECISION_KIND,
+    TOKEN_CAP_GRANT_KEY,
+    granted_cap_after,
+)
 from backend.workflow.domain.verified_deliverable import settle_run_context
 from backend.workflow.infrastructure.db import (
     Decision,
@@ -145,6 +151,31 @@ class CheckpointResolutionOutcome:
     resolution: str
     resolved_at: datetime
     run_status: RunStatus
+
+
+def _grant_more_token_budget(
+    payload: dict[str, Any], *, run: ExecutionRun, decision: Decision
+) -> None:
+    """#1105 — "keep going" on a token-capped run grants it one more full ceiling.
+
+    Usage accumulates on the run, so a plain resume would stop again on its first
+    turn. The new ceiling is computed from what the Decision recorded at the stop
+    (the run's usage then, the ceiling then), falling back to the run's own meter.
+    """
+    recorded = decision.payload if isinstance(decision.payload, dict) else {}
+    used = recorded.get("usage_total_tokens")
+    if not isinstance(used, int):
+        used = (run.usage_prompt_tokens or 0) + (run.usage_completion_tokens or 0)
+    cap = recorded.get("token_cap")
+    if not isinstance(cap, int) or cap <= 0:
+        return
+    payload[TOKEN_CAP_GRANT_KEY] = granted_cap_after(used, cap)
+    logger.info(
+        "checkpoint_token_budget_granted",
+        run_id=str(run.id),
+        used=used,
+        granted=payload[TOKEN_CAP_GRANT_KEY],
+    )
 
 
 async def resolve_checkpoint(
@@ -251,6 +282,8 @@ async def resolve_checkpoint(
         }
     )
     payload["resolved_decisions"] = resolved
+    if action_key == ACTION_RETRY and decision.decision == TOKEN_CAP_DECISION_KIND:
+        _grant_more_token_budget(payload, run=run, decision=decision)
     run.payload = payload
 
     await session.flush()

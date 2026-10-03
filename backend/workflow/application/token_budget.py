@@ -35,12 +35,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from backend.workflow.application.audit_events import LoopTerminal
+from backend.workflow.domain.run_token_cap import (
+    TOKEN_CAP_DECISION_KIND,
+    effective_run_token_cap,
+)
 
 if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult, LoopTurn, RunOrchestrator
     from backend.workflow.infrastructure.db import ExecutionRun, RunAttempt, WorkStep
-
-TOKEN_CAP_DECISION_KIND = "run_token_cap_reached"  # noqa: S105 — decision kind, not a secret
 
 
 async def account_and_enforce_token_cap(
@@ -62,7 +64,8 @@ async def account_and_enforce_token_cap(
     run.usage_prompt_tokens += turn.usage_prompt_tokens
     run.usage_completion_tokens += turn.usage_completion_tokens
 
-    cap = orch._settings.agent_max_run_tokens
+    # #1105 — a founder's "keep going" raises THIS run's ceiling.
+    cap = effective_run_token_cap(orch._settings.agent_max_run_tokens, run.payload)
     used = run.usage_prompt_tokens + run.usage_completion_tokens
     if cap <= 0 or used < cap:
         return None
@@ -89,3 +92,6 @@ async def account_and_enforce_token_cap(
     )
     await orch._session.commit()
     return orch._decision_result(run, work_step, attempt, decision, written_paths, final_text)
+
+
+__all__ = ["TOKEN_CAP_DECISION_KIND", "account_and_enforce_token_cap"]

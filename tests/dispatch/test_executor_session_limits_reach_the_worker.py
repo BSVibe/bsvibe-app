@@ -45,6 +45,7 @@ async def _adapter_dispatch(
     settings: Any,
     tools: list[dict[str, Any]] | None,
     used: tuple[int, int] = (0, 0),
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Drive one adapter turn to the dispatch and return what ``dispatch_task`` was given."""
     redis = await _make_redis()
@@ -64,6 +65,7 @@ async def _adapter_dispatch(
                 status=RunStatus.RUNNING,
                 usage_prompt_tokens=used[0],
                 usage_completion_tokens=used[1],
+                payload=payload or {},
             )
             setup.add(run)
             await setup.commit()
@@ -144,6 +146,24 @@ async def test_a_run_already_at_its_ceiling_still_gets_a_budget_that_stops_it(
     seen = await _adapter_dispatch(monkeypatch, settings=settings, tools=_TOOLS, used=(900, 300))
 
     assert seen["token_budget"] == 1
+
+
+async def test_a_granted_ceiling_reaches_the_session_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1105 — after the founder grants more budget, the worker must be told the NEW
+    remainder; the base ceiling would kill the resumed session at once (budget 1)."""
+    settings = get_settings().model_copy(update={"agent_max_run_tokens": 1_000})
+
+    seen = await _adapter_dispatch(
+        monkeypatch,
+        settings=settings,
+        tools=_TOOLS,
+        used=(1_100, 0),
+        payload={"token_cap_granted": 2_100},
+    )
+
+    assert seen["token_budget"] == 1_000
 
 
 async def test_an_uncapped_deployment_sends_no_budget(monkeypatch: pytest.MonkeyPatch) -> None:
