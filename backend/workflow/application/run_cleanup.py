@@ -42,11 +42,11 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.application.run_status import move_run_status
 from backend.workflow.infrastructure.db import (
     TERMINAL_RUN_STATUSES,
     DecisionStatus,
     ExecutionRun,
-    ExecutionRunHistory,
     RunStatus,
 )
 from backend.workflow.infrastructure.delivery.db import SafeModeStatus
@@ -406,20 +406,10 @@ async def _cancel(session: AsyncSession, run: ExecutionRun, *, reason: str) -> b
     if run.status in _TERMINAL:
         return False
     from_status = run.status
-    run.status = RunStatus.CANCELLED
-    run.updated_at = datetime.now(tz=UTC)
-    session.add(
-        ExecutionRunHistory(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            workspace_id=run.workspace_id,
-            from_status=from_status,
-            to_status=RunStatus.CANCELLED,
-            reason=reason,
-            created_at=datetime.now(tz=UTC),
-        )
-    )
-    await session.flush()
+    # #1110 — a compare-and-set: a run that shipped in another session meanwhile is
+    # not overwritten with a cancel.
+    if not await move_run_status(session, run, RunStatus.CANCELLED, reason=reason):
+        return False
     logger.info(
         "run_cancelled",
         run_id=str(run.id),
@@ -437,20 +427,8 @@ async def _reopen(session: AsyncSession, run: ExecutionRun, *, reason: str) -> N
     :meth:`AgentRunner.transition` allows out of CANCELLED.
     """
     from_status = run.status
-    run.status = RunStatus.OPEN
-    run.updated_at = datetime.now(tz=UTC)
-    session.add(
-        ExecutionRunHistory(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            workspace_id=run.workspace_id,
-            from_status=from_status,
-            to_status=RunStatus.OPEN,
-            reason=reason,
-            created_at=datetime.now(tz=UTC),
-        )
-    )
-    await session.flush()
+    if not await move_run_status(session, run, RunStatus.OPEN, reason=reason):
+        return
     logger.info(
         "run_reopened",
         run_id=str(run.id),

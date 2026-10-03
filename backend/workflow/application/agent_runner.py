@@ -50,6 +50,7 @@ from backend.workflow.application.handoff import (
     capture_prior_step_output,
     compose_step_handoff,
 )
+from backend.workflow.application.run_status import move_run_status
 from backend.workflow.domain.repositories import DeliverableRepository, RunRepository
 from backend.workflow.infrastructure.db import (
     ExecutionRun,
@@ -296,20 +297,10 @@ class AgentRunner:
         if run.status is RunStatus.CANCELLED and to_status is not RunStatus.OPEN:
             return False
         from_status = run.status
-        if not await self._compare_and_set_status(run, from_status, to_status):
+        # #1102 / #1110 — a compare-and-set against the DATABASE, history only if it
+        # lands (``run_status.move_run_status``, the one place a status changes).
+        if not await move_run_status(self._session, run, to_status, reason=reason):
             return False
-        self._session.add(
-            ExecutionRunHistory(
-                id=uuid.uuid4(),
-                run_id=run_id,
-                workspace_id=run.workspace_id,
-                from_status=from_status,
-                to_status=to_status,
-                reason=reason,
-                created_at=datetime.now(tz=UTC),
-            )
-        )
-        await self._session.flush()
         logger.info(
             "agent_runner_transitioned",
             run_id=str(run_id),
@@ -362,47 +353,6 @@ class AgentRunner:
         # last step.
         if to_status is RunStatus.REVIEW_READY:
             await self._maybe_spawn_next_step(run)
-        return True
-
-    async def _compare_and_set_status(
-        self, run: ExecutionRun, from_status: RunStatus, to_status: RunStatus
-    ) -> bool:
-        """Move ``run`` from ``from_status`` to ``to_status`` only if the DATABASE
-        still holds ``from_status`` (#1102).
-
-        ``run`` comes from the session's identity map, and the drive loop commits
-        with ``expire_on_commit=False`` — so its ``status`` can be minutes stale.
-        Prod run ``5044c88a`` was cancelled by the founder's request (another
-        session); the loop's copy still said ``running``, the guard above passed,
-        and the ORM's unconditional ``UPDATE … SET status`` wrote ``review_ready``
-        over the cancel. A conditional UPDATE lets the database decide: zero rows
-        means another writer moved the run first, and this transition is a no-op.
-        On that path the in-memory copy is refreshed so the caller sees the truth.
-        """
-        from sqlalchemy import update  # noqa: PLC0415
-        from sqlalchemy.orm.attributes import set_committed_value  # noqa: PLC0415
-
-        now = datetime.now(tz=UTC)
-        result = await self._session.execute(
-            update(ExecutionRun)
-            .where(ExecutionRun.id == run.id, ExecutionRun.status == from_status)
-            .values(status=to_status, updated_at=now)
-            .execution_options(synchronize_session=False)
-        )
-        if result.rowcount != 1:  # type: ignore[attr-defined]
-            await self._session.refresh(run, attribute_names=["status", "updated_at"])
-            logger.info(
-                "agent_runner_transition_lost_race",
-                run_id=str(run.id),
-                expected_status=from_status.value,
-                actual_status=run.status.value,
-                to_status=to_status.value,
-            )
-            return False
-        # Mirror the row into the held object without marking it dirty — a dirty
-        # ``status`` would flush a second, unconditional UPDATE.
-        set_committed_value(run, "status", to_status)
-        set_committed_value(run, "updated_at", now)
         return True
 
     async def _emit_run_failed(self, run: ExecutionRun, reason: str | None) -> None:
@@ -474,23 +424,11 @@ class AgentRunner:
                 # INSIDE the lock: two concurrent ships must not publish out of
                 # order and leave the older tree as the product's record.
                 await self._push_bundle_best_effort(product_id, run)
-            # Transition past REVIEW_READY → SHIPPED. The history row
-            # is recorded directly here rather than re-calling
-            # ``transition`` (which would recurse).
-            run.status = RunStatus.SHIPPED
-            run.updated_at = datetime.now(tz=UTC)
-            self._session.add(
-                ExecutionRunHistory(
-                    id=uuid.uuid4(),
-                    run_id=run.id,
-                    workspace_id=run.workspace_id,
-                    from_status=RunStatus.REVIEW_READY,
-                    to_status=RunStatus.SHIPPED,
-                    reason="auto-shipped after verify",
-                    created_at=datetime.now(tz=UTC),
-                )
+            # Transition past REVIEW_READY → SHIPPED through the one status seam
+            # (not ``transition``, which would recurse into this auto-ship).
+            await move_run_status(
+                self._session, run, RunStatus.SHIPPED, reason="auto-shipped after verify"
             )
-            await self._session.flush()
             # Best-effort worktree cleanup (idempotent — covers retries).
             try:
                 await remove_run_worktree(product_id, run.id)

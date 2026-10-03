@@ -478,6 +478,9 @@ class AgentWorker(BaseWorker):
         from backend.workflow.application.run_persistence import (  # noqa: PLC0415 — cycle break
             create_decision,
         )
+        from backend.workflow.application.run_status import (  # noqa: PLC0415
+            move_run_status,
+        )
 
         async with self._session_factory() as session:
             run = await session.get(ExecutionRun, run_id)
@@ -491,7 +494,20 @@ class AgentWorker(BaseWorker):
                     status=str(run.status),
                 )
                 return
-            run.status = RunStatus.RUNNING
+            # Park it RUNNING (paused on the Decision below) through the one status
+            # seam (#1110): a run cancelled meanwhile is not dragged back.
+            if (
+                not await move_run_status(
+                    session, run, RunStatus.RUNNING, reason="paused on decision: drive failed"
+                )
+                and run.status is not RunStatus.RUNNING
+            ):
+                logger.info(
+                    "agent_drive_escalate_run_moved_meanwhile",
+                    run_id=str(run_id),
+                    status=str(run.status),
+                )
+                return
             run.claimed_at = None
             run.claimed_by = None
             # The founder now owns this run; a resumed one starts its count over.

@@ -97,12 +97,12 @@ from typing import TYPE_CHECKING
 import structlog
 from sqlalchemy import select
 
+from backend.workflow.application.run_status import move_run_status
 from backend.workflow.infrastructure.db import (
     TERMINAL_RUN_STATUSES,
     DecisionStatus,
     Deliverable,
     ExecutionRun,
-    ExecutionRunHistory,
     ProofState,
     RunStatus,
     WorkStep,
@@ -199,10 +199,8 @@ async def auto_resolve_run_on_delivery(
         if not _should_ship_review_ready_without_local_auto_ship(run):
             return False
         reason = f"auto-resolved: deliverable {deliverable_id} shipped (no local auto-ship path)"
-        _record_hop(
-            session, run, to_status=RunStatus.SHIPPED, reason=reason, at=datetime.now(tz=UTC)
-        )
-        await session.flush()
+        if not await move_run_status(session, run, RunStatus.SHIPPED, reason=reason):
+            return False
         logger.info(
             "run_auto_resolved_on_delivery_no_local_ship",
             run_id=str(run_id),
@@ -241,7 +239,7 @@ async def auto_resolve_run_on_delivery(
     # on a review Decision rests at RUNNING; the defensive REVIEW_READY branch
     # covers the rare case the run already advanced.
     reason = f"auto-resolved: deliverable {deliverable_id} shipped (review moot)"
-    _ship_run_via_review_ready(session, run, reason=reason)
+    await _ship_run_via_review_ready(session, run, reason=reason)
 
     await session.flush()
 
@@ -303,51 +301,26 @@ def _should_ship_review_ready_without_local_auto_ship(run: ExecutionRun) -> bool
     return _recorded_local_auto_ship(run) is False
 
 
-def _ship_run_via_review_ready(
+async def _ship_run_via_review_ready(
     session: AsyncSession,
     run: ExecutionRun,
     *,
     reason: str,
 ) -> None:
-    """Advance ``run`` to SHIPPED through the valid REVIEW_READY hop, writing a
-    history row per transition.
+    """Advance ``run`` to SHIPPED through the valid REVIEW_READY hop, one history
+    row per hop.
 
-    Direct status + ``ExecutionRunHistory`` writes (the same pattern
-    :meth:`AgentRunner._auto_ship_product_run` uses) rather than routing through
-    :class:`AgentRunner` — see the module docstring for why (R2c inbound
-    plugin-free + no unwanted engine side effects). Caller guarantees the run is
-    non-terminal (guarded upstream); a run already at REVIEW_READY only needs the
-    final hop.
+    Through :func:`~backend.workflow.application.run_status.move_run_status` (the
+    one status seam, #1110) rather than :class:`AgentRunner` — see the module
+    docstring for why (R2c inbound plugin-free + no unwanted engine side effects).
+    Each hop is a compare-and-set: a run cancelled by another session after the
+    upstream non-terminal guard is refused instead of shipped over. A run already
+    at REVIEW_READY only needs the final hop.
     """
-    now = datetime.now(tz=UTC)
     if run.status is not RunStatus.REVIEW_READY:
-        _record_hop(session, run, to_status=RunStatus.REVIEW_READY, reason=reason, at=now)
-    _record_hop(session, run, to_status=RunStatus.SHIPPED, reason=reason, at=now)
-
-
-def _record_hop(
-    session: AsyncSession,
-    run: ExecutionRun,
-    *,
-    to_status: RunStatus,
-    reason: str,
-    at: datetime,
-) -> None:
-    """Flip ``run.status`` and append the matching ``ExecutionRunHistory`` row."""
-    from_status = run.status
-    run.status = to_status
-    run.updated_at = at
-    session.add(
-        ExecutionRunHistory(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            workspace_id=run.workspace_id,
-            from_status=from_status,
-            to_status=to_status,
-            reason=reason,
-            created_at=at,
-        )
-    )
+        if not await move_run_status(session, run, RunStatus.REVIEW_READY, reason=reason):
+            return
+    await move_run_status(session, run, RunStatus.SHIPPED, reason=reason)
 
 
 __all__ = [
