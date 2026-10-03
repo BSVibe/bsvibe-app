@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-02
+# BSVibe session handoff — 2026-10-04
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -16,107 +16,76 @@
 > 🧭 **Never put anything transitive in this header.** A field that points at itself becomes
 > false the moment it merges — updating the value does not fix it; **removing the field** does.
 
-> 🐙 **Opening an issue or a PR on `BSVibe/bsvibe-app` now starts a prod run** (§Ⅱ). To file
+> 🐙 **Opening an issue or a PR on `BSVibe/bsvibe-app` now starts a prod run**. To file
 > record-only issues/PRs, pause the binding filter first (§Ⅳ) — and ask 형님 each time.
 
 ---
 
-## §0 — One line: **two fixes on one branch, both waiting on a PR that is itself a prod action**
+## §0 — One line: **seven fixes shipped and walked in prod; what is left is waiting for a natural run or a DB read**
 
-Branch **`claude/bridge-cse_01824DHDZL1TUghFq1diRT1t`** carries both (it contains the #1106 branch):
+| PR | Issue | What | Prod check |
+|---|---|---|---|
+| #1119 | #1106 · #1104 · #1114 | cancel kills the executor session · in-session token budget · `--max-turns` | ✅ cancel 4 s · budget kill at 15k (6 % over) · `--max-turns 60` seen |
+| #1121 | #1103 | adjacent same-stage steps merge · TDD unit is one step · executor-neutral step handoff | ✅ one run carried test + fix, 86k input (92b76fba spent 3.05M on the test half) |
+| #1122 | #1114 | a failed round hands its own report + changed files to the next round | ⏳ waits for a run that fails verification once |
+| #1123 | #1102 | `transition()` is a compare-and-set — a cancel committed elsewhere survives | ⏳ CI ran it on Postgres; no prod walk yet |
+| #1124 | #1105 | `run_token_cap_reached` gets a question + "예산 늘려 계속" (grants one more ceiling) | ⏳ waits for the next cap stop |
+| #1125 | #1108 | the next chain step keeps `binding_id` · `kind` → the delivery gate survives | ⏳ waits for a real cross-stage split |
 
-| Commit | What |
-|---|---|
-| `71ff937` | #1106 — cancelling a run kills its executor session and refuses its token |
-| `8f74c3b` | #1104 + #1114 — in-session token budget, cost-weighted usage, `--max-turns` |
+Checklists: `docs/e2e/*` for each — the unchecked boxes are the ⏳ column.
+**#1104 stays open on purpose:** the raw cache breakdown has no columns yet.
 
-Neither is on `main`. No PR yet: the BSVibe MCP was not usable in the session that built them (§Ⅲ-1).
-
-## §Ⅰ — Decisions (형님, 2026-10-01)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01)
 
 | | |
 |---|---|
-| **Wrapping stays** | Claude Code and the real files live on **different machines**. Files may sit on the BSVibe server while a local Claude Code connects to them. So built-in tools are out; the MCP work tools are the surface. Don't propose "let Claude Code use its own tools" again |
-| **No `--resume`** | Continuity belongs to **BSVibe, not the executor**. A user may split work so the next step runs on codex or another executor, and a Claude Code session file cannot cross that boundary. Make BSVibe's handoff between rounds and steps smaller and executor-neutral instead |
+| **Wrapping stays** | Claude Code and the files live on different machines; built-in tools stay off, the MCP work tools are the surface |
+| **No `--resume`** | Continuity is BSVibe's. Every hand-over (#1103 step, #1114 round) is plain text on the payload / messages that any executor can read |
 
-How the open issues resolve under this:
+## §Ⅱ — What this session found that the issues had wrong
 
-| Issue | Direction |
-|---|---|
-| #1114 | `--max-turns` only. Replace the full re-rendered transcript with a BSVibe-owned summary (pairs with #1103) |
-| #1103 | The framer keeps one TDD unit (test + fix) in one run. When it does split, it leaves a handoff any executor can read: explored, touched, verify state |
-| #1104 | Weight cache reads by real cost; enforce **mid-session** from stream-json usage, then kill the process |
-| #1106 | ✅ on the branch (§Ⅱ) |
-| #1104 + #1114 | ✅ on the branch (§Ⅱ), except: raw cache breakdown not stored · transcript-summary half goes with #1103 |
-
-## §Ⅱ — What is on the branch (not merged)
-
-**#1106** (`71ff937`) — unchanged from the 10-01 handoff:
-* the awaiter's `abandon_if` run-status probe → `cancel_task` → `RunCancelledDuringTurn` (not retryable)
-* `load_run` refuses cancelled / failed / shipped runs
-* no worker change
-* checklist: `docs/e2e/cancel-reaches-the-executor-session-checklist.md`
-
-**#1104 + #1114** (`8f74c3b`) — checklist `docs/e2e/executor-session-limits-checklist.md`:
-* **Unit:** claude_code usage is weighted by cost, in input-token equivalents. Cache read ×0.1; cache write ×2 for the 1h TTL, ×1.25 for 5m. Raw sums had stopped run `92b76fba` at 3.05M on a task that finished normally
-* **Moment:**
-  * The adapter dispatches the run's **remaining** budget as `token_budget` (`cap − used`, min 1), with `max_turns`, on the #965 redelivery too
-  * The worker tallies assistant `message.usage`, deduped by `message.id`, and kills the process group at the budget
-  * The turn ends **done**, not failed (failed is retried), so the drive loop's existing cap check raises the Decision
-* **`--max-turns`:** `executor_agent_max_turns`, default **60** — a guess, tune it from prod data. `error_max_turns` + exit 1 is mapped to a normal finish
-* **Verified:**
-  * Real-CLI probe (2.1.286, one haiku turn)
-  * RED → GREEN
-  * Wire-cut on 8 wires, each red on its own test
-  * Full suite 7218 passed · import-linter 6/6 · ruff · mypy
-* **⚠️ This one changes the WORKER.** After merge, restart both host workers (top table). A backend-only deploy sends the keys to workers that ignore them
-* **Gaps:**
-  * Raw cache breakdown is not stored (no columns)
-  * opencode takes agentic turns (#1000) but ignores both limits
-  * codex and opencode still count cache at equal weight
+* **#1114's premise was inverted.** It said "the whole conversation is re-rendered every round". The code
+  dropped the round's report entirely: the next session got the seed context plus `Verification FAILED`
+  and nothing about what the previous session did. #1122 fixes the real gap.
+* **The run token cap is not wired through compose.** `BSVIBE_AGENT_MAX_RUN_TOKENS` in `.env.prod` never
+  reaches a container. To lower it for a test, recreate **only the worker** with an override file that
+  sets `worker.environment` (the cap check and the budget dispatch both run in the worker container), then
+  recreate it again without the override.
+* **The frame log does not record the step plan**, and run payloads are not exposed over MCP — #1103's prod
+  check was judged by outcome (one run, both files, no `handoff_next_step_spawned`).
 
 ## §Ⅲ — Next
 
-1. **BSVibe MCP in a FRESH session.** 형님 re-authenticated on 10-02, and the token works: initialize → 200 against `/mcp/`. But:
-   * A session's MCP tool list is fixed at its start, so the session that ran the auth never saw the tools
-   * The **credential stores are split.** `~/.claude/.credentials.json` has the valid bsvibe token. The macOS keychain item `Claude Code-credentials` has every one of its 22 `mcpOAuth` entries with an **empty** token, bsvibe included
-   * `claude mcp get/list` read the keychain, so they still say `Needs authentication`. Don't trust that line; check whether `bsvibe_*` tools appear (ToolSearch `+bsvibe`)
-   * If they don't, the empty keychain entry is the suspect. Deleting it touches 형님's credential store, so ask first
-2. **Open the PR as record-only** (one PR for the branch, or #1106 first). Pause → confirm → PR → confirm → restore:
-   * `bsvibe_bindings_update` `c50e7217…` → `{"filters":{"github_event":"__paused__"}}`
-   * confirm the filter took
-   * open the PR
-   * confirm the trigger row carries `_received_filtered` and `requests` did not grow
-   * restore `{"filters":{}}`
-   * **ask 형님 each time**
-3. **Merge → restart the host workers → post-deploy E2E** from both checklists. Those include deliberate prod runs (a cancel mid-turn; a lowered cap), so ask first.
-4. Then #1103 (framer keeps one TDD unit per run; executor-neutral handoff), together with the summary half of #1114.
-5. Still open from before: #1113 opt-in (label filter is the cheapest interim) · #1102/#1110 state machine · #1107 · #1108 · #1111 · #1112 · #1105 · carry-overs (credential rotation ×3 · #1047 · #937 · #1042 · #954 · #949 · #957).
-6. **New, unexamined:** prod backend logs show `supabase_token_failed` (password grant, 400) about **every 62 s**, plus `/api/auth/login` 401, from this host's IPv6. Some probe or script logging in with a stale password, most likely. Not investigated.
+1. Prod walks that need a natural run or a DB read — see the ⏳ column. The DB reads (`executor_tasks`
+   prompt of a second round; a chain step's payload) are blocked for agents by design; 형님 runs them.
+2. **#1110** — six places write run status without `transition()`, so they skip #1102's compare-and-set.
+   Then **#1109** (a transition table: `shipped` must not go back to `open`).
+3. #1074 — the same empty-checkpoint shape as #1105, for `ambiguous_model_account`. Worth a guard that
+   every Decision kind has a question + actions.
+4. Still open: #1113 opt-in · #1107 sandbox per product · #1111 · #1112 · #1115 · #1116 · carry-overs.
+5. Unexamined from 10-02: prod logs `supabase_token_failed` ~every 62 s from this host's IPv6.
 
 ## §Ⅳ — Discipline that paid off
 
-* **🧪⭐⭐ Probe the real CLI before wiring a bound.**
-  * `claude --max-turns` exits **1** with `result/error_max_turns`. Behind a "failed → retry" adapter, the bound would re-run the round it just stopped
-  * Each content block repeats its message's usage under one `message.id`, and its `output_tokens` is a partial snapshot
-  * Cache writes are 1h TTL (2×)
-  * The probe was one haiku turn; the fixtures copy its events verbatim (skill `a-bound-reported-as-failure-is-retried-past`)
-* **🔑⭐ "Needs authentication" can be a client store split, not a dead token.**
-  * Read the server log: the token exchange returned 200 and the calls that followed returned 200
-  * The 401s that followed were other processes sending **no** token
-  * The `/mcp` → `/mcp/` 307 is FastAPI's slash redirect and is harmless
-
-
-* **🐙⭐⭐ Filing issues/PRs on bsvibe-app is now a prod action.** Record-only: set the binding filter to a non-matching value (`bsvibe_bindings_update`, `{"filters":{"github_event":"__paused__"}}`), confirm the trigger row carries `_received_filtered` and `requests` did not grow, then restore `{"filters":{}}`. The auto-mode classifier blocks the binding change unless 형님 OKs it in the conversation.
-* **🛑⭐⭐ Cancelling a run does not stop its session.** A run cancelled at 10:41 kept its Claude Code session alive until 10:52 (6.4M tokens) with its run-scoped MCP token still valid (#1106). Cancel only before the executor task exists (~25 s after the request), or expect to pay.
-* **🔬⭐⭐ Canary with a positive control, on the same snapshot.** A "no change" canary is only evidence if the known-bad code turns it red on that very dump.
-* **🧾⭐ Re-verify subagent reports before acting.** Of the audit claims turned into issues, one was wrong ("`output_mode` has no reader" — `delivery_worker` reads it; the real defect was #1108).
-* **🪞 A source-text guard matched my own docstring.** Cutting the call left the guard green because the helper's docstring named the function; narrowed to the call form `_resolve_inbound_product(`.
-* **🗄 `SELECT DISTINCT` over a JSON column fails on Postgres** (`could not identify an equality operator for type json`) — SQLite never tells you. Use `IN (subquery)`.
-* **🧯 Nothing was committed in the deploy directory.** Every change went through a worktree.
-* **🔐 This session could not reach prod, by design.**
-  * A `docker --context colima exec bsvibe-prod-postgres-1 psql …` read was refused by the auto-mode classifier as a production read
-  * Self-adding a settings allow rule for it was refused too
-  * Use the BSVibe MCP (§Ⅲ-1); don't route around the classifier
-* **🐳 The default docker context on this host is `colima-palworld`.** The prod stack is on `colima`. Pass `--context colima`; never `docker context use`, because sibling scripts depend on the current context.
-* **📏 `_drive_loop.py` was at exactly 600 lines** (`test_h2a_decomposition`). Any addition there needs a sub-split. `_loop_turn.py` is the precedent and is registered in that guard.
+* **🐙⭐⭐ Every PR on bsvibe-app is a prod action — pause, act, check, restore.**
+  `bsvibe_bindings_update c50e7217… {"filters":{"github_event":"__paused__"}}` → open/merge →
+  `bsvibe_runs_list` shows no new run → `{"filters":{}}`. Restore right after opening; CI takes ~27 min
+  and real issues must not be blocked that long. Pause again for the merge.
+* **🔪⭐⭐ A wire-cut must hit the wire you mean.** `s.replace(old, new, 1)` on
+  `written_paths=written_paths,` changed the FIRST of five occurrences (the token-cap call), the test
+  stayed green, and a false explanation got written into a test comment. `assert s.count(old) == 1` with
+  enough surrounding lines. Skill: `a-cut-that-does-not-compile-is-not-a-wire-cut` §5.
+* **🧮⭐ The collected-test count is the cheapest sensor.** A cut run printed "no tests ran" — zsh does not
+  word-split `$T`, so pytest got one bogus path. Write the paths out.
+* **🪞⭐ A race test must hold what production holds.** The identity map is weak: a discarded
+  `await session.get(...)` is collected and the next `get` reloads from the DB, hiding #1102's race.
+  The drive loop holds `run`; the test has to too.
+* **🗑⭐⭐ `tests/_support.db_engine` DELETEs every row of whatever `BSVIBE_DATABASE_URL` names.** Pointing it
+  at `devcontainer-postgres-1` (old `wt/phase-1-knowledge`) emptied that DB. PG verification = CI's
+  `lint-and-test` (pgvector:pg16) or a throwaway container. Never an existing DB.
+* **🔐 Agents cannot read prod containers or the prod DB** (`docker exec` / `inspect` / `psql` are refused
+  as production reads). `docker --context colima logs` works and is where the drive loop's events are
+  (`bsvibe-prod-worker-1`); `backend-1` carries the MCP / API side.
+* **🐳 Default docker context is `colima-palworld`; prod is `colima`.** Pass `--context colima`; never
+  `docker context use`.
+* **📏 `_drive_loop.py` is at 581 / 600** (`test_h2a_decomposition`). New loop logic goes to `_loop_turn.py`.
