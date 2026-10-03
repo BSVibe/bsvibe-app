@@ -23,6 +23,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.common.settle_kinds import NEGATIVE_PATTERN_SETTLE_KIND, founder_authored_text
+from backend.workflow.application.run_status import move_run_status
 from backend.workflow.domain.repositories import SafeModeQueueRepository
 from backend.workflow.infrastructure.db import RunStatus
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
@@ -294,11 +295,9 @@ class SafeModeQueue:
         R2c(인바운드 레이어는 plugin-free) 를 깬다 — ``run_delivery_resolution`` 이
         같은 이유로 같은 패턴을 쓴다.
         """
-        import uuid as _uuid  # noqa: PLC0415
 
         from backend.workflow.infrastructure.db import (  # noqa: PLC0415
             ExecutionRun,
-            ExecutionRunHistory,
         )
 
         row = await self._repo.get(item_id)
@@ -323,22 +322,15 @@ class SafeModeQueue:
         payload["resolved_decisions"] = resolved
         run.payload = payload
 
-        now = datetime.now(tz=UTC)
-        from_status = run.status
-        run.status = RunStatus.OPEN
-        run.updated_at = now
-        self._session.add(
-            ExecutionRunHistory(
-                id=_uuid.uuid4(),
-                run_id=run.id,
-                workspace_id=run.workspace_id,
-                from_status=from_status,
-                to_status=RunStatus.OPEN,
-                reason=f"reopened: safe mode item {item_id} denied with a reason",
-                created_at=now,
-            )
-        )
         await self._session.flush()
+        # #1110 — through the one status seam: a run cancelled elsewhere meanwhile
+        # stays cancelled.
+        await move_run_status(
+            self._session,
+            run,
+            RunStatus.OPEN,
+            reason=f"reopened: safe mode item {item_id} denied with a reason",
+        )
 
     async def mark_delivered(
         self,
