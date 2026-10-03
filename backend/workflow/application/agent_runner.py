@@ -672,6 +672,12 @@ class AgentRunner:
                 "prior_run_id": str(run.id),
                 "prior_artifact_refs": refs,
                 "prior_output_text": output_text,
+                # #1108 — the delivery GATE travels with the chain. The
+                # DeliveryWorker reads these two keys (``open_run`` copies them
+                # from the Request for step 1): the binding's ``output_mode`` and
+                # the forced Safe Mode of an autonomous ``product_tick`` run.
+                # Without them every step after the first delivered ungated.
+                **_delivery_gate_keys(payload),
             },
             created_at=datetime.now(tz=UTC),
             updated_at=datetime.now(tz=UTC),
@@ -737,6 +743,15 @@ class AgentRunner:
                 if isinstance(ref, str) and ref not in refs:
                     refs.append(ref)
         return refs
+
+
+def _delivery_gate_keys(payload: dict[str, object]) -> dict[str, str]:
+    """The keys the DeliveryWorker gates a run's deliverable on, as this run holds them."""
+    return {
+        key: value
+        for key in ("binding_id", "kind")
+        if isinstance(value := payload.get(key), str) and value
+    }
 
 
 __all__ = ["AgentRunner"]
