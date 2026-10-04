@@ -109,6 +109,10 @@ _SUMMARY_CAP = 500
 #: nothing to close; here: a resume that has nowhere to go).
 _TERMINAL_RUN_STATUSES = frozenset({RunStatus.SHIPPED, RunStatus.FAILED, RunStatus.CANCELLED})
 
+#: Decision kinds that REPORT on work already out of the agent's hands — a free-text
+#: reply records the founder's words and never resumes the run (#1109).
+_REPORT_DECISION_KINDS = frozenset({"merge_watch_stalled"})
+
 logger = structlog.get_logger(__name__)
 
 
@@ -324,10 +328,11 @@ async def resolve_checkpoint(
         # has seen it. The Decision is RESOLVED above; the run is deliberately
         # untouched.
         pass
-    elif run.status in _TERMINAL_RUN_STATUSES:
-        # A free-text reply on a run that already ENDED. The resume below would
-        # re-open finished work — re-running its approval + delivery — so record
-        # the answer and stop. Only a live run has somewhere to resume to.
+    elif run.status in _TERMINAL_RUN_STATUSES or decision.decision in _REPORT_DECISION_KINDS:
+        # A free-text reply on a run that already ENDED — or on a REPORT about work
+        # already out as a PR (#1109: that run waits at review_ready for its merge).
+        # The resume below would re-open finished work — re-running its approval +
+        # delivery — so record the answer and stop.
         logger.info(
             "checkpoint_resolved_on_terminal_run",
             run_id=str(run.id),

@@ -55,8 +55,9 @@ async def _seed_stalled(
     workspace_id: uuid.UUID,
     *,
     run_status: RunStatus = RunStatus.SHIPPED,
+    kind: str = "merge_watch_stalled",
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """SHIPPED 런 + 그 위의 PENDING ``merge_watch_stalled`` Decision."""
+    """SHIPPED 런 + 그 위의 PENDING ``merge_watch_stalled`` Decision (``kind`` 로 바꿀 수 있다)."""
     run = ExecutionRun(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
@@ -71,7 +72,7 @@ async def _seed_stalled(
         id=uuid.uuid4(),
         run_id=run.id,
         workspace_id=workspace_id,
-        decision="merge_watch_stalled",
+        decision=kind,
         payload={"reason": "ci_deadline_exceeded", "repo": "acme/x", "pr_number": 23},
         status=DecisionStatus.PENDING,
     )
@@ -142,10 +143,16 @@ async def test_free_text_reply_does_not_reopen_a_terminal_run(
 async def test_free_text_reply_still_resumes_a_paused_running_run(
     sf, workspace_id: uuid.UUID, founder_id: uuid.UUID
 ) -> None:
-    """가드는 terminal 런에만 붙는다 — Decision 에 파킹된 RUNNING 런의 재개
-    (이 서비스의 본래 계약)는 그대로다."""
+    """가드는 terminal 런(과 이미 나간 작업에 대한 **보고** Decision)에만 붙는다 —
+    Decision 에 파킹된 RUNNING 런의 재개(이 서비스의 본래 계약)는 그대로다.
+
+    #1109 이후 ``merge_watch_stalled`` 는 보고라 재개하지 않는다. 그래서 이 대조군은
+    RUNNING 런을 실제로 파킹하는 종류(``ask_user_question``)로 잰다 — stall 은 런을
+    RUNNING 에 두지 않으므로 옛 픽스처는 만들 수 없는 상태였다."""
     async with sf() as s, workspace_session_scope(s, workspace_id):
-        run_id, decision_id = await _seed_stalled(s, workspace_id, run_status=RunStatus.RUNNING)
+        run_id, decision_id = await _seed_stalled(
+            s, workspace_id, run_status=RunStatus.RUNNING, kind="ask_user_question"
+        )
         await s.commit()
 
     async with sf() as s, workspace_session_scope(s, workspace_id):

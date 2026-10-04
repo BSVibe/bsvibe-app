@@ -185,6 +185,18 @@ class ConflictEscalate(Protocol):
     ) -> None: ...
 
 
+class PrConcluded(Protocol):
+    """Tell the application a watched PR CONCLUDED — merged, or closed unmerged (#1109).
+
+    A GitHub-delivered run waits at ``review_ready`` until its PR merges; this
+    watch is the only thing that sees the merge. Implemented in the APPLICATION
+    layer (``merge_watch_runtime``) so this worker never writes a run status
+    itself. Called after the row's terminal status is committed.
+    """
+
+    async def __call__(self, run_id: uuid.UUID, *, merged: bool, pr_number: int) -> None: ...
+
+
 class StallEscalate(Protocol):
     """Tell the founder the watch GAVE UP on a pull request that is still open.
 
@@ -201,9 +213,10 @@ class StallEscalate(Protocol):
     ``create_decision``. ``reason`` is the SAME string written to the row's
     ``last_error``, so the Decision and the row read as one story.
 
-    Unlike :class:`ConflictEscalate` this does NOT pause or re-drive the run: by
-    the time a PR is under watch its run has already shipped. There is nothing
-    left to drive — only something to report.
+    Unlike :class:`ConflictEscalate` this does NOT pause or re-drive the run: the
+    agent's work is done and the PR is out. Since #1109 the run waits at
+    ``review_ready`` for the merge, so the Decision also lets the founder discard
+    it; nothing is re-driven.
     """
 
     async def __call__(
@@ -343,6 +356,7 @@ class MergeWatchWorker(BaseWorker):
         redispatch_conflict: ConflictRedispatch | None = None,
         escalate_conflict: ConflictEscalate | None = None,
         escalate_stall: StallEscalate | None = None,
+        pr_concluded: PrConcluded | None = None,
         config: MergeWatchWorkerConfig | None = None,
         now: Clock | None = None,
     ) -> None:
@@ -360,6 +374,7 @@ class MergeWatchWorker(BaseWorker):
         # When absent (a PR4/PR6-era construction) a give-up terminal keeps its
         # old log-only behavior rather than half-reporting.
         self._escalate_stall = escalate_stall
+        self._pr_concluded = pr_concluded
         self._now = now or _utcnow
 
     @property
@@ -435,7 +450,7 @@ class MergeWatchWorker(BaseWorker):
             processed += 1
         return processed
 
-    async def _process(self, snap: _WatchSnapshot, now: datetime) -> None:  # noqa: PLR0911 — one early return per PR state (merged/closed/clean/behind/deadline/pending)
+    async def _process(self, snap: _WatchSnapshot, now: datetime) -> None:  # noqa: PLR0911, PLR0915 — one early return per PR state (merged/closed/clean/behind/deadline/pending)
         """Run the state machine for one watched PR in its own transaction."""
         owner, name = _split_repo(snap.repo)
         async with self._session_factory() as session:
@@ -483,6 +498,7 @@ class MergeWatchWorker(BaseWorker):
                 await repo.mark_status(snap.id, MergeWatchStatus.MERGED)
                 await session.commit()
                 logger.info("merge_watch_already_merged", repo=snap.repo, pr_number=snap.pr_number)
+                await self._report_concluded(snap, merged=True)
                 return
             if state == "closed":
                 await repo.mark_status(
@@ -490,12 +506,15 @@ class MergeWatchWorker(BaseWorker):
                 )
                 await session.commit()
                 logger.info("merge_watch_abandoned", repo=snap.repo, pr_number=snap.pr_number)
+                await self._report_concluded(snap, merged=False)
                 return
 
             # 2. Mergeability gate.
             if mergeable_state == "clean":
-                await self._merge_step(session, repo, snap, owner, name, client, now)
+                merged_now = await self._merge_step(session, repo, snap, owner, name, client, now)
                 await session.commit()
+                if merged_now:
+                    await self._report_concluded(snap, merged=True)
                 return
 
             if mergeable_state in ("behind", "dirty"):
@@ -618,7 +637,7 @@ class MergeWatchWorker(BaseWorker):
         name: str,
         client: MergeWatchClient,
         now: datetime,
-    ) -> None:
+    ) -> bool:
         """Squash-merge under the per-repo advisory lock (mergeable_state=clean).
 
         Raises :class:`GithubRepoBusy` on the loser path (caught by
@@ -636,7 +655,7 @@ class MergeWatchWorker(BaseWorker):
                     last_error="mergeable_state_changed",
                     increment_attempt=True,
                 )
-                return
+                return False
             result = await client.merge_pr(owner, name, snap.pr_number, method="squash")
             if result.merged:
                 await repo.mark_status(snap.id, MergeWatchStatus.MERGED)
@@ -646,7 +665,7 @@ class MergeWatchWorker(BaseWorker):
                     pr_number=snap.pr_number,
                     sha=result.sha,
                 )
-                return
+                return True
             # not_mergeable (405) / head_changed (409) — the head moved or the PR
             # is momentarily non-mergeable. Back to pending_ci with backoff; a
             # later tick re-reads the fresh head (at-least-once, no crash).
@@ -656,6 +675,21 @@ class MergeWatchWorker(BaseWorker):
                 next_poll_at=self._backoff(snap.attempts, now),
                 last_error=result.status,
                 increment_attempt=True,
+            )
+            return False
+
+    async def _report_concluded(self, snap: Any, *, merged: bool) -> None:
+        """Hand the PR's conclusion to the application (#1109); never fails the tick."""
+        if self._pr_concluded is None:
+            return
+        try:
+            await self._pr_concluded(snap.run_id, merged=merged, pr_number=snap.pr_number)
+        except Exception:  # noqa: BLE001 — the row is already terminal and committed
+            logger.warning(
+                "merge_watch_pr_concluded_failed",
+                run_id=str(snap.run_id),
+                pr_number=snap.pr_number,
+                exc_info=True,
             )
 
     async def _freshness_step(
@@ -949,5 +983,6 @@ __all__ = [
     "MergeWatchClient",
     "MergeWatchWorker",
     "MergeWatchWorkerConfig",
+    "PrConcluded",
     "StallEscalate",
 ]

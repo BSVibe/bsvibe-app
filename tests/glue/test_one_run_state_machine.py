@@ -184,3 +184,56 @@ def test_the_guard_can_see_a_violation(tmp_path: Path, monkeypatch: pytest.Monke
     (fake / "x.py").write_text("def f(run):\n    run.status = RunStatus.SHIPPED\n")
     monkeypatch.setattr(__import__(__name__, fromlist=["_BACKEND"]), "_BACKEND", fake)
     assert _violations() == ["x.py:2 assigns .status"]
+
+
+# ── #1109 — the transition table: terminal is terminal ────────────────────────
+
+
+@pytest.mark.parametrize(
+    "to_status", [RunStatus.OPEN, RunStatus.RUNNING, RunStatus.REVIEW_READY, RunStatus.CANCELLED]
+)
+async def test_nothing_leaves_shipped(sf, to_status: RunStatus) -> None:
+    """``shipped`` means merged/landed — the merge watch used to drag a GitHub run
+    back to ``open`` on a conflict, which made "terminal" a lie for every reaper,
+    cap and dashboard keyed on ``TERMINAL_RUN_STATUSES``."""
+    workspace_id = uuid.uuid4()
+    run_id = await _seed(sf, workspace_id, RunStatus.SHIPPED)
+
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        held = await s.get(ExecutionRun, run_id)
+        assert held is not None
+        assert await move_run_status(s, held, to_status, reason="x") is False
+        await s.commit()
+        assert held.status is RunStatus.SHIPPED
+
+    assert await _history(sf, workspace_id, run_id) == []
+
+
+@pytest.mark.parametrize("from_status", [RunStatus.FAILED, RunStatus.CANCELLED])
+@pytest.mark.parametrize(
+    "to_status", [RunStatus.RUNNING, RunStatus.REVIEW_READY, RunStatus.SHIPPED]
+)
+async def test_a_failed_or_cancelled_run_leaves_only_by_retry(
+    sf, from_status: RunStatus, to_status: RunStatus
+) -> None:
+    workspace_id = uuid.uuid4()
+    run_id = await _seed(sf, workspace_id, from_status)
+
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        held = await s.get(ExecutionRun, run_id)
+        assert held is not None
+        assert await move_run_status(s, held, to_status, reason="x") is False
+        await s.commit()
+
+
+@pytest.mark.parametrize("from_status", [RunStatus.FAILED, RunStatus.CANCELLED])
+async def test_retry_reopens_a_failed_or_cancelled_run(sf, from_status: RunStatus) -> None:
+    """Control — the one explicit exit from a closed run."""
+    workspace_id = uuid.uuid4()
+    run_id = await _seed(sf, workspace_id, from_status)
+
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        held = await s.get(ExecutionRun, run_id)
+        assert held is not None
+        assert await move_run_status(s, held, RunStatus.OPEN, reason="retry") is True
+        await s.commit()

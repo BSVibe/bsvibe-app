@@ -18,8 +18,9 @@ session could be undone through any of them.
   would flush a second, unconditional UPDATE), or refreshed on refusal so the
   caller sees the truth.
 
-What a move is ALLOWED to be (``shipped`` must not go back to ``open``) is #1109's
-transition table; this module is the single seam it will live in.
+And it is where a move is checked against the transition table (#1109,
+:func:`is_allowed_move`): ``shipped`` is final, and ``failed`` / ``cancelled``
+leave only by an explicit retry to ``open``.
 
 Leaf-level on purpose (sqlalchemy + the ORM rows only): callers include the
 inbound-webhook / MCP side, which import-linter keeps off the loop graph.
@@ -44,6 +45,23 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+#: The only exit from each CLOSED status (#1109). ``shipped`` has none: it means the
+#: work landed — merged, for a GitHub-delivered run — and every reaper, the run cap
+#: and the dashboards treat it as final. ``failed`` / ``cancelled`` re-open only by
+#: an explicit retry. Open statuses (``open`` / ``running`` / ``review_ready``) may
+#: move anywhere; who may move them is the caller's guard, not this table's.
+_EXITS_FROM_CLOSED: dict[RunStatus, frozenset[RunStatus]] = {
+    RunStatus.SHIPPED: frozenset(),
+    RunStatus.FAILED: frozenset({RunStatus.OPEN}),
+    RunStatus.CANCELLED: frozenset({RunStatus.OPEN}),
+}
+
+
+def is_allowed_move(from_status: RunStatus, to_status: RunStatus) -> bool:
+    """Whether the transition table permits ``from_status → to_status`` (#1109)."""
+    exits = _EXITS_FROM_CLOSED.get(from_status)
+    return exits is None or to_status in exits
+
 
 async def move_run_status(
     session: AsyncSession,
@@ -60,6 +78,15 @@ async def move_run_status(
     """
     from_status = run.status
     if from_status is to_status:
+        return False
+    if not is_allowed_move(from_status, to_status):
+        logger.warning(
+            "run_status_move_not_allowed",
+            run_id=str(run.id),
+            from_status=from_status.value,
+            to_status=to_status.value,
+            reason=reason,
+        )
         return False
     now = datetime.now(tz=UTC)
     result = await session.execute(
@@ -95,4 +122,4 @@ async def move_run_status(
     return True
 
 
-__all__ = ["move_run_status"]
+__all__ = ["is_allowed_move", "move_run_status"]

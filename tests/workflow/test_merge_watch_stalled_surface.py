@@ -76,16 +76,19 @@ def test_recorded_question_still_rides_through_verbatim() -> None:
 # --- 브리핑: 누를 수 있는 버튼 ----------------------------------------------
 
 
-def test_stalled_offers_acknowledge_only() -> None:
-    """런은 이미 끝났고(딜리버러블은 착지했다) 남은 것은 머지되지 않은 PR 이다.
-    ``ship`` 할 것도(머지 안 됨) ``retry`` 로 다시 몰 런도 없다 — 형님이 GitHub
-    쪽에서 처리하고 '확인했다'고 접는 것이 정직한 유일한 동작이다."""
+def test_stalled_offers_acknowledge_or_discard() -> None:
+    """에이전트의 작업은 끝났고 남은 것은 머지되지 않은 PR 이다. ``ship`` 할 것도(머지 안 됨)
+    ``retry`` 로 다시 몰 런도 없다.
+
+    #1109(형님 2026-10-04) 이후 GitHub 런은 PR 이 머지될 때까지 ``review_ready`` 에서
+    기다리므로, '확인했다'고 접는 것 말고 **놓아주는 것**(``discard`` → cancelled)도 정직한
+    선택지가 됐다. 옛 규칙으로 이미 shipped 인 런은 전이 표가 취소를 거절하므로, 착지한
+    작업을 취소로 부정하는 일은 여전히 없다."""
     actions = _EXECUTOR_DECISION_ACTIONS["merge_watch_stalled"]
     keys = {a.key for a in actions}
-    assert keys == {ACTION_ACKNOWLEDGE}
+    assert keys == {ACTION_ACKNOWLEDGE, ACTION_DISCARD}
     assert ACTION_SHIP not in keys
     assert ACTION_RETRY not in keys
-    assert ACTION_DISCARD not in keys
     for a in actions:
         assert a.label_en and a.label_ko
     assert _decision_actions(_stalled("ci_deadline_exceeded")) is not None
