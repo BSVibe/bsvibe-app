@@ -27,6 +27,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.data.rls import workspace_session_scope
+from backend.data.scoping import workspace_scope
 from backend.workflow.application.run_delivery_resolution import (
     AWAITING_MERGE_KEY,
     auto_resolve_run_on_delivery,
@@ -185,7 +186,9 @@ async def test_the_merge_ships_the_run(sf) -> None:
 
     workspace_id, run_id = await _await_merge(sf)
 
-    await build_merge_watch_pr_concluded(session_factory=sf)(run_id, merged=True, pr_number=9)
+    # The worker calls every callback inside the PR's workspace scope (#959) — RLS needs it.
+    with workspace_scope(workspace_id):
+        await build_merge_watch_pr_concluded(session_factory=sf)(run_id, merged=True, pr_number=9)
 
     run = await _run(sf, workspace_id, run_id)
     assert run.status is RunStatus.SHIPPED
@@ -199,7 +202,9 @@ async def test_a_pr_closed_unmerged_cancels_the_run(sf) -> None:
 
     workspace_id, run_id = await _await_merge(sf)
 
-    await build_merge_watch_pr_concluded(session_factory=sf)(run_id, merged=False, pr_number=9)
+    # The worker calls every callback inside the PR's workspace scope (#959) — RLS needs it.
+    with workspace_scope(workspace_id):
+        await build_merge_watch_pr_concluded(session_factory=sf)(run_id, merged=False, pr_number=9)
 
     run = await _run(sf, workspace_id, run_id)
     assert run.status is RunStatus.CANCELLED
@@ -214,7 +219,9 @@ async def test_a_run_shipped_before_this_change_stays_shipped(sf) -> None:
 
     workspace_id, run_id, _ = await _seed(sf, status=RunStatus.SHIPPED)
 
-    await build_merge_watch_pr_concluded(session_factory=sf)(run_id, merged=False, pr_number=9)
+    # The worker calls every callback inside the PR's workspace scope (#959) — RLS needs it.
+    with workspace_scope(workspace_id):
+        await build_merge_watch_pr_concluded(session_factory=sf)(run_id, merged=False, pr_number=9)
 
     assert (await _run(sf, workspace_id, run_id)).status is RunStatus.SHIPPED
 
