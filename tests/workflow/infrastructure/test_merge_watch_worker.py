@@ -1279,3 +1279,67 @@ async def test_stall_escalation_unwired_keeps_the_old_terminal() -> None:
         fetched = await _fetch(sf, row.id)
         assert fetched.status is MergeWatchStatus.FAILED
         assert fetched.last_error == "ci_deadline_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# #1109 — the watch tells the application when the PR concluded
+# ---------------------------------------------------------------------------
+
+
+class _Concluded:
+    def __init__(self) -> None:
+        self.calls: list[tuple[uuid.UUID, bool]] = []
+
+    async def __call__(self, run_id: uuid.UUID, *, merged: bool, pr_number: int) -> None:
+        self.calls.append((run_id, merged))
+
+
+def _concluding_worker(
+    sf: async_sessionmaker[AsyncSession], client: Any, concluded: _Concluded
+) -> MergeWatchWorker:
+    return MergeWatchWorker(
+        session_factory=sf,
+        client_resolver=_resolver_for(client),
+        config=MergeWatchWorkerConfig(poll_interval_s=30.0),
+        now=lambda: _FIXED_NOW,
+        pr_concluded=concluded,
+    )
+
+
+@pytest.mark.parametrize(
+    ("pr", "merged"),
+    [
+        ({"state": "open", "merged": False, "mergeable_state": "clean"}, True),  # our squash
+        (
+            {"state": "closed", "merged": True, "mergeable_state": "unknown"},
+            True,
+        ),  # merged by someone
+        (
+            {"state": "closed", "merged": False, "mergeable_state": "dirty"},
+            False,
+        ),  # closed unmerged
+    ],
+)
+async def test_a_concluded_pr_is_reported_with_its_run(pr: dict[str, Any], merged: bool) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        concluded = _Concluded()
+
+        await _concluding_worker(sf, _FakeClient(pr=pr), concluded).drain_once()
+
+        assert concluded.calls == [(row.run_id, merged)]
+
+
+async def test_a_pr_still_waiting_on_ci_is_not_reported() -> None:
+    """Control — only a CONCLUSION is reported."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        await _seed(sf, _row())
+        concluded = _Concluded()
+        client = _FakeClient(pr={"state": "open", "merged": False, "mergeable_state": "blocked"})
+
+        await _concluding_worker(sf, client, concluded).drain_once()
+
+        assert concluded.calls == []

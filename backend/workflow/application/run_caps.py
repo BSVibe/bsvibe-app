@@ -14,6 +14,11 @@ workspace; that is why the reaper deliberately leaves it alone. Prod measured
 priced nothing at all. The set is written as "not terminal" rather than as a
 list of live statuses so a status added to the enum later counts by default.
 
+**One review_ready is not counted** (#1109): a GitHub-delivered run whose PR is
+open, waiting for the merge (``payload["awaiting_merge"]``). Its work is done
+and out of BSVibe's hands — counting it would let three open PRs lock the
+founder out of starting anything until someone merges them.
+
 **What is not counted.** Submissions that have not become runs yet — a
 TriggerEvent or Request still walking the intake chain. A burst of submits can
 therefore overshoot the cap by however many the workers have not claimed. That
@@ -42,7 +47,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.identity.workspaces_db import DEFAULT_MAX_CONCURRENT_RUNS, WorkspaceRow
-from backend.workflow.infrastructure.db import TERMINAL_RUN_STATUSES, ExecutionRun
+from backend.workflow.infrastructure.db import TERMINAL_RUN_STATUSES, ExecutionRun, RunStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -77,7 +82,7 @@ async def load_run_cap(session: AsyncSession, workspace_id: uuid.UUID) -> int | 
 
 
 async def count_held_runs(session: AsyncSession, workspace_id: uuid.UUID) -> int:
-    """How many non-terminal runs this workspace currently holds."""
+    """How many non-terminal runs this workspace currently holds (less those awaiting a merge)."""
     held = await session.scalar(
         select(func.count())
         .select_from(ExecutionRun)
@@ -86,7 +91,24 @@ async def count_held_runs(session: AsyncSession, workspace_id: uuid.UUID) -> int
             ExecutionRun.status.not_in(tuple(TERMINAL_RUN_STATUSES)),
         )
     )
-    return int(held or 0)
+    return int(held or 0) - await _count_awaiting_merge(session, workspace_id)
+
+
+async def _count_awaiting_merge(session: AsyncSession, workspace_id: uuid.UUID) -> int:
+    """REVIEW_READY runs waiting on their PR's merge (#1109). Read in Python: the
+    marker is a JSON payload key, and JSON-path predicates differ between
+    Postgres and SQLite; the review_ready set per workspace is small."""
+    from backend.workflow.application.run_delivery_resolution import (  # noqa: PLC0415
+        AWAITING_MERGE_KEY,
+    )
+
+    payloads = await session.scalars(
+        select(ExecutionRun.payload).where(
+            ExecutionRun.workspace_id == workspace_id,
+            ExecutionRun.status == RunStatus.REVIEW_READY,
+        )
+    )
+    return sum(1 for p in payloads if isinstance(p, dict) and AWAITING_MERGE_KEY in p)
 
 
 async def enforce_run_cap(session: AsyncSession, *, workspace_id: uuid.UUID) -> None:

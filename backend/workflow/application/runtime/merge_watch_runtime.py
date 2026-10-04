@@ -43,6 +43,7 @@ from backend.workflow.infrastructure.workers.merge_watch_worker import (
     MergeWatchClient,
     MergeWatchWorker,
     MergeWatchWorkerConfig,
+    PrConcluded,
     StallEscalate,
 )
 from plugin.github.client import DEFAULT_BASE_URL, GithubClient
@@ -247,10 +248,11 @@ def build_merge_watch_stall_escalate(
     into the infrastructure worker as an opaque callable.
 
     Deliberately does NOT touch the run's status. By the time a PR is under
-    watch, its run has shipped — the deliverable landed and the founder approved
-    it. Pausing it (the conflict escalation's move) would re-open finished work,
-    and cancelling it would deny a delivery that genuinely happened. What is left
-    is a report, so this only reports. Opens its own short transaction (the
+    watch the agent's work is done and out — since #1109 the run waits at
+    ``review_ready`` for the merge. Pausing it (the conflict escalation's move)
+    would re-open finished work; whether to let it go is the founder's call, and
+    the Decision offers ``discard`` for that. What is left is a report, so this
+    only reports. Opens its own short transaction (the
     worker's session may hold the per-repo lock) and a missing run is a no-op.
     """
 
@@ -288,6 +290,47 @@ def build_merge_watch_stall_escalate(
     return _escalate
 
 
+def build_merge_watch_pr_concluded(
+    *, session_factory: async_sessionmaker[AsyncSession]
+) -> PrConcluded:
+    """#1109 — the watched PR concluded: merged → ``shipped``, closed unmerged → ``cancelled``.
+
+    A GitHub-delivered run waits at ``review_ready`` (marked ``awaiting_merge``)
+    while its PR is open; this is what moves it on. Through ``move_run_status``,
+    so the transition table holds: a run that already shipped under the old rule
+    (shipped on open) stays shipped, and one the founder discarded stays cancelled.
+    """
+
+    async def _concluded(run_id: uuid.UUID, *, merged: bool, pr_number: int) -> None:
+        from backend.workflow.application.run_delivery_resolution import (  # noqa: PLC0415
+            AWAITING_MERGE_KEY,
+        )
+        from backend.workflow.application.run_status import move_run_status  # noqa: PLC0415
+
+        async with session_factory() as session:
+            run = await session.get(ExecutionRun, run_id)
+            if run is None:
+                logger.warning("merge_watch_concluded_run_missing", run_id=str(run_id))
+                return
+            to_status = RunStatus.SHIPPED if merged else RunStatus.CANCELLED
+            reason = (
+                f"PR #{pr_number} merged" if merged else f"PR #{pr_number} closed without merging"
+            )
+            if await move_run_status(session, run, to_status, reason=reason):
+                payload = dict(run.payload or {})
+                payload.pop(AWAITING_MERGE_KEY, None)
+                run.payload = payload
+            await session.commit()
+        logger.info(
+            "merge_watch_pr_concluded",
+            run_id=str(run_id),
+            pr_number=pr_number,
+            merged=merged,
+        )
+
+    return _concluded
+
+
 def build_merge_watch_workers(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
@@ -323,6 +366,7 @@ def build_merge_watch_workers(
             ),
             escalate_conflict=build_merge_watch_conflict_escalate(session_factory=session_factory),
             escalate_stall=build_merge_watch_stall_escalate(session_factory=session_factory),
+            pr_concluded=build_merge_watch_pr_concluded(session_factory=session_factory),
             config=MergeWatchWorkerConfig(
                 poll_interval_s=settings.github_auto_merge_poll_interval_s,
                 conflict_resolution_deadline_s=settings.github_conflict_resolution_deadline_s,
@@ -337,6 +381,7 @@ __all__ = [
     "build_merge_watch_client_resolver",
     "build_merge_watch_conflict_escalate",
     "build_merge_watch_conflict_redispatch",
+    "build_merge_watch_pr_concluded",
     "build_merge_watch_stall_escalate",
     "build_merge_watch_workers",
 ]

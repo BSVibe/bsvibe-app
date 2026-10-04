@@ -195,13 +195,15 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
         DecisionAction(key=ACTION_RETRY, label_en="Guide & retry", label_ko="지침 주고 다시 시도"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
-    # The merge watch gave up on an open PR. Its run already SHIPPED (the
-    # deliverable landed and the founder approved it) — so this Decision is a
-    # report, not a fork in the work: there is nothing to ship past, nothing to
-    # re-drive, and discarding would cancel a run that genuinely shipped. The
-    # remedy lives on GitHub; the one honest in-app action is to fold it away.
+    # The merge watch gave up on an open PR. The agent's work is done and out as
+    # a PR — nothing to ship past, nothing to re-drive. Since #1109 the run waits
+    # at review_ready for the merge rather than shipping on open, so the founder
+    # may also let it go (discard → cancelled). A run that already shipped under
+    # the old rule is refused by the transition table, so discard never cancels
+    # work that genuinely landed. The remedy otherwise lives on GitHub.
     "merge_watch_stalled": [
         DecisionAction(key=ACTION_ACKNOWLEDGE, label_en="Got it", label_ko="확인했어요"),
+        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
     # W1: the ship_or_discard kind from L-P2 is retired. Verified runs no
     # longer need a founder-approval gate; W2 wires the actual auto-merge.

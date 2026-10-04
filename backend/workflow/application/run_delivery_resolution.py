@@ -10,18 +10,19 @@ founder APPROVES the Safe Mode item the deliverable ships (e.g. a GitHub PR
 opens) — but the run's ``human_review_required`` Decision stays ``pending``
 forever, so the run sits ``RUNNING`` "reviewing" work that ALREADY shipped.
 
-"Delivery success" is deliberately the ships-a-PR boundary, NOT the
-PR-gets-merged boundary. That distinction matters because
-:class:`~backend.workflow.infrastructure.workers.merge_watch_worker.MergeWatchWorker`
-is not a passive observer here: once a watched PR's checks go green it
-actually calls ``merge_pr(owner, repo, number, method="squash")`` under a
-per-repo advisory lock, so for a PR it is watching the merge is real, not
-just detected. Gating this module's run-termination on THAT merge anyway
-would strand every run whose delivery is not wired into the merge-watch
-queue, whose repo has GitHub auto-merge disabled, or whose PR a human merges
-by hand — none of those ever produce a merge event this module could key
-off. Delivery success (the PR opening) is the boundary every delivery path
-reaches; a squash merge is not.
+**When the PR is watched, the run ships on MERGE** (#1109, 형님 2026-10-04).
+This used to be the ships-a-PR boundary for every run, and a merge conflict then
+dragged the "shipped" run back to ``open`` so the agent could re-resolve —
+"terminal" was not terminal for every reaper, cap and dashboard keyed on
+``TERMINAL_RUN_STATUSES``. Now a run whose PR has a live
+:class:`~backend.workflow.infrastructure.github.db.GithubMergeWatchRow` waits at
+``REVIEW_READY`` marked ``payload["awaiting_merge"]``; the merge watch's
+``PrConcluded`` callback (``merge_watch_runtime.build_merge_watch_pr_concluded``)
+ships it on merge or cancels it if the PR closes unmerged.
+
+The old argument still holds for the runs with NO watch row — auto-merge off, or
+the enqueue failed: nothing would ever observe their merge, so waiting would
+strand them. Those still ship when the PR opens.
 
 The two founder-gates (the run's review Decision + the Safe-Mode delivery
 approval) were DECOUPLED. This module closes the gap (founder choice "B"): when
@@ -92,7 +93,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy import select
@@ -142,6 +143,60 @@ _REVIEW_DECISION_KINDS: frozenset[str] = frozenset({"human_review_required", "ve
 #: Run statuses that are already terminal — the auto-resolution is a no-op for
 #: them (idempotent: a second delivery of an already-shipped run does nothing).
 _TERMINAL_RUN_STATUSES: frozenset[RunStatus] = TERMINAL_RUN_STATUSES
+
+
+#: ``run.payload`` key marking a GitHub run that waits at REVIEW_READY for its PR to merge.
+AWAITING_MERGE_KEY = "awaiting_merge"
+
+
+async def _live_merge_watch(session: AsyncSession, run_id: uuid.UUID) -> Any:
+    """The merge-watch row still watching ``run_id``'s PR, or ``None`` (#1109).
+
+    A row exists only when GitHub auto-merge is on AND the enqueue succeeded; it
+    is "live" until it reaches a terminal watch status. Without one, nothing will
+    ever observe the merge, so the run must not wait for it.
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.workflow.infrastructure.github.db import (  # noqa: PLC0415
+        GithubMergeWatchRow,
+        MergeWatchStatus,
+    )
+
+    live = (
+        MergeWatchStatus.PENDING_CI,
+        MergeWatchStatus.MERGING,
+        MergeWatchStatus.NEEDS_RESOLUTION,
+    )
+    stmt = (
+        select(GithubMergeWatchRow)
+        .where(GithubMergeWatchRow.run_id == run_id, GithubMergeWatchRow.status.in_(live))
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _await_merge_if_watched(session: AsyncSession, run: ExecutionRun) -> bool:
+    """Mark ``run`` as waiting at REVIEW_READY for its watched PR to merge (#1109).
+
+    ``False`` (nothing written) when no live watch exists — the caller ships on
+    open, as before. The marker is what the run cap reads to stop counting the run
+    and what the merge watch's conclusion clears by moving the run on.
+    """
+    watch = await _live_merge_watch(session, run.id)
+    if watch is None:
+        return False
+    payload: dict[str, Any] = dict(run.payload or {})
+    payload[AWAITING_MERGE_KEY] = {"repo": watch.repo, "pr_number": watch.pr_number}
+    run.payload = payload
+    await session.flush()
+    logger.info(
+        "run_awaiting_merge",
+        run_id=str(run.id),
+        repo=watch.repo,
+        pr_number=watch.pr_number,
+    )
+    return True
 
 
 async def auto_resolve_run_on_delivery(
@@ -199,7 +254,12 @@ async def auto_resolve_run_on_delivery(
         if not _should_ship_review_ready_without_local_auto_ship(run):
             return False
         reason = f"auto-resolved: deliverable {deliverable_id} shipped (no local auto-ship path)"
-        if not await move_run_status(session, run, RunStatus.SHIPPED, reason=reason):
+        # #1109 — a watched PR ships on MERGE (the run waits here, marked); an
+        # unwatched one ships now, since nothing would ever observe its merge.
+        if not (
+            await _await_merge_if_watched(session, run)
+            or await move_run_status(session, run, RunStatus.SHIPPED, reason=reason)
+        ):
             return False
         logger.info(
             "run_auto_resolved_on_delivery_no_local_ship",
@@ -239,7 +299,13 @@ async def auto_resolve_run_on_delivery(
     # on a review Decision rests at RUNNING; the defensive REVIEW_READY branch
     # covers the rare case the run already advanced.
     reason = f"auto-resolved: deliverable {deliverable_id} shipped (review moot)"
-    await _ship_run_via_review_ready(session, run, reason=reason)
+    if await _live_merge_watch(session, run.id) is not None:
+        # #1109 — the review is moot (the PR is out), but the run ships on MERGE.
+        if run.status is not RunStatus.REVIEW_READY:
+            await move_run_status(session, run, RunStatus.REVIEW_READY, reason=reason)
+        await _await_merge_if_watched(session, run)
+    else:
+        await _ship_run_via_review_ready(session, run, reason=reason)
 
     await session.flush()
 
