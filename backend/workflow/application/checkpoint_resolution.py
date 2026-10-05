@@ -44,6 +44,10 @@ from backend.workflow.application._checkpoint_shared import (
     _question_text,
 )
 from backend.workflow.application.audit_events import DecisionResolved
+from backend.workflow.domain.model_account_decision import (
+    ACCOUNT_CHOICES_KEY,
+    DECISION_AMBIGUOUS_MODEL_ACCOUNT,
+)
 from backend.workflow.domain.run_token_cap import (
     TOKEN_CAP_DECISION_KIND,
     TOKEN_CAP_GRANT_KEY,
@@ -157,6 +161,24 @@ class CheckpointResolutionOutcome:
     run_status: RunStatus
 
 
+async def _prepare_the_resume(
+    session: AsyncSession,
+    payload: dict[str, Any],
+    *,
+    run: ExecutionRun,
+    decision: Decision,
+    action_key: str | None,
+    answer: str,
+) -> None:
+    """What a resolution must change BEFORE the run resumes, for the kinds where a
+    plain resume would stop on the same wall again: the token ceiling (#1105 — grant
+    budget) and the unpicked model account (#1074 — set the workspace default)."""
+    if action_key == ACTION_RETRY and decision.decision == TOKEN_CAP_DECISION_KIND:
+        _grant_more_token_budget(payload, run=run, decision=decision)
+    if action_key is None and decision.decision == DECISION_AMBIGUOUS_MODEL_ACCOUNT:
+        await _make_picked_account_the_default(session, run=run, decision=decision, answer=answer)
+
+
 def _grant_more_token_budget(
     payload: dict[str, Any], *, run: ExecutionRun, decision: Decision
 ) -> None:
@@ -179,6 +201,54 @@ def _grant_more_token_budget(
         run_id=str(run.id),
         used=used,
         granted=payload[TOKEN_CAP_GRANT_KEY],
+    )
+
+
+async def _make_picked_account_the_default(
+    session: AsyncSession, *, run: ExecutionRun, decision: Decision, answer: str
+) -> None:
+    """#1074 — the founder picked a model account: make it the workspace default.
+
+    The run stopped because several accounts were active and none was the
+    default; the resume re-resolves through the default, so setting it IS the
+    answer. Only an account that was offered, still exists, and is still active
+    in this workspace is accepted — an off-list reply is recorded as words and
+    the re-resolve simply asks again.
+    """
+    from backend.identity.workspaces_db import WorkspaceRow  # noqa: PLC0415
+    from backend.router.accounts.models import ModelAccount  # noqa: PLC0415
+
+    recorded = decision.payload if isinstance(decision.payload, dict) else {}
+    choices = recorded.get(ACCOUNT_CHOICES_KEY)
+    picked = next(
+        (
+            c.get("account_id")
+            for c in (choices if isinstance(choices, list) else [])
+            if isinstance(c, dict) and c.get("option") == answer.strip()
+        ),
+        None,
+    )
+    if not isinstance(picked, str):
+        return
+    try:
+        account_id = uuid.UUID(picked)
+    except ValueError:
+        return
+    account = await session.get(ModelAccount, account_id)
+    workspace = await session.get(WorkspaceRow, run.workspace_id)
+    if (
+        account is None
+        or not account.is_active
+        or account.workspace_id != run.workspace_id
+        or workspace is None
+    ):
+        return
+    workspace.default_account_id = account.id
+    logger.info(
+        "checkpoint_default_account_picked",
+        run_id=str(run.id),
+        workspace_id=str(run.workspace_id),
+        account_id=str(account.id),
     )
 
 
@@ -286,8 +356,9 @@ async def resolve_checkpoint(
         }
     )
     payload["resolved_decisions"] = resolved
-    if action_key == ACTION_RETRY and decision.decision == TOKEN_CAP_DECISION_KIND:
-        _grant_more_token_budget(payload, run=run, decision=decision)
+    await _prepare_the_resume(
+        session, payload, run=run, decision=decision, action_key=action_key, answer=answer
+    )
     run.payload = payload
 
     await session.flush()
