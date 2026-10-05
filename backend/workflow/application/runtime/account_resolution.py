@@ -143,7 +143,7 @@ async def resolve_via_caller(
 
 
 async def resolve_workspace_model_account(
-    session: AsyncSession, run: ExecutionRun
+    session: AsyncSession, run: ExecutionRun, *, record_decision: bool = True
 ) -> ModelAccount | None:
     """Resolve the workspace's *active* ModelAccount for this run.
 
@@ -173,6 +173,11 @@ async def resolve_workspace_model_account(
     accounts = await list_active_workspace_accounts(session, run.workspace_id)
     if len(accounts) == 1:
         return accounts[0]
+
+    if not record_decision:
+        # A lookup (the merge watch finding which worker holds a checkout) — the
+        # run is not being driven, so it must not stop on a Decision.
+        return None
 
     # #1074 — through ``create_decision``: the one place that calls the founder
     # (prod cc68f583 sat 30 hours on a raw, silent, blank Decision). The kind is

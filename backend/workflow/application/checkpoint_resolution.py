@@ -115,7 +115,7 @@ _TERMINAL_RUN_STATUSES = frozenset({RunStatus.SHIPPED, RunStatus.FAILED, RunStat
 
 #: Decision kinds that REPORT on work already out of the agent's hands — a free-text
 #: reply records the founder's words and never resumes the run (#1109).
-_REPORT_DECISION_KINDS = frozenset({"merge_watch_stalled"})
+_REPORT_DECISION_KINDS = frozenset({"merge_watch_stalled", "product_bundle_conflict"})
 
 logger = structlog.get_logger(__name__)
 

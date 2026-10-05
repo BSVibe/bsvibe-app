@@ -115,6 +115,10 @@ _FALLBACK_BODY: dict[str, dict[str, str]] = {
 #: English ``decision.rationale`` never rides out to a KO founder. An unknown
 #: reason resolves to the generic ``needs_you`` fallback body above.
 _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
+    "product_bundle_publish_conflict": {
+        "en": "This product's saved copy has diverged from BSVibe's and can't be merged automatically.",
+        "ko": "이 제품의 보관본이 BSVibe 의 사본과 갈라져 자동으로 합칠 수 없어요.",
+    },
     # #1074 — the run could not pick a model account. Was a raw Decision with no
     # notification at all: a schedule run sat 30 hours before anyone noticed.
     "ambiguous_model_account": {

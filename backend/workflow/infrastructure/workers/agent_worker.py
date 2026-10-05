@@ -766,7 +766,18 @@ class AgentWorker(BaseWorker):
                         resolve_workspace_model_account,
                     )
 
-                    await resolve_workspace_model_account(session, run)
+                    if await resolve_workspace_model_account(session, run) is not None:
+                        # The ACT side resolved an account, so no Decision was
+                        # written — parking the run here would strand it running
+                        # with nothing to answer and its claim cleared (found in
+                        # the #1074 inventory). Hand it to the bounded drive-failure
+                        # path instead: past the bound the founder gets the
+                        # ``run_drive_failed`` checkpoint (Try again / Discard).
+                        logger.warning(
+                            "agent_worker_frame_model_unresolved_without_decision",
+                            run_id=str(run.id),
+                        )
+                        raise
                     logger.info("agent_worker_frame_model_unresolved", run_id=str(run.id))
                     await AgentRunner(session).transition(
                         run_id=run.id,

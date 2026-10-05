@@ -513,7 +513,11 @@ class AgentRunner:
                 self._session,
                 run,
                 None,
-                kind="merge_conflict_review",
+                # A REPORT, not a fork in the work: the merge to main already
+                # landed and the run ships right after, so retry/discard (the
+                # ``merge_conflict_review`` actions it used to carry) have nothing
+                # to act on — the transition table refuses both on a shipped run.
+                kind="product_bundle_conflict",
                 payload={
                     "reason": "product_bundle_publish_conflict",
                     "conflict_paths": list(conflict_paths),
