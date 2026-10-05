@@ -72,6 +72,17 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "This task kept failing to start, so BSVibe stopped retrying — try again, or let it go?",
         "ko": "이 작업이 계속 시작되지 못해서 재시도를 멈췄어요 — 다시 해볼까요, 접을까요?",
     },
+    # #1074 — the run could not pick a model account (prod cc68f583 waited 30
+    # hours on a blank checkpoint). Kept in step with the phone body
+    # (``notifications.copy._NEEDS_YOU_REASON_BODY``).
+    "ambiguous_model_account": {
+        "en": "Which model account should run this task? The one you pick becomes the workspace default.",
+        "ko": "이 작업을 어느 모델 계정으로 돌릴까요? 고른 계정이 워크스페이스 기본이 돼요.",
+    },
+    "no_model_account": {
+        "en": "There is no active model account to run this task — connect one, then try again.",
+        "ko": "이 작업을 돌릴 모델 계정이 없어요 — 계정을 연결한 뒤 다시 시도해주세요.",
+    },
     # #1105 — the run hit its token ceiling. Was blank (prod fb38eb66): the founder
     # could only discard.
     "run_token_cap_reached": {
@@ -163,6 +174,17 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
     # A crashed drive produced nothing, so ``ship`` has no meaning here — the
     # only honest answers are another attempt or letting the run go.
     "run_drive_failed": [
+        DecisionAction(key=ACTION_RETRY, label_en="Try again", label_ko="다시 시도"),
+        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
+    ],
+    # #1074 — the founder answers by PICKING one of the payload's options (the
+    # active accounts); ``checkpoint_resolution`` makes it the workspace default and
+    # resumes. Discard lets the run go.
+    "ambiguous_model_account": [
+        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
+    ],
+    # Nothing to pick: the founder connects an account elsewhere, then retries.
+    "no_model_account": [
         DecisionAction(key=ACTION_RETRY, label_en="Try again", label_ko="다시 시도"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],

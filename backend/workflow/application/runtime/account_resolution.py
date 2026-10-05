@@ -41,13 +41,14 @@ from backend.dispatch.resolver import (
 from backend.router.accounts.models import ModelAccount
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.domain.execution_target import CLIENT_ATTACH
-from backend.workflow.infrastructure.db import Decision, ExecutionRun
+from backend.workflow.domain.model_account_decision import (
+    ACCOUNT_CHOICES_KEY,
+    DECISION_AMBIGUOUS_MODEL_ACCOUNT,
+    DECISION_NO_MODEL_ACCOUNT,
+)
+from backend.workflow.infrastructure.db import ExecutionRun
 
 logger = structlog.get_logger(__name__)
-
-
-DECISION_NO_MODEL_ACCOUNT = "no_model_account"
-DECISION_AMBIGUOUS_MODEL_ACCOUNT = "ambiguous_model_account"
 
 
 async def list_active_workspace_accounts(
@@ -173,28 +174,43 @@ async def resolve_workspace_model_account(
     if len(accounts) == 1:
         return accounts[0]
 
+    # #1074 — through ``create_decision``: the one place that calls the founder
+    # (prod cc68f583 sat 30 hours on a raw, silent, blank Decision). The kind is
+    # spelled out per branch so the every-Decision-has-a-way-out guard can see it.
+    from backend.workflow.application.run_persistence import (  # noqa: PLC0415
+        create_decision,
+    )
+
     if not accounts:
         kind = DECISION_NO_MODEL_ACCOUNT
-        reason = "no active model account for workspace"
+        await create_decision(
+            session,
+            run,
+            None,
+            kind=DECISION_NO_MODEL_ACCOUNT,
+            payload={"reason": DECISION_NO_MODEL_ACCOUNT, "active_model_account_count": 0},
+            rationale="no active model account for workspace",
+        )
     else:
         kind = DECISION_AMBIGUOUS_MODEL_ACCOUNT
-        reason = f"ambiguous: {len(accounts)} active model accounts"
-
-    session.add(
-        Decision(
-            id=uuid.uuid4(),
-            run_id=run.id,
-            workspace_id=run.workspace_id,
-            decision=kind,
-            actor_id=None,
-            rationale=reason,
+        choices = [
+            {"option": f"{a.label} ({a.litellm_model})", "account_id": str(a.id)} for a in accounts
+        ]
+        await create_decision(
+            session,
+            run,
+            None,
+            kind=DECISION_AMBIGUOUS_MODEL_ACCOUNT,
             payload={
+                "reason": DECISION_AMBIGUOUS_MODEL_ACCOUNT,
                 "active_model_account_count": len(accounts),
                 "active_model_account_ids": [str(a.id) for a in accounts],
+                # What the founder picks from; ``account_choices`` maps the pick back.
+                "options": [c["option"] for c in choices],
+                ACCOUNT_CHOICES_KEY: choices,
             },
+            rationale=f"ambiguous: {len(accounts)} active model accounts",
         )
-    )
-    await session.flush()
     logger.info(
         "worker_run_model_account_unresolved",
         run_id=str(run.id),

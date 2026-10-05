@@ -115,6 +115,16 @@ _FALLBACK_BODY: dict[str, dict[str, str]] = {
 #: English ``decision.rationale`` never rides out to a KO founder. An unknown
 #: reason resolves to the generic ``needs_you`` fallback body above.
 _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
+    # #1074 — the run could not pick a model account. Was a raw Decision with no
+    # notification at all: a schedule run sat 30 hours before anyone noticed.
+    "ambiguous_model_account": {
+        "en": "BSVibe has several model accounts and no default — pick the one this task should use.",
+        "ko": "모델 계정이 여러 개인데 기본이 없어요 — 이 작업을 돌릴 계정을 골라주세요.",
+    },
+    "no_model_account": {
+        "en": "There is no active model account to run this task — connect one, then try again.",
+        "ko": "이 작업을 돌릴 모델 계정이 없어요 — 계정을 연결한 뒤 다시 시도해주세요.",
+    },
     # The merge watch gave up on an OPEN pull request. Both reasons end the same
     # way — a PR nobody will merge — but call for different things, so they get
     # their own bodies rather than one catch-all. Kept in step with
