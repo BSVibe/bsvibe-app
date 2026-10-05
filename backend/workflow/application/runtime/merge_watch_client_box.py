@@ -87,7 +87,7 @@ def client_box_factory(
                 run = await session.get(ExecutionRun, run_id)
                 if run is None:
                     return None
-                account = await resolve_workspace_model_account(session, run)
+                account = await resolve_workspace_model_account(session, run, record_decision=False)
             if account is None or not client_dir:
                 logger.warning(
                     "merge_watch_client_box_context_incomplete",

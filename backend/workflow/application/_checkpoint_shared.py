@@ -72,6 +72,12 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "This task kept failing to start, so BSVibe stopped retrying — try again, or let it go?",
         "ko": "이 작업이 계속 시작되지 못해서 재시도를 멈췄어요 — 다시 해볼까요, 접을까요?",
     },
+    # The product's durable copy diverged from this box's and cannot be merged
+    # automatically. The run itself shipped; this reports the divergence.
+    "product_bundle_conflict": {
+        "en": "This product's saved copy has diverged from BSVibe's and can't be merged automatically — check which side should win.",
+        "ko": "이 제품의 보관본이 BSVibe 의 사본과 갈라져 자동으로 합칠 수 없어요 — 어느 쪽을 남길지 확인해주세요.",
+    },
     # #1074 — the run could not pick a model account (prod cc68f583 waited 30
     # hours on a blank checkpoint). Kept in step with the phone body
     # (``notifications.copy._NEEDS_YOU_REASON_BODY``).
@@ -176,6 +182,10 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
     "run_drive_failed": [
         DecisionAction(key=ACTION_RETRY, label_en="Try again", label_ko="다시 시도"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
+    ],
+    # A report on a shipped run: nothing to retry, nothing to discard.
+    "product_bundle_conflict": [
+        DecisionAction(key=ACTION_ACKNOWLEDGE, label_en="Got it", label_ko="확인했어요"),
     ],
     # #1074 — the founder answers by PICKING one of the payload's options (the
     # active accounts); ``checkpoint_resolution`` makes it the workspace default and

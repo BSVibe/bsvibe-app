@@ -341,3 +341,48 @@ async def test_no_path_fails_a_run_for_an_unclassifiable_frame() -> None:
         "the unrouted-model branch is the one that must stay: retrying it just "
         "re-runs the same missing configuration"
     )
+
+
+async def test_an_unrouted_frame_never_parks_the_run_without_a_decision(
+    sf: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Found while inventorying Decisions (#1074): the unresolved-frame branch asked
+    the ACT caller for an account. When the act side resolves (here: the one active
+    account), no Decision is written — yet the run was still parked ``running`` with
+    its claim cleared, so nothing would ever pick it up again. A run that stops must
+    stop ON something the founder can answer."""
+    from backend.router.accounts.models import ModelAccount
+
+    workspace_id = uuid.uuid4()
+    async with sf() as session:
+        run_id = await _seed_request_and_run(
+            session, workspace_id=workspace_id, text="build a thing"
+        )
+        async with workspace_session_scope(session, workspace_id):
+            session.add(
+                ModelAccount(
+                    id=uuid.uuid4(),
+                    workspace_id=workspace_id,
+                    account_id=uuid.uuid4(),
+                    provider="ollama",
+                    label="only",
+                    litellm_model="ollama_chat/only",
+                    is_active=True,
+                    extra_params={},
+                )
+            )
+        await session.commit()
+
+    # frame_llm=None → FrameModelUnresolvedError; the act side resolves the one account.
+    worker = _worker(sf, _deps(tmp_path, None, _EndsTheLoopLlm()), max_drive_failures=1)
+    await worker.drive_once()
+
+    async with sf() as session, workspace_session_scope(session, workspace_id):
+        run = await session.get(ExecutionRun, run_id)
+        assert run is not None
+        pending = [
+            d for d in await _decisions(session, run_id) if d.status is DecisionStatus.PENDING
+        ]
+        assert run.status is not RunStatus.RUNNING or pending, (
+            "parked running with no Decision — nothing will ever resume it"
+        )

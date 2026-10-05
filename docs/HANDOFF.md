@@ -71,10 +71,14 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 
 ## §Ⅳ — Discipline that paid off
 
-* **🐙⭐⭐ Every PR on bsvibe-app is a prod action — pause, act, check, restore.**
-  `bsvibe_bindings_update c50e7217… {"filters":{"github_event":"__paused__"}}` → open/merge →
-  `bsvibe_runs_list` shows no new run → `{"filters":{}}`. Restore right after opening; CI takes ~27 min
-  and real issues must not be blocked that long. Pause again for the merge.
+* **🐙⭐⭐ Every PR on bsvibe-app is a prod action — pause, act, WAIT, check, restore.**
+  `bsvibe_bindings_update c50e7217… {"filters":{"github_event":"__paused__"}}` → open / merge / push →
+  **wait ≥60 s** → `bsvibe_runs_list` shows no new run → `{"filters":{}}`.
+  ⚠️ The filter is applied when the **intake worker** processes the stored event, not when the webhook
+  arrives. On 10-05 the filter was restored 3.6 s after the webhook for docs PR #1130 landed; intake ran
+  after the restore and opened run `f26ef907` (32k tokens, a needs_you question to 형님) — cancelled. A
+  `runs_list` right after the action proves nothing: the run does not exist yet. (This section used to
+  say "restore right after opening" — that was the bug.)
 * **🔪⭐⭐ A wire-cut must hit the wire you mean.** `s.replace(old, new, 1)` on
   `written_paths=written_paths,` changed the FIRST of five occurrences (the token-cap call), the test
   stayed green, and a false explanation got written into a test comment. `assert s.count(old) == 1` with

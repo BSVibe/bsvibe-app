@@ -184,6 +184,7 @@ _KINDS: dict[str, dict[str, Any]] = {
     "human_review_required": {"reason": "no_verification_declared"},
     "no_model_account": {},
     "ambiguous_model_account": {"options": ["opus", "sonnet"]},
+    "product_bundle_conflict": {"reason": "product_bundle_publish_conflict"},
 }
 
 
@@ -305,3 +306,61 @@ def test_the_scan_sees_the_kinds_it_must() -> None:
 def test_the_guard_covers_every_kind_the_code_creates() -> None:
     """A new kind must come with its question and actions — or this goes red."""
     assert _created_kinds() <= set(_KINDS), _created_kinds() - set(_KINDS)
+
+
+async def test_a_lookup_that_only_needs_the_account_writes_no_decision(sf) -> None:
+    """The merge watch resolves an account only to find which worker holds a
+    checkout. It must not stop the run on a Decision — it was only harmless because
+    that session happened never to commit (#1074 inventory)."""
+    from backend.workflow.application.runtime.account_resolution import (
+        resolve_workspace_model_account,
+    )
+
+    workspace_id, run_id, _ = await _seed(sf, labels=["opus", "sonnet"])
+
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        assert await resolve_workspace_model_account(s, run, record_decision=False) is None
+        await s.commit()
+        rows = await s.execute(select(Decision).where(Decision.run_id == run_id))
+        assert rows.first() is None
+
+
+def test_the_merge_watch_lookup_asks_for_no_decision() -> None:
+    """The call site, not just the flag: the merge watch's resolve passes it."""
+    path = _BACKEND / "workflow" / "application" / "runtime" / "merge_watch_client_box.py"
+    calls = [
+        n
+        for n in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "id", None) == "resolve_workspace_model_account"
+    ]
+    assert calls, "the lookup moved — re-point this check"
+    for call in calls:
+        kw = next((k for k in call.keywords if k.arg == "record_decision"), None)
+        assert kw is not None and isinstance(kw.value, ast.Constant) and kw.value.value is False
+
+
+async def test_a_bundle_publish_conflict_is_a_report_on_a_shipped_run(sf) -> None:
+    """The merge to main already succeeded — only publishing the durable copy hit a
+    divergence. It used to be a ``merge_conflict_review`` offering retry/discard on a
+    run that ships right after, which the transition table now refuses silently. It
+    is a report: acknowledge, and a reply never re-drives the run (#1074 inventory)."""
+    from backend.workflow.application._checkpoint_shared import ACTION_ACKNOWLEDGE
+    from backend.workflow.application.agent_runner import AgentRunner
+    from backend.workflow.application.checkpoint_resolution import _REPORT_DECISION_KINDS
+
+    workspace_id, run_id, _ = await _seed(sf, labels=["only"])
+
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        await AgentRunner(s)._raise_bundle_conflict_decision(run, ["a.py"])
+        await s.commit()
+        decision = (await s.execute(select(Decision).where(Decision.run_id == run_id))).scalar_one()
+
+    assert decision.decision == "product_bundle_conflict"
+    actions = _decision_actions(decision)
+    assert actions is not None and {a.key for a in actions} == {ACTION_ACKNOWLEDGE}
+    assert decision.decision in _REPORT_DECISION_KINDS
