@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-04
+# BSVibe session handoff — 2026-10-05
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,26 +21,29 @@
 
 ---
 
-## §0 — One line: **seven fixes shipped and walked in prod; what is left is waiting for a natural run or a DB read**
+## §0 — One line: **ten fixes shipped; the run state machine is now one function with a table**
 
 | PR | Issue | What | Prod check |
 |---|---|---|---|
-| #1119 | #1106 · #1104 · #1114 | cancel kills the executor session · in-session token budget · `--max-turns` | ✅ cancel 4 s · budget kill at 15k (6 % over) · `--max-turns 60` seen |
-| #1121 | #1103 | adjacent same-stage steps merge · TDD unit is one step · executor-neutral step handoff | ✅ one run carried test + fix, 86k input (92b76fba spent 3.05M on the test half) |
-| #1122 | #1114 | a failed round hands its own report + changed files to the next round | ⏳ waits for a run that fails verification once |
-| #1123 | #1102 | `transition()` is a compare-and-set — a cancel committed elsewhere survives | ⏳ CI ran it on Postgres; no prod walk yet |
-| #1124 | #1105 | `run_token_cap_reached` gets a question + "예산 늘려 계속" (grants one more ceiling) | ⏳ waits for the next cap stop |
-| #1125 | #1108 | the next chain step keeps `binding_id` · `kind` → the delivery gate survives | ⏳ waits for a real cross-stage split |
+| #1119 | #1106 · #1104 · #1114 | cancel kills the executor session · in-session token budget · `--max-turns` | ✅ cancel 4 s · budget kill at 15k · `--max-turns 60` |
+| #1121 | #1103 | adjacent same-stage steps merge · TDD unit is one step · executor-neutral step handoff | ✅ one run carried test + fix, 86k input |
+| #1122 | #1114 | a failed round hands its report + changed files to the next round | ⏳ a run that fails verification once |
+| #1123 | #1102 | `transition()` is a compare-and-set | ⏳ CI ran it on Postgres |
+| #1124 | #1105 | `run_token_cap_reached` gets a question + "예산 늘려 계속" | ⏳ next cap stop |
+| #1125 | #1108 | next chain step keeps `binding_id` · `kind` → delivery gate survives | ⏳ a real cross-stage split |
+| #1127 | #1110 | **every run status change goes through `run_status.move_run_status`** (AST guard) | ✅ BStockReport weekly run 10-05 reached review_ready normally |
+| #1128 | #1109 | transition table (shipped is final) · **GitHub runs ship on MERGE** (awaiting_merge, PrConcluded callback, cap exclusion) | ⏳ next GitHub delivery |
+| #1129 | #1074 | model-account Decisions ask + offer accounts + notify · **guard: every Decision kind has a question and a way out** | ⏳ next unresolved account |
 
-Checklists: `docs/e2e/*` for each — the unchecked boxes are the ⏳ column.
-**#1104 stays open on purpose:** the raw cache breakdown has no columns yet.
+Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 stays open on purpose** (no raw cache columns).
 
-## §Ⅰ — Decisions still in force (형님, 2026-10-01)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04)
 
 | | |
 |---|---|
 | **Wrapping stays** | Claude Code and the files live on different machines; built-in tools stay off, the MCP work tools are the surface |
 | **No `--resume`** | Continuity is BSVibe's. Every hand-over (#1103 step, #1114 round) is plain text on the payload / messages that any executor can read |
+| **Shipped only after merge** (10-04) | A GitHub-delivered run waits at `review_ready` (`awaiting_merge`) until its PR merges; closed unmerged → `cancelled`. Runs with no merge watch row still ship on open. Awaiting-merge runs do not hold a concurrent-run slot |
 
 ## §Ⅱ — What this session found that the issues had wrong
 
@@ -56,14 +59,15 @@ Checklists: `docs/e2e/*` for each — the unchecked boxes are the ⏳ column.
 
 ## §Ⅲ — Next
 
-1. Prod walks that need a natural run or a DB read — see the ⏳ column. The DB reads (`executor_tasks`
-   prompt of a second round; a chain step's payload) are blocked for agents by design; 형님 runs them.
-2. **#1110** — six places write run status without `transition()`, so they skip #1102's compare-and-set.
-   Then **#1109** (a transition table: `shipped` must not go back to `open`).
-3. #1074 — the same empty-checkpoint shape as #1105, for `ambiguous_model_account`. Worth a guard that
-   every Decision kind has a question + actions.
-4. Still open: #1113 opt-in · #1107 sandbox per product · #1111 · #1112 · #1115 · #1116 · carry-overs.
-5. Unexamined from 10-02: prod logs `supabase_token_failed` ~every 62 s from this host's IPv6.
+1. Prod walks in the ⏳ column. DB reads are 형님's (agents are refused prod reads by design).
+2. Found while inventorying Decisions (#1074 checklist, not filed yet):
+   * the frame-failure path in `agent_worker` resolves the ACT caller and can park a run `running` with no Decision
+   * `merge_watch_client_box`'s account resolution never commits, so its Decision rolls back
+   * `merge_conflict_review` for a bundle-publish conflict is raised on a run that ships right after
+   * `human_review_required` has no creator left (dead mapping)
+3. #1111 — the `shipped` notification still fires at verify time; with #1109 it should fire on merge.
+4. #1115 · #1107 · #1112 · #1113 · #1116 · carry-overs.
+5. Unexamined since 10-02: prod logs `supabase_token_failed` ~every 62 s from this host's IPv6.
 
 ## §Ⅳ — Discipline that paid off
 
@@ -83,6 +87,12 @@ Checklists: `docs/e2e/*` for each — the unchecked boxes are the ⏳ column.
 * **🗑⭐⭐ `tests/_support.db_engine` DELETEs every row of whatever `BSVIBE_DATABASE_URL` names.** Pointing it
   at `devcontainer-postgres-1` (old `wt/phase-1-knowledge`) emptied that DB. PG verification = CI's
   `lint-and-test` (pgvector:pg16) or a throwaway container. Never an existing DB.
+* **🐙⭐ Pushing to an OPEN PR is a prod action too.** It sends `pull_request synchronize` — pause the filter
+  around the push exactly like opening or merging.
+* **🧪⭐ RLS hides what SQLite shows.** A callback the merge watch calls inside `workspace_scope` returned
+  "run missing" in CI's Postgres when the test called it unscoped — call callbacks the way the worker does.
+* **🎯⭐ A guard on "non-empty text" cannot see a missing translation** — `_question_text` falls back to
+  English. Assert `ko != en`.
 * **🔐 Agents cannot read prod containers or the prod DB** (`docker exec` / `inspect` / `psql` are refused
   as production reads). `docker --context colima logs` works and is where the drive loop's events are
   (`bsvibe-prod-worker-1`); `backend-1` carries the MCP / API side.
