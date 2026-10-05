@@ -132,9 +132,12 @@ def test_notification_content_deliverable_id_and_language_default() -> None:
     assert content.language == "en"
 
 
+# #1111 — the approve/reject card is the ``review_ready`` event (it rode ``shipped``
+# before the split; ``shipped`` now means the run actually shipped and has no buttons).
+# The helper names keep "shipped" for history; the event they build is the card.
 def _shipped_content(*, deliverable_id: str | None, language: str) -> NotificationContent:
     return NotificationContent(
-        event="shipped",
+        event="review_ready",
         title="작업 완료",
         body="검증까지 끝났어요.",
         link="/deliverables/x",
@@ -220,7 +223,7 @@ def test_slack_shipped_en_button_labels() -> None:
 
 def test_slack_cta_is_mrkdwn_link_in_section_block() -> None:
     content = NotificationContent(
-        event="shipped",
+        event="review_ready",
         title="작업 완료",
         body="검증까지 끝났어요.",
         link="보고서 보기 → https://app.bsvibe.dev/deliverables/D9",
@@ -270,7 +273,7 @@ def _shipped_with_cta(
     *, title: str, cta_label: str = "보고서 보기", url: str
 ) -> NotificationContent:
     return NotificationContent(
-        event="shipped",
+        event="review_ready",
         title=title,
         body="검증까지 끝났어요.",
         # ``link`` still carries the flattened form (plain-text channels use it);
@@ -392,7 +395,7 @@ def test_discord_custom_id_within_100_char_cap() -> None:
 
 def test_discord_cta_is_markdown_link_in_content() -> None:
     content = NotificationContent(
-        event="shipped",
+        event="review_ready",
         title="작업 완료",
         body="검증까지 끝났어요.",
         link="보고서 보기 → https://app.bsvibe.dev/deliverables/D9",

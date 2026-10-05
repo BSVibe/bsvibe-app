@@ -43,6 +43,9 @@ import { useEffect, useState } from "react";
 // Every one of them delivering, every one of them togglable.
 const DELIVERING_EVENTS = [
   "needs_you",
+  // #1111 — the approval card (verified result ready for review). Split from
+  // `shipped`, which now fires when the run actually ships.
+  "review_ready",
   "triggered",
   "shipped",
   "failed",

@@ -172,15 +172,16 @@ def test_a_needs_you_without_a_decision_id_keeps_the_link() -> None:
     assert "reply_markup" not in payload
 
 
-def test_shipped_still_renders_approve_reject() -> None:
+def test_the_review_card_still_renders_approve_reject() -> None:
     """Negative control: the ONE event that already had buttons must not regress.
+    (#1111 — that event is ``review_ready`` now; it was called ``shipped``.)
 
     Its vocabulary (``apv``/``rej`` + deliverable_id) is a different verb space
     from the decision one, and a shared handler acts on both.
     """
     content = NotificationContent(
-        event="shipped",
-        title="작업 완료",
+        event="review_ready",
+        title="검토할 결과가 나왔어요",
         body="",
         language="ko",
         deliverable_id=str(uuid.uuid4()),

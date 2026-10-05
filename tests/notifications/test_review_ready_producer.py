@@ -1,9 +1,14 @@
-"""Producer-existence proof for the ``shipped`` outbox event (Notifier N3).
+"""Producer-existence proof for the ``review_ready`` outbox event (#1111).
 
-[P-shipped] drives the REAL verified-terminal write (``write_verified_deliverable``
-— the single "shipped to the world" moment, NOT a mid-loop partial or a knowledge
-answer) against a real DB and asserts a real ``NotificationEventRow(event="shipped",
-dedupe_key="shipped:<deliverable_id>")`` lands in the SAME transaction as the
+The verified terminal (``write_verified_deliverable`` — NOT a mid-loop partial or a
+knowledge answer) is "a result is ready for your review", NOT "shipped": at that
+moment the run is ``review_ready`` and, with Safe Mode on, waiting for the founder's
+approval. This event used to be called ``shipped`` and carried the approve/reject
+buttons; it said "Done" about work nothing had delivered yet (#1111). The real
+``shipped`` now fires when the run actually ships (``run_status.move_run_status``).
+
+[P] a real ``NotificationEventRow(event="review_ready",
+dedupe_key="review_ready:<deliverable_id>")`` lands in the SAME transaction as the
 Deliverable. [D] a re-run of the write is deduped to one row by the UNIQUE key.
 """
 
@@ -52,8 +57,8 @@ async def _seed_workspace(s, *, language: str) -> uuid.UUID:
     return ws
 
 
-async def test_verified_deliverable_emits_shipped() -> None:
-    """[P-shipped] the verified terminal queues a ``shipped`` notification."""
+async def test_verified_deliverable_emits_review_ready() -> None:
+    """[P] the verified terminal queues a ``review_ready`` notification — not ``shipped``."""
     async with memory_session() as s:
         run = await _seed_run(s)
         deliverable = await write_verified_deliverable(
@@ -67,10 +72,15 @@ async def test_verified_deliverable_emits_shipped() -> None:
 
         row = (
             await s.execute(
-                select(NotificationEventRow).where(NotificationEventRow.event == "shipped")
+                select(NotificationEventRow).where(NotificationEventRow.event == "review_ready")
             )
         ).scalar_one()
-        assert row.dedupe_key == f"shipped:{deliverable.id}"
+        assert row.dedupe_key == f"review_ready:{deliverable.id}"
+        # Not "shipped": nothing has been delivered yet (#1111).
+        shipped = await s.execute(
+            select(NotificationEventRow).where(NotificationEventRow.event == "shipped")
+        )
+        assert shipped.first() is None
         assert row.workspace_id == run.workspace_id
         assert row.status is NotificationStatus.PENDING
         assert row.payload["deliverable_id"] == str(deliverable.id)
@@ -79,8 +89,8 @@ async def test_verified_deliverable_emits_shipped() -> None:
         assert row.payload["title"]
 
 
-async def test_shipped_title_localizes_to_workspace_language() -> None:
-    """A KO workspace gets a KO ``shipped`` title; the deliverable's title line
+async def test_review_ready_title_localizes_to_workspace_language() -> None:
+    """A KO workspace gets a KO ``review_ready`` title; the deliverable's title line
     stays verbatim as the body. An EN workspace gets the English title."""
     async with memory_session() as s:
         ko_ws = await _seed_workspace(s, language="ko")
@@ -108,7 +118,7 @@ async def test_shipped_title_localizes_to_workspace_language() -> None:
                 select(NotificationEventRow).where(NotificationEventRow.workspace_id == ko_ws)
             )
         ).scalar_one()
-        assert ko_row.payload["title"] == "작업 완료"
+        assert ko_row.payload["title"] == "검토할 결과가 나왔어요"
         assert ko_row.payload["body"] == "dedup 유틸 추가"
 
         en_row = (
@@ -116,11 +126,11 @@ async def test_shipped_title_localizes_to_workspace_language() -> None:
                 select(NotificationEventRow).where(NotificationEventRow.workspace_id == en_ws)
             )
         ).scalar_one()
-        assert en_row.payload["title"] == "Done"
+        assert en_row.payload["title"] == "Ready for your review"
 
 
-async def test_shipped_body_is_compact_card_work_line_plus_verify_line() -> None:
-    """The shipped body is a compact two-line card: the work-summary title line +
+async def test_review_ready_body_is_compact_card_work_line_plus_verify_line() -> None:
+    """The review_ready body is a compact two-line card: the work-summary title line +
     the verify line, extracted from the already-localized deliverable summary. The
     full changed-files list stays in the report, NOT in the chat card."""
     async with memory_session() as s:
@@ -150,8 +160,8 @@ async def test_shipped_body_is_compact_card_work_line_plus_verify_line() -> None
         assert body == "「Toolkit」 새 문자열 유틸 함수 추가\n검증: 2개 확인 통과."
 
 
-async def test_answer_deliverable_does_not_emit_shipped() -> None:
-    """A knowledge-only answer is NOT a verified ship → no ``shipped`` row."""
+async def test_answer_deliverable_does_not_emit_review_ready() -> None:
+    """A knowledge-only answer is NOT a verified result → no ``review_ready`` row."""
     async with memory_session() as s:
         run = await _seed_run(s, intent="what is X?")
         await write_answer_deliverable(
@@ -166,7 +176,7 @@ async def test_answer_deliverable_does_not_emit_shipped() -> None:
         rows = (
             (
                 await s.execute(
-                    select(NotificationEventRow).where(NotificationEventRow.event == "shipped")
+                    select(NotificationEventRow).where(NotificationEventRow.event == "review_ready")
                 )
             )
             .scalars()
@@ -175,21 +185,21 @@ async def test_answer_deliverable_does_not_emit_shipped() -> None:
         assert rows == []
 
 
-async def test_re_writing_verified_is_deduped_to_one_shipped_row() -> None:
-    """[D] two writes for the same deliverable id queue exactly one ``shipped`` row."""
+async def test_re_writing_verified_is_deduped_to_one_review_ready_row() -> None:
+    """[D] two writes for the same deliverable id queue exactly one ``review_ready`` row."""
     async with memory_session() as s:
         run = await _seed_run(s)
         deliverable = await write_verified_deliverable(
             s, run, attempt_id=uuid.uuid4(), artifact_refs=[], summary="done"
         )
-        # A retried terminal write re-emits the SAME deliverable id's shipped moment.
+        # A retried terminal write re-emits the SAME deliverable id's review moment.
         from backend.notifications.emit import emit_notification
 
         await emit_notification(
             s,
             workspace_id=run.workspace_id,
-            event="shipped",
-            dedupe_key=f"shipped:{deliverable.id}",
+            event="review_ready",
+            dedupe_key=f"review_ready:{deliverable.id}",
             payload={"title": "t", "body": "b"},
             producer_id="workflow:verified_deliverable",
         )
@@ -198,7 +208,7 @@ async def test_re_writing_verified_is_deduped_to_one_shipped_row() -> None:
         rows = (
             (
                 await s.execute(
-                    select(NotificationEventRow).where(NotificationEventRow.event == "shipped")
+                    select(NotificationEventRow).where(NotificationEventRow.event == "review_ready")
                 )
             )
             .scalars()

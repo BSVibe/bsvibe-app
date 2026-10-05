@@ -247,3 +247,24 @@ async def test_put_rejects_extra_field(client) -> None:
     }
     r = await client.put("/api/v1/notifications/prefs", json=payload)
     assert r.status_code == 422, r.text
+
+
+async def test_a_matrix_saved_before_review_ready_still_saves_and_reads_whole(client) -> None:
+    """#1111 added ``review_ready``. A PWA still holding the old event list saves a
+    matrix without it — that must not be a 422 — and the next read returns every
+    event, ``review_ready`` inheriting the founder's ``shipped`` switch."""
+    legacy = {e: True for e in DEFAULT_EVENTS if e != "review_ready"}
+    legacy["shipped"] = False
+    r = await client.put(
+        "/api/v1/notifications/prefs",
+        json={
+            "matrix": legacy,
+            "quiet_hours_enabled": False,
+            "quiet_hours_start": "22:00",
+            "quiet_hours_end": "08:00",
+        },
+    )
+    assert r.status_code == 200, r.text
+    got = (await client.get("/api/v1/notifications/prefs")).json()["matrix"]
+    assert set(got) == set(DEFAULT_EVENTS)
+    assert got["review_ready"] is False
