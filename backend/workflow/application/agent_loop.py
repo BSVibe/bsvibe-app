@@ -289,7 +289,9 @@ class RunOrchestrator:
         )
 
     async def run(self, *, run: ExecutionRun, workspace_dir: Path) -> LoopResult:
-        project_id = run.product_id or run.id
+        # One box per RUN (#1107): keyed by product, two concurrent runs of one
+        # product shared a container mounted on the first run's worktree.
+        project_id = run.id
         work_step = WorkStep(
             id=uuid.uuid4(),
             run_id=run.id,

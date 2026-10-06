@@ -66,8 +66,10 @@ class SandboxSession(Protocol):
 
 @runtime_checkable
 class SandboxManager(Protocol):
-    """Per-project sandbox lifecycle. One sandbox per project, created
-    lazily on first work dispatch, reused across runs, reaped on idle."""
+    """Per-run sandbox lifecycle. One sandbox per RUN (#1107 — per product, two
+    concurrent runs of one product shared one box on the first run's worktree),
+    created lazily on first work dispatch, released when the run ends, reaped on
+    idle."""
 
     async def acquire(self, project_id: uuid.UUID, workspace_path: str) -> SandboxSession: ...
 
