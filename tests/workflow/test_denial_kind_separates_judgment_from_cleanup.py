@@ -126,7 +126,11 @@ async def test_queue_cleanup_denial_does_not_reopen_the_run() -> None:
         )
 
         await session.refresh(run)
-        assert run.status is RunStatus.REVIEW_READY
+        # Not RE-OPENED (nothing re-drives it, no cleanup text folded in as an answer).
+        # Since #1115 a cleanup of the run's LAST item releases it — ``cancelled`` —
+        # instead of leaving it at review_ready holding a run slot forever.
+        assert run.status is not RunStatus.OPEN
+        assert run.status is RunStatus.CANCELLED
         assert (run.payload or {}).get("resolved_decisions") in (None, [])
 
 

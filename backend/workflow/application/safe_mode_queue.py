@@ -212,6 +212,8 @@ class SafeModeQueue:
                 workspace_id=workspace_id, item_id=item_id, actor_id=actor_id, reason=reason_text
             )
             await self._reopen_run_with_the_reason(item_id=item_id, reason=reason_text)
+        elif flipped:
+            await self._release_run_if_nothing_left(item_id=item_id, why="denied")
         return flipped
 
     async def _record_rejection_knowledge(
@@ -274,6 +276,51 @@ class SafeModeQueue:
             )
         )
         await self._session.flush()
+
+    async def _release_run_if_nothing_left(self, *, item_id: uuid.UUID, why: str) -> None:
+        """#1115 — a run whose last live item ended UNDELIVERED is cancelled.
+
+        The run cap counts ``review_ready`` (``run_caps``), and a cleanup deny, a
+        reasonless deny or the 90-day expiry used to leave the run there forever:
+        its result will never be delivered, yet it held a slot until someone bulk-
+        cancelled the backlog (73 of 226 prod cancellations read exactly that).
+
+        Only a run that is DONE and waiting on nothing: ``review_ready``, no other
+        item still pending / extended / approved, and not awaiting a PR merge
+        (#1109 — the merge watch decides that one). Through ``move_run_status``, so
+        a run moved elsewhere meanwhile is left as it is.
+        """
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+
+        row = await self._repo.get(item_id)
+        if row is None or row.run_id is None:
+            return
+        run = await self._session.get(ExecutionRun, row.run_id)
+        if run is None or run.status is not RunStatus.REVIEW_READY:
+            return
+        payload = run.payload if isinstance(run.payload, dict) else {}
+        if "awaiting_merge" in payload:
+            return
+        live = (
+            await self._session.execute(
+                select(SafeModeQueueItemRow.id).where(
+                    SafeModeQueueItemRow.run_id == run.id,
+                    SafeModeQueueItemRow.status.in_(
+                        (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED, SafeModeStatus.APPROVED)
+                    ),
+                )
+            )
+        ).first()
+        if live is not None:
+            return
+        await move_run_status(
+            self._session,
+            run,
+            RunStatus.CANCELLED,
+            reason=f"released: safe mode item {item_id} {why} — nothing left to deliver",
+        )
 
     async def _reopen_run_with_the_reason(self, *, item_id: uuid.UUID, reason: str) -> None:
         """A-1c — 거절을 **그 런에** 도달시킨다.
@@ -446,6 +493,7 @@ class SafeModeQueue:
         row.status = SafeModeStatus.EXPIRED
         row.decided_at = datetime.now(tz=UTC)
         await self._session.flush()
+        await self._release_run_if_nothing_left(item_id=item_id, why="expired")
         return True
 
     async def list_due_expired(self, *, now: datetime | None = None) -> list[SafeModeQueueItemRow]:

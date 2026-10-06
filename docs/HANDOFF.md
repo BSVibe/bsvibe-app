@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-05
+# BSVibe session handoff — 2026-10-06
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,7 +21,7 @@
 
 ---
 
-## §0 — One line: **ten fixes shipped; the run state machine is now one function with a table**
+## §0 — One line: **the run state machine is one function with a table; notifications say what happened**
 
 | PR | Issue | What | Prod check |
 |---|---|---|---|
@@ -34,6 +34,9 @@
 | #1127 | #1110 | **every run status change goes through `run_status.move_run_status`** (AST guard) | ✅ BStockReport weekly run 10-05 reached review_ready normally |
 | #1128 | #1109 | transition table (shipped is final) · **GitHub runs ship on MERGE** (awaiting_merge, PrConcluded callback, cap exclusion) | ⏳ next GitHub delivery |
 | #1129 | #1074 | model-account Decisions ask + offer accounts + notify · **guard: every Decision kind has a question and a way out** | ⏳ next unresolved account |
+| #1131 | (inventory) | frame-unresolved run no longer parks without a Decision · account lookup writes no Decision · bundle publish conflict is a report | ⏳ rare paths |
+| #1132 | #1111 | **notifications split:** `review_ready` (approval card, at verify) · `shipped` (when the run ships, no buttons); old matrices inherit `shipped` | ✅ prod prefs read whole, `review_ready` inherited `true` |
+| (next) | #1115 | a run whose last Safe Mode item ends undelivered (cleanup deny · reasonless deny · expiry) is cancelled — frees the cap slot | ⏳ next cleanup deny |
 
 Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 stays open on purpose** (no raw cache columns).
 
@@ -60,13 +63,10 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 ## §Ⅲ — Next
 
 1. Prod walks in the ⏳ column. DB reads are 형님's (agents are refused prod reads by design).
-2. Found while inventorying Decisions (#1074 checklist, not filed yet):
-   * the frame-failure path in `agent_worker` resolves the ACT caller and can park a run `running` with no Decision
-   * `merge_watch_client_box`'s account resolution never commits, so its Decision rolls back
-   * `merge_conflict_review` for a bundle-publish conflict is raised on a run that ships right after
-   * `human_review_required` has no creator left (dead mapping)
-3. #1111 — the `shipped` notification still fires at verify time; with #1109 it should fire on merge.
-4. #1115 · #1107 · #1112 · #1113 · #1116 · carry-overs.
+2. `human_review_required` has no creator left — kept mapped on purpose (pending prod rows would go blank).
+3. The #1115 backlog that predates the fix (runs whose items were already denied/expired) is not
+   back-filled — 형님 decides whether to clear it once.
+4. #1107 · #1112 · #1113 · #1116 · carry-overs.
 5. Unexamined since 10-02: prod logs `supabase_token_failed` ~every 62 s from this host's IPv6.
 
 ## §Ⅳ — Discipline that paid off
