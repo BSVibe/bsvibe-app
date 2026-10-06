@@ -46,6 +46,12 @@ the shaped event under that tag so the dispatcher's
 ``artifact_type in cap.artifact_types`` match selects the right outbound."""
 
 
+#: #1112 — a delivery event the founder already approved by clicking "Approve &
+#: ship" (``checkpoint_resolution._ship_decision_run``). The DeliveryWorker
+#: dispatches it straight out rather than queueing a second Safe Mode approval.
+FOUNDER_APPROVED_KEY = "founder_approved"
+
+
 class ActionResult(BaseModel):
     """Per-action outcome inside one delivery fan-out — Workflow §3.1."""
 

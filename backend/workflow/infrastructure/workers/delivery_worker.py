@@ -69,7 +69,7 @@ from backend.shared.wire_kinds import SCHEDULE_KIND_PRODUCT_TICK
 from backend.workers.base import BaseWorker
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.channels import DELIVERY_EVENTS
-from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.domain.delivery import FOUNDER_APPROVED_KEY, ActionResult, DeliveryResult
 from backend.workflow.infrastructure.db import Deliverable
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 
@@ -442,7 +442,10 @@ class DeliveryWorker(BaseWorker):
                         workspace_safe_mode = await _workspace_safe_mode(session, row.workspace_id)
                         output_mode = await _run_output_mode(session, row.run_id)
                         autonomous_origin = await _run_autonomous_origin(session, row.run_id)
-                        if resolve_output_mode_gate(
+                        # #1112 — the founder's "Approve & ship" click already
+                        # approved this one; a second Safe Mode card would ask twice.
+                        founder_approved = (row.payload or {}).get(FOUNDER_APPROVED_KEY) is True
+                        if not founder_approved and resolve_output_mode_gate(
                             workspace_safe_mode=workspace_safe_mode,
                             output_mode=output_mode,
                             autonomous_origin=autonomous_origin,
@@ -500,6 +503,7 @@ class DeliveryWorker(BaseWorker):
 
 
 __all__ = [
+    "FOUNDER_APPROVED_KEY",
     "DeliveryWorker",
     "DeliveryWorkerConfig",
     "PluginDispatchAdapter",
