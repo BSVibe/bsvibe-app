@@ -568,7 +568,7 @@ async def _ship_decision_run(
     """L-D2 ``ship`` handler — founder overrides verification.
 
     1. Take the run's latest :class:`WorkStep` and mark it
-       ``VERIFIED`` / ``ProofState.VERIFIED`` — a founder override,
+       ``VERIFIED`` / ``ProofState.PROVED`` — a founder override,
        distinct from a real-passing verifier (the audit row records the
        human resolution; B4 trust integrity is preserved because the
        Decision carries the kind = "verification_failed" or
@@ -579,6 +579,13 @@ async def _ship_decision_run(
     3. Transition the run RUNNING → REVIEW_READY → SHIPPED in two hops
        (state-machine valid path; the worker would have made the first
        hop on a verifier PASS, the founder makes both here in one click).
+
+    #1112 — a GITHUB-bound product delivers by push + PR, not by its local
+    main. There, ship writes what the verified path writes (the Deliverable AND
+    its delivery event, marked founder-approved so Safe Mode does not ask a
+    second time), does NOT force-merge the local main, and leaves the run at
+    REVIEW_READY: the delivery opens the PR and the run ships on its merge
+    (#1109). Before, the run read ``shipped`` and no PR was ever opened.
     """
     payload = decision.payload if isinstance(decision.payload, dict) else {}
     artifact_refs_raw = payload.get("artifact_refs")
@@ -612,21 +619,24 @@ async def _ship_decision_run(
     # a duplicate — the existing row already carries the verified artifact
     # refs. For verification_failed / human_review_required Decisions there
     # is no prior Deliverable, so the mint below is the first one.
+    github_bound = await _delivers_via_github(session, run)
     existing_deliverable = await deliverables.find_first_by_run(run.id)
     if existing_deliverable is None:
-        await deliverables.add(
-            Deliverable(
-                id=uuid.uuid4(),
-                run_id=run.id,
-                workspace_id=run.workspace_id,
-                deliverable_type=DeliverableType.CODE,
-                payload={
-                    "shipped_by_founder": True,
-                    "decision_id": str(decision.id),
-                    "artifact_refs": artifact_refs,
-                },
-            )
+        minted = Deliverable(
+            id=uuid.uuid4(),
+            run_id=run.id,
+            workspace_id=run.workspace_id,
+            deliverable_type=DeliverableType.CODE,
+            payload={
+                "shipped_by_founder": True,
+                "decision_id": str(decision.id),
+                "artifact_refs": artifact_refs,
+            },
         )
+        await deliverables.add(minted)
+        if github_bound:
+            await session.flush()
+            _emit_founder_approved_delivery(session, run, minted, artifact_refs, decision)
 
     # W2 — when the run is bound to a product workspace, ship_anyway means
     # "force the run's version onto main" (the founder explicitly accepted
@@ -656,28 +666,31 @@ async def _ship_decision_run(
                 run.id,
                 message=f"ship_anyway: decision {decision.id}",
             )
-            async with product_workspace_lock(session, run.product_id):
-                await force_merge_theirs(run.product_id, run.id)
-                # Publish inside the lock, same as auto-ship: a forced ship
-                # still moves ``main``, so the durable off-box record must
-                # follow it or the product's remote copy silently goes stale.
+            # #1112 — a GitHub-bound run's PR is cut from the run branch just
+            # committed; the local main must not move ahead of GitHub's.
+            if not github_bound:
+                async with product_workspace_lock(session, run.product_id):
+                    await force_merge_theirs(run.product_id, run.id)
+                    # Publish inside the lock, same as auto-ship: a forced ship
+                    # still moves ``main``, so the durable off-box record must
+                    # follow it or the product's remote copy silently goes stale.
+                    try:
+                        await publish_product_bundle(run.product_id)
+                    except Exception:  # noqa: BLE001 — durability must not fail the ship
+                        logger.warning(
+                            "ship_anyway_bundle_push_failed",
+                            run_id=str(run.id),
+                            product_id=str(run.product_id),
+                            exc_info=True,
+                        )
                 try:
-                    await publish_product_bundle(run.product_id)
-                except Exception:  # noqa: BLE001 — durability must not fail the ship
+                    await remove_run_worktree(run.product_id, run.id)
+                except ProductWorkspaceError:
                     logger.warning(
-                        "ship_anyway_bundle_push_failed",
+                        "ship_anyway_worktree_cleanup_failed",
                         run_id=str(run.id),
-                        product_id=str(run.product_id),
                         exc_info=True,
                     )
-            try:
-                await remove_run_worktree(run.product_id, run.id)
-            except ProductWorkspaceError:
-                logger.warning(
-                    "ship_anyway_worktree_cleanup_failed",
-                    run_id=str(run.id),
-                    exc_info=True,
-                )
         except _StorageProductWorkspaceBusy:
             logger.warning("ship_anyway_lock_busy", run_id=str(run.id))
             # Surface as HTTP 503-ish via the resolve service's exception path —
@@ -692,10 +705,59 @@ async def _ship_decision_run(
         to_status=RunStatus.REVIEW_READY,
         reason=f"founder approve+ship via decision {decision.id}",
     )
+    if github_bound:
+        # Delivery (push + PR) and then the merge ship it — not this click.
+        return
     await runner.transition(
         run_id=run.id,
         to_status=RunStatus.SHIPPED,
         reason=f"founder approve+ship via decision {decision.id}",
+    )
+
+
+async def _delivers_via_github(session: AsyncSession, run: ExecutionRun) -> bool:
+    """Is this run's product delivered by push + PR (a GitHub binding resolves)?"""
+    if run.product_id is None:
+        return False
+    from backend.workflow.application.delivery.connector_dispatch import (  # noqa: PLC0415
+        resolve_github_binding,
+    )
+
+    binding = await resolve_github_binding(
+        session, workspace_id=run.workspace_id, product_id=run.product_id
+    )
+    return binding is not None
+
+
+def _emit_founder_approved_delivery(
+    session: AsyncSession,
+    run: ExecutionRun,
+    deliverable: Deliverable,
+    artifact_refs: list[str],
+    decision: Decision,
+) -> None:
+    """The delivery event the verified path writes — pre-approved by this click."""
+    from backend.workflow.channels import DELIVERY_EVENTS  # noqa: PLC0415 — cross-domain
+    from backend.workflow.domain.delivery import FOUNDER_APPROVED_KEY  # noqa: PLC0415
+    from backend.workflow.infrastructure.delivery.db import (  # noqa: PLC0415
+        DeliveryEventRow,
+    )
+
+    DELIVERY_EVENTS.emit(
+        session,
+        DeliveryEventRow(
+            id=uuid.uuid4(),
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            deliverable_id=deliverable.id,
+            artifact_type=DeliverableType.CODE.value,
+            payload={
+                "artifact_refs": artifact_refs,
+                "summary": f"Approved & shipped by the founder past {decision.decision}",
+                FOUNDER_APPROVED_KEY: True,
+            },
+        ),
+        producer_id="workflow:checkpoint_ship",
     )
 
 
