@@ -259,6 +259,21 @@ def _render_body(event: str, lang: str, params: dict[str, object]) -> str:
     return detail or _FALLBACK_BODY[event][lang]
 
 
+def intake_refused_detail(language: str | None, *, source: str) -> str:
+    """#1113 — why work that came in from ``source`` did not start: the month's
+    token budget is spent. Says what the founder can do about it."""
+    who = source.strip() or ("외부" if _resolve_language(language) == "ko" else "an external")
+    if _resolve_language(language) == "ko":
+        return (
+            f"이번 달 토큰 예산을 다 써서 {who} 에서 들어온 일을 시작하지 않았어요. "
+            "예산을 늘리거나 다음 달에 다시 보내 주세요."
+        )
+    return (
+        f"Work that came in from {who} did not start — this month's token budget is "
+        "spent. Raise the budget or send it again next month."
+    )
+
+
 def needs_you_reason_body(
     reason: str, language: str | None, payload: Mapping[str, object] | None = None
 ) -> str:

@@ -24,17 +24,28 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.config import Settings, get_settings
 from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.identity.workspaces_db import load_workspace_language
-from backend.notifications.copy import TRIGGERED_LINK, notification_copy
+from backend.notifications.copy import (
+    TRIGGERED_LINK,
+    intake_refused_detail,
+    notification_copy,
+)
 from backend.notifications.emit import emit_notification
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
+from backend.workflow.application.intake_gate import (
+    IntakeVerdict,
+    gate_webhook_work,
+    room_for_new_work,
+)
 from backend.workflow.application.stages.intake import (
+    INTAKE_HELD_KEY,
     RECEIVE_FILTERED_KEY,
     filtered_out_record,
     receive,
@@ -156,6 +167,7 @@ class IntakeWorker(BaseWorker):
         count = 0
         emitted_workspace_ids: list[str] = []
         async with self._session_factory() as session:
+            await self._release_held(session)
             async for trig in self._claim_batch(session):
                 # #959 — one trigger, one tenant. Layer 2 (ORM auto-filter)
                 # and layer 3 (RLS GUC) both read this contextvar; without
@@ -184,6 +196,33 @@ class IntakeWorker(BaseWorker):
                         )
                         count += 1
                         continue
+
+                    # #1113 — webhook work meets the run cap and the token budget
+                    # here, the way a founder's own submission meets them at its door.
+                    if trig.trigger_kind == TriggerKind.WEBHOOK:
+                        verdict = await gate_webhook_work(session, trig.workspace_id)
+                        if verdict is IntakeVerdict.REFUSE:
+                            await self._refuse_over_budget(session, trig)
+                            count += 1
+                            continue
+                        if verdict is IntakeVerdict.HOLD:
+                            trig.payload = {
+                                **(trig.payload or {}),
+                                INTAKE_HELD_KEY: {
+                                    "reason": "run_cap_reached",
+                                    "held_at": datetime.now(tz=UTC).isoformat(),
+                                },
+                            }
+                            flag_modified(trig, "payload")
+                            await session.flush()
+                            logger.info(
+                                "intake_worker_trigger_held",
+                                trigger_event_id=str(trig.id),
+                                workspace_id=str(trig.workspace_id),
+                                source=trig.source,
+                            )
+                            count += 1
+                            continue
 
                     now = datetime.now(tz=UTC)
                     # L-P1: propagate product_id from the trigger (set either by
@@ -265,6 +304,78 @@ class IntakeWorker(BaseWorker):
                 fields={"workspace_id": ws_id},
             )
         return count
+
+    async def _refuse_over_budget(self, session: AsyncSession, trig: TriggerEventRow) -> None:
+        """#1113 — the month's token budget is spent: no run, and the founder hears why."""
+        trig.payload = {
+            **(trig.payload or {}),
+            RECEIVE_FILTERED_KEY: filtered_out_record(filters={}, reason="token_budget_reached"),
+        }
+        flag_modified(trig, "payload")
+        language = await load_workspace_language(session, trig.workspace_id)
+        copy = notification_copy(
+            "needs_you", language, detail=intake_refused_detail(language, source=trig.source)
+        )
+        await emit_notification(
+            session,
+            workspace_id=trig.workspace_id,
+            product_id=trig.product_id,
+            event="needs_you",
+            dedupe_key=f"intake_refused:{trig.id}",
+            payload={
+                "title": copy.title,
+                "body": copy.body,
+                "link": TRIGGERED_LINK,
+                "run_id": None,
+            },
+            producer_id="worker:intake_worker",
+        )
+        await session.flush()
+        logger.info(
+            "intake_worker_trigger_refused",
+            trigger_event_id=str(trig.id),
+            workspace_id=str(trig.workspace_id),
+            source=trig.source,
+            reason="token_budget_reached",
+        )
+
+    async def _release_held(self, session: AsyncSession) -> None:
+        """#1113 — un-park held webhook triggers, oldest first, one per free slot.
+
+        Released rows lose their marker and so re-enter the claim below in this
+        same tick. Read across tenants (a queue poller), written per tenant.
+        """
+        async with cross_tenant_session_read(session):
+            held = list(
+                (
+                    await session.execute(
+                        select(TriggerEventRow)
+                        .where(TriggerEventRow.payload[INTAKE_HELD_KEY].as_string().is_not(None))
+                        .order_by(TriggerEventRow.received_at.asc())
+                        .limit(self._cfg.batch_size)
+                        .with_for_update(skip_locked=True)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        by_workspace: dict[uuid.UUID, list[TriggerEventRow]] = {}
+        for row in held:
+            by_workspace.setdefault(row.workspace_id, []).append(row)
+        for workspace_id, rows in by_workspace.items():
+            async with workspace_session_scope(session, workspace_id):
+                room = await room_for_new_work(session, workspace_id)
+                for row in rows if room is None else rows[:room]:
+                    payload = dict(row.payload or {})
+                    payload.pop(INTAKE_HELD_KEY, None)
+                    row.payload = payload
+                    flag_modified(row, "payload")
+                    logger.info(
+                        "intake_worker_trigger_released",
+                        trigger_event_id=str(row.id),
+                        workspace_id=str(workspace_id),
+                    )
+                await session.flush()
 
     async def _claim_batch(self, session: AsyncSession) -> AsyncIterator[TriggerEventRow]:
         """Yield up to ``batch_size`` TriggerEvents that have no Request yet.

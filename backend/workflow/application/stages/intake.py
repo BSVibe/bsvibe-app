@@ -51,15 +51,14 @@ from backend.shared.wire_kinds import (
     PAYLOAD_KEY_CONNECTOR_ACCOUNT_ID,
     PAYLOAD_KEY_RESOURCE_ID,
 )
-from backend.workflow.infrastructure.intake.db import TriggerEventRow, TriggerKind
+from backend.workflow.infrastructure.intake.db import (
+    INTAKE_HELD_KEY,
+    RECEIVE_FILTERED_KEY,
+    TriggerEventRow,
+    TriggerKind,
+)
 
 logger = structlog.get_logger(__name__)
-
-
-# Payload key the Receive stage writes to mark a TriggerEvent as filter-rejected
-# (so the operator can see the trigger landed but was intentionally NOT turned
-# into a Request). The value is an honest record dict — see :func:`receive`.
-RECEIVE_FILTERED_KEY: str = "_received_filtered"
 
 
 @dataclass(slots=True)
@@ -229,6 +228,7 @@ async def receive(session: AsyncSession, trigger: TriggerEventRow) -> ReceiveOut
 
 
 __all__ = [
+    "INTAKE_HELD_KEY",
     "RECEIVE_FILTERED_KEY",
     "ReceiveOutcome",
     "filtered_out_record",

@@ -17,7 +17,12 @@ from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.channels import TRIGGER_EVENTS
-from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow
+from backend.workflow.infrastructure.intake.db import (
+    INTAKE_HELD_KEY,
+    RECEIVE_FILTERED_KEY,
+    RequestRow,
+    TriggerEventRow,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -55,14 +60,17 @@ class SqlAlchemyIdempotencyRepository:
         )
 
     async def list_undrained(self, *, limit: int = 50) -> list[TriggerEventRow]:
-        # A row is "drained" when a RequestRow references it. The filter-rejected
-        # path (RECEIVE_FILTERED_KEY marker on payload) is enforced by the
-        # IntakeWorker in-process — JSON key-presence semantics drift across the
-        # Postgres/SQLite test tiers so we keep the WHERE simple.
+        # A row is "drained" when a RequestRow references it, or intake refused it
+        # (RECEIVE_FILTERED_KEY) or parked it at the run cap (INTAKE_HELD_KEY,
+        # #1113). The markers are excluded HERE, before the limit: filtering them
+        # in-process after it let refused rows — which never get a Request — fill
+        # the oldest-first window for good, after which no new trigger was seen.
         already_drained = exists().where(RequestRow.trigger_event_id == TriggerEventRow.id)
         stmt = (
             select(TriggerEventRow)
             .where(~already_drained)
+            .where(TriggerEventRow.payload[RECEIVE_FILTERED_KEY].as_string().is_(None))
+            .where(TriggerEventRow.payload[INTAKE_HELD_KEY].as_string().is_(None))
             .order_by(TriggerEventRow.received_at.asc())
             .limit(limit)
             .with_for_update(skip_locked=True)
