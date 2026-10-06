@@ -14,10 +14,13 @@ unnoticed for weeks.)
 So the probe takes TWO readings and reports the layer:
 
 * **shallow** ``GET /api/health`` — edge + tunnel + app process
-* **deep** ``POST /api/auth/login`` with throwaway credentials — the same plus
-  the auth dependency. A ``4xx`` is HEALTHY here: it means the app processed the
-  request and its dependency answered. Only ``5xx``/``000`` mean the dependency
-  is gone.
+* **deep** ``GET /api/health/auth`` — the same plus the auth dependency: the
+  backend relays GoTrue's own ``/auth/v1/health``. Only ``200`` is healthy.
+
+  (Until 2026-10-06 the deep reading POSTed throwaway credentials to
+  ``/api/auth/login`` and called the ``4xx`` healthy. Every reading was a failed
+  sign-in: a ``supabase_token_failed`` warning in prod once a minute, and a share
+  of the per-IP sign-in rate limit every user's login is proxied through.)
 
 Verdicts are a pure function of the two codes, tested here across every branch.
 The logic lives in ``.github/scripts/offbox-probe.sh`` rather than inline in the
@@ -48,8 +51,10 @@ class _Stub(http.server.BaseHTTPRequestHandler):
 
     codes: dict[str, int] = {}
     edge_challenge: bool = False
+    hits: list[tuple[str, str]] = []
 
     def _respond(self) -> None:
+        self.hits.append((self.command, self.path.split("?")[0]))
         code = self.codes.get(self.path.split("?")[0], 404)
         self.send_response(code)
         if self.edge_challenge:
@@ -71,6 +76,7 @@ def stub() -> Iterator[tuple[str, dict[str, int]]]:
     codes: dict[str, int] = {}
     _Stub.codes = codes
     _Stub.edge_challenge = False
+    _Stub.hits = []
     server = http.server.HTTPServer(("127.0.0.1", 0), _Stub)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -93,39 +99,51 @@ def _run(base_url: str) -> tuple[int, str]:
 
 
 HEALTH = "/api/health"
-LOGIN = "/api/auth/login"
+AUTH = "/api/health/auth"
 
 
 def test_all_healthy_is_green(stub: tuple[str, dict[str, int]]) -> None:
-    """200 + 401 — the app answers and its auth dependency answered too."""
+    """200 + 200 — the app answers and its auth dependency answered too."""
     base, codes = stub
     codes[HEALTH] = 200
-    codes[LOGIN] = 401
+    codes[AUTH] = 200
     rc, out = _run(base)
     assert rc == 0, out
     assert "OK" in out
 
 
-def test_a_4xx_on_the_deep_probe_is_healthy(stub: tuple[str, dict[str, int]]) -> None:
-    """400/422 also mean "the app processed it" — only 5xx is a dependency failure.
+def test_the_deep_reading_never_signs_in(stub: tuple[str, dict[str, int]]) -> None:
+    """The whole reason for the auth health route — no failed sign-in per reading."""
+    base, codes = stub
+    codes[HEALTH] = 200
+    codes[AUTH] = 200
+    rc, out = _run(base)
+    assert rc == 0, out
+    assert ("GET", AUTH) in _Stub.hits
+    assert not any(path == "/api/auth/login" for _m, path in _Stub.hits)
 
-    Pinned separately so a later edit cannot narrow the healthy set to exactly
-    401 and start alerting because a request-shape change moved it to 422.
+
+def test_a_4xx_on_the_deep_probe_is_not_healthy(stub: tuple[str, dict[str, int]]) -> None:
+    """The deep route answers 200 or 503 — a 404 means it is not there, not "fine".
+
+    The login-based reading had to call 4xx healthy (invalid credentials was the
+    expected verdict). Carrying that over would green-light a backend that lost
+    the route.
     """
     base, codes = stub
     codes[HEALTH] = 200
-    codes[LOGIN] = 422
+    codes[AUTH] = 404
     rc, out = _run(base)
-    assert rc == 0, out
+    assert rc != 0, out
 
 
 def test_app_up_but_dependency_down_is_the_case_that_bit_us(
     stub: tuple[str, dict[str, int]],
 ) -> None:
-    """200 + 500 — Supabase paused. The old single-probe watch called this GREEN."""
+    """200 + 503 — Supabase paused. The old single-probe watch called this GREEN."""
     base, codes = stub
     codes[HEALTH] = 200
-    codes[LOGIN] = 500
+    codes[AUTH] = 503
     rc, out = _run(base)
     assert rc != 0, out
     assert "DEPENDENCY" in out
@@ -138,7 +156,7 @@ def test_app_down_names_the_app(stub: tuple[str, dict[str, int]]) -> None:
     """A 502 on health is the app/tunnel, not the dependency."""
     base, codes = stub
     codes[HEALTH] = 502
-    codes[LOGIN] = 502
+    codes[AUTH] = 502
     rc, out = _run(base)
     assert rc != 0, out
     assert "APP" in out
@@ -154,7 +172,7 @@ def test_a_cloudflare_challenge_is_named_as_the_edge(stub: tuple[str, dict[str, 
     """
     base, codes = stub
     codes[HEALTH] = 403
-    codes[LOGIN] = 403
+    codes[AUTH] = 403
     _Stub.edge_challenge = True
     rc, out = _run(base)
     assert rc != 0, out
@@ -182,7 +200,7 @@ def test_the_verdicts_are_distinct(stub: tuple[str, dict[str, int]]) -> None:
     seen = set()
     for health, login, edge in ((200, 500, False), (502, 502, False), (403, 403, True)):
         codes[HEALTH] = health
-        codes[LOGIN] = login
+        codes[AUTH] = login
         _Stub.edge_challenge = edge
         _rc, out = _run(base)
         verdict = next(w for w in ("DEPENDENCY", "APP", "EDGE") if w in out)
@@ -199,7 +217,7 @@ def test_a_bare_403_is_the_app_not_the_edge(stub: tuple[str, dict[str, int]]) ->
     """
     base, codes = stub
     codes[HEALTH] = 403
-    codes[LOGIN] = 403
+    codes[AUTH] = 403
     _Stub.edge_challenge = False
     rc, out = _run(base)
     assert rc != 0, out

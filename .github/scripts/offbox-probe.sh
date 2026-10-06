@@ -4,18 +4,18 @@
 # Two readings, because one was not enough:
 #
 #   shallow  GET  /api/health        edge + tunnel + app process
-#   deep     POST /api/auth/login    the same PLUS the auth dependency
+#   deep     GET  /api/health/auth   the same PLUS the auth dependency
 #
 # ``/api/health`` is ``return HealthResponse(status="ok", version=…, git_sha=…)``
 # — settings in, settings out. On 2026-09-11 Supabase was paused and login was
 # broken while that route answered 200 through the whole outage. A watch that
 # green-lights an app whose auth is dead converts an outage into confidence.
 #
-# On the deep probe a 4xx is HEALTHY: it means the app processed the request and
-# its dependency answered (invalid credentials is the expected verdict for the
-# throwaway account below). Only 5xx / no-connection mean the dependency is gone.
-# The credentials are deliberately bogus and the call is read-only — nothing is
-# created, and no real account can be locked out by it.
+# The deep route relays GoTrue's own ``/auth/v1/health``: 200 healthy, 503 down.
+# Only 200 is healthy. (Until 2026-10-06 this POSTed bogus credentials to
+# ``/api/auth/login`` and called the 4xx healthy — every reading was a failed
+# sign-in, logged as a warning and charged to the per-IP sign-in rate limit that
+# every user's login shares.)
 #
 # Lives here as a script rather than inline in the workflow so the verdict logic
 # is reachable from a test (tests/infra/test_offbox_probe.py). A verdict nobody
@@ -25,7 +25,7 @@ set -uo pipefail
 BASE_URL="${BASE_URL:-https://api.bsvibe.dev}"
 RETRY_DELAY="${RETRY_DELAY:-30}"
 HEALTH_PATH=/api/health
-LOGIN_PATH=/api/auth/login
+AUTH_PATH=/api/health/auth
 
 # NOTE: no ``|| echo 000`` after curl -w. curl already prints the code, so the
 # fallback CONCATENATES into "000000" — a value that matches no branch below and
@@ -39,10 +39,7 @@ probe_health() {
 
 probe_deep() {
   local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
-    -X POST -H 'Content-Type: application/json' \
-    --data '{"email":"offbox-probe@invalid.example","password":"not-a-real-password"}' \
-    "$BASE_URL$LOGIN_PATH" 2>/dev/null)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$BASE_URL$AUTH_PATH" 2>/dev/null)"
   printf '%s' "${code:-000}"
 }
 
@@ -57,7 +54,7 @@ edge_challenged() {
 verdict() { # health_code deep_code -> prints verdict, returns exit status
   local h="$1" d="$2"
   if [ "$h" = "000" ] && [ "$d" = "000" ]; then
-    echo "UNREACHABLE — nothing answered at $BASE_URL (box, tunnel or DNS). health=$h login=$d"
+    echo "UNREACHABLE — nothing answered at $BASE_URL (box, tunnel or DNS). health=$h auth=$d"
     return 1
   fi
   if [ "$h" = "403" ] && edge_challenged; then
@@ -65,21 +62,19 @@ verdict() { # health_code deep_code -> prints verdict, returns exit status
     return 1
   fi
   if [ "$h" != "200" ]; then
-    echo "APP — $HEALTH_PATH did not answer 200 (edge/tunnel/app process). health=$h login=$d"
+    echo "APP — $HEALTH_PATH did not answer 200 (edge/tunnel/app process). health=$h auth=$d"
     return 1
   fi
-  case "$d" in
-    2??|4??)
-      echo "OK — $HEALTH_PATH 200 and $LOGIN_PATH $d (the auth dependency answered)"
-      return 0
-      ;;
-  esac
-  echo "DEPENDENCY — the app is fine ($HEALTH_PATH 200) but $LOGIN_PATH returned $d: its auth dependency (Supabase) is down. Do NOT restart the backend."
+  if [ "$d" = "200" ]; then
+    echo "OK — $HEALTH_PATH 200 and $AUTH_PATH 200 (the auth dependency answered)"
+    return 0
+  fi
+  echo "DEPENDENCY — the app is fine ($HEALTH_PATH 200) but $AUTH_PATH returned $d: its auth dependency (Supabase) is down. Do NOT restart the backend."
   return 1
 }
 
 h="$(probe_health)"; d="$(probe_deep)"
-echo "probe 1: health=$h login=$d"
+echo "probe 1: health=$h auth=$d"
 out="$(verdict "$h" "$d")"; rc=$?
 if [ "$rc" = "0" ]; then echo "$out"; exit 0; fi
 
@@ -88,7 +83,7 @@ if [ "$rc" = "0" ]; then echo "$out"; exit 0; fi
 echo "first reading unhealthy — re-checking in ${RETRY_DELAY}s before alerting"
 sleep "$RETRY_DELAY"
 h="$(probe_health)"; d="$(probe_deep)"
-echo "probe 2: health=$h login=$d"
+echo "probe 2: health=$h auth=$d"
 out="$(verdict "$h" "$d")"; rc=$?
 if [ "$rc" = "0" ]; then echo "recovered on the second reading — $out"; exit 0; fi
 echo "::error::$out"
