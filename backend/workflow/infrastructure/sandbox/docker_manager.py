@@ -59,6 +59,14 @@ def _safe_rel(rel_path: str) -> str:
 class _Entry:
     name: str
     last_used: float
+    # The run worktree mounted at ``/work``. A cached box is only reused for the
+    # SAME worktree — handing a run a box mounted on another run's worktree is
+    # #1107.
+    workspace_path: str = ""
+    # Started by ANOTHER process (worker vs API share one DinD) and merely
+    # adopted here: it holds none of this process's slots, and idle-reaping it
+    # only forgets it — its run decides its lifetime.
+    adopted: bool = False
     # Test-PG sidecar container + its dedicated user-defined network, tracked so
     # teardown reaps them with the sandbox. ``None`` when the test-db gate is off.
     sidecar: str | None = None
@@ -151,7 +159,7 @@ class DockerSandboxSession:
 
 
 class DockerSandboxManager:
-    """Per-project sandbox lifecycle over a DinD daemon."""
+    """Per-run sandbox lifecycle over a DinD daemon (#1107: keyed by run, not product)."""
 
     def __init__(
         self,
@@ -253,17 +261,63 @@ class DockerSandboxManager:
         )
         return code == 0 and out.decode().strip() == "true"
 
+    async def _running_mount(self, name: str) -> str | None:
+        """The worktree a RUNNING container mounts at ``/work`` — ``None`` if not running."""
+        code, out, _err = await self._docker(
+            [
+                "inspect",
+                "-f",
+                "{{.State.Running}}|{{range .Mounts}}"
+                f'{{{{if eq .Destination "{_WORK_MOUNT}"}}}}{{{{.Source}}}}{{{{end}}}}'
+                "{{end}}",
+                name,
+            ],
+            timeout_s=10.0,
+        )
+        if code != 0:
+            return None
+        running, _, mount = out.decode().strip().partition("|")
+        return mount if running == "true" else None
+
     async def acquire(self, project_id: uuid.UUID, workspace_path: str) -> DockerSandboxSession:
+        """The box for ``project_id`` — a RUN id (#1107) — mounted on ``workspace_path``."""
         async with self._registry_lock:
             lock = self._locks.setdefault(project_id, asyncio.Lock())
         async with lock:
             entry = self._containers.get(project_id)
-            if entry is not None and await self._is_running(entry.name):
+            if (
+                entry is not None
+                and entry.workspace_path == workspace_path
+                and await self._is_running(entry.name)
+            ):
                 entry.last_used = time.monotonic()
                 return DockerSandboxSession(container=entry.name, docker=self)
             if entry is not None:
                 await self._teardown(project_id)
+            name = _container_name(project_id)
+            if await self._running_mount(name) == workspace_path:
+                # Another process (worker ↔ API) already runs this run's box on this
+                # worktree. Recreating it would ``rm -f`` the box mid-command.
+                self._containers[project_id] = _Entry(
+                    name=name,
+                    last_used=time.monotonic(),
+                    workspace_path=workspace_path,
+                    adopted=True,
+                )
+                logger.info("sandbox_adopted", project_id=str(project_id), container=name)
+                return DockerSandboxSession(container=name, docker=self)
             return await self._create(project_id, workspace_path)
+
+    async def _free_slots_of_vanished_boxes(self) -> None:
+        """Free the slot of every box this process created that is no longer running.
+
+        The other process may have removed it (the worker releases a box the API
+        created when the run ends); without this the slot stays held until the
+        idle reap — 30 minutes in which the next run's ``acquire`` blocks."""
+        for pid in list(self._held):
+            entry = self._containers.get(pid)
+            if entry is not None and not await self._is_running(entry.name):
+                await self._teardown(pid)
 
     async def _ensure_network(self, network: str) -> None:
         """Idempotently create the sandbox's user-defined bridge network.
@@ -345,6 +399,8 @@ class DockerSandboxManager:
         await self._await_dind()
         name = _container_name(project_id)
         await self._docker(["rm", "-f", name], timeout_s=_DOCKER_OP_TIMEOUT_S)
+        if self._semaphore.locked():
+            await self._free_slots_of_vanished_boxes()
         await self._semaphore.acquire()
         sidecar: str | None = None
         network: str | None = None
@@ -392,7 +448,11 @@ class DockerSandboxManager:
                 f"sandbox create failed: {err.decode('utf-8', errors='replace').strip()}"
             )
         self._containers[project_id] = _Entry(
-            name=name, last_used=time.monotonic(), sidecar=sidecar, network=network
+            name=name,
+            last_used=time.monotonic(),
+            sidecar=sidecar,
+            network=network,
+            workspace_path=workspace_path,
         )
         self._held.add(project_id)
         logger.info("sandbox_created", project_id=str(project_id), container=name)
@@ -477,4 +537,9 @@ class DockerSandboxManager:
             if now - entry.last_used >= self._idle_reap_seconds
         ]
         for pid in stale:
+            entry = self._containers.get(pid)
+            if entry is not None and entry.adopted:
+                # Not ours to remove — its run (or its creator's reaper) ends it.
+                self._containers.pop(pid, None)
+                continue
             await self.release(pid)

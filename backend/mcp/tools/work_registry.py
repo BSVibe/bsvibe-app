@@ -72,7 +72,8 @@ async def _sandbox_for(run: ExecutionRun, workspace_dir: Path, ctx: ToolContext)
     manager = get_sandbox_manager()
     if manager is None:
         return None
-    return await manager.acquire(run.product_id, str(workspace_dir))
+    # Keyed by RUN (#1107) — the same box the worker's run loop holds, adopted not recreated.
+    return await manager.acquire(run.id, str(workspace_dir))
 
 
 async def _client_sandbox_for(run: ExecutionRun, ctx: ToolContext) -> Any:
