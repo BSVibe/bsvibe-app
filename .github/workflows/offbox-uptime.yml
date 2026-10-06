@@ -14,7 +14,7 @@
 #
 # It takes TWO readings and names the layer that broke (see
 # .github/scripts/offbox-probe.sh): a shallow ``/api/health`` for edge+tunnel+app,
-# and a deep ``/api/auth/login`` that also exercises the auth dependency. The
+# and a deep ``/api/health/auth`` that also exercises the auth dependency. The
 # first version probed only ``/api/health``, which is settings-in-settings-out —
 # so when Supabase was paused on 2026-09-11 it answered 200 through the whole
 # outage. A watch that green-lights an app whose auth is dead converts an outage

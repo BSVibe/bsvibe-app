@@ -117,6 +117,18 @@ class SupabaseAuthClient:
             raise SupabaseAuthError(f"supabase {grant_type} failed ({resp.status_code})")
         return _session_from_gotrue(resp.json())
 
+    async def health(self) -> bool:
+        """Is GoTrue answering? Read-only — spends no sign-in rate-limit budget."""
+        try:
+            resp = await self._http.get(f"{self._base_url}/auth/v1/health", headers=self._headers())
+        except httpx.HTTPError:
+            logger.warning("supabase_health_unreachable")
+            return False
+        if resp.status_code != 200:
+            logger.warning("supabase_health_failed", status=resp.status_code)
+            return False
+        return True
+
     async def password_login(self, email: str, password: str) -> SupabaseSession:
         return await self._token("password", {"email": email, "password": password})
 
