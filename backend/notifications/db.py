@@ -42,6 +42,9 @@ NotificationsBase = Base
 # here; they are derived per workspace from connector bindings + ``in_app``.
 DEFAULT_EVENTS: tuple[str, ...] = (
     "needs_you",
+    # #1111 — a verified result is ready for the founder's review (the approval
+    # card). Split from ``shipped``, which now means the run actually shipped.
+    "review_ready",
     "triggered",
     "shipped",
     "failed",
@@ -67,6 +70,7 @@ DEFAULT_EVENTS: tuple[str, ...] = (
 # can be missing.
 DEFAULT_MATRIX: dict[str, bool] = {
     "needs_you": True,
+    "review_ready": True,
     "triggered": True,
     "shipped": True,
     "failed": True,
@@ -80,6 +84,34 @@ DEFAULT_MATRIX: dict[str, bool] = {
 
 DEFAULT_QUIET_HOURS_START = "22:00"
 DEFAULT_QUIET_HOURS_END = "08:00"
+
+
+#: Events whose ABSENT switch means ON. Absence otherwise means "not chosen" —
+#: for ordinary moments that opt-in default is right; during an auth outage the
+#: in-app inbox is part of what breaks, so an alert nobody opted into is an alert
+#: nobody gets. An explicit ``False`` is still a No.
+DEFAULT_ON_EVENTS: frozenset[str] = frozenset({"auth_down"})
+
+
+def effective_switch(matrix: dict[str, bool], event: str) -> bool:
+    """Whether ``event`` is on for this saved matrix — the ONE rule the notify gate
+    and the settings view both read.
+
+    An explicit value wins. An ABSENT switch defaults per event: ``review_ready``
+    inherits ``shipped`` (#1111 — the approval card rode ``shipped`` before the
+    split, so a matrix saved before it keeps the founder's choice instead of
+    silently dropping the cards); ``DEFAULT_ON_EVENTS`` default on; the rest off.
+    """
+    if event in matrix:
+        return bool(matrix[event])
+    if event == "review_ready":
+        return bool(matrix.get("shipped", True))
+    return event in DEFAULT_ON_EVENTS
+
+
+def effective_matrix(matrix: dict[str, bool]) -> dict[str, bool]:
+    """Every known event's effective switch — what the settings surface shows."""
+    return {event: effective_switch(matrix, event) for event in DEFAULT_EVENTS}
 
 
 def default_matrix() -> dict[str, bool]:

@@ -66,19 +66,29 @@ def test_triggered_en() -> None:
     assert copy.body == "A github trigger started new work."
 
 
-def test_shipped_ko_and_en() -> None:
-    # Compact-card status label — terse, not a sentence (founder feedback: the old
-    # "검증된 산출물이 배포됐어요" was over-long; "작업 완료" 정도면 충분).
-    ko = notification_copy("shipped", "ko", detail="dedup 유틸 추가")
-    assert ko.title == "작업 완료"
+def test_review_ready_ko_and_en() -> None:
+    # Compact-card status label — terse, not a sentence. #1111: this card used to be
+    # titled "작업 완료"/"Done" under the ``shipped`` event, said at verify time —
+    # before approval and before any delivery. It is the review card now.
+    ko = notification_copy("review_ready", "ko", detail="dedup 유틸 추가")
+    assert ko.title == "검토할 결과가 나왔어요"
     assert ko.body == "dedup 유틸 추가"
-    en = notification_copy("shipped", "en", detail="Add dedup util")
-    assert en.title == "Done"
+    en = notification_copy("review_ready", "en", detail="Add dedup util")
+    assert en.title == "Ready for your review"
     assert en.body == "Add dedup util"
 
 
-def test_shipped_empty_detail_localized_fallback() -> None:
-    assert notification_copy("shipped", "ko", detail="").body == "검증된 산출물이 준비됐어요."
+def test_review_ready_empty_detail_localized_fallback() -> None:
+    assert notification_copy("review_ready", "ko", detail="").body == "검증된 산출물이 준비됐어요."
+
+
+def test_shipped_ko_and_en() -> None:
+    """#1111 — said when the run actually ships."""
+    ko = notification_copy("shipped", "ko", detail="dedup 유틸 추가")
+    assert ko.title == "배송됐어요"
+    assert ko.body == "dedup 유틸 추가"
+    assert notification_copy("shipped", "en", detail="x").title == "Shipped"
+    assert notification_copy("shipped", "ko", detail="").body == "작업이 배송됐어요."
 
 
 def test_failed_keeps_reason_verbatim() -> None:

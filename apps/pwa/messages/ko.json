@@ -755,6 +755,7 @@
       "quietCaption": "방해 금지 시간에는 해당 구간의 푸시 채널이 억제돼요(워크스페이스 시간대 기준). 인앱 인박스에는 needs-you를 포함해 모두 그대로 쌓여요.",
       "event": {
         "needs_you": "확인이 필요해요",
+        "review_ready": "검토할 결과",
         "triggered": "외부에서 시작됨",
         "shipped": "출시됨",
         "failed": "실패함",

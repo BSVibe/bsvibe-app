@@ -755,6 +755,7 @@
       "quietCaption": "Quiet hours suppress push channels during the window (evaluated in your workspace time zone). The in-app inbox still keeps everything, including needs-you.",
       "event": {
         "needs_you": "Needs you",
+        "review_ready": "Ready for review",
         "triggered": "Triggered",
         "shipped": "Shipped",
         "failed": "Failed",

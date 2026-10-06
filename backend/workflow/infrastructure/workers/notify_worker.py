@@ -64,6 +64,7 @@ from backend.notifications.db import (
     NotificationEventRow,
     NotificationPrefsRow,
     NotificationStatus,
+    effective_switch,
 )
 from backend.notifications.notify_builders import DecisionChoice, NotificationContent
 from backend.workers.base import BaseWorker
@@ -165,7 +166,8 @@ def _utcnow() -> datetime:
 #:
 #: An explicit ``False`` is still a No. This changes the default for a key the
 #: founder never set — never a choice they made.
-DEFAULT_ON_EVENTS: frozenset[str] = frozenset({"auth_down"})
+# ``DEFAULT_ON_EVENTS`` and the absent-switch rule live in the notifications leaf
+# (``effective_switch``) so the settings VIEW and this gate read one rule (#1111).
 
 
 def channels_for_event(matrix: dict[str, bool], *, event: str, bound: set[str]) -> set[str]:
@@ -183,7 +185,7 @@ def channels_for_event(matrix: dict[str, bool], *, event: str, bound: set[str]) 
     # ``DEFAULT_ON_EVENTS`` only changes the default for an ABSENT switch.
     # An explicit ``False`` is still a No — the founder turning an alert off is
     # a choice they made, and no default may override it.
-    if not matrix.get(event, event in DEFAULT_ON_EVENTS):
+    if not effective_switch(matrix, event):
         return set()
     return {ch for ch in bound if ch != IN_APP_CHANNEL}
 

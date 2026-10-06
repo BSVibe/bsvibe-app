@@ -119,7 +119,58 @@ async def move_run_status(
         )
     )
     await session.flush()
+    if to_status is RunStatus.SHIPPED:
+        await _announce_shipped(session, run)
     return True
+
+
+async def _announce_shipped(session: AsyncSession, run: ExecutionRun) -> None:
+    """Say "shipped" when the run SHIPS (#1111) — merged, or shipped locally.
+
+    Every move to SHIPPED passes through :func:`move_run_status`, so this is the one
+    honest place. It used to be said at VERIFY time, before Safe Mode approval and
+    before any delivery; that card is now ``review_ready``. Staged in the SAME
+    transaction as the move (confirmed iff the move commits); deduped per run. The
+    body is the run's latest deliverable title line; no buttons — nothing is left
+    to approve.
+    """
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.identity.workspaces_db import load_workspace_language  # noqa: PLC0415
+    from backend.notifications.copy import notification_copy  # noqa: PLC0415
+    from backend.notifications.emit import emit_notification  # noqa: PLC0415
+    from backend.workflow.domain.verified_deliverable import _shipped_detail  # noqa: PLC0415
+    from backend.workflow.infrastructure.db import Deliverable  # noqa: PLC0415
+
+    latest = (
+        await session.execute(
+            select(Deliverable)
+            .where(Deliverable.run_id == run.id)
+            .order_by(Deliverable.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    summary = ""
+    if latest is not None and isinstance(latest.payload, dict):
+        summary = str(latest.payload.get("summary") or "")
+    language = await load_workspace_language(session, run.workspace_id)
+    copy = notification_copy("shipped", language, detail=_shipped_detail(summary))
+    payload: dict[str, object] = {
+        "title": copy.title,
+        "body": copy.body,
+        "run_id": str(run.id),
+    }
+    if latest is not None:
+        payload["link"] = f"/deliverables/{latest.id}"
+    await emit_notification(
+        session,
+        workspace_id=run.workspace_id,
+        product_id=run.product_id,
+        event="shipped",
+        dedupe_key=f"shipped:{run.id}",
+        payload=payload,
+        producer_id="workflow:run_status",
+    )
 
 
 __all__ = ["is_allowed_move", "move_run_status"]

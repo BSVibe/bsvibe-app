@@ -42,6 +42,7 @@ function prefs(overrides: Partial<NotificationPrefsView> = {}): NotificationPref
   return {
     matrix: {
       needs_you: true,
+      review_ready: true,
       triggered: true,
       shipped: true,
       failed: true,

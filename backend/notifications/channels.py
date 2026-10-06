@@ -23,7 +23,11 @@ job with no triggering write (its own commit is the only gate):
   (webhook / schedule tick) minting a Request; a founder-initiated DIRECT run
   does NOT notify (the founder started it).
 * :func:`~backend.workflow.domain.verified_deliverable.write_verified_deliverable`
-  (``workflow:verified_deliverable``) → ``shipped`` — the verified terminal ships.
+  (``workflow:verified_deliverable``) → ``review_ready`` — a verified result is
+  ready for the founder's review (the approval card; #1111 split it from ``shipped``).
+* :func:`~backend.workflow.application.run_status.move_run_status`
+  (``workflow:run_status``) → ``shipped`` — the run actually SHIPPED (merged, or
+  shipped locally). Every move to SHIPPED passes through it.
 * :meth:`~backend.workflow.application.agent_runner.AgentRunner.transition`
   (``workflow:run_failed``) → ``failed`` — a run reaches its FAILED terminal.
 * :class:`~backend.workflow.infrastructure.workers.daily_brief_worker.DailyBriefWorker`
@@ -63,6 +67,7 @@ NOTIFICATION_OUTBOX: Channel[NotificationEventRow] = Channel(
         "worker:intake_worker",
         "workflow:verified_deliverable",
         "workflow:run_failed",
+        "workflow:run_status",
         "worker:daily_brief",
         "worker:auth_dependency",
     ),

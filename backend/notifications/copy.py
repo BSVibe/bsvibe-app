@@ -77,7 +77,9 @@ class NotificationCopy:
 _TITLES: dict[str, dict[str, str]] = {
     "needs_you": {"en": "A run needs your decision", "ko": "결정이 필요한 작업이 있어요"},
     "triggered": {"en": "New work came in", "ko": "새 작업이 들어왔어요"},
-    "shipped": {"en": "Done", "ko": "작업 완료"},
+    "review_ready": {"en": "Ready for your review", "ko": "검토할 결과가 나왔어요"},
+    # #1111 — said when the run SHIPS (merged / shipped locally), not at verify.
+    "shipped": {"en": "Shipped", "ko": "배송됐어요"},
     "failed": {"en": "A run failed", "ko": "작업이 실패했어요"},
     "daily_brief": {"en": "Your daily brief", "ko": "오늘의 요약"},
     "auth_down": {
@@ -94,9 +96,13 @@ _FALLBACK_BODY: dict[str, dict[str, str]] = {
         "en": "A run has paused and needs your input.",
         "ko": "작업이 멈췄고 결정을 기다리고 있어요.",
     },
-    "shipped": {
+    "review_ready": {
         "en": "A verified deliverable is ready.",
         "ko": "검증된 산출물이 준비됐어요.",
+    },
+    "shipped": {
+        "en": "The work has shipped.",
+        "ko": "작업이 배송됐어요.",
     },
     "failed": {
         "en": "A run reached its failed terminal.",
@@ -198,7 +204,7 @@ _CTA_PREFIX: dict[str, dict[str, str]] = {
 }
 
 #: Which CTA prefix each event uses. Unlisted events fall back to ``review``.
-_CTA_KIND: dict[str, str] = {"needs_you": "answer", "shipped": "report"}
+_CTA_KIND: dict[str, str] = {"needs_you": "answer", "review_ready": "report", "shipped": "report"}
 
 
 def _resolve_language(language: str | None) -> str:

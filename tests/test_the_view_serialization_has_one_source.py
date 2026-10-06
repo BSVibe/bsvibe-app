@@ -89,7 +89,9 @@ def test_the_matrix_validator_still_rejects_a_wrong_event_set() -> None:
     """특성화 — 통합 후에도 검증이 그대로여야 한다."""
     from backend.notifications.serialization import validate_matrix
 
-    with pytest.raises(ValueError, match="matrix events must be exactly"):
+    # #1111 — a MISSING event is allowed now (a matrix saved before ``review_ready``);
+    # an UNKNOWN one is still rejected, which is what this pins.
+    with pytest.raises(ValueError, match="got unknown"):
         validate_matrix({"not-an-event": {"in_app": True}})
 
 

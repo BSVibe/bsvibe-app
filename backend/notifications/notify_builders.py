@@ -49,8 +49,8 @@ class NotificationContent:
     title: str
     body: str
     link: str | None = None
-    # The verified Deliverable this notification is about (``shipped`` events
-    # only). When set on a ``shipped`` event, chat channels that support inline
+    # The verified Deliverable this notification is about. When set on a
+    # ``review_ready`` event (#1111 — the approval card; it was ``shipped``), chat channels that support inline
     # actions (telegram) render Approve/Reject buttons carrying it in the
     # ``callback_data`` so the founder can settle the held delivery in place.
     deliverable_id: str | None = None
@@ -193,7 +193,7 @@ def _slack_approval_blocks(content: NotificationContent) -> list[dict[str, Any]]
 
     Returns ``None`` for any non-``shipped`` event or a shipped event without a
     ``deliverable_id`` — those stay plain text (no blocks)."""
-    if content.event != "shipped" or not content.deliverable_id:
+    if content.event != "review_ready" or not content.deliverable_id:
         return None
     ko = content.language == "ko"
     approve = "승인" if ko else "Approve"
@@ -258,7 +258,7 @@ def _approval_keyboard(content: NotificationContent) -> dict[str, Any] | None:
     inbound callback handler parses it to settle the held Safe-Mode item. Labels
     are localized to the workspace language ("ko" → 승인/거절, else Approve/Reject).
     """
-    if content.event != "shipped" or not content.deliverable_id:
+    if content.event != "review_ready" or not content.deliverable_id:
         return None
     ko = content.language == "ko"
     approve = "승인" if ko else "Approve"
@@ -419,7 +419,7 @@ def _discord_components(content: NotificationContent) -> list[dict[str, Any]] | 
 
     Returns ``None`` for any non-``shipped`` event or a shipped event without a
     ``deliverable_id`` — those stay content-only (no components)."""
-    if content.event != "shipped" or not content.deliverable_id:
+    if content.event != "review_ready" or not content.deliverable_id:
         return None
     ko = content.language == "ko"
     approve = "승인" if ko else "Approve"

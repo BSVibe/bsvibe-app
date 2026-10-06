@@ -412,13 +412,16 @@ async def write_verified_deliverable(
     from backend.notifications.emit import emit_notification  # noqa: PLC0415 — leaf, local
 
     language = await load_workspace_language(session, run.workspace_id)
-    copy = notification_copy("shipped", language, detail=_shipped_detail(summary))
+    # #1111 — "ready for your review", NOT "shipped": the run is review_ready and,
+    # with Safe Mode on, waits for the founder. ``shipped`` is said when it ships
+    # (``run_status.move_run_status``). This card carries the approve/reject buttons.
+    copy = notification_copy("review_ready", language, detail=_shipped_detail(summary))
     await emit_notification(
         session,
         workspace_id=run.workspace_id,
         product_id=run.product_id,
-        event="shipped",
-        dedupe_key=f"shipped:{deliverable.id}",
+        event="review_ready",
+        dedupe_key=f"review_ready:{deliverable.id}",
         payload={
             "title": copy.title,
             "body": copy.body,

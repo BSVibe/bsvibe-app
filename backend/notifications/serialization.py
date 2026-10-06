@@ -27,6 +27,7 @@ from backend.notifications.db import (
     DEFAULT_QUIET_HOURS_START,
     NotificationPrefsRow,
     default_matrix,
+    effective_matrix,
 )
 
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -52,9 +53,14 @@ def validate_matrix(matrix: dict[str, bool]) -> dict[str, bool]:
     the nested dict as a truthy "on" for every event including the ones the
     founder turned off.
     """
-    if set(matrix.keys()) != EVENT_SET:
+    # Known events only — an unknown id is still rejected. A MISSING one is allowed
+    # (#1111): adding ``review_ready`` would otherwise reject every matrix saved
+    # before it, and a PWA still holding the old event list could not save at all.
+    # An absent switch reads through ``effective_switch``.
+    unknown = set(matrix.keys()) - EVENT_SET
+    if unknown:
         raise ValueError(
-            f"matrix events must be exactly {sorted(EVENT_SET)}; got {sorted(matrix.keys())}"
+            f"matrix events must be among {sorted(EVENT_SET)}; got unknown {sorted(unknown)}"
         )
     for event_id, enabled in matrix.items():
         if not isinstance(enabled, bool):
@@ -131,7 +137,9 @@ async def get_or_create_prefs(
 def prefs_view_from_row(row: NotificationPrefsRow, channels: list[str]) -> PrefsView:
     """행 + 파생된 채널 목록 → 응답 모양."""
     return PrefsView(
-        matrix=row.matrix,
+        # What the gate will actually do, every known event filled — an absent key
+        # would draw an "off" switch for an event that is on (#1111).
+        matrix=effective_matrix(row.matrix),
         quiet_hours_enabled=row.quiet_hours_enabled,
         quiet_hours_start=row.quiet_hours_start,
         quiet_hours_end=row.quiet_hours_end,
