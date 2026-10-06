@@ -27,6 +27,15 @@ from backend.data import Base
 IntakeBase = Base
 
 
+#: Payload marker of a TriggerEvent intake evaluated and REFUSED (binding filter,
+#: or #1113 the workspace's monthly token budget). Never becomes a Request.
+RECEIVE_FILTERED_KEY = "_received_filtered"
+
+#: #1113 — payload marker of a webhook TriggerEvent PARKED because its workspace
+#: holds its whole concurrent-run cap. It waits and is released when a slot frees.
+INTAKE_HELD_KEY = "_intake_held"
+
+
 class TriggerKind(StrEnum):
     """Mirrors :data:`backend.workflow.domain.incoming.TriggerKindLiteral`."""
 
