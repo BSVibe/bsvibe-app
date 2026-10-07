@@ -80,7 +80,13 @@ class _FakeClient:
         return dict(self._pr)
 
     async def merge_pr(
-        self, owner: str, repo: str, number: int, *, method: str = "squash"
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        *,
+        method: str = "squash",
+        commit_title: str | None = None,
     ) -> MergeResult:
         self.merge_calls.append((owner, repo, number, method))
         return self._merge_result
