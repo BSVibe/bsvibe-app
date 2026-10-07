@@ -49,6 +49,7 @@ from backend.workflow.application.delivery.connector_dispatch import (
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import (
     product_dispatch_config,
+    resolve_account_for_caller,
     resolve_via_caller,
 )
 from backend.workflow.application.runtime.dispatcher import _ResolverFrameLlm
@@ -255,16 +256,37 @@ def build_agent_execution_deps(
             client_workspace_dir=agent_workspace_dir,
         )
         if resolved is None:
-            # Fallthrough writes a Decision when there's truly no LLM
-            # for the workspace — preserves the existing founder UX.
-            await resolve_workspace_model_account(session, run)
-            logger.info(
-                "agent_runtime_account_unresolved",
-                run_id=str(run.id),
-                workspace_id=str(run.workspace_id),
+            # The resolver found nothing; the legacy fallback may still find the
+            # workspace's one active account (#1073 — its answer used to be
+            # discarded and the run stalled). Only when it finds nothing too does
+            # it write the Decision — preserves the existing founder UX.
+            fallback = await resolve_workspace_model_account(session, run)
+            if fallback is None:
+                logger.info(
+                    "agent_runtime_account_unresolved",
+                    run_id=str(run.id),
+                    workspace_id=str(run.workspace_id),
+                    caller_id=CALLER_AGENT_LOOP_ACT,
+                )
+                return None
+            resolved = await resolve_account_for_caller(
+                session,
+                account=fallback,
                 caller_id=CALLER_AGENT_LOOP_ACT,
+                workspace_id=run.workspace_id,
+                settings=settings,
+                redis=redis_client,
+                session_factory=session_factory,
+                run_id=run.id,
+                repo_url=repo_url,
+                execution_target=execution_target,
+                client_workspace_dir=agent_workspace_dir,
             )
-            return None
+            logger.info(
+                "agent_runtime_account_fallback",
+                run_id=str(run.id),
+                account_id=str(fallback.id),
+            )
 
         retriever = await _retriever_for(session, run.workspace_id)
         suggested_skill, suggested_skill_description = _frame_skill_hint(run, _skill_loader_for)

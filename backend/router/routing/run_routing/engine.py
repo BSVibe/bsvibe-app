@@ -273,20 +273,30 @@ def _rule_matches(rule: RunRoutingRuleRow, ctx: RoutingContext) -> bool:
     return all(_evaluate_condition(c, ctx) for c in conditions if isinstance(c, dict))
 
 
-def evaluate_rules(rules: list[RunRoutingRuleRow], ctx: RoutingContext) -> str | None:
-    """Return the ``target`` of the first matching active rule by priority
-    (ascending), else the active default rule's target, else ``None``."""
-    default_target: str | None = None
+def matching_rules(rules: list[RunRoutingRuleRow], ctx: RoutingContext) -> list[RunRoutingRuleRow]:
+    """Every active rule that applies to ``ctx`` in the order to try them:
+    matching explicit rules by priority, then the first active default rule."""
+    matched: list[RunRoutingRuleRow] = []
+    default_rule: RunRoutingRuleRow | None = None
     for rule in sorted(rules, key=lambda r: r.priority):
         if not rule.is_active:
             continue
         if rule.is_default:
-            if default_target is None:
-                default_target = rule.target
+            if default_rule is None:
+                default_rule = rule
             continue
         if _rule_matches(rule, ctx):
-            return rule.target
-    return default_target
+            matched.append(rule)
+    if default_rule is not None:
+        matched.append(default_rule)
+    return matched
+
+
+def evaluate_rules(rules: list[RunRoutingRuleRow], ctx: RoutingContext) -> str | None:
+    """Return the ``target`` of the first matching active rule by priority
+    (ascending), else the active default rule's target, else ``None``."""
+    ordered = matching_rules(rules, ctx)
+    return ordered[0].target if ordered else None
 
 
 async def resolve_route(session: AsyncSession, run: ExecutionRun) -> ModelAccount | None:
