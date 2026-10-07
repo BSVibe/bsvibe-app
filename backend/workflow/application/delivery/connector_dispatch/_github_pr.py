@@ -14,6 +14,7 @@ that exists for one execution model and silently not for the other.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import TYPE_CHECKING
 
@@ -70,6 +71,49 @@ async def _source_github_issue_number(
     return int(number) if isinstance(number, int) else None
 
 
+_ISSUE_REF = re.compile(r"(?<![\w/&])#(\d+)\b")
+
+
+def with_founder_request(body: str, *, intent: str, source_issue: int | None, language: str) -> str:
+    """#1144 — append the founder's directive, quoted verbatim, and ``Refs`` for
+    every ``#N`` it names.
+
+    The body is the deterministic report (title · changed files · what was
+    proven); the agent's prose is kept out on purpose (streaming narration). The
+    founder's own words are the WHY the reviewer was missing. Quoted so the
+    directive's headings do not outrank the report's.
+
+    ``Refs``, never ``Closes``: a directive names issues it is not resolving
+    ("이전 런은 … #1141 로 고쳤다"). An issue-SOURCED run is returned unchanged —
+    its body already carries ``Closes #N`` and the issue itself is the request.
+    """
+    text = intent.strip()
+    if source_issue is not None or not text:
+        return body
+    label = "요청" if language == "ko" else "Request"
+    quoted = "\n".join(f"> {line}" if line.strip() else ">" for line in text.splitlines())
+    sections = [body.strip(), f"**{label}**\n\n{quoted}"]
+    refs = list(dict.fromkeys(_ISSUE_REF.findall(text)))
+    if refs:
+        sections.append("Refs " + ", ".join(f"#{n}" for n in refs))
+    return "\n\n".join(sections)
+
+
+async def _founder_request(
+    session_factory: async_sessionmaker[AsyncSession], run_id: uuid.UUID, workspace_id: uuid.UUID
+) -> tuple[str, str]:
+    """The run's directive and the workspace's output language."""
+    from backend.data.rls import workspace_session_scope  # noqa: PLC0415
+    from backend.identity.workspaces_db import load_workspace_language  # noqa: PLC0415
+
+    async with session_factory() as session, workspace_session_scope(session, workspace_id):
+        run = await session.get(ExecutionRun, run_id)
+        payload = (run.payload if run is not None else None) or {}
+        intent = str(payload.get("intent_text") or payload.get("text") or "")
+        language = await load_workspace_language(session, workspace_id)
+    return intent, language or "en"
+
+
 async def _open_pr_and_settle(
     *,
     deps: GithubDeliveryDeps,
@@ -94,6 +138,15 @@ async def _open_pr_and_settle(
     the auto-merge watch, comment back on the originating issue. Letting the
     two models drift here is how one of them quietly loses a feature.
     """
+    # #1144 — the founder's directive is the why; link what it names.
+    try:
+        intent, language = await _founder_request(deps.session_factory, run_id, workspace_id)
+        body = with_founder_request(
+            body, intent=intent, source_issue=source_issue, language=language
+        )
+    except Exception:  # noqa: BLE001 — a missing directive never blocks the PR
+        logger.warning("github_delivery_request_section_failed", run_id=str(run_id), exc_info=True)
+
     # 4. Open the PR via the github plugin's open_pr action. Routing (repo/base) is
     #    the founder-set config; head is the run branch; title/body from content.
     plugin = deps.plugins_by_name.get("github")
