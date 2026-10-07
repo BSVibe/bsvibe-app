@@ -245,6 +245,17 @@ class _Client:
         }
 
 
+@pytest.fixture(autouse=True)
+def _put_the_real_repository_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_worker`` swaps the module's repository class for a fake. Registering the
+    real one with ``monkeypatch`` first puts it back after every test — the raw
+    assignment alone outlived this file, and the next merge-watch test to run
+    claimed rows from a fake that has no ``claim_due``."""
+    from backend.workflow.infrastructure.workers import merge_watch_worker as mod
+
+    monkeypatch.setattr(mod, "GithubMergeWatchRepository", mod.GithubMergeWatchRepository)
+
+
 def _worker(
     *, mergeable_state: str = "unstable", conclusion: str | None = "failure"
 ) -> tuple[Any, _Repo, list[Any]]:

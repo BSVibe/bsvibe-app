@@ -102,13 +102,18 @@ def test_the_record_is_not_mangled_when_args_are_not_uvicorns_shape() -> None:
 
 
 def test_install_is_idempotent() -> None:
-    """create_app() runs per-process but tests build many apps."""
+    """create_app() runs per-process but tests build many apps.
+
+    Counted from a clean logger, not as "how many did this add": any test that
+    built the app earlier had already installed the one filter, so the delta was
+    0 — the idempotence this asserts — and the test failed whenever it ran after
+    one (seen in a wide local run, 2026-10-06)."""
     logger = logging.getLogger("uvicorn.access")
-    before = len(logger.filters)
+    logger.filters = [f for f in logger.filters if not isinstance(f, RedactQueryValuesFilter)]
     install_access_log_redaction()
     install_access_log_redaction()
-    added = len(logger.filters) - before
-    assert added == 1, f"expected exactly one filter, added {added}"
+    installed = sum(isinstance(f, RedactQueryValuesFilter) for f in logger.filters)
+    assert installed == 1, f"expected exactly one filter, found {installed}"
 
 
 def test_creating_the_app_installs_it() -> None:
