@@ -423,3 +423,113 @@ class TestClassifiedIntentRouting:
         )
         with pytest.raises(NoMatchingRouteError):
             await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+
+
+class TestRuleTargetWithoutAccount:
+    """#1073 — a rule whose target has no active account is skipped, not fatal."""
+
+    async def test_stage_rule_with_deleted_target_falls_to_default_rule(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        cloud_account: ModelAccount,
+    ) -> None:
+        session.add_all(
+            [
+                RunRoutingRuleRow(
+                    workspace_id=workspace.id,
+                    name="frame -> deleted account",
+                    caller_id=CALLER_FRAME,
+                    priority=0,
+                    is_default=False,
+                    target="openai/gpt-gone",
+                    conditions=[],
+                    is_active=True,
+                ),
+                RunRoutingRuleRow(
+                    workspace_id=workspace.id,
+                    name="catch-all",
+                    caller_id=None,
+                    priority=100,
+                    is_default=True,
+                    target=cloud_account.litellm_model,
+                    conditions=[],
+                    is_active=True,
+                ),
+            ]
+        )
+        await session.flush()
+
+        resolver = ModelAccountResolver(session, settings=get_settings())
+        resolved = await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+
+        assert resolved.account.id == cloud_account.id
+        assert resolved.source == "explicit_rule"
+
+    async def test_skipped_rule_is_logged_with_id_and_target(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+        cloud_account: ModelAccount,
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        stale = RunRoutingRuleRow(
+            workspace_id=workspace.id,
+            name="frame -> deleted account",
+            caller_id=CALLER_FRAME,
+            priority=0,
+            is_default=False,
+            target="openai/gpt-gone",
+            conditions=[],
+            is_active=True,
+        )
+        session.add_all(
+            [
+                stale,
+                RunRoutingRuleRow(
+                    workspace_id=workspace.id,
+                    name="catch-all",
+                    caller_id=None,
+                    priority=100,
+                    is_default=True,
+                    target=cloud_account.litellm_model,
+                    conditions=[],
+                    is_active=True,
+                ),
+            ]
+        )
+        await session.flush()
+
+        resolver = ModelAccountResolver(session, settings=get_settings())
+        with capture_logs() as logs:
+            await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)
+
+        events = [e for e in logs if e["event"] == "routing_rule_target_missing"]
+        assert len(events) == 1
+        assert events[0]["log_level"] == "warning"
+        assert events[0]["rule_id"] == str(stale.id)
+        assert events[0]["target"] == "openai/gpt-gone"
+
+    async def test_no_account_for_any_rule_still_raises_without_default(
+        self,
+        session: AsyncSession,
+        workspace: WorkspaceRow,
+    ) -> None:
+        session.add(
+            RunRoutingRuleRow(
+                workspace_id=workspace.id,
+                name="frame -> deleted account",
+                caller_id=CALLER_FRAME,
+                priority=0,
+                is_default=False,
+                target="openai/gpt-gone",
+                conditions=[],
+                is_active=True,
+            )
+        )
+        await session.flush()
+
+        resolver = ModelAccountResolver(session, settings=get_settings())
+        with pytest.raises(NoMatchingRouteError):
+            await resolver.resolve_for(caller_id=CALLER_FRAME, workspace_id=workspace.id)

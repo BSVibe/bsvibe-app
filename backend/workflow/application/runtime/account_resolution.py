@@ -64,6 +64,85 @@ async def list_active_workspace_accounts(
     return list(rows)
 
 
+def _build_resolver(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    settings: Settings,
+    redis: Any = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    run_id: uuid.UUID | None = None,
+    repo_url: str | None = None,
+    execution_target: str = "server_sandbox",
+    client_workspace_dir: str | None = None,
+) -> ModelAccountResolver:
+    """The one place a :class:`ModelAccountResolver` is wired for a call site."""
+
+    async def _build_intent_classifier() -> IntentClassifier | None:
+        # Lift N1 — built lazily by the resolver ONLY when a rule keys on
+        # classified_intent (semantic category routing). Scoped to the
+        # workspace's personal account, where intents + embedding config live.
+        from backend.router.accounts.account_service import (  # noqa: PLC0415
+            ensure_personal_account,
+        )
+        from backend.router.routing.run_routing.intent_classifier import (  # noqa: PLC0415
+            build_intent_classifier,
+        )
+
+        account = await ensure_personal_account(session, workspace_id=workspace_id)
+        return await build_intent_classifier(
+            session, settings, workspace_id=workspace_id, account_id=account.id
+        )
+
+    return ModelAccountResolver(
+        session,
+        settings=settings,
+        redis=redis,
+        session_factory=session_factory,
+        run_id=run_id,
+        repo_url=repo_url,
+        execution_target=execution_target,
+        client_workspace_dir=client_workspace_dir,
+        intent_classifier_builder=_build_intent_classifier,
+    )
+
+
+async def resolve_account_for_caller(
+    session: AsyncSession,
+    *,
+    account: ModelAccount,
+    caller_id: str,
+    workspace_id: uuid.UUID,
+    settings: Settings,
+    redis: Any = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    run_id: uuid.UUID | None = None,
+    repo_url: str | None = None,
+    execution_target: str = "server_sandbox",
+    client_workspace_dir: str | None = None,
+) -> ResolvedAccount:
+    """Wrap an account chosen OUTSIDE the resolver (the exactly-one-active
+    fallback of :func:`resolve_workspace_model_account`) in the same
+    :class:`ResolvedAccount` the resolver returns — adapter wiring included."""
+    resolver = _build_resolver(
+        session,
+        workspace_id=workspace_id,
+        settings=settings,
+        redis=redis,
+        session_factory=session_factory,
+        run_id=run_id,
+        repo_url=repo_url,
+        execution_target=execution_target,
+        client_workspace_dir=client_workspace_dir,
+    )
+    return await resolver.resolve_account(
+        caller_id=caller_id,
+        workspace_id=workspace_id,
+        account=account,
+        source="workspace_fallback",
+    )
+
+
 async def resolve_via_caller(
     session: AsyncSession,
     *,
@@ -97,24 +176,9 @@ async def resolve_via_caller(
     ``session.flush()`` ("Session is already flushing") — the E18 bug.
     """
 
-    async def _build_intent_classifier() -> IntentClassifier | None:
-        # Lift N1 — built lazily by the resolver ONLY when a rule keys on
-        # classified_intent (semantic category routing). Scoped to the
-        # workspace's personal account, where intents + embedding config live.
-        from backend.router.accounts.account_service import (  # noqa: PLC0415
-            ensure_personal_account,
-        )
-        from backend.router.routing.run_routing.intent_classifier import (  # noqa: PLC0415
-            build_intent_classifier,
-        )
-
-        account = await ensure_personal_account(session, workspace_id=workspace_id)
-        return await build_intent_classifier(
-            session, settings, workspace_id=workspace_id, account_id=account.id
-        )
-
-    resolver = ModelAccountResolver(
+    resolver = _build_resolver(
         session,
+        workspace_id=workspace_id,
         settings=settings,
         redis=redis,
         session_factory=session_factory,
@@ -122,7 +186,6 @@ async def resolve_via_caller(
         repo_url=repo_url,
         execution_target=execution_target,
         client_workspace_dir=client_workspace_dir,
-        intent_classifier_builder=_build_intent_classifier,
     )
     try:
         return await resolver.resolve_for(caller_id=caller_id, workspace_id=workspace_id)
@@ -316,6 +379,7 @@ __all__ = [
     "list_active_workspace_accounts",
     "product_dispatch_config",
     "product_is_client_attach",
+    "resolve_account_for_caller",
     "resolve_judge_llm",
     "resolve_via_caller",
     "resolve_workspace_model_account",

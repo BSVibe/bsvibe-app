@@ -190,7 +190,7 @@ class ModelAccountResolver:
         """
         # Validate the caller is known — mistyped ids should never reach
         # the rule matcher.
-        spec = get_caller_spec(caller_id, skill_names=self._skill_names)
+        get_caller_spec(caller_id, skill_names=self._skill_names)
 
         # Thread the workspace OUTPUT language onto the contextvar so the
         # adapter's ``chat`` can append a "write prose in <lang>" directive to
@@ -226,6 +226,25 @@ class ModelAccountResolver:
                 workspace_id=str(workspace_id),
             )
             raise NoMatchingRouteError(caller_id=caller_id, workspace_id=workspace_id)
+
+        return await self.resolve_account(
+            caller_id=caller_id, workspace_id=workspace_id, account=account, source=source
+        )
+
+    async def resolve_account(
+        self,
+        *,
+        caller_id: str,
+        workspace_id: uuid.UUID,
+        account: ModelAccount,
+        source: str,
+    ) -> ResolvedAccount:
+        """Bundle an ALREADY-chosen ``account`` with its adapter + provenance.
+
+        :meth:`resolve_for` ends here; a call site that picked the account by
+        other means (the runtime's legacy exactly-one-active fallback, #1073)
+        enters here so it gets the same adapter wiring and routing record."""
+        spec = get_caller_spec(caller_id, skill_names=self._skill_names)
 
         # Executor accounts never carry an api key (CLI subprocess uses
         # the host's own credential); skip the decryption entirely so a
@@ -400,7 +419,7 @@ class ModelAccountResolver:
         from sqlalchemy import select  # noqa: PLC0415
 
         from backend.router.routing.run_routing.engine import (  # noqa: PLC0415
-            evaluate_rules,
+            matching_rules,
         )
 
         stmt = (
@@ -423,10 +442,21 @@ class ModelAccountResolver:
 
                 classified = await classifier.classify(ctx.intent_text or "")
                 ctx = replace(ctx, classified_intent=classified)
-        target = evaluate_rules(rules, ctx)
-        if target is None:
-            return None
-        return await self._account_for_target(workspace_id, target)
+        # #1073 — a rule whose target has no active account (deleted / disabled)
+        # is skipped, not fatal: the next matching rule, then the default rule,
+        # still get their turn.
+        for rule in matching_rules(rules, ctx):
+            account = await self._account_for_target(workspace_id, rule.target)
+            if account is not None:
+                return account
+            logger.warning(
+                "routing_rule_target_missing",
+                rule_id=str(rule.id),
+                target=rule.target,
+                workspace_id=str(workspace_id),
+                caller_id=caller_id,
+            )
+        return None
 
     async def _build_routing_context(self, caller_id: str) -> Any:
         """Build the :class:`RoutingContext` the engine evaluates conditions
