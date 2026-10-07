@@ -29,11 +29,25 @@
 |---|---|---|---|
 | #1133 | #1115 | a run whose last Safe Mode item ends undelivered is cancelled — frees the cap slot | ⏳ next cleanup deny |
 | #1134 | (log noise) | `GET /api/health/auth` relays GoTrue `/auth/v1/health`; offbox probe + heartbeat (workstation #10) read it instead of a bogus login | ✅ 200 via real Supabase · `supabase_token_failed` gone |
-| #1135 | #1107 | **one sandbox container per RUN** (`bsvibe-sbx-<run id>`) · a live box of the same run + worktree is adopted, not `rm -f`-ed (worker ↔ API) · slots of boxes removed elsewhere are freed | ⏳ next server_sandbox run: `sandbox_adopted` in API log |
+| #1135 | #1107 | **one sandbox container per RUN** (`bsvibe-sbx-<run id>`) · a live box of the same run + worktree is adopted, not `rm -f`-ed (worker ↔ API) · slots of boxes removed elsewhere are freed | ✅ `bsvibe-sbx-<run id>` per run (runs `4414bcd5`, `b2ebd3c4`) · ⏳ `sandbox_adopted` not yet seen |
 | #1136 | #1112 | "승인하고 출시" on a GitHub product writes the delivery event (`founder_approved` → skips Safe Mode), no local force-merge, run stays review_ready → PR → ships on merge | ⏳ next ship on a BSVibe run |
 | #1137 | #1113 | **webhook work at intake:** run cap full → held (`_intake_held`, released oldest-first per free slot) · monthly token budget spent → refused + `needs_you` · **claim excludes refused/held rows in SQL** | ⏳ held / released / refused log lines |
 | #1138 | #1116 | tool-menu guard (every `bsvibe_*` / `executor/<x>` a description names must exist) · webhook skips client_attach `run/<8hex>` PR branches | ⏳ next BStockReport PR makes no run |
 | #1139 | (tests) | two order-dependent tests fixed (unrestored module patch · idempotence counted as a delta) | ✅ whole suite in one process, 6732 passed |
+| #1141 | (measured) | the server-side gate derives commands only over changed paths still present — a removed scratch file no longer yields `ruff … E902` | ✅ run `b2ebd3c4` passed with 3 removed `_patch_*.py` |
+| #1142 | #1073 | **written by BSVibe itself:** a rule whose target has no account is skipped (`routing_rule_target_missing`) → next rule → default; the runtime keeps the account the fallback found | ✅ CI green, auto-merged, run shipped |
+
+**Measurement 10-07 — #1073 handed to BSVibe** (`bsvibe_direct`, product `bsvibe`):
+
+| Run | Outcome | Tokens in/out | Why |
+|---|---|---|---|
+| `4414bcd5` | stopped on a question after 2 failed verifies (15 min) → discarded | 358k / 28k | gate linted a scratch file the agent had removed (E902) → #1141 |
+| `b2ebd3c4` | verified in 8 m 48 s → approved → PR #1142 → auto-merged → shipped | 379k / 24k | — |
+
+Found by it: #1143 (auto-merge leaves the run commit message — the directive's first line — on main) · #1144
+(PR body has no `Closes #N`, no why) · #1145 (the agent writes scratch `_patch_*.py` at the repo root, twice).
+The own-PR skip held (#1142 made no run). A run that stops on a QUESTION makes no status transition —
+watch `agent_worker_driven`, not transitions.
 
 Checklists: `docs/e2e/{run-with-nothing-to-deliver,auth-health-probe,sandbox-per-run,ship-on-github-product,intake-gates-webhook-work,tool-menu-and-own-branches}-checklist.md`.
 
@@ -48,7 +62,7 @@ Checklists: `docs/e2e/{run-with-nothing-to-deliver,auth-health-probe,sandbox-per
 | #1124 | #1105 | `run_token_cap_reached` gets a question + "예산 늘려 계속" | ⏳ next cap stop |
 | #1125 | #1108 | next chain step keeps `binding_id` · `kind` → delivery gate survives | ⏳ a real cross-stage split |
 | #1127 | #1110 | **every run status change goes through `run_status.move_run_status`** (AST guard) | ✅ BStockReport weekly run 10-05 reached review_ready normally |
-| #1128 | #1109 | transition table (shipped is final) · **GitHub runs ship on MERGE** (awaiting_merge, PrConcluded callback, cap exclusion) | ⏳ next GitHub delivery |
+| #1128 | #1109 | transition table (shipped is final) · **GitHub runs ship on MERGE** (awaiting_merge, PrConcluded callback, cap exclusion) | ✅ run `b2ebd3c4`: PR #1142 → review_ready + awaiting_merge → merge watch auto-merged → shipped 2 s later |
 | #1129 | #1074 | model-account Decisions ask + offer accounts + notify · **guard: every Decision kind has a question and a way out** | ⏳ next unresolved account |
 | #1131 | (inventory) | frame-unresolved run no longer parks without a Decision · account lookup writes no Decision · bundle publish conflict is a report | ⏳ rare paths |
 | #1132 | #1111 | **notifications split:** `review_ready` (approval card, at verify) · `shipped` (when the run ships, no buttons); old matrices inherit `shipped` | ✅ prod prefs read whole, `review_ready` inherited `true` |
@@ -100,7 +114,8 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 4. Held webhook triggers are invisible in the PWA (logs only) — a `triggered` notification goes when released.
 5. Branch rules are still three (`bsvibe/run/<uuid>` · `bsvibe/run-<8hex>` · `run/<8hex>`); #1116 taught the
    skip all three instead of renaming 형님's worktrees.
-6. Carry-overs in GitHub issues.
+6. #1143 → #1144 → #1145 (from the 10-07 measurement).
+7. Carry-overs in GitHub issues.
 
 ## §Ⅳ — Discipline that paid off
 
@@ -143,6 +158,11 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 * **🧪⭐ A failure only in a wide run is pollution until shown otherwise.** Bisect by file pairs, then
   reproduce on a clean `origin/main` worktree (reuse the venv with `.venv/bin/python -m pytest` from the
   worktree dir — `backend` resolves from cwd). Raw `mod.X = fake` in a test helper is the usual culprit.
+* **🐙⭐ Issue COMMENTS are prod actions too.** On 10-07 the filter was restored, then `gh issue close 1073
+  --comment …` 11 s later became run `bf316afc` (68k tokens, review card to 형님) — discarded. Do every
+  issue/PR write (create · comment · close-with-comment · review) inside ONE pause window.
+* **🤖 The merge watch merges on its own** once CI is green (founder's token). A manual `gh pr merge` after that
+  is a no-op — check `mergedAt` before reading the timeline.
 * **🐘 Throwaway Postgres for JSON-path SQL:** `docker --context colima run -d --rm … pgvector/pgvector:pg16`,
   then `CREATE EXTENSION vector` before the schema is created. `payload[KEY].as_string().is_(None)` behaves
   the same on PG and SQLite (`->>` / `json_extract`).

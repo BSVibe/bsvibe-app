@@ -29,8 +29,8 @@ API(MCP 작업 도구). 캐시가 따로라서 API 의 첫 도구 호출이 워�
 
 워커 컨테이너도 재배포된다 (backend 와 같은 이미지).
 
-- [ ] 다음 BSVibe(server_sandbox) 런에서 DinD 컨테이너 이름이 `bsvibe-sbx-<런 id>`
-- [ ] API 로그에 `sandbox_adopted` (워커가 만든 박스를 API 가 입양) — `sandbox_created` 가 런당 한 번
+- [x] 다음 BSVibe(server_sandbox) 런에서 DinD 컨테이너 이름이 `bsvibe-sbx-<런 id>` — 실측 2026-10-07 런 `4414bcd5`·`b2ebd3c4` (`sandbox_created` → 끝나고 `sandbox_removed`)
+- [ ] (미관측 — 머지 재배포로 그 시점 API 로그가 사라짐) API 로그에 `sandbox_adopted` (워커가 만든 박스를 API 가 입양) — `sandbox_created` 가 런당 한 번
 - [ ] 같은 제품 런 두 개 동시 — 각자 자기 워크트리에서 명령이 돈다
 
 ## 남은 틈

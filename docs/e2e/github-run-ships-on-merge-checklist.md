@@ -50,8 +50,8 @@ GitHub 배송 런은 PR 이 **열리는 순간** `shipped` 가 됐고, 그 PR �
 
 워커 변경 없음 — 바뀐 것은 백엔드·워커 컨테이너(autodeploy). prod 는 `BSVIBE_GITHUB_AUTO_MERGE_ENABLED=true`.
 
-- [ ] 다음 GitHub 배송 런: PR 이 열린 뒤 `review_ready` + `awaiting_merge`, 동시 런 상한에 안 잡힌다
-- [ ] 그 PR 이 머지되면 `merge_watch_pr_concluded merged=true` → 런 `shipped`
+- [x] 다음 GitHub 배송 런: PR 이 열린 뒤 `review_ready` + `awaiting_merge` — 런 `b2ebd3c4` → PR #1142, `github_merge_watch_enqueued` · `run_auto_resolved_on_delivery_no_local_ship` 후 review_ready 유지 (상한 제외는 미관측)
+- [x] 그 PR 이 머지되면 런 `shipped` — PR #1142 는 CI 초록 직후 머지 감시가 직접 squash 머지(06:35:13), 런 shipped 06:35:15
 - [ ] 충돌이 나면 `review_ready → open` 재작업이 되고(더는 shipped 에서 나가지 않는다), 다시 검증 후 `review_ready`
 - [ ] 배포 시점에 이미 shipped 인 런의 watch 가 충돌을 만나면 재작업 전이가 표에 막힌다
   (`run_status_move_not_allowed`) — watch 는 재시도하다 escalate 한다. 옛 런에 한정된 전환기 현상
