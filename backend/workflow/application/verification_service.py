@@ -1118,6 +1118,25 @@ class VerificationService:
             return DerivedGateFailed(reason="deriver_unparseable")
         return parse_derived_gate(raw)
 
+    @staticmethod
+    async def _still_present(box: SandboxSession, paths: list[str]) -> list[str]:
+        """The changed paths that still exist in the tree — the deriver lints these.
+
+        ``written_paths`` only grows: it records every ``file_write`` and never
+        learns that the shell removed one. Prod ``4414bcd5`` (2026-10-07) wrote a
+        scratch ``_patch_engine.py``, removed it, and the deriver kept deriving
+        ``ruff check … _patch_engine.py`` — E902 on a file that is gone, a failure
+        the agent had no way to fix. A one-byte read is the protocol's own
+        existence question (a missing path raises :class:`SandboxError`)."""
+        present: list[str] = []
+        for path in paths:
+            try:
+                await box.read_file(path, 1)
+            except SandboxError:
+                continue
+            present.append(path)
+        return present
+
     async def _run_derived_gate(
         self,
         run: ExecutionRun,
@@ -1150,7 +1169,12 @@ class VerificationService:
         manifests = await self._read_repo_manifests(box)
         ci_declarations = await self._read_ci_declarations(box)
         gate = await self._author_derived_gate(
-            run, intent, manifests, written_paths, baseline, ci_declarations
+            run,
+            intent,
+            manifests,
+            await self._still_present(box, written_paths),
+            baseline,
+            ci_declarations,
         )
         if isinstance(gate, DerivedGateFailed):
             return gate
