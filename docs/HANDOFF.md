@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-06
+# BSVibe session handoff — 2026-10-07
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,7 +21,23 @@
 
 ---
 
-## §0 — One line: **the run state machine is one function with a table; notifications say what happened**
+## §0 — One line: **work from outside meets the same limits as work from 형님; ship opens the PR**
+
+10-06 → 10-07 (this session):
+
+| PR | Issue | What | Prod check |
+|---|---|---|---|
+| #1133 | #1115 | a run whose last Safe Mode item ends undelivered is cancelled — frees the cap slot | ⏳ next cleanup deny |
+| #1134 | (log noise) | `GET /api/health/auth` relays GoTrue `/auth/v1/health`; offbox probe + heartbeat (workstation #10) read it instead of a bogus login | ✅ 200 via real Supabase · `supabase_token_failed` gone |
+| #1135 | #1107 | **one sandbox container per RUN** (`bsvibe-sbx-<run id>`) · a live box of the same run + worktree is adopted, not `rm -f`-ed (worker ↔ API) · slots of boxes removed elsewhere are freed | ⏳ next server_sandbox run: `sandbox_adopted` in API log |
+| #1136 | #1112 | "승인하고 출시" on a GitHub product writes the delivery event (`founder_approved` → skips Safe Mode), no local force-merge, run stays review_ready → PR → ships on merge | ⏳ next ship on a BSVibe run |
+| #1137 | #1113 | **webhook work at intake:** run cap full → held (`_intake_held`, released oldest-first per free slot) · monthly token budget spent → refused + `needs_you` · **claim excludes refused/held rows in SQL** | ⏳ held / released / refused log lines |
+| #1138 | #1116 | tool-menu guard (every `bsvibe_*` / `executor/<x>` a description names must exist) · webhook skips client_attach `run/<8hex>` PR branches | ⏳ next BStockReport PR makes no run |
+| #1139 | (tests) | two order-dependent tests fixed (unrestored module patch · idempotence counted as a delta) | ✅ whole suite in one process, 6732 passed |
+
+Checklists: `docs/e2e/{run-with-nothing-to-deliver,auth-health-probe,sandbox-per-run,ship-on-github-product,intake-gates-webhook-work,tool-menu-and-own-branches}-checklist.md`.
+
+10-05 → 10-06 (previous session) — **the run state machine is one function with a table; notifications say what happened**:
 
 | PR | Issue | What | Prod check |
 |---|---|---|---|
@@ -36,7 +52,6 @@
 | #1129 | #1074 | model-account Decisions ask + offer accounts + notify · **guard: every Decision kind has a question and a way out** | ⏳ next unresolved account |
 | #1131 | (inventory) | frame-unresolved run no longer parks without a Decision · account lookup writes no Decision · bundle publish conflict is a report | ⏳ rare paths |
 | #1132 | #1111 | **notifications split:** `review_ready` (approval card, at verify) · `shipped` (when the run ships, no buttons); old matrices inherit `shipped` | ✅ prod prefs read whole, `review_ready` inherited `true` |
-| (next) | #1115 | a run whose last Safe Mode item ends undelivered (cleanup deny · reasonless deny · expiry) is cancelled — frees the cap slot | ⏳ next cleanup deny |
 
 Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 stays open on purpose** (no raw cache columns).
 
@@ -47,6 +62,10 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 | **Wrapping stays** | Claude Code and the files live on different machines; built-in tools stay off, the MCP work tools are the surface |
 | **No `--resume`** | Continuity is BSVibe's. Every hand-over (#1103 step, #1114 round) is plain text on the payload / messages that any executor can read |
 | **Shipped only after merge** (10-04) | A GitHub-delivered run waits at `review_ready` (`awaiting_merge`) until its PR merges; closed unmerged → `cancelled`. Runs with no merge watch row still ship on open. Awaiting-merge runs do not hold a concurrent-run slot |
+| **#1115: plug the leak only** (10-06) | Undeliverable runs are released; the cap still counts `review_ready`. The pre-fix backlog is not back-filled (checked 10-06: one non-terminal run, `1c5290f3`, a legitimate wait) |
+| **Every GitHub issue / PR / comment is work** (10-06) | No label or command opt-in — "일단 받고, 단순 질의거나 의미 없으면 종료된다". Webhook work: **cap → wait, budget → refuse** |
+| **Ship is the approval** (10-06) | "승인하고 출시" does not raise a second Safe Mode card |
+| **One sandbox per run** (10-06) | `sandbox_max_concurrent=2` now counts runs; a third server_sandbox run waits for a slot |
 
 ## §Ⅱ — What this session found that the issues had wrong
 
@@ -60,20 +79,36 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 * **The frame log does not record the step plan**, and run payloads are not exposed over MCP — #1103's prod
   check was judged by outcome (one run, both files, no `handoff_next_step_spawned`).
 
+## §Ⅱ-b — What 10-06 found
+
+* **`supabase_token_failed` every ~62 s was our own probe**, not an attack: `heartbeat.sh` (launchd, 60 s)
+  and `offbox-uptime.yml` (15 min) POSTed a bogus password to `/api/auth/login` to read "is Supabase up".
+  Every reading was a failed sign-in on the per-IP limit every user's login shares. → #1134.
+* **Intake had a time bomb.** `list_undrained` took the oldest 50 triggers without a Request and only then
+  skipped filter-rejected ones in Python. Rejected triggers never get a Request, so 50 of them (one per
+  paused record-only PR) would have stopped intake for good — direct submissions included. → #1137.
+* **Two processes drive one DinD** (worker `RunOrchestrator` + API MCP work tools) with separate caches; the
+  API's first tool call used to `rm -f` the worker's box. Per-run keys alone do not fix that — adoption does.
+* **launchd runs `_infra`'s working tree.** Editing `heartbeat.sh` on a branch changes prod at once; change
+  it only after the backend it calls is deployed.
+
 ## §Ⅲ — Next
 
-1. Prod walks in the ⏳ column. DB reads are 형님's (agents are refused prod reads by design).
+1. Prod walks in the ⏳ column (both tables). DB reads are 형님's (agents are refused prod reads by design).
 2. `human_review_required` has no creator left — kept mapped on purpose (pending prod rows would go blank).
-3. The #1115 backlog that predates the fix (runs whose items were already denied/expired) is not
-   back-filled — 형님 decides whether to clear it once.
-4. #1107 · #1112 · #1113 · #1116 · carry-overs.
-5. Unexamined since 10-02: prod logs `supabase_token_failed` ~every 62 s from this host's IPv6.
+3. Still outside the caps on purpose: schedule ticks and next-step spawns (`run_caps` docstring).
+4. Held webhook triggers are invisible in the PWA (logs only) — a `triggered` notification goes when released.
+5. Branch rules are still three (`bsvibe/run/<uuid>` · `bsvibe/run-<8hex>` · `run/<8hex>`); #1116 taught the
+   skip all three instead of renaming 형님's worktrees.
+6. Carry-overs in GitHub issues.
 
 ## §Ⅳ — Discipline that paid off
 
 * **🐙⭐⭐ Every PR on bsvibe-app is a prod action — pause, act, WAIT, check, restore.**
   `bsvibe_bindings_update c50e7217… {"filters":{"github_event":"__paused__"}}` → open / merge / push →
-  **wait ≥60 s** → `bsvibe_runs_list` shows no new run → `{"filters":{}}`.
+  **wait for intake's own verdict** (`docker --context colima logs --since 2m bsvibe-prod-worker-1 | grep
+  filter_rejected`; a merge sends no event — wait ≥90 s) → `bsvibe_runs_list` shows no new run →
+  `{"filters":{}}`. Held 7 PRs in a row this session.
   ⚠️ The filter is applied when the **intake worker** processes the stored event, not when the webhook
   arrives. On 10-05 the filter was restored 3.6 s after the webhook for docs PR #1130 landed; intake ran
   after the restore and opened run `f26ef907` (32k tokens, a needs_you question to 형님) — cancelled. A
@@ -103,3 +138,11 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 * **🐳 Default docker context is `colima-palworld`; prod is `colima`.** Pass `--context colima`; never
   `docker context use`.
 * **📏 `_drive_loop.py` is at 581 / 600** (`test_h2a_decomposition`). New loop logic goes to `_loop_turn.py`.
+* **🔪⭐ Never wire-cut while a suite runs in the background.** Cuts rewrite source files; a background run
+  imports whatever is on disk at that moment. Stop it, cut, restore, then rerun.
+* **🧪⭐ A failure only in a wide run is pollution until shown otherwise.** Bisect by file pairs, then
+  reproduce on a clean `origin/main` worktree (reuse the venv with `.venv/bin/python -m pytest` from the
+  worktree dir — `backend` resolves from cwd). Raw `mod.X = fake` in a test helper is the usual culprit.
+* **🐘 Throwaway Postgres for JSON-path SQL:** `docker --context colima run -d --rm … pgvector/pgvector:pg16`,
+  then `CREATE EXTENSION vector` before the schema is created. `payload[KEY].as_string().is_(None)` behaves
+  the same on PG and SQLite (`->>` / `json_extract`).
