@@ -92,7 +92,13 @@ class MergeWatchClient(Protocol):
     async def get_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]: ...
 
     async def merge_pr(
-        self, owner: str, repo: str, number: int, *, method: str = "squash"
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        *,
+        method: str = "squash",
+        commit_title: str | None = None,
     ) -> MergeResult: ...
 
     async def close_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]: ...
@@ -656,7 +662,15 @@ class MergeWatchWorker(BaseWorker):
                     increment_attempt=True,
                 )
                 return False
-            result = await client.merge_pr(owner, name, snap.pr_number, method="squash")
+            # #1143 — title the squash after the PR, not after the run's commit.
+            title = str(confirm.get("title") or "").strip()
+            result = await client.merge_pr(
+                owner,
+                name,
+                snap.pr_number,
+                method="squash",
+                commit_title=f"{title} (#{snap.pr_number})" if title else None,
+            )
             if result.merged:
                 await repo.mark_status(snap.id, MergeWatchStatus.MERGED)
                 logger.info(

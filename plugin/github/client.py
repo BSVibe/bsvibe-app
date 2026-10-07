@@ -161,7 +161,13 @@ class GithubClient:
         return self._json(resp)
 
     async def merge_pr(
-        self, owner: str, repo: str, number: int, *, method: str = "squash"
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        *,
+        method: str = "squash",
+        commit_title: str | None = None,
     ) -> MergeResult:
         """Merge a PR via ``PUT /repos/{owner}/{repo}/pulls/{number}/merge``.
 
@@ -175,11 +181,18 @@ class GithubClient:
         * ``409`` (Conflict — head moved since the client last read it) →
           ``head_changed`` (re-read the head, retry).
         * any other non-2xx → raises via ``raise_for_status``.
+
+        ``commit_title`` (#1143) names the merge commit. Without it GitHub titles a
+        one-commit PR's squash with that commit's message — a BSVibe run's
+        ``work: <directive first line>`` — instead of the PR's title.
         """
+        body_json: dict[str, Any] = {"merge_method": method}
+        if commit_title:
+            body_json["commit_title"] = commit_title
         resp = await self._request(
             "PUT",
             f"/repos/{owner}/{repo}/pulls/{number}/merge",
-            json_body={"merge_method": method},
+            json_body=body_json,
         )
         if resp.status_code == 200:
             body: dict[str, Any] = resp.json()
