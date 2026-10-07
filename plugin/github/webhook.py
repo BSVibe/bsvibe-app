@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import uuid
 from typing import Any
 
@@ -153,10 +154,16 @@ def parse_webhook(
 #: (``bsvibe/run/<id>``).
 _OWN_BRANCH_PREFIXES = ("bsvibe/run-", "bsvibe/run/")
 
+#: #1116 — the THIRD rule: a client_attach run's branch, pushed from the founder's
+#: machine and PR'd from there (``client_worktree.worktree_branch`` →
+#: ``run/<first 8 hex of the run id>``). Matched exactly, not as a prefix: a
+#: human's ``run/fix-login`` is not ours.
+_OWN_CLIENT_BRANCH = re.compile(r"run/[0-9a-f]{8}")
+
 
 def _is_own_branch(body: dict[str, Any]) -> bool:
-    head = ((body.get("pull_request") or {}).get("head") or {}).get("ref") or ""
-    return str(head).startswith(_OWN_BRANCH_PREFIXES)
+    head = str(((body.get("pull_request") or {}).get("head") or {}).get("ref") or "")
+    return head.startswith(_OWN_BRANCH_PREFIXES) or _OWN_CLIENT_BRANCH.fullmatch(head) is not None
 
 
 def _join_text(parts: list[Any]) -> str | None:

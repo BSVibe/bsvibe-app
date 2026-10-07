@@ -3,17 +3,15 @@
 Mirrors the REST surface at ``/api/v1/run-routing`` (see
 :mod:`backend.api.v1.run_routing`). These rules pick WHICH ModelAccount
 handles a run, keyed on the dispatch ``caller_id`` + the run's framed
-signals — distinct from the legacy model-routing rules
-(``bsvibe_routing_rules_*``) which pick the LLM model within a run via
-the litellm hook.
+signals.
 
-The lift exists because the dogfood (qazasa123) surfaced that the new
-run-routing system lived behind REST only, while the legacy
-``bsvibe_routing_rules_*`` tools route through a different engine + a
-different (heuristic) ALLOWED_FIELDS whitelist that rejects
-``caller_id``. This violates [[bsvibe-mcp-ui-parity]]. We expose the
-NEW surface as a SEPARATE tool family so the legacy tools stay valid
-for the legacy model-routing rules.
+The lift exists because the dogfood (qazasa123) surfaced that the
+run-routing system lived behind REST only. This violated
+[[bsvibe-mcp-ui-parity]]. (The legacy model-routing ``bsvibe_routing_rules_*``
+tools it once sat beside were removed with their table —
+``20260711_drop_layer2_routing_rules``; #1116 took the menu's last mention of
+them out, and its ``executor/codex`` example: codex cannot take BSVibe's
+tools, so agentic work routed to it is refused — ``dispatch.adapter``.)
 
 Handlers delegate to the same
 :class:`SqlAlchemyRunRoutingRuleRepository` the REST surface uses, and
@@ -361,9 +359,7 @@ def register_run_routing_rules_tools(registry: ToolRegistry) -> None:
             description=(
                 "List run-routing rules for the active workspace, priority "
                 "ascending. These rules pick which ModelAccount handles a "
-                "run (e.g. design → executor/codex, impl → executor/opencode). "
-                "Distinct from bsvibe_routing_rules_* (those are model-routing "
-                "rules for the litellm hook, a different layer)."
+                "run (e.g. design → executor/claude_code, impl → executor/opencode)."
             ),
             input_schema=RunRoutingRulesListInput,
             output_schema=_Envelope,
