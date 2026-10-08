@@ -27,6 +27,7 @@ Both adapters expose the same ``chat`` surface.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import uuid
 from collections.abc import Awaitable, Callable
@@ -255,11 +256,24 @@ class ExecutorAdapterUnavailable(RuntimeError):
     showed an executor ``exit 1`` recover on the very next call). The adapter
     re-dispatches those a bounded number of times. Config errors (no redis / no
     executor_type) and a genuine timeout are NOT retryable.
+
+    ``usage_*`` (#928) are the tokens the turn had already spent when it failed — a
+    ``failed`` task's worker still reports what its session burned, and every failed
+    attempt the retry loop re-dispatched past. The drive loop accrues them onto the run
+    before the error goes on; 0 means nothing was reported, not that nothing was spent.
     """
 
-    def __init__(self, *args: object, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        *args: object,
+        retryable: bool = False,
+        usage_prompt_tokens: int = 0,
+        usage_completion_tokens: int = 0,
+    ) -> None:
         super().__init__(*args)
         self.retryable = retryable
+        self.usage_prompt_tokens = usage_prompt_tokens
+        self.usage_completion_tokens = usage_completion_tokens
 
 
 class RunCancelledDuringTurn(ExecutorAdapterUnavailable):
@@ -601,12 +615,21 @@ class ExecutorAdapter:
         # (live dogfood). Each retry creates a fresh task (and, on the E19 path,
         # a fresh session). Non-retryable modes (no redis / no executor_type /
         # timeout / no capacity) raise on the first attempt, unchanged.
+        #
+        # #928 — a failed attempt still spent its tokens. They are carried forward onto
+        # whatever the call finally ends in (the success's usage, or the last error's), so
+        # the run is metered for every attempt, not only the one that worked.
+        spent_prompt = spent_completion = 0
         for attempt in range(1, _EXECUTOR_CHAT_ATTEMPTS + 1):
             try:
-                return await _dispatch_once()
+                response = await _dispatch_once()
             except ExecutorAdapterUnavailable as exc:
+                exc.usage_prompt_tokens += spent_prompt
+                exc.usage_completion_tokens += spent_completion
                 if not exc.retryable or attempt >= _EXECUTOR_CHAT_ATTEMPTS:
                     raise
+                spent_prompt = exc.usage_prompt_tokens
+                spent_completion = exc.usage_completion_tokens
                 logger.warning(
                     "executor_adapter_chat_retry",
                     workspace_id=str(self.workspace_id),
@@ -616,6 +639,14 @@ class ExecutorAdapter:
                     error=str(exc),
                 )
                 await asyncio.sleep(_EXECUTOR_CHAT_RETRY_BACKOFF_S * attempt)
+                continue
+            if not (spent_prompt or spent_completion):
+                return response
+            return dataclasses.replace(
+                response,
+                usage_prompt_tokens=response.usage_prompt_tokens + spent_prompt,
+                usage_completion_tokens=response.usage_completion_tokens + spent_completion,
+            )
         # Unreachable — the loop returns or raises on the final attempt.
         raise AssertionError("executor chat retry loop exited without result")
 
@@ -891,6 +922,8 @@ class ExecutorAdapter:
                 f"executor chat task {task.id} failed: "
                 f"{completed.error_message or 'no error message'}",
                 retryable=True,
+                usage_prompt_tokens=completed.usage_prompt_tokens,
+                usage_completion_tokens=completed.usage_completion_tokens,
             )
 
         logger.info(
