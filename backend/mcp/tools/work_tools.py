@@ -204,6 +204,18 @@ class EmitDeliverableInput(_WorkInput):
 
     artifact_type: str = Field(..., min_length=1)
     summary: str = Field(..., min_length=1)
+    # #673 — publish a command's output byte-for-byte instead of retyping it.
+    verbatim_command: str | None = Field(
+        default=None,
+        description=(
+            "Run this command in the run's box and put its stdout (or the part between "
+            "verbatim_start/verbatim_end, excluded) at the top of the deliverable exactly as "
+            "printed; `summary` follows as commentary. A failing command or missing markers "
+            "publish nothing."
+        ),
+    )
+    verbatim_start: str | None = Field(default=None, description="Marker line opening the block.")
+    verbatim_end: str | None = Field(default=None, description="Marker line closing the block.")
 
 
 class WorkToolOutput(BaseModel):
@@ -411,7 +423,11 @@ def register_work_tools(
     registry.register(
         Tool(
             name="bsvibe_work_emit_deliverable",
-            description="Record a deliverable produced DURING the run (before it finishes).",
+            description=(
+                "Record a deliverable produced DURING the run (before it finishes). For "
+                "numbers a tool computed, pass `verbatim_command` — the server runs it and "
+                "publishes its output exactly; never retype tool output into `summary`."
+            ),
             input_schema=EmitDeliverableInput,
             output_schema=WorkToolOutput,
             handler=_h_emit,

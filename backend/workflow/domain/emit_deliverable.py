@@ -72,6 +72,26 @@ EMIT_DELIVERABLE_TOOL: dict[str, Any] = {
                         "Where the artifact landed — 'github', 'notion', 'slack', etc. Optional."
                     ),
                 },
+                "verbatim_command": {
+                    "type": "string",
+                    "description": (
+                        "#673 — publish a command's OUTPUT, not your rewrite of it. The server "
+                        "runs this command in the run's own box and puts its stdout (or the "
+                        "part between verbatim_start/verbatim_end) at the top of the "
+                        "deliverable exactly as printed; your `summary` follows it as "
+                        "commentary. Use it for numbers a tool computed. A failing command "
+                        "or missing markers publish nothing — fix the cause, never retype "
+                        "the numbers."
+                    ),
+                },
+                "verbatim_start": {
+                    "type": "string",
+                    "description": "Marker line opening the block to publish (excluded).",
+                },
+                "verbatim_end": {
+                    "type": "string",
+                    "description": "Marker line closing the block to publish (excluded).",
+                },
             },
             "required": ["artifact_type", "summary"],
         },
@@ -100,8 +120,15 @@ async def handle_emit_deliverable(
     arguments: dict[str, Any],
     *,
     live_event_bus: Any = None,
+    box: Any = None,
 ) -> str:
     """Persist a mid-loop Deliver event (B12a / Workflow §1).
+
+    ``verbatim_command`` (#673) makes the published text the command's own output:
+    run in ``box`` (the run's sandbox — or the founder's machine for
+    ``client_attach``), the block between the optional markers leads the
+    deliverable byte-for-byte, and ``summary`` follows as commentary. Any doubt
+    (no box, non-zero exit, timeout, missing markers) publishes nothing.
 
     Validates the required ``artifact_type`` + ``summary`` strings, calls
     :func:`write_partial_deliverable`, and returns a JSON ack the LLM can
@@ -135,6 +162,18 @@ async def handle_emit_deliverable(
                 "error": "emit_deliverable requires a non-empty 'summary'.",
             }
         )
+    command = str(arguments.get("verbatim_command") or "").strip()
+    if command:
+        block, problem = await _verbatim_block(
+            box,
+            command,
+            start=_opt_str(arguments.get("verbatim_start")),
+            end=_opt_str(arguments.get("verbatim_end")),
+        )
+        if problem is not None:
+            logger.warning("emit_deliverable_verbatim_refused", run_id=str(run.id), error=problem)
+            return json.dumps({"status": "error", "error": problem})
+        summary = f"{block}\n\n{summary}"
     try:
         deliverable = await write_partial_deliverable(
             session,
@@ -184,6 +223,41 @@ async def handle_emit_deliverable(
             "artifact_type": artifact_type,
         }
     )
+
+
+#: A report command runs for seconds; a hung one must not hold the turn forever.
+_VERBATIM_TIMEOUT_S = 600.0
+
+
+def _opt_str(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+async def _verbatim_block(
+    box: Any, command: str, *, start: str | None, end: str | None
+) -> tuple[str, str | None]:
+    """``(block, None)`` — the text to publish verbatim — or ``("", why_not)``."""
+    if box is None:
+        return "", "verbatim_command needs the run's box, and this run has none."
+    # The run's own sandbox (or the founder's box) — the same place and the same
+    # command shell ``shell_exec`` already runs for this agent; not a host shell.
+    result = await box.exec(command, timeout_s=_VERBATIM_TIMEOUT_S, shell=True)  # noqa: S604
+    if result.timed_out:
+        return "", f"verbatim_command timed out after {_VERBATIM_TIMEOUT_S:.0f}s: {command}"
+    if result.exit_code != 0:
+        tail = (result.stderr or result.stdout or "").strip()[-2000:]
+        return "", f"verbatim_command exited {result.exit_code}: {tail}"
+    out = result.stdout or ""
+    if start is None and end is None:
+        # Trailing newlines only — the block is otherwise exactly what was printed.
+        return out.rstrip("\n"), None
+    lines = out.splitlines()
+    try:
+        first = lines.index(start) + 1 if start is not None else 0
+        last = lines.index(end, first) if end is not None else len(lines)
+    except ValueError:
+        return "", f"verbatim markers not found in the output of: {command}"
+    return "\n".join(lines[first:last]), None
 
 
 async def _publish_deliverable_partial_event(
