@@ -503,18 +503,33 @@ class NoCompileModelError(Exception):
 
 class _AdapterCompileLlm:
     """Bridges a resolved dispatch adapter to the compiler's ``complete_text``
-    seam — one ``(system, user)`` → text chat call (no tools)."""
+    seam — one ``(system, user)`` → text chat call (no tools).
 
-    __slots__ = ("_adapter",)
+    #954 — the turn runs outside any run, so its usage is reported under
+    ``llm_usage_unattributed`` like every other run-less call (#953), rather than
+    dropped without a trace."""
 
-    def __init__(self, adapter: Any) -> None:
+    __slots__ = ("_adapter", "_workspace_id")
+
+    def __init__(self, adapter: Any, *, workspace_id: uuid.UUID) -> None:
         self._adapter = adapter
+        self._workspace_id = workspace_id
 
     async def complete_text(self, *, system: str, user: str) -> str:
+        from backend.workflow.application.runtime.dispatcher import (  # noqa: PLC0415
+            log_unattributed_usage,
+        )
+
         response = await self._adapter.chat(
             system=system,
             messages=[{"role": "user", "content": user}],
             tools=None,
+        )
+        log_unattributed_usage(
+            site=CALLER_ROUTING_COMPILE,
+            workspace_id=self._workspace_id,
+            usage_prompt_tokens=getattr(response, "usage_prompt_tokens", 0),
+            usage_completion_tokens=getattr(response, "usage_completion_tokens", 0),
         )
         return str(response.content)
 
@@ -558,7 +573,7 @@ async def _resolve_compile_llm(
         )
     except NoMatchingRouteError:
         return None
-    return _AdapterCompileLlm(resolved.adapter)
+    return _AdapterCompileLlm(resolved.adapter, workspace_id=workspace_id)
 
 
 async def compile_for_workspace(
