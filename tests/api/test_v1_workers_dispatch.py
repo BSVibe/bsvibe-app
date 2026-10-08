@@ -175,6 +175,48 @@ async def test_result_records_done(db, redis) -> None:
         assert row.output == "ok"
 
 
+async def test_result_stores_the_cache_breakdown(db, redis) -> None:
+    """#1104 — the breakdown the worker posts reaches the row, not just the body."""
+    worker_id, token = await _seed_worker(db, capabilities=["claude_code"])
+    async with db() as s:
+        worker = await s.get(WorkerRow, worker_id)
+        task = await dispatch.create_task(
+            s, workspace_id=worker.workspace_id, executor_type="claude_code", prompt="p"
+        )
+        await s.flush()
+        await dispatch.dispatch_task(redis, session=s, task=task, worker_id=worker_id)
+        await s.commit()
+        task_id = task.id
+
+    app = create_app()
+    async with _client(app, db, redis) as c:
+        r = await c.post(
+            "/api/v1/workers/result",
+            headers={"X-Worker-Token": token},
+            json={
+                "task_id": str(task_id),
+                "success": True,
+                "output": "ok",
+                "usage_prompt_tokens": 100,
+                "usage_input_tokens": 11,
+                "usage_cache_read_tokens": 700,
+                "usage_cache_write_5m_tokens": 3,
+                "usage_cache_write_1h_tokens": 6,
+            },
+        )
+        assert r.status_code == 200, r.text
+
+    async with db() as s:
+        row = await s.get(ExecutorTaskRow, task_id)
+        assert row is not None
+        assert (
+            row.usage_input_tokens,
+            row.usage_cache_read_tokens,
+            row.usage_cache_write_5m_tokens,
+            row.usage_cache_write_1h_tokens,
+        ) == (11, 700, 3, 6)
+
+
 async def test_result_records_failed(db, redis) -> None:
     worker_id, token = await _seed_worker(db, capabilities=["claude_code"])
     async with db() as s:

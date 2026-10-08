@@ -69,6 +69,7 @@ from backend.executors.worker.credentials import (
 )
 from backend.executors.worker.executors import (
     ExecutorProtocol,
+    UsageBreakdown,
     detect_capabilities,
     select_executor,
 )
@@ -643,18 +644,7 @@ async def handle_task(
                 done_chan=done_chan,
             )
             return
-        await _post_result(
-            client,
-            headers,
-            payload={
-                "task_id": task_id,
-                "success": outcome.success,
-                "output": "".join(outcome.parts),
-                "error_message": outcome.error,
-                "usage_prompt_tokens": outcome.usage_prompt_tokens,
-                "usage_completion_tokens": outcome.usage_completion_tokens,
-            },
-        )
+        await _post_result(client, headers, payload=_result_payload(task_id, outcome))
         if redis is not None:
             await _publish(
                 redis,
@@ -692,6 +682,28 @@ class _StreamOutcome:
     usage_prompt_tokens: int = 0
     usage_completion_tokens: int = 0
     reported_usage: bool = False
+    usage_breakdown: UsageBreakdown | None = None
+
+
+def _result_payload(task_id: str, outcome: _StreamOutcome) -> dict[str, Any]:
+    """The ``POST /api/v1/workers/result`` body for a drained turn.
+
+    The cache breakdown (#1104) is flattened onto the body; a turn whose CLI reported none
+    posts zeros, which the backend stores as it stores every pre-#1104 task.
+    """
+    split = outcome.usage_breakdown or UsageBreakdown()
+    return {
+        "task_id": task_id,
+        "success": outcome.success,
+        "output": "".join(outcome.parts),
+        "error_message": outcome.error,
+        "usage_prompt_tokens": outcome.usage_prompt_tokens,
+        "usage_completion_tokens": outcome.usage_completion_tokens,
+        "usage_input_tokens": split.input_tokens,
+        "usage_cache_read_tokens": split.cache_read_tokens,
+        "usage_cache_write_5m_tokens": split.cache_write_5m_tokens,
+        "usage_cache_write_1h_tokens": split.cache_write_1h_tokens,
+    }
 
 
 async def _stream_and_collect(
@@ -721,6 +733,7 @@ async def _stream_and_collect(
     usage_prompt = 0
     usage_completion = 0
     reported_usage = False
+    breakdown: UsageBreakdown | None = None
 
     stream = executor.execute(prompt, context)
     try:
@@ -732,6 +745,7 @@ async def _stream_and_collect(
                 # cumulative usage per turn, so summing would double-count.
                 usage_prompt = chunk.usage_prompt_tokens
                 usage_completion = chunk.usage_completion_tokens
+                breakdown = chunk.usage_breakdown
                 reported_usage = True
             if chunk.error:
                 error = chunk.error
@@ -766,6 +780,7 @@ async def _stream_and_collect(
         usage_prompt_tokens=usage_prompt,
         usage_completion_tokens=usage_completion,
         reported_usage=reported_usage,
+        usage_breakdown=breakdown,
     )
 
 

@@ -728,6 +728,10 @@ async def record_result(
     error_message: str | None,
     usage_prompt_tokens: int = 0,
     usage_completion_tokens: int = 0,
+    usage_input_tokens: int = 0,
+    usage_cache_read_tokens: int = 0,
+    usage_cache_write_5m_tokens: int = 0,
+    usage_cache_write_1h_tokens: int = 0,
 ) -> ExecutorTaskRow | None:
     """Close a task ``done`` / ``failed`` from a worker result. ``None`` if unknown.
 
@@ -743,7 +747,9 @@ async def record_result(
     off its CLI's own stream, and are persisted onto the row because that row is
     what :class:`ExecutorAdapter` reads a completed turn back from. They default
     to 0 so a worker deployed before the field still closes its task rather than
-    stranding the run.
+    stranding the run. ``usage_prompt_tokens`` is a WEIGHTED figure (#1104); the
+    ``usage_input`` / ``usage_cache_*`` counts are the raw split behind it, stored
+    so the task's real cost can be recomputed afterwards.
 
     The run's ``artifact_refs`` now come from the work tools themselves — the registry records
     what it wrote and the loop reads it back (``WORK_TOOL_STATE_KEY``), which is the same
@@ -791,6 +797,10 @@ async def record_result(
     task.error_message = error_message
     task.usage_prompt_tokens = usage_prompt_tokens
     task.usage_completion_tokens = usage_completion_tokens
+    task.usage_input_tokens = usage_input_tokens
+    task.usage_cache_read_tokens = usage_cache_read_tokens
+    task.usage_cache_write_5m_tokens = usage_cache_write_5m_tokens
+    task.usage_cache_write_1h_tokens = usage_cache_write_1h_tokens
 
     await session.flush()
     logger.info(
@@ -799,6 +809,7 @@ async def record_result(
         status=task.status,
         usage_prompt_tokens=usage_prompt_tokens,
         usage_completion_tokens=usage_completion_tokens,
+        usage_cache_read_tokens=usage_cache_read_tokens,
     )
     try:
         await redis.publish(done_channel(task_id), json.dumps({"task_id": str(task_id)}))

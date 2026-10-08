@@ -109,6 +109,12 @@ class WorkerResultBody(BaseModel):
     # negative that would then subtract from the run's meter.
     usage_prompt_tokens: int = Field(default=0, ge=0)
     usage_completion_tokens: int = Field(default=0, ge=0)
+    # #1104 — the raw split behind ``usage_prompt_tokens`` (a weighted figure), so a task's
+    # real cost can be recomputed afterwards. Defaulted for the same deploy-order reason.
+    usage_input_tokens: int = Field(default=0, ge=0)
+    usage_cache_read_tokens: int = Field(default=0, ge=0)
+    usage_cache_write_5m_tokens: int = Field(default=0, ge=0)
+    usage_cache_write_1h_tokens: int = Field(default=0, ge=0)
     # T3 — a result carries NO files. The agent writes to the run's SERVER-SIDE worktree
     # through BSVibe's tools over MCP; there is nothing to ship back. The old ``files`` payload
     # is what let a truncated >256 KB edit come back as ``raw = b""`` and zero the real file,
@@ -415,6 +421,10 @@ async def report_result(
         error_message=body.error_message,
         usage_prompt_tokens=body.usage_prompt_tokens,
         usage_completion_tokens=body.usage_completion_tokens,
+        usage_input_tokens=body.usage_input_tokens,
+        usage_cache_read_tokens=body.usage_cache_read_tokens,
+        usage_cache_write_5m_tokens=body.usage_cache_write_5m_tokens,
+        usage_cache_write_1h_tokens=body.usage_cache_write_1h_tokens,
     )
     await session.commit()
     return HeartbeatResponse(status="ok")

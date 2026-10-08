@@ -190,6 +190,20 @@ class ExecutorTaskRow(Base):
     usage_completion_tokens: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default="0", default=0
     )
+    # #1104 — ``usage_prompt_tokens`` is WEIGHTED (a cache read a tenth, a write 1.25× / 2×);
+    # these are the raw counts behind it, so a task's real cost can be recomputed later.
+    usage_input_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", default=0
+    )
+    usage_cache_read_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", default=0
+    )
+    usage_cache_write_5m_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", default=0
+    )
+    usage_cache_write_1h_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0", default=0
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
