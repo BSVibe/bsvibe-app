@@ -35,6 +35,10 @@
 | #1138 | #1116 | tool-menu guard (every `bsvibe_*` / `executor/<x>` a description names must exist) · webhook skips client_attach `run/<8hex>` PR branches | ⏳ next BStockReport PR makes no run |
 | #1139 | (tests) | two order-dependent tests fixed (unrestored module patch · idempotence counted as a delta) | ✅ whole suite in one process, 6732 passed |
 | #1141 | (measured) | the server-side gate derives commands only over changed paths still present — a removed scratch file no longer yields `ruff … E902` | ✅ run `b2ebd3c4` passed with 3 removed `_patch_*.py` |
+| #1150 | #1077 | agentic turn switches CLI built-ins off with `--tools ""` (measured: MCP tools survive) — no name list to rot | ✅ host workers restarted 10-08 11:24 KST · ⏳ next agentic run |
+| #1151 | #1079 | a SCHEDULE-sourced request is framed with no stage vocabulary → one run | ⏳ 10-12 weekly run |
+| #1152 | #673 · #1078 | `emit_deliverable(verbatim_command, verbatim_start, verbatim_end)` — the server runs the command in the run's box and publishes the block byte-for-byte; failure/missing markers publish nothing · same-content partials dedupe | ⏳ 10-12 weekly run |
+| #1153 | #1072 | schedule `output_mode` (safe · direct; product_tick safe only) — REST/MCP/PWA toggle; gate: PT3 > schedule direct > workspace Safe Mode | ✅ PWA toggle → `534f78a7` direct (형님 10-08) · ⏳ 10-12 run arrives without approval |
 | #1147 | #1143 | the merge watch's squash sends `commit_title` = PR title + ` (#N)` — main no longer gets the run commit (`work: <directive first line>`) | ⏳ next auto-merge |
 | #1148 | #1144 | a Direct run's PR body quotes the founder's directive (`**요청**`) and links every `#N` it names with a non-closing `Refs` (issue-sourced runs keep `Closes #N`) | ⏳ next Direct run PR |
 | workstation #11 | (#1145 prereq) | autodeploy archives backend/worker logs to `_infra/logs/bsvibe-prod/<container>--<started>.log` before `--force-recreate` (20 kept) | ⏳ open — 형님 merges; live already (launchd runs the `_infra` tree) |
@@ -119,7 +123,10 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
    skip all three instead of renaming 형님's worktrees.
 6. #1145 — cause unconfirmed (hypothesis: `file_edit` refuses a path not `file_read` first; the agent read via
    shell and patched with scripts). Logs now survive deploys — confirm on the next measured run.
-7. Next cluster (형님 10-08): **schedules & reports** — #1077 → #1079 → #1078 → #1072 (+ #673).
+7. **10-12 (Mon) 00:30 UTC BStockReport weekly run** checks four PRs at once: one run (#1079) · no markers, block
+   byte-identical to `--emit` (#1152) · published once · no Safe Mode card (#1153). The schedule was recreated
+   (`4020dbf0` → `534f78a7`, same cron) with the verbatim instruction, then set `direct`. Its backend log will
+   survive (#11) — read #1145's cause from it. Note: the instruction runs `--emit` twice (commentary + publish).
 8. Carry-overs in GitHub issues.
 
 ## §Ⅳ — Discipline that paid off
