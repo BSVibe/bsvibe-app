@@ -106,13 +106,70 @@ async def _upsert_executor_model_accounts(
 async def _remove_executor_model_accounts(
     session: AsyncSession, *, workspace_id: uuid.UUID, worker_id: uuid.UUID
 ) -> None:
-    """Delete the routable executor model rows bound to ``worker_id``."""
+    """Delete the routable executor rows REGISTRATION created for ``worker_id``.
+
+    #1075 — only ``executor/<capability>``. A row the founder made by hand (a
+    model-specific account such as ``litellm_model="opus"``) is kept: routing rules
+    and the workspace default point at it, and deleting it with the worker left them
+    pointing at nothing (09-21, ``mac-mini-e2e``). A worker of the same name that
+    registers again takes it over (:func:`_adopt_predecessor_accounts`)."""
     repo = SqlAlchemyModelAccountRepository(session)
     rows = await repo.list_executor_accounts_for_worker(
         workspace_id=workspace_id, worker_id=worker_id
     )
     for row in rows:
-        await session.delete(row)
+        if _is_registration_row(row):
+            await session.delete(row)
+    await session.flush()
+
+
+def _is_registration_row(row: Any) -> bool:
+    """``executor/<capability>`` — the row :func:`_upsert_executor_model_accounts` makes."""
+    expected = f"executor/{row.extra_params.get('executor_type')}"
+    return bool(row.litellm_model == expected)
+
+
+async def _adopt_predecessor_accounts(
+    session: AsyncSession, *, workspace_id: uuid.UUID, worker: WorkerRow, capabilities: list[str]
+) -> None:
+    """#1075 — bind a dead same-name worker's hand-made executor rows to ``worker``.
+
+    A re-registration mints a new worker id; the founder's model-specific accounts
+    still carry the old one. Only rows of an INACTIVE worker of the same name move
+    (two live workers may share a name), and only for a capability the new worker
+    has."""
+    predecessors = (
+        (
+            await session.execute(
+                select(WorkerRow.id).where(
+                    WorkerRow.workspace_id == workspace_id,
+                    WorkerRow.name == worker.name,
+                    WorkerRow.is_active.is_(False),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not predecessors:
+        return
+    repo = SqlAlchemyModelAccountRepository(session)
+    for old_id in predecessors:
+        for row in await repo.list_executor_accounts_for_worker(
+            workspace_id=workspace_id, worker_id=old_id
+        ):
+            if (
+                _is_registration_row(row)
+                or row.extra_params.get("executor_type") not in capabilities
+            ):
+                continue
+            row.extra_params = {**row.extra_params, "worker_id": str(worker.id)}
+            logger.info(
+                "executor_account_adopted",
+                model_account_id=str(row.id),
+                from_worker_id=str(old_id),
+                to_worker_id=str(worker.id),
+            )
     await session.flush()
 
 
@@ -157,6 +214,9 @@ async def register_worker_for_workspace(
         worker_id=worker.id,
         name=name,
         capabilities=list(capabilities),
+    )
+    await _adopt_predecessor_accounts(
+        session, workspace_id=workspace_id, worker=worker, capabilities=list(capabilities)
     )
 
     logger.info(
