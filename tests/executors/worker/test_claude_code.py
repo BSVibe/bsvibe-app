@@ -240,8 +240,8 @@ async def test_the_agent_has_no_native_writes_to_confine(
     assert "--dangerously-skip-permissions" not in argv
     assert "--permission-mode" not in argv
     assert "acceptEdits" not in argv
-    # What replaced it: the CLI's own tools are taken away by name.
-    assert "--disallowedTools" in argv
+    # What replaced it: the CLI's own tools are switched off (#1077 — not listed by name).
+    assert argv[argv.index("--tools") + 1] == ""
     assert "--strict-mcp-config" in argv
 
 
@@ -357,7 +357,7 @@ async def test_agent_run_acts_only_through_bsvibe_tools(monkeypatch: pytest.Monk
 
     argv = calls[0]
     assert "--strict-mcp-config" in argv
-    assert "--disallowedTools" in argv
+    assert argv[argv.index("--tools") + 1] == ""  # #1077 — built-ins off
     # The deleted shape's fingerprints — neither may come back.
     assert "--permission-mode" not in argv
     assert "acceptEdits" not in argv
@@ -664,16 +664,6 @@ async def test_subprocess_env_forces_a_BLOCKING_mcp_connect(
         "the worker must force a blocking MCP connect; unset != false (the CLI default is "
         "non-blocking, so the agent starts with no tools and fabricates)"
     )
-
-
-async def test_native_denylist_covers_the_task_tool_family() -> None:
-    """CLI 2.1.172 added TaskCreate/TaskGet/TaskList/TaskUpdate. The enumerated denylist rots;
-    the guard below is the guarantee, but keep the list current so runs do not abort."""
-    import backend.executors.worker.claude_code as cc
-
-    denied = set(cc._NATIVE_TOOLS.split())
-
-    assert {"TaskCreate", "TaskGet", "TaskList", "TaskUpdate"} <= denied
 
 
 def _init(tools: list[str]) -> dict[str, object]:

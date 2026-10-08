@@ -7,14 +7,12 @@ taken away.
 Two measured constraints shape the invocation:
 
 * ``--disallowedTools "*"`` — the clean wildcard — **kills MCP tools too** (a run with an MCP
-  server attached reports ``NO_MCP_TOOLS``), and ``--allowedTools`` does not override it. So
-  the natives must be denied **by name**.
-* An enumerated denylist over a vendor's built-ins is exactly the trap this codebase already
-  fell into today: my first list missed ``ToolSearch`` / ``Skill`` / ``Workflow``, and the
-  agent burned twelve turns calling ``ToolSearch``. A new built-in in the next CLI release
-  would silently hand the agent its local filesystem back.
+  server attached reports ``NO_MCP_TOOLS``), and ``--allowedTools`` does not override it.
+* An enumerated denylist over a vendor's built-ins ROTS — it did, and stopped every agentic
+  run (#1077). ``--tools ""`` switches the built-in set off instead and leaves MCP tools alone
+  (measured 2026-10-08, CLI 2.1.287).
 
-So the list is best-effort and the CORRECTNESS is verified at runtime: the CLI's own
+The flags are still not trusted: CORRECTNESS is verified at runtime: the CLI's own
 ``system/init`` event announces the tools it actually exposed. If anything other than
 BSVibe's tools is in it, the task ABORTS. We do not trust the flags; we check the outcome.
 """
@@ -145,11 +143,10 @@ async def test_the_cli_is_given_bsvibes_tools_and_stripped_of_its_own(
     assert _seen_config["text"] == json.dumps(_MCP)
     assert "--strict-mcp-config" in argv
     assert argv[argv.index("--allowedTools") + 1] == " ".join(_TOOLS)
-    # Its own hands, taken away. The wildcard is unusable here — it kills MCP tools too — so
-    # the natives are denied by name, and the init check below is what makes that safe.
-    denied = argv[argv.index("--disallowedTools") + 1]
-    for native in ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "Task", "ToolSearch"):
-        assert native in denied
+    # Its own hands, taken away. ``--disallowedTools "*"`` kills MCP tools too; ``--tools ""``
+    # switches off the built-in set only (#1077 — a name list rotted and stopped every run).
+    # The init check below is still what makes that safe.
+    assert argv[argv.index("--tools") + 1] == ""
     # No local edit permissions: there is nothing local left to permit.
     assert "--permission-mode" not in argv
     # The host operator's harness (CLAUDE.md, skills, their own MCP servers) is not the
@@ -274,7 +271,7 @@ async def test_exclusive_shape_is_unchanged_when_the_flag_is_absent(
 
     await drain(ClaudeCodeExecutor().execute("build it", _ctx()))
 
-    assert "--disallowedTools" in calls[0]
+    assert calls[0][calls[0].index("--tools") + 1] == ""
 
 
 # ── the token is a secret, and argv is not a secret ─────────────────────────
