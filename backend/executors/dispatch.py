@@ -717,6 +717,12 @@ async def cancel_task(
     )
 
 
+def _set_usage(task: ExecutorTaskRow, **usage: int) -> None:
+    """Write a worker's reported usage onto its task row (the same six columns either way)."""
+    for column, value in usage.items():
+        setattr(task, column, value)
+
+
 async def record_result(
     session: AsyncSession,
     redis: _RedisDispatch,
@@ -786,6 +792,31 @@ async def record_result(
         )
         return None
     if task.status != "dispatched":
+        # #928 — a report that lands after the awaiter timed the task out (the cancel
+        # never reached the worker, so it ran to the end) still carries what it spent.
+        # Its status and output stay refused (#926: a late POST must not overwrite the
+        # terminal row); only the usage columns take it — and only on a row that holds
+        # none, so a replay onto a closed task cannot replace the number it already has.
+        if task.status == "failed" and not (
+            task.usage_prompt_tokens or task.usage_completion_tokens
+        ):
+            _set_usage(
+                task,
+                usage_prompt_tokens=usage_prompt_tokens,
+                usage_completion_tokens=usage_completion_tokens,
+                usage_input_tokens=usage_input_tokens,
+                usage_cache_read_tokens=usage_cache_read_tokens,
+                usage_cache_write_5m_tokens=usage_cache_write_5m_tokens,
+                usage_cache_write_1h_tokens=usage_cache_write_1h_tokens,
+            )
+            await session.flush()
+            logger.info(
+                "executor_task_late_usage_recorded",
+                task_id=str(task_id),
+                usage_prompt_tokens=usage_prompt_tokens,
+                usage_completion_tokens=usage_completion_tokens,
+            )
+            return None
         logger.warning(
             "executor_result_not_dispatched",
             task_id=str(task_id),
@@ -795,12 +826,15 @@ async def record_result(
     task.status = "done" if success else "failed"
     task.output = output
     task.error_message = error_message
-    task.usage_prompt_tokens = usage_prompt_tokens
-    task.usage_completion_tokens = usage_completion_tokens
-    task.usage_input_tokens = usage_input_tokens
-    task.usage_cache_read_tokens = usage_cache_read_tokens
-    task.usage_cache_write_5m_tokens = usage_cache_write_5m_tokens
-    task.usage_cache_write_1h_tokens = usage_cache_write_1h_tokens
+    _set_usage(
+        task,
+        usage_prompt_tokens=usage_prompt_tokens,
+        usage_completion_tokens=usage_completion_tokens,
+        usage_input_tokens=usage_input_tokens,
+        usage_cache_read_tokens=usage_cache_read_tokens,
+        usage_cache_write_5m_tokens=usage_cache_write_5m_tokens,
+        usage_cache_write_1h_tokens=usage_cache_write_1h_tokens,
+    )
 
     await session.flush()
     logger.info(

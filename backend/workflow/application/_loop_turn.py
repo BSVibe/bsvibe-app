@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from backend.dispatch.adapter import RunCancelledDuringTurn
+from backend.dispatch.adapter import ExecutorAdapterUnavailable, RunCancelledDuringTurn
 from backend.workflow.infrastructure.db import ExecutionRun
 
 if TYPE_CHECKING:
@@ -52,11 +52,32 @@ async def take_turn(
     await orch._session.commit()
     try:
         turn: LoopTurn = await orch._llm.complete(messages=messages, tools=tools)
-    except RunCancelledDuringTurn:
+    except RunCancelledDuringTurn as exc:
         # #1106 — the cancel landed MID-turn; the adapter has already told the
         # worker to kill the session.
+        await _accrue_spent(orch, run, exc)
         return None
+    except ExecutorAdapterUnavailable as exc:
+        await _accrue_spent(orch, run, exc)
+        raise
     return turn
+
+
+async def _accrue_spent(
+    orch: RunOrchestrator, run: ExecutionRun, exc: ExecutorAdapterUnavailable
+) -> None:
+    """#928 — a turn that ended in an error still spent what its worker reported.
+
+    The success path accrues through ``account_and_enforce_token_cap``; this is the same
+    meter for the endings that never get there. Committed here, because the error is about
+    to unwind past every later write. The ceiling is not checked: the run is stopping
+    anyway, and on a cancel it already has.
+    """
+    if not (exc.usage_prompt_tokens or exc.usage_completion_tokens):
+        return
+    run.usage_prompt_tokens += exc.usage_prompt_tokens
+    run.usage_completion_tokens += exc.usage_completion_tokens
+    await orch._session.commit()
 
 
 def failed_round_messages(
