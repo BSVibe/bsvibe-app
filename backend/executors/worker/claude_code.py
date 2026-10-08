@@ -221,82 +221,15 @@ _FORCED_CLI_SETTINGS: tuple[str, ...] = (
 #: Measured, same empty dir, same question: append + named denies → 12 turns / 44 s,
 #: answering about the temp dir (44 s also blew the 45 s inline-answer budget). This
 #: invocation → 1 turn / 9 s, answering from the grounding we injected.
-#: Claude Code's built-in tools, denied by NAME for an agentic turn that must act only through
-#: BSVibe's MCP tools. The wildcard cannot be used here: ``--disallowedTools "*"`` kills the
-#: MCP tools too (measured — the model reports NO_MCP_TOOLS), and ``--allowedTools`` does not
-#: override it.
-#:
-#: An enumerated denylist over a vendor's built-ins ROTS — my first attempt at one, hours
-#: earlier, missed ToolSearch/Skill/Workflow and the agent burned 12 turns calling ToolSearch.
-#: A tool added in the next CLI release would silently hand the agent back the user's
-#: filesystem. So this list is BEST EFFORT, and the guarantee is elsewhere:
-#: :func:`_exposed_tools_are_ours` reads the CLI's own ``system/init`` event, which announces
-#: what it actually exposed, and aborts the task if anything but our tools is in it. Do not
-#: trust the flags; check the outcome.
-_NATIVE_TOOLS: str = " ".join(
-    (
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "MultiEdit",
-        "NotebookEdit",
-        "Glob",
-        "Grep",
-        "LS",
-        "Task",
-        "TodoWrite",
-        "WebFetch",
-        "WebSearch",
-        "ToolSearch",
-        "Skill",
-        "Workflow",
-        "Monitor",
-        "AskUserQuestion",
-        "SlashCommand",
-        "BashOutput",
-        "KillShell",
-        "CronCreate",
-        "CronDelete",
-        "CronList",
-        "DesignSync",
-        "EnterPlanMode",
-        "ExitPlanMode",
-        "EnterWorktree",
-        "ExitWorktree",
-        "PushNotification",
-        "RemoteTrigger",
-        "ScheduleWakeup",
-        "TaskOutput",
-        "TaskStop",
-        # Added in CLI 2.1.172 — exactly the rot this list was predicted to suffer. The guard
-        # below caught them on the first real agentic run (they are not in `claude --print`'s
-        # vanilla tool list; they appear once a session is not nested inside another one).
-        "TaskCreate",
-        "TaskGet",
-        "TaskList",
-        "TaskUpdate",
-        # The rot again, and this time it stopped every agent run. Measured on the worker,
-        # 2026-08-24 (run ``cb37cbcd``, both attempts):
-        #     claude_code_unsanctioned_tools problem='unsanctioned: ListAgents,
-        #     ReportFindings, SendMessage'
-        # The guard did its job — it refused rather than hand the agent the founder's
-        # filesystem — but a rotted list means NO agentic run can start, on either execution
-        # model (they share this branch).
-        "ListAgents",
-        "ReportFindings",
-        "SendMessage",
-        # ...and the rest of the same generation's surface, which that run simply did not
-        # expose. Denying a name the CLI never offers costs nothing; discovering the gap one
-        # aborted production run at a time costs a run each time.
-        "Agent",
-        "Artifact",
-        "ListMcpResourcesTool",
-        "ReadMcpResourceDirTool",
-        "ReadMcpResourceTool",
-        "SendUserFile",
-    )
-)
+#: #1077 — an agentic turn switches the CLI's built-ins OFF with ``--tools ""`` (the built-in
+#: set; "Use \"\" to disable all tools"). It used to deny them BY NAME, because the wildcard
+#: ``--disallowedTools "*"`` also kills the MCP tools. A vendor's name list ROTS: CLI updates
+#: added TaskCreate…, then ListAgents / ReportFindings / SendMessage, the init guard refused
+#: the unknown names, and every agentic run aborted — the BStockReport weekly report published
+#: nothing 08-17 → 08-31 (run ``cb37cbcd``). Measured 2026-10-08 on CLI 2.1.287 with an MCP
+#: server attached: ``--tools ""`` → init exposes ONLY the MCP tools. The guarantee is still
+#: :func:`_exposed_tools_are_ours` — do not trust the flags; check the outcome.
+_NO_BUILTIN_TOOLS: tuple[str, ...] = ("--tools", "")
 
 
 def _write_mcp_config(mcp_config: str) -> str:
@@ -586,11 +519,10 @@ class ClaudeCodeExecutor:
                 mcp_config_path,
                 "--allowedTools",
                 " ".join(allowed_tools or ()),
-                "--disallowedTools",
-                _NATIVE_TOOLS,
+                *_NO_BUILTIN_TOOLS,
                 "--setting-sources",
                 "",
-                # This path declares its own isolation (natives denied, state reached only
+                # This path declares its own isolation (built-ins off, state reached only
                 # through BSVibe's tools). The host's auto-memory store walked in behind
                 # that claim — see :data:`_FORCED_CLI_SETTINGS`.
                 *_FORCED_CLI_SETTINGS,
