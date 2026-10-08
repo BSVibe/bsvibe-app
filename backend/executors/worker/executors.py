@@ -43,6 +43,22 @@ def usage_int(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
 
 
+@dataclass(frozen=True)
+class UsageBreakdown:
+    """The input side of a turn's usage, split the way it is billed (#1104).
+
+    ``usage_prompt_tokens`` is ONE weighted figure — what the run's ceiling meters. These are
+    the raw counts behind it, kept so a task's real cost can be recomputed afterwards (and a
+    weight that turns out wrong re-applied). An unsplit cache write counts as the 5-minute
+    write — the same assumption the weighting makes.
+    """
+
+    input_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_5m_tokens: int = 0
+    cache_write_1h_tokens: int = 0
+
+
 @dataclass
 class ExecutionChunk:
     """One incremental message from a streaming executor.
@@ -64,6 +80,8 @@ class ExecutionChunk:
     error: str | None = None
     usage_prompt_tokens: int = 0
     usage_completion_tokens: int = 0
+    #: The raw split behind ``usage_prompt_tokens``, when the CLI reports one (#1104).
+    usage_breakdown: UsageBreakdown | None = None
 
 
 @runtime_checkable

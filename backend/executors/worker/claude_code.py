@@ -39,6 +39,7 @@ from backend.executors.worker.claude_auth import ensure_claude_bearer
 from backend.executors.worker.config import default_claude_config_dir, get_worker_settings
 from backend.executors.worker.executors import (
     ExecutionChunk,
+    UsageBreakdown,
     _kill_process_group,
     sanitized_subprocess_env,
     usage_int,
@@ -597,15 +598,8 @@ class ClaudeCodeExecutor:
             process.stdin.close()
 
             stderr_task = asyncio.create_task(_drain(process.stderr, stderr_buf))
-            # The most recent NON-``allowed`` rate_limit_event status seen on the
-            # stream (e.g. ``rejected`` on a five_hour window with org-disabled
-            # overage). Used only when the CLI then exits non-zero — see below.
-            rate_status: str | None = None
-            # The turn's token usage, off the terminal ``result`` event. Kept as
-            # the LAST reported value rather than a sum: claude reports one
-            # cumulative ``result`` per invocation, so adding would double-count
-            # if the CLI ever emitted an interim one.
-            usage: tuple[int, int] = (0, 0)
+            # The out-of-band signals the delta loop has no use for — see ``_StreamScrape``.
+            scrape = _StreamScrape()
             try:
                 async for line in _marking_first_event(
                     _aiter_lines(process.stdout, deadline),
@@ -615,7 +609,7 @@ class ClaudeCodeExecutor:
                     parsed = _safe_json(line)
                     if parsed is None:
                         continue
-                    rate_status, usage = _scrape_event(parsed, rate_status, usage)
+                    scrape.feed(parsed)
                     delta = _claude_extract_delta(parsed)
                     if delta:
                         yield ExecutionChunk(delta=delta)
@@ -650,7 +644,7 @@ class ClaudeCodeExecutor:
                 )
                 await stderr_task
             yield _terminal_chunk(
-                0 if limits.reached_max_turns(rc) else rc, "".join(stderr_buf), rate_status, usage
+                0 if limits.reached_max_turns(rc) else rc, "".join(stderr_buf), scrape
             )
         except TimeoutError:
             # ``TimeoutError`` is a subclass of ``OSError`` (3.11) — re-raise so
@@ -677,12 +671,7 @@ class ClaudeCodeExecutor:
 # ── Stream parsing helpers ────────────────────────────────────────────────────
 
 
-def _terminal_chunk(
-    rc: int,
-    err_text: str,
-    rate_status: str | None,
-    usage: tuple[int, int] = (0, 0),
-) -> ExecutionChunk:
+def _terminal_chunk(rc: int, err_text: str, scrape: _StreamScrape) -> ExecutionChunk:
     """The final ``done`` chunk for a finished subprocess.
 
     A non-zero exit AFTER a non-``allowed`` rate_limit_event (the five_hour
@@ -691,27 +680,24 @@ def _terminal_chunk(
     routes it through the wait+retry path and the founder gets an actionable
     reason instead of an opaque "claude exited".
 
-    ``usage`` rides the terminal chunk on EVERY outcome, failure included: a turn
+    The usage rides the terminal chunk on EVERY outcome, failure included: a turn
     that burned tokens and then exited non-zero still spent the founder's budget,
     and a ceiling that only counted successes would be blind to exactly the
-    runaway that keeps failing."""
-    prompt_tokens, completion_tokens = usage
-    if rc == 0:
-        return ExecutionChunk(
-            done=True,
-            usage_prompt_tokens=prompt_tokens,
-            usage_completion_tokens=completion_tokens,
+    runaway that keeps failing. The breakdown (#1104) rides it for the same reason."""
+    prompt_tokens, completion_tokens = scrape.usage
+    error: str | None = None
+    if rc != 0:
+        error = (
+            f"rate limit ({scrape.rate_status}): claude exited {rc}"
+            if scrape.rate_status is not None
+            else err_text or f"exit {rc}"
         )
-    error = (
-        f"rate limit ({rate_status}): claude exited {rc}"
-        if rate_status is not None
-        else err_text or f"exit {rc}"
-    )
     return ExecutionChunk(
         done=True,
         error=error,
         usage_prompt_tokens=prompt_tokens,
         usage_completion_tokens=completion_tokens,
+        usage_breakdown=scrape.breakdown,
     )
 
 
@@ -729,25 +715,34 @@ def _rate_limit_event_status(event: dict[str, Any]) -> str | None:
     return status if isinstance(status, str) else None
 
 
-def _scrape_event(
-    event: dict[str, Any],
-    rate_status: str | None,
-    usage: tuple[int, int],
-) -> tuple[str | None, tuple[int, int]]:
-    """Fold one event's out-of-band signals into the running stream state.
+@dataclass
+class _StreamScrape:
+    """The out-of-band signals of one stream, folded in event by event.
 
-    The rate-limit status and the turn's token usage are both "remember the last
-    one we saw" scrapes that the delta loop otherwise has no use for. Kept
-    together in one helper so ``_run_once`` stays under its branch budget — the
-    same hygiene split as ``main._stream_and_collect``.
+    The rate-limit status, the turn's token usage and its raw breakdown (#1104) are all
+    "remember the last one we saw" scrapes that the delta loop otherwise has no use for.
+    Kept together so ``_run_once`` stays under its statement budget — the same hygiene
+    split as ``main._stream_and_collect``.
+
+    ``rate_status`` is the most recent NON-``allowed`` rate_limit_event status (e.g.
+    ``rejected`` on a five_hour window with org-disabled overage), used only when the CLI
+    then exits non-zero. ``usage`` is the LAST reported value rather than a sum: claude
+    reports one cumulative ``result`` per invocation, so adding would double-count if the
+    CLI ever emitted an interim one.
     """
-    status = _rate_limit_event_status(event)
-    if status is not None and status != "allowed":
-        rate_status = status
-    reported = _claude_extract_usage(event)
-    if reported is not None:
-        usage = reported
-    return rate_status, usage
+
+    rate_status: str | None = None
+    usage: tuple[int, int] = (0, 0)
+    breakdown: UsageBreakdown | None = None
+
+    def feed(self, event: dict[str, Any]) -> None:
+        status = _rate_limit_event_status(event)
+        if status is not None and status != "allowed":
+            self.rate_status = status
+        reported = _claude_extract_usage(event)
+        if reported is not None:
+            self.usage = reported
+            self.breakdown = _claude_usage_breakdown(event)
 
 
 def _claude_extract_usage(event: dict[str, Any]) -> tuple[int, int] | None:
@@ -771,6 +766,37 @@ def _claude_extract_usage(event: dict[str, Any]) -> tuple[int, int] | None:
     return _weighted_prompt(usage), usage_int(usage.get("output_tokens"))
 
 
+def _claude_usage_breakdown(event: dict[str, Any]) -> UsageBreakdown | None:
+    """The raw split behind :func:`_claude_extract_usage`'s weighted figure (#1104).
+
+    ``None`` for an event that carries no usage, exactly when the weighted figure is ``None``.
+    """
+    if event.get("type") != "result":
+        return None
+    usage = event.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return _breakdown(usage)
+
+
+def _breakdown(usage: dict[str, Any]) -> UsageBreakdown:
+    """A usage block's input side, split by how each kind of token is billed."""
+    split = usage.get("cache_creation")
+    if isinstance(split, dict):
+        write_5m = usage_int(split.get("ephemeral_5m_input_tokens"))
+        write_1h = usage_int(split.get("ephemeral_1h_input_tokens"))
+    else:
+        # No TTL split: assume the cheaper write rather than guess at the dearer one.
+        write_5m = usage_int(usage.get("cache_creation_input_tokens"))
+        write_1h = 0
+    return UsageBreakdown(
+        input_tokens=usage_int(usage.get("input_tokens")),
+        cache_read_tokens=usage_int(usage.get("cache_read_input_tokens")),
+        cache_write_5m_tokens=write_5m,
+        cache_write_1h_tokens=write_1h,
+    )
+
+
 #: What a cached token costs relative to a plain input token (Anthropic pricing, every model).
 #: A cache READ is a tenth; a cache WRITE is 1.25× for the 5-minute TTL and 2× for the 1-hour
 #: TTL — and the CLI writes 1-hour entries (measured, 2.1.286: ``ephemeral_1h_input_tokens``).
@@ -789,20 +815,13 @@ def _weighted_prompt(usage: dict[str, Any]) -> int:
 
     Rounded UP, so a ceiling never rounds a real cost away.
     """
-    plain = usage_int(usage.get("input_tokens"))
-    read = math.ceil(usage_int(usage.get("cache_read_input_tokens")) * _CACHE_READ_WEIGHT)
-    split = usage.get("cache_creation")
-    if isinstance(split, dict):
-        written = math.ceil(
-            usage_int(split.get("ephemeral_5m_input_tokens")) * _CACHE_WRITE_5M_WEIGHT
-            + usage_int(split.get("ephemeral_1h_input_tokens")) * _CACHE_WRITE_1H_WEIGHT
-        )
-    else:
-        # No TTL split: assume the cheaper write rather than guess at the dearer one.
-        written = math.ceil(
-            usage_int(usage.get("cache_creation_input_tokens")) * _CACHE_WRITE_5M_WEIGHT
-        )
-    return plain + read + written
+    split = _breakdown(usage)
+    read = math.ceil(split.cache_read_tokens * _CACHE_READ_WEIGHT)
+    written = math.ceil(
+        split.cache_write_5m_tokens * _CACHE_WRITE_5M_WEIGHT
+        + split.cache_write_1h_tokens * _CACHE_WRITE_1H_WEIGHT
+    )
+    return split.input_tokens + read + written
 
 
 def _positive_int(value: Any) -> int | None:
