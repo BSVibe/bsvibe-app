@@ -39,6 +39,11 @@ now differ because their CONSUMERS differ, not because the fix is half-applied:
   in the knowledge context) to carry a number every consumer would immediately
   drop would be a contract change bought for nothing; a named event makes the
   remaining gap MEASURABLE instead of invisible, which is the actual ask.
+
+#954 — a log line could not stay measurable: the prod log archive keeps about a
+day. :func:`record_unattributed_usage` also keeps each turn in the workspace
+ledger (:class:`~backend.workflow.infrastructure.db.UnattributedLlmUsage`) when
+the seam was handed a session factory.
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ import uuid
 from typing import Any
 
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.dispatch.adapter import ModelAccountAdapter
 from backend.workflow.application.stages.frame import TextCompletion
@@ -86,6 +92,57 @@ def log_unattributed_usage(
     )
 
 
+async def record_unattributed_usage(
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    *,
+    site: str,
+    workspace_id: uuid.UUID | str,
+    usage_prompt_tokens: int,
+    usage_completion_tokens: int,
+    **identity: str | None,
+) -> None:
+    """Log the turn (:func:`log_unattributed_usage`) AND keep it in the workspace ledger.
+
+    The write is its own short transaction, so the caller's rollback (a failed ingest
+    batch) cannot take the record of tokens already spent with it. It is soft-failed for
+    the same reason the other way round: the call that spent them already succeeded, and
+    losing that work over its bookkeeping would be worse than losing the row.
+    ``session_factory=None`` (a seam built without one, test doubles) only logs.
+    """
+    log_unattributed_usage(
+        site=site,
+        workspace_id=workspace_id,
+        usage_prompt_tokens=usage_prompt_tokens,
+        usage_completion_tokens=usage_completion_tokens,
+        **identity,
+    )
+    if session_factory is None or not (usage_prompt_tokens or usage_completion_tokens):
+        return
+    from backend.data.rls import workspace_session_scope  # noqa: PLC0415
+    from backend.workflow.infrastructure.db import UnattributedLlmUsage  # noqa: PLC0415
+
+    ws = workspace_id if isinstance(workspace_id, uuid.UUID) else uuid.UUID(workspace_id)
+    try:
+        async with session_factory() as session, workspace_session_scope(session, ws):
+            session.add(
+                UnattributedLlmUsage(
+                    workspace_id=ws,
+                    site=site,
+                    identity={k: v for k, v in identity.items() if v is not None},
+                    usage_prompt_tokens=usage_prompt_tokens,
+                    usage_completion_tokens=usage_completion_tokens,
+                )
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — bookkeeping must not fail the spend it records
+        logger.warning(
+            "llm_usage_unattributed_write_failed",
+            site=site,
+            workspace_id=str(ws),
+            exc_info=True,
+        )
+
+
 class _ResolverCompileLlm:
     """Thin :class:`CompileLlm` adapter over a resolved adapter.
 
@@ -100,7 +157,7 @@ class _ResolverCompileLlm:
     why this seam logs rather than returns.
     """
 
-    __slots__ = ("_adapter", "_site", "_workspace_id")
+    __slots__ = ("_adapter", "_session_factory", "_site", "_workspace_id")
 
     def __init__(
         self,
@@ -108,10 +165,12 @@ class _ResolverCompileLlm:
         adapter: ModelAccountAdapter,
         workspace_id: uuid.UUID | str,
         site: str,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
         self._adapter = adapter
         self._workspace_id = workspace_id
         self._site = site
+        self._session_factory = session_factory
 
     async def chat(
         self,
@@ -127,7 +186,8 @@ class _ResolverCompileLlm:
             messages=[dict(m) for m in messages],
             tools=None,
         )
-        log_unattributed_usage(
+        await record_unattributed_usage(
+            self._session_factory,
             site=self._site,
             workspace_id=self._workspace_id,
             usage_prompt_tokens=getattr(response, "usage_prompt_tokens", 0),
@@ -171,4 +231,5 @@ __all__ = [
     "_ResolverCompileLlm",
     "_ResolverFrameLlm",
     "log_unattributed_usage",
+    "record_unattributed_usage",
 ]

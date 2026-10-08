@@ -40,7 +40,7 @@ from backend.workflow.application.runtime.account_resolution import resolve_via_
 from backend.workflow.application.runtime.dispatcher import (
     _ResolverCompileLlm,
     _ResolverFrameLlm,
-    log_unattributed_usage,
+    record_unattributed_usage,
 )
 from backend.workflow.application.stages.frame import TextCompletion
 
@@ -109,6 +109,7 @@ def build_settle_entity_extractor_factory(
                 adapter=resolved.adapter,
                 workspace_id=workspace_id,
                 site=CALLER_SETTLE_EXTRACT,
+                session_factory=session_factory,
             )
             knowledge = KnowledgeFactory(
                 workspace_id=str(workspace_id),
@@ -159,10 +160,17 @@ class _RoutedConceptFramer:
     never product-chosen. A single ``(system, user)`` → text completion per
     newly created concept; the promoter bounds + soft-fails the result."""
 
-    __slots__ = ("_llm", "_workspace_id")
+    __slots__ = ("_llm", "_session_factory", "_workspace_id")
 
-    def __init__(self, llm: _ResolverFrameLlm, *, workspace_id: uuid.UUID) -> None:
+    def __init__(
+        self,
+        llm: _ResolverFrameLlm,
+        *,
+        workspace_id: uuid.UUID,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
+    ) -> None:
         self._llm = llm
+        self._session_factory = session_factory
         # #930 — the promoter that calls this has no run: concept framing is
         # triggered by a settle pass over a workspace vault, not by one run's
         # work. So the spend is REPORTED under the workspace rather than
@@ -175,7 +183,7 @@ class _RoutedConceptFramer:
             return None
         user = f"Concept: {concept}\n\nSource notes:\n{notes}"
         completion = await self._llm.complete_text(system=_FRAMING_SYSTEM, user=user)
-        self._report(completion, concept=concept)
+        await self._report(completion, concept=concept)
         return completion.text.strip() or None
 
     async def label(self, *, concept: str) -> str | None:
@@ -186,14 +194,15 @@ class _RoutedConceptFramer:
         completion = await self._llm.complete_text(
             system=_DISPLAY_LABEL_SYSTEM, user=f"Concept: {concept}"
         )
-        self._report(completion, concept=concept)
+        await self._report(completion, concept=concept)
         # Defensive: take the first non-empty line, strip wrapping quotes.
         line = next((ln.strip() for ln in completion.text.splitlines() if ln.strip()), "")
         return line.strip("\"'").strip() or None
 
-    def _report(self, completion: TextCompletion, *, concept: str) -> None:
+    async def _report(self, completion: TextCompletion, *, concept: str) -> None:
         """Report this turn's spend under the workspace — there is no run."""
-        log_unattributed_usage(
+        await record_unattributed_usage(
+            self._session_factory,
             site=CALLER_KNOWLEDGE_CANONICALIZATION,
             workspace_id=self._workspace_id,
             usage_prompt_tokens=completion.usage_prompt_tokens,
@@ -239,6 +248,7 @@ def build_concept_framer(
             return _RoutedConceptFramer(
                 _ResolverFrameLlm(adapter=resolved.adapter),
                 workspace_id=workspace_id,
+                session_factory=session_factory,
             )
 
     return _factory

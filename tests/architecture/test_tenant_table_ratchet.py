@@ -86,6 +86,8 @@ EXPECTED_RLS_EXEMPT_TENANT_TABLES: frozenset[str] = frozenset(
         "safe_mode_queue_items",
         "settle_drains",
         "trigger_events",
+        # #954 — the run-less LLM spend ledger; layer 2 like ``executor_tasks``.
+        "unattributed_llm_usage",
         "verification_results",
         "work_steps",
         "workspace_schedules",

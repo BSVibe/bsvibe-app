@@ -29,7 +29,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.api.deps import get_db_session, get_workspace_id, require_account_id
 from backend.api.v1._router_deps import get_run_routing_rule_repository
@@ -509,15 +509,22 @@ class _AdapterCompileLlm:
     ``llm_usage_unattributed`` like every other run-less call (#953), rather than
     dropped without a trace."""
 
-    __slots__ = ("_adapter", "_workspace_id")
+    __slots__ = ("_adapter", "_session_factory", "_workspace_id")
 
-    def __init__(self, adapter: Any, *, workspace_id: uuid.UUID) -> None:
+    def __init__(
+        self,
+        adapter: Any,
+        *,
+        workspace_id: uuid.UUID,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
+    ) -> None:
         self._adapter = adapter
         self._workspace_id = workspace_id
+        self._session_factory = session_factory
 
     async def complete_text(self, *, system: str, user: str) -> str:
         from backend.workflow.application.runtime.dispatcher import (  # noqa: PLC0415
-            log_unattributed_usage,
+            record_unattributed_usage,
         )
 
         response = await self._adapter.chat(
@@ -525,7 +532,8 @@ class _AdapterCompileLlm:
             messages=[{"role": "user", "content": user}],
             tools=None,
         )
-        log_unattributed_usage(
+        await record_unattributed_usage(
+            self._session_factory,
             site=CALLER_ROUTING_COMPILE,
             workspace_id=self._workspace_id,
             usage_prompt_tokens=getattr(response, "usage_prompt_tokens", 0),
@@ -573,7 +581,13 @@ async def _resolve_compile_llm(
         )
     except NoMatchingRouteError:
         return None
-    return _AdapterCompileLlm(resolved.adapter, workspace_id=workspace_id)
+    # #954 — the ledger row is written on its own session over the request's engine, so
+    # a dry-run compile (which never commits the request session) still keeps it.
+    return _AdapterCompileLlm(
+        resolved.adapter,
+        workspace_id=workspace_id,
+        session_factory=async_sessionmaker(session.bind, expire_on_commit=False),
+    )
 
 
 async def compile_for_workspace(
