@@ -8,7 +8,8 @@
  *                                      instruction IS the scheduled run's task.
  *   GET    /api/v1/schedules        — list this workspace's schedules, newest first.
  *   DELETE /api/v1/schedules/{id}   — remove a schedule (204 No Content).
- *   PATCH  /api/v1/schedules/{id}   — enable / disable a schedule.
+ *   PATCH  /api/v1/schedules/{id}   — enable / disable a schedule, or set its
+ *                                      `output_mode` (#1072).
  *
  *  The backend accepts TWO kinds today — `instruction` and `product_tick`
  *  (`_SUPPORTED_KINDS` in `backend/schedule/application/schedule_service.py`;
@@ -60,7 +61,12 @@ export interface Schedule {
   next_run_at: string;
   last_fired_at: string | null;
   enabled: boolean;
+  /** #1072 — "safe" follows the workspace's Safe Mode; "direct" delivers without
+   *  an approval card. A `product_tick` schedule is always "safe". */
+  output_mode: ScheduleOutputMode;
 }
+
+export type ScheduleOutputMode = "safe" | "direct";
 
 /** Request body for authoring a schedule — mirrors the backend `ScheduleCreate`
  *  (`extra=forbid`). `kind` defaults to `instruction`, which is the only kind
@@ -72,6 +78,7 @@ export interface ScheduleCreate {
   cron_expr: string;
   product_id?: string | null;
   title?: string | null;
+  output_mode?: ScheduleOutputMode;
 }
 
 /** List this workspace's schedules, newest first. */
@@ -88,6 +95,7 @@ export function createSchedule(body: ScheduleCreate): Promise<Schedule> {
   };
   if (body.product_id != null) payload.product_id = body.product_id;
   if (body.title != null && body.title !== "") payload.title = body.title;
+  if (body.output_mode != null) payload.output_mode = body.output_mode;
   return apiFetch<Schedule>("/api/v1/schedules", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -97,6 +105,17 @@ export function createSchedule(body: ScheduleCreate): Promise<Schedule> {
 /** Delete a schedule. 204 No Content, so this resolves to void. */
 export function deleteSchedule(id: string): Promise<void> {
   return apiFetch<void>(`/api/v1/schedules/${id}`, { method: "DELETE" });
+}
+
+/** #1072 — set a schedule's output_mode (PATCH). Returns the reconciled row. */
+export function setScheduleOutputMode(
+  id: string,
+  outputMode: ScheduleOutputMode,
+): Promise<Schedule> {
+  return apiFetch<Schedule>(`/api/v1/schedules/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ output_mode: outputMode }),
+  });
 }
 
 /** Enable or disable a schedule (PATCH). Returns the reconciled row. */

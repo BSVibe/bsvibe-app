@@ -32,7 +32,10 @@ async def test_create_persists_instruction_row_with_text_payload() -> None:
         await session.commit()
 
         assert row.kind == "instruction"
-        assert row.payload == {"text": "post the weekly market summary"}
+        assert row.payload == {
+            "text": "post the weekly market summary",
+            "output_mode": "safe",
+        }  # #1072 default
         assert row.plugin_name is None
         assert row.enabled is True
         # First next_run_at is the next Monday 09:00 UTC.

@@ -34,6 +34,8 @@ class ScheduleView(BaseModel):
     next_run_at: datetime | None
     last_fired_at: datetime | None
     enabled: bool
+    #: #1072 — ``safe`` follows the workspace's Safe Mode; ``direct`` skips the queue.
+    output_mode: str = "safe"
 
 
 class ScheduleRowLike(Protocol):
@@ -74,4 +76,5 @@ def schedule_view_from_row(row: ScheduleRowLike) -> ScheduleView:
         next_run_at=row.next_run_at,
         last_fired_at=row.last_fired_at,
         enabled=row.enabled,
+        output_mode="direct" if payload.get("output_mode") == "direct" else "safe",
     )

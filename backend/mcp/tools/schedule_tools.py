@@ -52,6 +52,9 @@ class ScheduleCreateInput(BaseModel):
     cron_expr: str = Field(min_length=1, max_length=255)
     product_id: uuid.UUID | None = None
     title: str | None = Field(default=None, max_length=500)
+    # #1072 — "safe" (default) follows workspace Safe Mode; "direct" delivers
+    # without an approval card. product_tick may only be "safe".
+    output_mode: str = Field(default="safe")
 
 
 class SchedulesListInput(BaseModel):
@@ -69,6 +72,13 @@ class ScheduleSetEnabledInput(BaseModel):
 
     schedule_id: uuid.UUID
     enabled: bool
+
+
+class ScheduleSetOutputModeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schedule_id: uuid.UUID
+    output_mode: str
 
 
 class SchedulesListOutput(RootModel[list[ScheduleView]]):
@@ -99,6 +109,7 @@ async def _h_create(args: ScheduleCreateInput, ctx: ToolContext) -> Any:
             product_id=args.product_id,
             title=args.title,
             producer_id=_MCP_PRODUCER_ID,
+            output_mode=args.output_mode,
         )
     except ScheduleValidationError as exc:
         await ctx.session.rollback()
@@ -131,6 +142,23 @@ async def _h_set_enabled(args: ScheduleSetEnabledInput, ctx: ToolContext) -> Any
         workspace_id=ctx.principal.workspace_id,
         enabled=args.enabled,
     )
+    if row is None:
+        raise ToolError(f"schedule {args.schedule_id} not found")
+    await ctx.session.commit()
+    return _to_view(row)
+
+
+async def _h_set_output_mode(args: ScheduleSetOutputModeInput, ctx: ToolContext) -> Any:
+    service = ScheduleService(ctx.session)
+    try:
+        row = await service.set_output_mode(
+            schedule_id=args.schedule_id,
+            workspace_id=ctx.principal.workspace_id,
+            output_mode=args.output_mode,
+        )
+    except ScheduleValidationError as exc:
+        await ctx.session.rollback()
+        raise ToolError(str(exc)) from exc
     if row is None:
         raise ToolError(f"schedule {args.schedule_id} not found")
     await ctx.session.commit()
@@ -193,6 +221,22 @@ def register_schedule_tools(registry: ToolRegistry) -> None:
             handler=_h_set_enabled,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.schedules_set_enabled.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_schedules_set_output_mode",
+            description=(
+                "Set a schedule's output_mode: 'safe' (its deliverables follow the "
+                "workspace's Safe Mode) or 'direct' (they are delivered without an "
+                "approval card — the founder approved them by writing the schedule). "
+                "A product_tick schedule may only be 'safe'."
+            ),
+            input_schema=ScheduleSetOutputModeInput,
+            output_schema=ScheduleView,
+            handler=_h_set_output_mode,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.schedules_set_output_mode.invoked",
         )
     )
 

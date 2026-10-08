@@ -1,12 +1,14 @@
 "use client";
 
 import {
+  SCHEDULE_KIND_PRODUCT_TICK,
   type Schedule,
   type ScheduleCreate,
   createSchedule,
   deleteSchedule,
   getSchedules,
   setScheduleEnabled,
+  setScheduleOutputMode,
 } from "@/lib/api/schedules";
 import { getWorkspace } from "@/lib/api/workspace";
 import { useTranslations } from "next-intl";
@@ -63,6 +65,7 @@ export default function SchedulesTab() {
   const [text, setText] = useState("");
   const [cron, setCron] = useState("");
   const [title, setTitle] = useState("");
+  const [direct, setDirect] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -121,6 +124,7 @@ export default function SchedulesTab() {
       text: trimmedText,
       cron_expr: trimmedCron,
       title: title.trim() || undefined,
+      output_mode: direct ? "direct" : "safe",
     };
     createSchedule(body)
       .then((row) => {
@@ -128,6 +132,7 @@ export default function SchedulesTab() {
         setText("");
         setCron("");
         setTitle("");
+        setDirect(false);
       })
       .catch(() => setCreateError(t("createError")))
       .finally(() => setCreating(false));
@@ -146,6 +151,23 @@ export default function SchedulesTab() {
       .catch(() =>
         setSchedules((prev) =>
           (prev ?? []).map((s) => (s.id === row.id ? { ...s, enabled: row.enabled } : s)),
+        ),
+      );
+  }
+
+  // #1072 — "deliver without approval": optimistic like the enable toggle.
+  function toggleDirect(row: Schedule) {
+    const next = row.output_mode === "direct" ? "safe" : "direct";
+    setSchedules((prev) =>
+      (prev ?? []).map((s) => (s.id === row.id ? { ...s, output_mode: next } : s)),
+    );
+    setScheduleOutputMode(row.id, next)
+      .then((saved) =>
+        setSchedules((prev) => (prev ?? []).map((s) => (s.id === saved.id ? saved : s))),
+      )
+      .catch(() =>
+        setSchedules((prev) =>
+          (prev ?? []).map((s) => (s.id === row.id ? { ...s, output_mode: row.output_mode } : s)),
         ),
       );
   }
@@ -220,6 +242,18 @@ export default function SchedulesTab() {
           />
         </label>
 
+        <label className="schedule-row__toggle">
+          <input
+            type="checkbox"
+            aria-label={t("directLabel")}
+            checked={direct}
+            disabled={creating}
+            onChange={(e) => setDirect(e.target.checked)}
+          />
+          <span>{t("directLabel")}</span>
+        </label>
+        <p className="settings-field__caption">{t("directCaption")}</p>
+
         <button
           type="submit"
           className="schedules-form__submit"
@@ -265,6 +299,17 @@ export default function SchedulesTab() {
                     </p>
                   </div>
                   <div className="schedule-row__actions">
+                    {row.kind !== SCHEDULE_KIND_PRODUCT_TICK && (
+                      <label className="schedule-row__toggle">
+                        <input
+                          type="checkbox"
+                          aria-label={`${heading} — ${t("directLabel")}`}
+                          checked={row.output_mode === "direct"}
+                          onChange={() => toggleDirect(row)}
+                        />
+                        <span>{t("directLabel")}</span>
+                      </label>
+                    )}
                     <label className="schedule-row__toggle">
                       <input
                         type="checkbox"

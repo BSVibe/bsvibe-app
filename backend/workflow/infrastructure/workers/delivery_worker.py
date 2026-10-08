@@ -117,6 +117,7 @@ def resolve_output_mode_gate(
     workspace_safe_mode: bool,
     output_mode: str | None,
     autonomous_origin: bool = False,
+    schedule_direct: bool = False,
 ) -> bool:
     """Decide whether a delivery must be QUEUED (``True``) or delivered (``False``).
 
@@ -134,9 +135,14 @@ def resolve_output_mode_gate(
        binding) → deliver. With the override off this matches today's behavior,
        so a Resource with no explicit ``output_mode`` does not regress.
     """
-    if workspace_safe_mode:
-        return True
+    # PT3 first: BSVibe deciding the work itself always waits — nothing outranks it.
     if autonomous_origin:
+        return True
+    # #1072 — the founder marked THIS schedule "direct" when writing it; that is
+    # the approval, so the workspace-wide override does not ask again.
+    if schedule_direct:
+        return False
+    if workspace_safe_mode:
         return True
     if output_mode == "safe":
         return True
@@ -197,6 +203,17 @@ async def _run_autonomous_origin(session: AsyncSession, run_id: uuid.UUID | None
         return False
     payload = run.payload if isinstance(run.payload, dict) else {}
     return payload.get("kind") in _AUTONOMOUS_ORIGIN_KINDS
+
+
+async def _run_schedule_direct(session: AsyncSession, run_id: uuid.UUID | None) -> bool:
+    """#1072 — was this run fired by a schedule the founder marked ``direct``?"""
+    if run_id is None:
+        return False
+    from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+
+    run = await session.get(ExecutionRun, run_id)
+    payload = run.payload if run is not None and isinstance(run.payload, dict) else {}
+    return payload.get("schedule_output_mode") == "direct"
 
 
 def extract_compensation_handles(
@@ -442,6 +459,7 @@ class DeliveryWorker(BaseWorker):
                         workspace_safe_mode = await _workspace_safe_mode(session, row.workspace_id)
                         output_mode = await _run_output_mode(session, row.run_id)
                         autonomous_origin = await _run_autonomous_origin(session, row.run_id)
+                        schedule_direct = await _run_schedule_direct(session, row.run_id)
                         # #1112 — the founder's "Approve & ship" click already
                         # approved this one; a second Safe Mode card would ask twice.
                         founder_approved = (row.payload or {}).get(FOUNDER_APPROVED_KEY) is True
@@ -449,6 +467,7 @@ class DeliveryWorker(BaseWorker):
                             workspace_safe_mode=workspace_safe_mode,
                             output_mode=output_mode,
                             autonomous_origin=autonomous_origin,
+                            schedule_direct=schedule_direct,
                         ):
                             # Gate says QUEUE — hold for founder approval instead of
                             # dispatching (D3: per-Run output_mode == "safe", OR the

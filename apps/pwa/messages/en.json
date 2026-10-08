@@ -796,6 +796,8 @@
       "emptyHint": "Add an instruction above and a recurrence to have BSVibe start work on its own.",
       "nextRun": "Next run: {when}",
       "enabledLabel": "Enabled",
+      "directLabel": "Deliver without approval",
+      "directCaption": "This schedule's results are delivered without a Safe Mode approval card — writing the schedule is the approval.",
       "delete": "Delete"
     },
     "account": {

@@ -55,14 +55,18 @@ class ScheduleCreate(BaseModel):
     cron_expr: str = Field(min_length=1, max_length=255)
     product_id: uuid.UUID | None = None
     title: str | None = Field(default=None, max_length=500)
+    #: #1072 — "safe" (default) or "direct" (delivered without an approval card).
+    output_mode: str = Field(default="safe")
 
 
 class ScheduleEnabledPatch(BaseModel):
-    """Request body for enabling / disabling a schedule."""
+    """Request body for editing a schedule: enable / disable it, and (#1072) its
+    output_mode. Each field is optional; at least one must be given."""
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool
+    enabled: bool | None = None
+    output_mode: str | None = None
 
 
 _to_view = schedule_view_from_row
@@ -89,6 +93,7 @@ async def create_schedule(
             cron_expr=payload.cron_expr,
             product_id=payload.product_id,
             title=payload.title,
+            output_mode=payload.output_mode,
         )
     except ScheduleValidationError as exc:
         await session.rollback()
@@ -139,11 +144,26 @@ async def set_schedule_enabled(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ScheduleView:
-    """Enable or disable a schedule. 404 if it does not exist in this workspace."""
+    """Enable / disable a schedule, and/or set its output_mode. 404 if it does not
+    exist in this workspace; 400 on an invalid output_mode or an empty body."""
+    if payload.enabled is None and payload.output_mode is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="nothing to change")
     service = ScheduleService(session)
-    row = await service.set_enabled(
-        schedule_id=schedule_id, workspace_id=workspace_id, enabled=payload.enabled
-    )
+    row = None
+    try:
+        if payload.output_mode is not None:
+            row = await service.set_output_mode(
+                schedule_id=schedule_id,
+                workspace_id=workspace_id,
+                output_mode=payload.output_mode,
+            )
+        if payload.enabled is not None:
+            row = await service.set_enabled(
+                schedule_id=schedule_id, workspace_id=workspace_id, enabled=payload.enabled
+            )
+    except ScheduleValidationError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"schedule {schedule_id} not found"

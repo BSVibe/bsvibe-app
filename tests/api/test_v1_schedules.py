@@ -82,7 +82,10 @@ async def test_create_lists_and_returns_view(client, db, workspace_id) -> None:
                 )
             )
         ).scalar_one()
-        assert row.payload == {"text": "post the weekly market summary"}
+        assert row.payload == {
+            "text": "post the weekly market summary",
+            "output_mode": "safe",
+        }  # #1072 default
         assert row.plugin_name is None
 
     listed = await client.get("/api/v1/schedules")

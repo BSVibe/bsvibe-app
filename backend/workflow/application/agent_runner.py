@@ -186,6 +186,10 @@ class AgentRunner:
         kind = req_payload.get("kind")
         if isinstance(kind, str) and kind:
             run_payload["kind"] = kind
+        # #1072 — a schedule the founder marked "direct" skips the approval queue.
+        schedule_output_mode = req_payload.get("schedule_output_mode")
+        if isinstance(schedule_output_mode, str) and schedule_output_mode:
+            run_payload["schedule_output_mode"] = schedule_output_mode
 
         run = ExecutionRun(
             id=uuid.uuid4(),
@@ -691,7 +695,7 @@ def _delivery_gate_keys(payload: dict[str, object]) -> dict[str, str]:
     """The keys the DeliveryWorker gates a run's deliverable on, as this run holds them."""
     return {
         key: value
-        for key in ("binding_id", "kind")
+        for key in ("binding_id", "kind", "schedule_output_mode")
         if isinstance(value := payload.get(key), str) and value
     }
 
