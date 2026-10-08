@@ -63,10 +63,22 @@ async def record_question(run_id: uuid.UUID, ctx: ToolContext, payload: dict[str
     return str(decision.id)
 
 
+async def _box_for_run(run: Any, ctx: ToolContext) -> Any:
+    """The box this run's work tools act in — the one a verbatim emit runs its command in."""
+    from backend.mcp.tools.work_registry import _sandbox_for  # noqa: PLC0415
+    from backend.storage.product_workspace import run_worktree_path  # noqa: PLC0415
+
+    return await _sandbox_for(run, run_worktree_path(run.id), ctx)
+
+
 async def record_deliverable(run_id: uuid.UUID, ctx: ToolContext, arguments: dict[str, Any]) -> str:
-    """Persist a mid-run Deliver event — the same domain handler the loop calls."""
+    """Persist a mid-run Deliver event — the same domain handler the loop calls.
+
+    #673 — a ``verbatim_command`` runs in the run's own box (the same one
+    ``shell_exec`` uses), so it is handed over; any other emit needs none."""
     run = await load_run(run_id, ctx)
-    result = await handle_emit_deliverable(ctx.session, run, arguments)
+    box = await _box_for_run(run, ctx) if arguments.get("verbatim_command") else None
+    result = await handle_emit_deliverable(ctx.session, run, arguments, box=box)
     await ctx.session.commit()
     return result
 

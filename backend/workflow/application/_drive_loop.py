@@ -356,6 +356,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                         run,
                         call.arguments,
                         live_event_bus=orch._live_event_bus,
+                        box=box,
                     )
                     await orch._record(
                         run,

@@ -491,6 +491,24 @@ async def write_partial_deliverable(
     still fires once at the verified terminal via
     :func:`write_verified_deliverable`.
     """
+    if not external_ref:
+        # #1078 — a text deliverable has no external_ref to dedupe on, and run
+        # ``2928e493`` published the same weekly report twice. The same content
+        # from the same run is the same delivery.
+        prior_rows = (
+            (await session.execute(select(Deliverable).where(Deliverable.run_id == run.id)))
+            .scalars()
+            .all()
+        )
+        same = capped_summary(summary)
+        for prior in prior_rows:
+            prior_payload = prior.payload if isinstance(prior.payload, dict) else {}
+            if (
+                prior_payload.get("kind") == PARTIAL_DELIVERABLE_KIND
+                and prior_payload.get("summary") == same
+            ):
+                logger.info("partial_deliverable_deduped_by_content", run_id=str(run.id))
+                return None
     if external_ref:
         # Idempotency on ``(run_id, external_ref)`` — done Python-side rather
         # than via a JSON path operator so SQLite tests + PG prod behave
