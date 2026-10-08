@@ -105,7 +105,10 @@ async def test_create_inserts_row_via_service(db, workspace_id, user_id, registr
                 )
             )
         ).scalar_one()
-        assert row.payload == {"text": "post the weekly market summary"}
+        assert row.payload == {
+            "text": "post the weekly market summary",
+            "output_mode": "safe",
+        }  # #1072 default
         assert str(row.id) == out["id"]
         assert row.plugin_name is None
 
@@ -304,6 +307,8 @@ async def test_mcp_schemas_match_rest_models() -> None:
 
     assert set(mcp.ScheduleCreateInput.model_fields) == set(rest.ScheduleCreate.model_fields)
     assert set(mcp.ScheduleView.model_fields) == set(rest.ScheduleView.model_fields)
-    # The enable toggle carries the same boolean the REST PATCH body does.
+    # The REST PATCH edits enabled and (#1072) output_mode; MCP keeps one tool per
+    # knob — set_enabled and set_output_mode — carrying the same fields.
     assert "enabled" in mcp.ScheduleSetEnabledInput.model_fields
-    assert set(rest.ScheduleEnabledPatch.model_fields) == {"enabled"}
+    assert "output_mode" in mcp.ScheduleSetOutputModeInput.model_fields
+    assert set(rest.ScheduleEnabledPatch.model_fields) == {"enabled", "output_mode"}

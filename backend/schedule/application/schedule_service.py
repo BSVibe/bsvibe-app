@@ -32,6 +32,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.identity.domain.repositories.resource_binding_repository import (
+    OUTPUT_MODES as _BINDING_OUTPUT_MODES,
+)
 from backend.schedule.domain.advancer import CronScheduleAdvancer
 from backend.schedule.domain.cron import CronParseError, parse_cron
 from backend.schedule.infrastructure.repositories.workspace_schedule_repository_sql import (
@@ -60,6 +63,26 @@ class ScheduleValidationError(ValueError):
     """The requested schedule is invalid (bad cron expr / unsupported kind)."""
 
 
+#: #1072 — what happens to a scheduled run's deliverable. ``safe`` (the default)
+#: follows the workspace's Safe Mode; ``direct`` skips the approval queue — the
+#: founder approved it by writing the schedule. ``product_tick`` is BSVibe deciding
+#: the work itself, so it may only be ``safe`` (PT3).
+#: The same value set a resource binding's ``output_mode`` uses — one SoT.
+OUTPUT_MODES: frozenset[str] = _BINDING_OUTPUT_MODES
+DEFAULT_OUTPUT_MODE = "safe"
+
+
+def _check_output_mode(kind: str, output_mode: str) -> None:
+    if output_mode not in OUTPUT_MODES:
+        raise ScheduleValidationError(
+            f"unknown output_mode {output_mode!r} (one of: {', '.join(sorted(OUTPUT_MODES))})"
+        )
+    if kind == SCHEDULE_KIND_PRODUCT_TICK and output_mode != DEFAULT_OUTPUT_MODE:
+        raise ScheduleValidationError(
+            "a product_tick schedule always waits for approval — it cannot be direct"
+        )
+
+
 class ScheduleService:
     """Create + manage ``workspace_schedules`` rows for the REST surface."""
 
@@ -79,6 +102,7 @@ class ScheduleService:
         title: str | None = None,
         now: datetime | None = None,
         producer_id: str = _API_PRODUCER_ID,
+        output_mode: str = DEFAULT_OUTPUT_MODE,
     ) -> WorkspaceScheduleRow:
         """Author one schedule. Raises :class:`ScheduleValidationError` on a bad
         kind or cron expression (the REST layer maps that to a 400).
@@ -99,6 +123,7 @@ class ScheduleService:
                 raise ScheduleValidationError("product_tick schedule requires a product_id")
         elif not text.strip():
             raise ScheduleValidationError("instruction text must not be empty")
+        _check_output_mode(kind, output_mode)
         try:
             parse_cron(cron_expr)
         except CronParseError as exc:
@@ -108,7 +133,9 @@ class ScheduleService:
         next_run_at = self._advancer.next_after(cron_expr=cron_expr, after=after)
         # ``product_tick`` stores no ``text`` (unused); ``instruction`` stores the
         # founder's task text the framer reads.
-        payload: dict[str, Any] = {} if kind == SCHEDULE_KIND_PRODUCT_TICK else {"text": text}
+        payload: dict[str, Any] = (
+            {} if kind == SCHEDULE_KIND_PRODUCT_TICK else {"text": text, "output_mode": output_mode}
+        )
         row = WorkspaceScheduleRow(
             id=uuid.uuid4(),
             workspace_id=workspace_id,
@@ -143,5 +170,22 @@ class ScheduleService:
             schedule_id=schedule_id, workspace_id=workspace_id, enabled=enabled
         )
 
+    async def set_output_mode(
+        self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID, output_mode: str
+    ) -> WorkspaceScheduleRow | None:
+        """#1072 — switch an existing schedule between ``safe`` and ``direct``."""
+        row = await self._repo.get(schedule_id=schedule_id, workspace_id=workspace_id)
+        if row is None:
+            return None
+        _check_output_mode(row.kind, output_mode)
+        row.payload = {**(row.payload or {}), "output_mode": output_mode}
+        await self._session.flush()
+        return row
 
-__all__ = ["ScheduleService", "ScheduleValidationError"]
+
+__all__ = [
+    "DEFAULT_OUTPUT_MODE",
+    "OUTPUT_MODES",
+    "ScheduleService",
+    "ScheduleValidationError",
+]

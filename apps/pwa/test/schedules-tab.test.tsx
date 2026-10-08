@@ -67,6 +67,7 @@ function schedule(overrides: Partial<Schedule> = {}): Schedule {
     next_run_at: "2026-07-20T00:00:00Z",
     last_fired_at: null,
     enabled: true,
+    output_mode: "safe",
     ...overrides,
   };
 }

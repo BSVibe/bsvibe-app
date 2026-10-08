@@ -796,6 +796,8 @@
       "emptyHint": "위에 지시문과 반복 주기를 추가하면 BSVibe가 스스로 작업을 시작해요.",
       "nextRun": "다음 실행: {when}",
       "enabledLabel": "사용",
+      "directLabel": "승인 없이 전송",
+      "directCaption": "이 스케줄의 결과는 Safe Mode 승인 없이 바로 전송돼요 — 스케줄을 만든 것이 곧 승인이에요.",
       "delete": "삭제"
     },
     "account": {

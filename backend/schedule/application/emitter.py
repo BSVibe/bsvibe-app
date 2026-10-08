@@ -107,6 +107,14 @@ class ScheduleTrigger:
         }
         if plugin_name is not None:
             payload["plugin"] = plugin_name
+        # #1072 — the founder's per-schedule delivery choice rides to the run, then
+        # to the DeliveryWorker's gate. Only an instruction schedule may be direct.
+        if (
+            kind != SCHEDULE_KIND_PRODUCT_TICK
+            and isinstance(schedule_payload, dict)
+            and schedule_payload.get("output_mode") == "direct"
+        ):
+            payload["schedule_output_mode"] = "direct"
         event = TriggerEvent(
             workspace_id=workspace_id,
             source=_SCHEDULE_SOURCE,

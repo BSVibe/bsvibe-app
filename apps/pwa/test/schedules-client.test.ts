@@ -6,6 +6,7 @@
  *  - createSchedule:      POST   /api/v1/schedules with {kind, text, cron_expr}
  *  - deleteSchedule:      DELETE /api/v1/schedules/{id}  (204 → void)
  *  - setScheduleEnabled:  PATCH  /api/v1/schedules/{id}  with {enabled}
+ *  - setScheduleOutputMode: PATCH /api/v1/schedules/{id} with {output_mode} (#1072)
  */
 
 import { ApiError } from "@/lib/api/client";
@@ -14,6 +15,7 @@ import {
   deleteSchedule,
   getSchedules,
   setScheduleEnabled,
+  setScheduleOutputMode,
 } from "@/lib/api/schedules";
 import type { Schedule } from "@/lib/api/schedules";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
@@ -37,6 +39,7 @@ const SCHEDULE: Schedule = {
   next_run_at: "2026-07-20T00:00:00Z",
   last_fired_at: null,
   enabled: true,
+  output_mode: "safe",
 };
 
 function okFetch(body: unknown, status = 200) {
@@ -129,6 +132,29 @@ describe("schedules client", () => {
     expect(url).toBe("/api/v1/schedules/sched-1");
     expect(init.method).toBe("PATCH");
     expect(JSON.parse(init.body as string)).toEqual({ enabled: false });
+  });
+
+  it("setScheduleOutputMode PATCHes {output_mode} (#1072)", async () => {
+    const fetchMock = okFetch({ ...SCHEDULE, output_mode: "direct" });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const res = await setScheduleOutputMode("sched-1", "direct");
+
+    expect(res.output_mode).toBe("direct");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/v1/schedules/sched-1");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ output_mode: "direct" });
+  });
+
+  it("createSchedule sends output_mode when given (#1072)", async () => {
+    const fetchMock = okFetch({ ...SCHEDULE, output_mode: "direct" }, 201);
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await createSchedule({ text: "x", cron_expr: "0 9 * * 1", output_mode: "direct" });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).output_mode).toBe("direct");
   });
 
   it("surfaces an ApiError on a non-ok create (e.g. 400 bad cron)", async () => {
