@@ -32,6 +32,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.identity.domain.repositories.resource_binding_repository import (
+    OUTPUT_MODES as _BINDING_OUTPUT_MODES,
+)
 from backend.schedule.domain.advancer import CronScheduleAdvancer
 from backend.schedule.domain.cron import CronParseError, parse_cron
 from backend.schedule.infrastructure.repositories.workspace_schedule_repository_sql import (
@@ -64,7 +67,8 @@ class ScheduleValidationError(ValueError):
 #: follows the workspace's Safe Mode; ``direct`` skips the approval queue — the
 #: founder approved it by writing the schedule. ``product_tick`` is BSVibe deciding
 #: the work itself, so it may only be ``safe`` (PT3).
-OUTPUT_MODES: frozenset[str] = frozenset({"safe", "direct"})
+#: The same value set a resource binding's ``output_mode`` uses — one SoT.
+OUTPUT_MODES: frozenset[str] = _BINDING_OUTPUT_MODES
 DEFAULT_OUTPUT_MODE = "safe"
 
 

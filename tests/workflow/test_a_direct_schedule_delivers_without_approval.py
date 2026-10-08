@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 import backend.identity.workspaces_db  # noqa: F401
 import backend.schedule.infrastructure.schedule_db  # noqa: F401
 from backend.config import get_settings
+from backend.data.rls import workspace_session_scope
 from backend.mcp.api import McpPrincipal, ToolContext, ToolRegistry
 from backend.mcp.tools import register_all_tools
 from backend.schedule.application.emitter import ScheduleTrigger
@@ -202,7 +203,7 @@ async def test_opening_the_run_keeps_the_schedules_mode(db) -> None:
     from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus, TriggerKind
 
     ws = uuid.uuid4()
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, ws):
         trig = TriggerEventRow(
             id=uuid.uuid4(),
             workspace_id=ws,
@@ -262,7 +263,7 @@ async def test_the_delivery_worker_honours_it_under_workspace_safe_mode(
     payload: dict[str, Any] = {"kind": "instruction"}
     if mode:
         payload["schedule_output_mode"] = mode
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, ws):
         s.add(WorkspaceRow(id=ws, name="ws-1072", safe_mode=True))
         await s.flush()
         s.add(
@@ -293,7 +294,7 @@ async def test_the_delivery_worker_honours_it_under_workspace_safe_mode(
     dispatcher = _Dispatcher()
     await DeliveryWorker(session_factory=db, dispatcher=dispatcher).drain_once()
 
-    async with db() as s:
+    async with db() as s, workspace_session_scope(s, ws):
         items = list((await s.execute(select(SafeModeQueueItemRow))).scalars().all())
     assert (len(items) == 1) is queued
     assert (dispatcher.dispatched == [deliverable_id]) is (not queued)
