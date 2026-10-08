@@ -88,7 +88,12 @@ from backend.workflow.infrastructure.db import (
     ExecutionRun,
     RunStatus,
 )
-from backend.workflow.infrastructure.intake.db import RequestRow, RequestStatus
+from backend.workflow.infrastructure.intake.db import (
+    RequestRow,
+    RequestStatus,
+    TriggerEventRow,
+    TriggerKind,
+)
 from backend.workflow.infrastructure.repositories import SqlAlchemyRequestRepository
 
 logger = structlog.get_logger(__name__)
@@ -741,8 +746,9 @@ class AgentWorker(BaseWorker):
                 # 종합 — the founder's routing rules ARE the definition of what
                 # stages this workspace distinguishes. No rules → no vocabulary
                 # → the framer is never asked to split (and never invents a
-                # split we would have nowhere to route).
-                stage_vocabulary = await _stage_vocabulary_for(session, run.workspace_id)
+                # split we would have nowhere to route). #1079 — nor is a
+                # scheduled instruction (see :func:`_split_vocabulary_for`).
+                stage_vocabulary = await _split_vocabulary_for(session, request)
                 # B9a — resolve the per-workspace cheap-LLM for real framing,
                 # bound to this framing session.
                 frame_llm = await _resolve_frame_llm(execution, session, run.workspace_id)
@@ -961,6 +967,22 @@ async def _resolve_orchestrator(
     if inspect.isawaitable(produced):
         return await produced
     return produced
+
+
+async def _split_vocabulary_for(session: AsyncSession, request: RequestRow) -> list[StageTerm]:
+    """The stages framing may split THIS request into — none for a scheduled one.
+
+    #1079: a schedule's instruction is a unit the founder authored once and that
+    fires unchanged every tick. Split, the BStockReport weekly report ran its one
+    command in step 1 (``cc68f583``: delivered nothing, parked at review_ready,
+    held a cap slot) and again from scratch in step 2 (``a65412ad``) — twice the
+    tokens. No vocabulary → no split, the rule a workspace without stage rules
+    already follows.
+    """
+    trigger = await session.get(TriggerEventRow, request.trigger_event_id)
+    if trigger is not None and trigger.trigger_kind == TriggerKind.SCHEDULE:
+        return []
+    return await _stage_vocabulary_for(session, request.workspace_id)
 
 
 async def _stage_vocabulary_for(session: AsyncSession, workspace_id: uuid.UUID) -> list[StageTerm]:
