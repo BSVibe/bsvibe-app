@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-07
+# BSVibe session handoff — 2026-10-08
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -35,6 +35,9 @@
 | #1138 | #1116 | tool-menu guard (every `bsvibe_*` / `executor/<x>` a description names must exist) · webhook skips client_attach `run/<8hex>` PR branches | ⏳ next BStockReport PR makes no run |
 | #1139 | (tests) | two order-dependent tests fixed (unrestored module patch · idempotence counted as a delta) | ✅ whole suite in one process, 6732 passed |
 | #1141 | (measured) | the server-side gate derives commands only over changed paths still present — a removed scratch file no longer yields `ruff … E902` | ✅ run `b2ebd3c4` passed with 3 removed `_patch_*.py` |
+| #1147 | #1143 | the merge watch's squash sends `commit_title` = PR title + ` (#N)` — main no longer gets the run commit (`work: <directive first line>`) | ⏳ next auto-merge |
+| #1148 | #1144 | a Direct run's PR body quotes the founder's directive (`**요청**`) and links every `#N` it names with a non-closing `Refs` (issue-sourced runs keep `Closes #N`) | ⏳ next Direct run PR |
+| workstation #11 | (#1145 prereq) | autodeploy archives backend/worker logs to `_infra/logs/bsvibe-prod/<container>--<started>.log` before `--force-recreate` (20 kept) | ⏳ open — 형님 merges; live already (launchd runs the `_infra` tree) |
 | #1142 | #1073 | **written by BSVibe itself:** a rule whose target has no account is skipped (`routing_rule_target_missing`) → next rule → default; the runtime keeps the account the fallback found | ✅ CI green, auto-merged, run shipped |
 
 **Measurement 10-07 — #1073 handed to BSVibe** (`bsvibe_direct`, product `bsvibe`):
@@ -114,8 +117,10 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 4. Held webhook triggers are invisible in the PWA (logs only) — a `triggered` notification goes when released.
 5. Branch rules are still three (`bsvibe/run/<uuid>` · `bsvibe/run-<8hex>` · `run/<8hex>`); #1116 taught the
    skip all three instead of renaming 형님's worktrees.
-6. #1143 → #1144 → #1145 (from the 10-07 measurement).
-7. Carry-overs in GitHub issues.
+6. #1145 — cause unconfirmed (hypothesis: `file_edit` refuses a path not `file_read` first; the agent read via
+   shell and patched with scripts). Logs now survive deploys — confirm on the next measured run.
+7. Next cluster (형님 10-08): **schedules & reports** — #1077 → #1079 → #1078 → #1072 (+ #673).
+8. Carry-overs in GitHub issues.
 
 ## §Ⅳ — Discipline that paid off
 
