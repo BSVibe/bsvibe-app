@@ -497,6 +497,7 @@ def _build_bootstrap_knowledge_inner(
             adapter=resolved.adapter,
             workspace_id=workspace_id,
             site=CALLER_KNOWLEDGE_INGEST,
+            session_factory=session_factory,
         )
         factory = KnowledgeFactory(
             workspace_id=str(workspace_id),

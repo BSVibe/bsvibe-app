@@ -393,3 +393,31 @@ class VerificationResult(ExecutionBase):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
+
+
+class UnattributedLlmUsage(ExecutionBase):
+    """One LLM turn that no run can be billed for (#954).
+
+    Knowledge ingest (one call per chunk), product bootstrap, settle extraction,
+    concept framing / labels and routing-rule compile all spend tokens with no
+    ``execution_runs`` row to accrue onto. Attaching them to whichever run happened
+    to be nearby would make that run's count silently wrong, so they are kept here,
+    per workspace — the ledger #928's billing reads alongside ``execution_runs``.
+
+    ``site`` is the call path (a dispatch caller_id); ``identity`` is whatever id
+    that path DOES have (a concept, a product) so the spend can be attributed
+    further later without re-deriving the call graph.
+    """
+
+    __tablename__ = "unattributed_llm_usage"
+    __table_args__ = (Index("ix_unattributed_llm_usage_ws_created", "workspace_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    site: Mapped[str] = mapped_column(String(64), nullable=False)
+    identity: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    usage_prompt_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    usage_completion_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
+    )
