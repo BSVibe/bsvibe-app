@@ -62,7 +62,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import structlog
 from sqlalchemy import select
@@ -73,7 +73,7 @@ from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.runner import PluginRunner
 from backend.router.accounts.crypto import CredentialCipher
 from backend.workflow.application.delivery.dispatcher import DeliveryDispatcher
-from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.domain.delivery import ActionResult, ArtifactType, DeliveryResult
 from backend.workflow.infrastructure.db import Deliverable, ExecutionRun
 from backend.workflow.infrastructure.delivery.git_ops import GitOps
 
@@ -149,6 +149,16 @@ async def _github_actions(
             exc_info=True,
         )
         return [ActionResult(action="github:outbound", succeeded=False, error=str(exc))]
+
+
+_ARTIFACT_TYPES: frozenset[str] = frozenset(get_args(ArtifactType))
+
+
+def _result_artifact_type(raw: str) -> ArtifactType:
+    """A known ArtifactType as-is; anything else is ``direct_output`` — the same
+    parking :func:`~backend.workflow.domain.verified_deliverable._resolve_deliverable_type`
+    gives the Deliverable row."""
+    return raw if raw in _ARTIFACT_TYPES else "direct_output"  # type: ignore[return-value]
 
 
 @dataclass(slots=True)
@@ -312,11 +322,15 @@ class ConnectorDeliveryAdapter:
 
         # The persisted DeliveryResult uses the deliverable's own artifact_type
         # (e.g. "code") — it identifies the deliverable, not the per-connector
-        # artifact_type dispatched (e.g. "page").
+        # artifact_type dispatched (e.g. "page"). The event column is free-form:
+        # the work LLM may emit ``report``, which the deliverable was parked under
+        # as ``direct_output``. Building the result is the last step AFTER the
+        # outbound went out, so it must not raise (2026-10-12: it did, and the
+        # worker re-sent the same report every tick).
         return DeliveryResult(
             workspace_id=workspace_id,
             deliverable_id=deliverable_id,
-            artifact_type=artifact_type,  # type: ignore[arg-type]  # validated at the schema layer
+            artifact_type=_result_artifact_type(artifact_type),
             actions=actions,
             error=None if any(a.succeeded for a in actions) or not actions else actions[-1].error,
         )
