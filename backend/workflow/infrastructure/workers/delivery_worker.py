@@ -354,21 +354,31 @@ async def dispatch_delivery(
         auto_resolve_run_on_delivery,
     )
 
-    if session_factory is not None:
-        async with session_factory() as owned:
-            await persist_compensation_handles(
-                owned,
-                deliverable_id=deliverable_id,
-                result=result,
-            )
-            if await auto_resolve_run_on_delivery(owned, deliverable_id=deliverable_id):
-                await owned.commit()
-    elif session is not None:
-        # Caller-owned session (REST / MCP / Telegram approve): resolve within
-        # their transaction and commit our writes (these handlers already
-        # multi-commit per request — approve, then dispatch, then persist).
-        if await auto_resolve_run_on_delivery(session, deliverable_id=deliverable_id):
-            await session.commit()
+    # The outbound already went out. Anything below is book-keeping — if it
+    # raises, the caller must still see a delivered result, or the worker leaves
+    # the event in place and sends the same thing again next tick.
+    try:
+        if session_factory is not None:
+            async with session_factory() as owned:
+                await persist_compensation_handles(
+                    owned,
+                    deliverable_id=deliverable_id,
+                    result=result,
+                )
+                if await auto_resolve_run_on_delivery(owned, deliverable_id=deliverable_id):
+                    await owned.commit()
+        elif session is not None:
+            # Caller-owned session (REST / MCP / Telegram approve): resolve within
+            # their transaction and commit our writes (these handlers already
+            # multi-commit per request — approve, then dispatch, then persist).
+            if await auto_resolve_run_on_delivery(session, deliverable_id=deliverable_id):
+                await session.commit()
+    except Exception:  # noqa: BLE001 — never turn a delivered send into a resend
+        logger.exception(
+            "delivery_post_send_bookkeeping_failed",
+            deliverable_id=str(deliverable_id),
+            workspace_id=str(workspace_id),
+        )
     return result
 
 
@@ -396,6 +406,11 @@ def build_delivery_claim_stmt(*, batch_size: int) -> Select[tuple[DeliveryEventR
 class DeliveryWorkerConfig:
     batch_size: int = 50
     poll_interval_s: float = 5.0
+    #: A row that raised this many times in a row is dropped (logged at error)
+    #: instead of re-claimed every tick forever. Outbound sends are not
+    #: idempotent — an unbounded retry of a row whose send succeeded before the
+    #: raise is a message every tick (2026-10-12).
+    max_attempts: int = 5
 
 
 class DeliveryWorker(BaseWorker):
@@ -412,6 +427,9 @@ class DeliveryWorker(BaseWorker):
         super().__init__(name="delivery_worker", poll_interval_s=self._cfg.poll_interval_s)
         self._session_factory = session_factory
         self._dispatcher = dispatcher
+        #: Consecutive failures per event id. In-process: a restart resets it,
+        #: which only buys a row another ``max_attempts`` — still bounded.
+        self._failures: dict[uuid.UUID, int] = {}
 
     async def _tick(self) -> int:
         return await self.drain_once()
@@ -443,9 +461,12 @@ class DeliveryWorker(BaseWorker):
             # OUT so the final DELETE leaves it in place and the next tick retries
             # it — never silently dropped. Poison-pill trade-off: a permanently
             # failing row is re-claimed every tick forever. That is the correct
-            # at-least-once behavior (retry beats silent loss); a retry cap is
-            # deliberately out of scope for this fix.
+            # at-least-once behavior (retry beats silent loss) — up to
+            # ``max_attempts``; past that the row is dropped with an error log,
+            # because an outbound that succeeded before the raise would
+            # otherwise repeat every tick.
             delivered_ids: list[uuid.UUID] = []
+            dropped_ids: list[uuid.UUID] = []
             for row in rows:
                 # #959 — everything below belongs to exactly ONE tenant, so
                 # publish it: layer 2 (the ORM auto-filter) and layer 3 (the
@@ -500,12 +521,27 @@ class DeliveryWorker(BaseWorker):
                 except Exception:  # noqa: BLE001 — record + move on
                     # Failure path: row.id NOT added to delivered_ids, so the
                     # DELETE below leaves this event in place for the next tick.
+                    attempts = self._failures.get(row.id, 0) + 1
                     logger.exception(
                         "delivery_worker_dispatch_failed",
                         event_id=str(row.id),
                         deliverable_id=str(row.deliverable_id),
+                        attempt=attempts,
                     )
+                    if attempts >= self._cfg.max_attempts:
+                        logger.error(
+                            "delivery_worker_event_dropped",
+                            event_id=str(row.id),
+                            deliverable_id=str(row.deliverable_id),
+                            run_id=str(row.run_id),
+                            attempts=attempts,
+                        )
+                        self._failures.pop(row.id, None)
+                        dropped_ids.append(row.id)
+                    else:
+                        self._failures[row.id] = attempts
                     continue
+                self._failures.pop(row.id, None)
                 delivered_ids.append(row.id)
                 processed += 1
             # Scope the DELETE to ONLY the successfully-drained rows — failed rows
@@ -513,9 +549,11 @@ class DeliveryWorker(BaseWorker):
             # entirely (no rows to remove; the whole batch is left for the next
             # tick). The DELETE + commit stay one transaction with the FOR UPDATE
             # claim: succeeded rows are removed, failed rows remain committed as-is.
-            if delivered_ids:
+            if delivered_ids or dropped_ids:
                 await session.execute(
-                    delete(DeliveryEventRow).where(DeliveryEventRow.id.in_(delivered_ids))
+                    delete(DeliveryEventRow).where(
+                        DeliveryEventRow.id.in_(delivered_ids + dropped_ids)
+                    )
                 )
             await session.commit()
             return processed
