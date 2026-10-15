@@ -57,7 +57,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.identity.workspaces_db import DEFAULT_MONTHLY_TOKEN_BUDGET, WorkspaceRow
-from backend.workflow.infrastructure.db import ExecutionRun
+from backend.workflow.infrastructure.db import ExecutionRun, UnattributedLlmUsage
 
 logger = structlog.get_logger(__name__)
 
@@ -135,17 +135,23 @@ async def load_workspace_token_budget(session: AsyncSession, workspace_id: uuid.
 async def sum_workspace_tokens_since(
     session: AsyncSession, workspace_id: uuid.UUID, since: datetime
 ) -> int:
-    """Total LLM tokens this workspace's runs burned at or after ``since``.
+    """Total LLM tokens this workspace burned at or after ``since``.
 
     Prompt + completion, across EVERY run in the window regardless of status — a
     shipped run does not refund the provider bill. That is the deliberate
     difference from ``run_caps.count_held_runs``, which excludes terminal runs
     because a finished run holds nothing.
 
-    Served by ``ix_execution_runs_ws_created`` — neither existing composite on
-    ``execution_runs`` covers ``(workspace_id, created_at)``.
+    Plus the workspace ledger (``unattributed_llm_usage``): spend no run's meter can
+    take — run-less calls (#954: ingest, bootstrap, settle, rule compile) and executor
+    reports that arrived after their run moved on (#928, #1158). Until this summed it,
+    the ledger was written and read by nothing, and that spend was outside the budget.
+    The two sources are disjoint by construction: a ledger row exists exactly when the
+    run meter could not take the number.
+
+    Served by ``ix_execution_runs_ws_created`` and ``ix_unattributed_llm_usage_ws_created``.
     """
-    total = await session.scalar(
+    runs = await session.scalar(
         select(
             func.coalesce(
                 func.sum(ExecutionRun.usage_prompt_tokens + ExecutionRun.usage_completion_tokens),
@@ -156,7 +162,21 @@ async def sum_workspace_tokens_since(
             ExecutionRun.created_at >= since,
         )
     )
-    return int(total or 0)
+    ledger = await session.scalar(
+        select(
+            func.coalesce(
+                func.sum(
+                    UnattributedLlmUsage.usage_prompt_tokens
+                    + UnattributedLlmUsage.usage_completion_tokens
+                ),
+                0,
+            )
+        ).where(
+            UnattributedLlmUsage.workspace_id == workspace_id,
+            UnattributedLlmUsage.created_at >= since,
+        )
+    )
+    return int(runs or 0) + int(ledger or 0)
 
 
 async def enforce_workspace_token_budget(

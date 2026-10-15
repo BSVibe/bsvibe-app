@@ -27,6 +27,7 @@ result endpoints import.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
@@ -41,7 +42,8 @@ from backend.api.v1.workers_register_auth import (
 )
 from backend.config import get_settings
 from backend.executors import dispatch, service
-from backend.executors.db import WorkerRow
+from backend.executors.db import ExecutorTaskRow, WorkerRow
+from backend.workflow.infrastructure.db import UnattributedLlmUsage
 
 # JWT-gated routes — mounted under the v1 aggregate (get_current_user upstream).
 router = APIRouter()
@@ -425,9 +427,36 @@ async def report_result(
         usage_cache_read_tokens=body.usage_cache_read_tokens,
         usage_cache_write_5m_tokens=body.usage_cache_write_5m_tokens,
         usage_cache_write_1h_tokens=body.usage_cache_write_1h_tokens,
+        on_late_usage=lambda task: session.add(_late_usage_entry(task)),
     )
     await session.commit()
     return HeartbeatResponse(status="ok")
+
+
+#: The ledger ``site`` of an executor report that arrived after its run moved on.
+LATE_EXECUTOR_REPORT_SITE = "executor_late_report"
+
+
+def _late_usage_entry(task: ExecutorTaskRow) -> UnattributedLlmUsage:
+    """The workspace-ledger row for a late executor report (#928, #1158).
+
+    The run's meter cannot take this number — the run already moved on, and folding it in
+    would race the drive loop's absolute write — so without this the workspace budget never
+    saw it. ``identity`` keeps the task and its run, so the spend stays attributable.
+    ``created_at`` is tz-aware: the column's naive default is stored verbatim by SQLite but
+    localized by asyncpg, which moves the row across the budget window's edge.
+    """
+    identity = {"task_id": str(task.id)}
+    if task.run_id is not None:
+        identity["run_id"] = str(task.run_id)
+    return UnattributedLlmUsage(
+        workspace_id=task.workspace_id,
+        site=LATE_EXECUTOR_REPORT_SITE,
+        identity=identity,
+        usage_prompt_tokens=task.usage_prompt_tokens,
+        usage_completion_tokens=task.usage_completion_tokens,
+        created_at=datetime.now(UTC),
+    )
 
 
 __all__ = ["get_current_worker", "get_poll_redis", "public_router", "router"]
