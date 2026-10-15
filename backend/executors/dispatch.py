@@ -1063,7 +1063,10 @@ async def _fail_orphaned_dispatched_row(
     The rest of the design already assumed this flip existed: ``record_result``
     refuses a row whose ``status != "dispatched"``, and the worker's cancel
     branch explains that it skips its result POST because "a late ``failed``
-    POST would clobber a row it may have already terminal-flipped".
+    POST would clobber a row it may have already terminal-flipped". Since #1158
+    that branch does post when its session had spent anything — a ``failed``
+    report whose usage lands on THIS flipped row through ``record_result``'s
+    #928 path, while its status and output stay refused.
 
     Same short-session discipline as :func:`_read_terminal_isolated`: with a
     ``session_factory`` the UPDATE runs (and commits) in its OWN session opened
