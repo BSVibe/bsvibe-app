@@ -49,7 +49,13 @@ class TestChatSurface:
 
     async def test_passes_through_api_base_and_key(self):
         fake = AsyncMock(return_value=_Response(""))
-        client = LlmClient(completion_fn=fake)
+
+        async def _public(_host: str) -> list[str]:
+            return ["93.184.216.34"]
+
+        # The endpoint is resolved and checked before the call (backend.router.egress);
+        # a fixed public answer keeps this test off the network.
+        client = LlmClient(completion_fn=fake, resolver=_public)
         await client.chat(
             model="m",
             messages=[{"role": "user", "content": "hi"}],

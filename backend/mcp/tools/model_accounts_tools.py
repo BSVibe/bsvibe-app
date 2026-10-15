@@ -29,7 +29,7 @@ from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.accounts.account_service import ensure_personal_account
 from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
 from backend.router.accounts.schemas import ModelAccountCreate, ModelAccountOut
-from backend.router.accounts.service import ModelAccountService
+from backend.router.accounts.service import EgressRefused, ModelAccountService
 
 
 class _Envelope(RootModel[Any]):
@@ -144,11 +144,14 @@ class ModelAccountsCreateInput(BaseModel):
 async def _h_create(args: ModelAccountsCreateInput, ctx: ToolContext) -> Any:
     account_id = await _resolve_account_id(ctx)
     payload = ModelAccountCreate.model_validate(args.model_dump())
-    created = await _service(ctx).create(
-        workspace_id=ctx.principal.workspace_id,
-        account_id=account_id,
-        payload=payload,
-    )
+    try:
+        created = await _service(ctx).create(
+            workspace_id=ctx.principal.workspace_id,
+            account_id=account_id,
+            payload=payload,
+        )
+    except EgressRefused as exc:
+        raise ToolError(str(exc)) from exc
     # 게이트 2 — first model account becomes the workspace default (parity with
     # the REST create), so the founder's first run resolves.
     await set_default_model_account_if_unset(

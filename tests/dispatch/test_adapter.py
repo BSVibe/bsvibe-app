@@ -45,7 +45,8 @@ def _stub_account(
         provider=provider,
         label="test",
         litellm_model="ollama_chat/qwen3" if provider == "ollama" else "executor/claude_code",
-        api_base=None,
+        # A server-side ollama account must name a public endpoint (backend.router.egress).
+        api_base="https://93.184.216.34" if provider == "ollama" else None,
         api_key_encrypted=None,
         is_active=True,
         extra_params=extra_params or {},

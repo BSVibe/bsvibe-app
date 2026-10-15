@@ -16,7 +16,7 @@ from backend.router.accounts.schemas import (
     ModelAccountOut,
     ModelAccountUpdate,
 )
-from backend.router.accounts.service import ModelAccountService
+from backend.router.accounts.service import EgressRefused, ModelAccountService
 
 router = APIRouter()
 
@@ -46,9 +46,12 @@ async def create_account(
     account_id: Annotated[uuid.UUID, Depends(require_account_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ModelAccountOut:
-    created = await _service(session).create(
-        workspace_id=workspace_id, account_id=account_id, payload=payload
-    )
+    try:
+        created = await _service(session).create(
+            workspace_id=workspace_id, account_id=account_id, payload=payload
+        )
+    except EgressRefused as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     # 게이트 2 — first model account becomes the workspace default (fills the
     # empty slot only; never overrides), so the founder's first run resolves.
     await set_default_model_account_if_unset(
@@ -86,12 +89,15 @@ async def update_account(
     account_id: Annotated[uuid.UUID, Depends(require_account_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ModelAccountOut:
-    result = await _service(session).update(
-        workspace_id=workspace_id,
-        account_id=account_id,
-        model_account_id=model_account_id,
-        payload=payload,
-    )
+    try:
+        result = await _service(session).update(
+            workspace_id=workspace_id,
+            account_id=account_id,
+            model_account_id=model_account_id,
+            payload=payload,
+        )
+    except EgressRefused as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
