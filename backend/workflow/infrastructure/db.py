@@ -407,6 +407,12 @@ class UnattributedLlmUsage(ExecutionBase):
     ``site`` is the call path (a dispatch caller_id); ``identity`` is whatever id
     that path DOES have (a concept, a product) so the spend can be attributed
     further later without re-deriving the call graph.
+
+    One more kind lands here: an executor report that arrived after its run moved
+    on (``site="executor_late_report"``, #928 · #1158). That turn HAS a run, but the
+    run's meter can no longer take the number without racing the drive loop's
+    write, so ``identity`` carries ``run_id`` and the row is booked here instead.
+    The workspace budget sums this ledger alongside ``execution_runs``.
     """
 
     __tablename__ = "unattributed_llm_usage"

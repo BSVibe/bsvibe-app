@@ -738,6 +738,7 @@ async def record_result(
     usage_cache_read_tokens: int = 0,
     usage_cache_write_5m_tokens: int = 0,
     usage_cache_write_1h_tokens: int = 0,
+    on_late_usage: Callable[[ExecutorTaskRow], None] | None = None,
 ) -> ExecutorTaskRow | None:
     """Close a task ``done`` / ``failed`` from a worker result. ``None`` if unknown.
 
@@ -809,6 +810,11 @@ async def record_result(
                 usage_cache_write_5m_tokens=usage_cache_write_5m_tokens,
                 usage_cache_write_1h_tokens=usage_cache_write_1h_tokens,
             )
+            # The run already moved on, so its meter cannot take this number — the caller
+            # books it where the workspace budget will see it (#1158 follow-up). Called
+            # inside this transaction so the row and its booking commit together.
+            if on_late_usage is not None:
+                on_late_usage(task)
             await session.flush()
             logger.info(
                 "executor_task_late_usage_recorded",
