@@ -464,6 +464,19 @@ class Settings(BaseSettings):
             )
         return self
 
+    # Hosts a workspace's model account MAY point ``api_base`` at even though they resolve to
+    # a private address — the operator's own Ollama, say. Every other non-public endpoint is
+    # refused before the request leaves the box (``backend.router.egress``). Exact host match.
+    llm_egress_allowed_hosts: Annotated[list[str], NoDecode] = csv_list_field(
+        default=[],
+        description="Comma-separated hosts exempt from the public-only model endpoint check.",
+    )
+
+    @field_validator("llm_egress_allowed_hosts", mode="before")
+    @classmethod
+    def _parse_llm_egress_allowed_hosts(cls, value: str | list[str] | None) -> list[str]:
+        return parse_csv_list(value) or []
+
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def _parse_cors_allowed_origins(cls, value: str | list[str] | None) -> list[str]:

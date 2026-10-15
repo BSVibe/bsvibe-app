@@ -137,6 +137,8 @@ async def _seed_active_account(
                 provider=provider,
                 label=label,
                 litellm_model="ollama_chat/qwen3-coder:30b",
+                # A public endpoint: a server-side ollama account must name one (backend.router.egress).
+                api_base="https://93.184.216.34",
                 api_key="sk-test",
                 extra_params=({"executor_type": "claude_code"} if provider == "executor" else {}),
             ),

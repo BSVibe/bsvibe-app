@@ -16,6 +16,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from backend.router.egress import EgressRefused, Resolver, check_completion_kwargs, resolve_host
+
 CompletionFn = Callable[..., Awaitable[Any]]
 
 
@@ -42,8 +44,20 @@ def _lazy_litellm_completion() -> CompletionFn:
 
 
 class LlmClient:
-    def __init__(self, *, completion_fn: CompletionFn | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        completion_fn: CompletionFn | None = None,
+        resolver: Resolver | None = None,
+        allowed_hosts: frozenset[str] | None = None,
+    ) -> None:
         self._completion = completion_fn or _lazy_litellm_completion()
+        # Every completion here is configured by a WORKSPACE (its model account), so every one
+        # is checked before it leaves the box — see :mod:`backend.router.egress`.
+        self._resolver = resolver or resolve_host
+        self._allowed_hosts = (
+            allowed_hosts if allowed_hosts is not None else _operator_allowed_hosts()
+        )
 
     async def chat(
         self,
@@ -68,6 +82,10 @@ class LlmClient:
         if extra_params:
             kwargs.update(extra_params)
 
+        # The MERGED kwargs: ``extra_params`` lands last and can name its own endpoint.
+        await check_completion_kwargs(
+            kwargs, resolver=self._resolver, allowed_hosts=self._allowed_hosts
+        )
         raw = await self._completion(**kwargs)
 
         # litellm-shaped response — fall back to dict access for mocks.
@@ -87,6 +105,13 @@ class LlmClient:
             raw=raw,
             tool_calls=_normalize_tool_calls(_attr_or_key(message, "tool_calls")),
         )
+
+
+def _operator_allowed_hosts() -> frozenset[str]:
+    """``BSVIBE_LLM_EGRESS_ALLOWED_HOSTS`` — hosts the operator vouches for (exact match)."""
+    from backend.config import get_settings  # noqa: PLC0415 — settings are read at construction
+
+    return frozenset(get_settings().llm_egress_allowed_hosts)
 
 
 def _attr_or_key(obj: Any, name: str) -> Any:
@@ -118,3 +143,6 @@ def _normalize_tool_calls(raw: Any) -> tuple[dict[str, Any], ...]:
             }
         )
     return tuple(normalized)
+
+
+__all__ = ["CompletionFn", "EgressRefused", "LlmClient", "LlmResponse"]
