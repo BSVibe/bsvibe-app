@@ -39,6 +39,7 @@ from backend.executors.worker.claude_auth import ensure_claude_bearer
 from backend.executors.worker.config import default_claude_config_dir, get_worker_settings
 from backend.executors.worker.executors import (
     ExecutionChunk,
+    SessionUsage,
     UsageBreakdown,
     _kill_process_group,
     sanitized_subprocess_env,
@@ -385,6 +386,7 @@ class ClaudeCodeExecutor:
         limits = _SessionLimits(
             token_budget=_positive_int(context.get("token_budget")),
             max_turns=_positive_int(context.get("max_turns")) if agentic else None,
+            tally=context.get("session_usage"),
         )
         # The config carries the run-scoped bearer token, so it reaches the CLI as a
         # 0600 FILE rather than on argv, where ``ps`` shows it to anything running as
@@ -844,15 +846,22 @@ class _SessionLimits:
     ``message.id`` (measured), so the tally keys on the id. Its ``output_tokens`` is a
     streaming snapshot and runs low; the input side, which dominates an agent session, is
     exact.
+
+    ``tally`` is the worker's holder for that running total (#1158): a session the backend
+    cancels never reaches its terminal chunk, and this tally is the only record of what it spent.
     """
 
     token_budget: int | None = None
     max_turns: int | None = None
+    tally: SessionUsage | None = None
     _per_message: dict[str, tuple[int, int]] = field(default_factory=dict)
+    _per_message_split: dict[str, UsageBreakdown] = field(default_factory=dict)
     _result_subtype: str | None = None
 
     def fresh(self) -> _SessionLimits:
-        return _SessionLimits(token_budget=self.token_budget, max_turns=self.max_turns)
+        return _SessionLimits(
+            token_budget=self.token_budget, max_turns=self.max_turns, tally=self.tally
+        )
 
     def spent(self) -> tuple[int, int]:
         prompt = sum(p for p, _ in self._per_message.values())
@@ -874,11 +883,28 @@ class _SessionLimits:
         usage = message["usage"]
         key = str(message.get("id") or f"anon-{len(self._per_message)}")
         seen = self._per_message.get(key, (0, 0))
+        weighted = _weighted_prompt(usage)
+        if weighted >= seen[0]:
+            self._per_message_split[key] = _breakdown(usage)
         self._per_message[key] = (
-            max(seen[0], _weighted_prompt(usage)),
+            max(seen[0], weighted),
             max(seen[1], usage_int(usage.get("output_tokens"))),
         )
+        self._publish()
         return self.token_budget is not None and sum(self.spent()) >= self.token_budget
+
+    def _publish(self) -> None:
+        """Mirror the running total into the worker's holder, when it handed one."""
+        if self.tally is None:
+            return
+        splits = self._per_message_split.values()
+        self.tally.prompt_tokens, self.tally.completion_tokens = self.spent()
+        self.tally.breakdown = UsageBreakdown(
+            input_tokens=sum(s.input_tokens for s in splits),
+            cache_read_tokens=sum(s.cache_read_tokens for s in splits),
+            cache_write_5m_tokens=sum(s.cache_write_5m_tokens for s in splits),
+            cache_write_1h_tokens=sum(s.cache_write_1h_tokens for s in splits),
+        )
 
     def stop_chunk(self, event: dict[str, Any], pid: int) -> ExecutionChunk | None:
         """Fold ``event`` in; the terminal chunk when the session must stop here, else ``None``.

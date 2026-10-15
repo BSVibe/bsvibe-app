@@ -800,7 +800,9 @@ async def test_handle_task_cancellation_skips_result_post(tmp_path: Any) -> None
        subprocess cleanup runs (kills the child process).
     2. NOT POST a result to ``/api/v1/workers/result`` — the backend has
        already moved on; a late ``failed`` result POST would clobber the
-       row the backend may have already terminal-flipped.
+       row the backend may have already terminal-flipped. This executor
+       tallies no usage; a session that spent tokens DOES report them
+       (#1158, ``test_a_cancelled_session_reports_what_it_spent.py``).
     3. Log ``task_cancelled_by_backend`` so the cancel path is visible
        in production logs.
     """

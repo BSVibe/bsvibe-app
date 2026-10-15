@@ -19,7 +19,7 @@ import shutil
 import signal
 import sys
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import structlog
@@ -57,6 +57,27 @@ class UsageBreakdown:
     cache_read_tokens: int = 0
     cache_write_5m_tokens: int = 0
     cache_write_1h_tokens: int = 0
+
+
+@dataclass
+class SessionUsage:
+    """What a session has spent SO FAR, readable after it was cancelled (#1158).
+
+    A chunk's usage reaches the worker only on the terminal chunk, and a session the backend
+    cancels never yields one — the generator is torn down mid-stream. The worker hands an
+    executor this holder in ``context["session_usage"]``; an executor that tallies usage while
+    the session runs keeps it current, and the worker reads it on the cancel and deadline
+    paths. An executor that keeps no in-session tally leaves it at zero, which reads as
+    "nothing to report", never as a metered zero.
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    breakdown: UsageBreakdown = field(default_factory=UsageBreakdown)
+
+    @property
+    def observed(self) -> bool:
+        return bool(self.prompt_tokens or self.completion_tokens)
 
 
 @dataclass
@@ -235,6 +256,7 @@ def _kill_process_group(process: asyncio.subprocess.Process) -> None:
 __all__ = [
     "ExecutionChunk",
     "ExecutorProtocol",
+    "SessionUsage",
     "_kill_process_group",
     "detect_capabilities",
     "sanitized_subprocess_env",

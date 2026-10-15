@@ -69,6 +69,7 @@ from backend.executors.worker.credentials import (
 )
 from backend.executors.worker.executors import (
     ExecutorProtocol,
+    SessionUsage,
     UsageBreakdown,
     detect_capabilities,
     select_executor,
@@ -442,19 +443,28 @@ async def _report_deadline_exceeded(
     headers: dict[str, str],
     redis: _RedisPublisher | None,
     done_chan: str,
+    spent: SessionUsage,
 ) -> None:
     """Close out a task this worker abandoned at the dispatched deadline.
 
     REPORTING is the point. A silent abort would leave the row ``dispatched``
     and the awaiter waiting out its own timeout — the same shape #926 closed one
     layer in, where a worker finished in 5s and the backend recorded 180s.
+    The session's in-flight tally rides along (#1158): it is the only record of
+    what the abandoned session spent.
     """
     msg = f"worker gave up after {deadline_s:g}s — the dispatching caller's deadline had run out"
     logger.warning("task_deadline_exceeded", task_id=task_id, timeout_s=deadline_s)
     await _post_result(
         client,
         headers,
-        payload={"task_id": task_id, "success": False, "output": "", "error_message": msg},
+        payload={
+            "task_id": task_id,
+            "success": False,
+            "output": "",
+            "error_message": msg,
+            **_usage_fields(spent.prompt_tokens, spent.completion_tokens, spent.breakdown),
+        },
     )
     if redis is not None:
         await _publish(
@@ -579,6 +589,7 @@ async def handle_task(
         # inert and "share it safely" stops being true.
         local_workspace = sandbox_cwd or str(default_sandbox_cwd())
         os.makedirs(local_workspace, exist_ok=True)  # noqa: ASYNC240 — one idempotent stat+mkdir
+    spent = SessionUsage()
     context: dict[str, Any] = {
         "task_id": task_id,
         # server_sandbox → the worker-local temp dir; client_attach → the user's
@@ -601,6 +612,9 @@ async def handle_task(
         # parses them (absent → unbounded, the pre-fix behaviour).
         "token_budget": task.get("token_budget"),
         "max_turns": task.get("max_turns"),
+        # #1158 — what the session has spent so far, kept current by an executor that tallies
+        # in flight. Read below when the session never reaches its terminal chunk.
+        "session_usage": spent,
     }
 
     # Lift E14 — register the asyncio Task this handler runs in so the
@@ -642,6 +656,7 @@ async def handle_task(
                 headers=headers,
                 redis=redis,
                 done_chan=done_chan,
+                spent=spent,
             )
             return
         await _post_result(client, headers, payload=_result_payload(task_id, outcome))
@@ -657,10 +672,9 @@ async def handle_task(
         # task_id (backend timed out / shutdown signal fired) and
         # ``.cancel()``-ed our wrapper task. The executor's ``finally``
         # in :func:`_stream_and_collect` has already killed the CLI
-        # subprocess + removed the work dir. Skip the result POST — the
-        # backend has already moved on, a late ``failed`` POST would
-        # clobber a row it may have already terminal-flipped.
+        # subprocess + removed the work dir.
         logger.info("task_cancelled_by_backend", task_id=task_id, executor=executor_type)
+        await _report_cancelled_spend(task_id=task_id, spent=spent, client=client, headers=headers)
         raise
     finally:
         _RUNNING_TASKS.pop(task_id, None)
@@ -685,24 +699,78 @@ class _StreamOutcome:
     usage_breakdown: UsageBreakdown | None = None
 
 
+def _usage_fields(
+    prompt_tokens: int, completion_tokens: int, breakdown: UsageBreakdown | None
+) -> dict[str, int]:
+    """A result body's usage columns — the same six on every report that carries any."""
+    split = breakdown or UsageBreakdown()
+    return {
+        "usage_prompt_tokens": prompt_tokens,
+        "usage_completion_tokens": completion_tokens,
+        "usage_input_tokens": split.input_tokens,
+        "usage_cache_read_tokens": split.cache_read_tokens,
+        "usage_cache_write_5m_tokens": split.cache_write_5m_tokens,
+        "usage_cache_write_1h_tokens": split.cache_write_1h_tokens,
+    }
+
+
+async def _report_cancelled_spend(
+    *,
+    task_id: str,
+    spent: SessionUsage,
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+) -> None:
+    """Report what a session the backend cancelled had already spent (#1158).
+
+    The cancel arrives after the backend closed the row ``failed`` (timeout, or the run
+    cancelled mid-turn), and ``record_result`` takes a ``failed`` row's usage only while it holds
+    none — its status and output stay refused (#926, #928). So this is an ordinary ``failed``
+    result whose only payload the backend keeps is the number. Nothing spent → nothing to say,
+    and the Lift E14 rule (no late POST) holds as it always did.
+
+    Best-effort and never in the way of the cancel: the caller re-raises ``CancelledError``
+    whatever happens here, because that is what lets the poll loop drop the task.
+    """
+    if not spent.observed:
+        return
+    try:
+        await _post_result(
+            client,
+            headers,
+            payload={
+                "task_id": task_id,
+                "success": False,
+                "output": "",
+                "error_message": "cancelled by the backend; usage reported for the record",
+                **_usage_fields(spent.prompt_tokens, spent.completion_tokens, spent.breakdown),
+            },
+        )
+    except Exception:  # noqa: BLE001 — the cancel must finish whatever the report does
+        logger.warning("task_cancelled_usage_report_failed", task_id=task_id, exc_info=True)
+        return
+    logger.info(
+        "task_cancelled_usage_reported",
+        task_id=task_id,
+        usage_prompt_tokens=spent.prompt_tokens,
+        usage_completion_tokens=spent.completion_tokens,
+    )
+
+
 def _result_payload(task_id: str, outcome: _StreamOutcome) -> dict[str, Any]:
     """The ``POST /api/v1/workers/result`` body for a drained turn.
 
     The cache breakdown (#1104) is flattened onto the body; a turn whose CLI reported none
     posts zeros, which the backend stores as it stores every pre-#1104 task.
     """
-    split = outcome.usage_breakdown or UsageBreakdown()
     return {
         "task_id": task_id,
         "success": outcome.success,
         "output": "".join(outcome.parts),
         "error_message": outcome.error,
-        "usage_prompt_tokens": outcome.usage_prompt_tokens,
-        "usage_completion_tokens": outcome.usage_completion_tokens,
-        "usage_input_tokens": split.input_tokens,
-        "usage_cache_read_tokens": split.cache_read_tokens,
-        "usage_cache_write_5m_tokens": split.cache_write_5m_tokens,
-        "usage_cache_write_1h_tokens": split.cache_write_1h_tokens,
+        **_usage_fields(
+            outcome.usage_prompt_tokens, outcome.usage_completion_tokens, outcome.usage_breakdown
+        ),
     }
 
 
