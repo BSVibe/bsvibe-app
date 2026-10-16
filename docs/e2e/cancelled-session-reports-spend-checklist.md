@@ -27,7 +27,8 @@ time** moved. The backend needs nothing new (#928's usage-on-`failed` path takes
 
 ## Not covered on purpose
 
-- The run meter (`execution_runs.usage_*`) and therefore the workspace budget do NOT see this
-  number — it lands on the task row only, like #928's late reports. Folding it into the run
-  would race the drive loop's absolute ORM write.
+- The run meter (`execution_runs.usage_*`) does NOT see this number — it lands on the task row,
+  like #928's late reports; folding it into the run would race the drive loop's absolute ORM
+  write. The workspace budget DOES see it since #1162, through the ledger row
+  (`site="executor_late_report"`).
 - codex / opencode keep no in-session tally; their cancelled sessions still report nothing.
