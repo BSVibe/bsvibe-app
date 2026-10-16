@@ -7,6 +7,7 @@ rooted at the project workspace directory. Lifted from BSNexus.
 from __future__ import annotations
 
 import asyncio
+import os
 import shlex
 import uuid
 from collections.abc import Mapping
@@ -42,10 +43,12 @@ class NoopSandboxSession:
         shell: bool = False,
         env: Mapping[str, str] | None = None,
     ) -> SandboxResult:
+        run_env = {**os.environ, **env} if env else None
         if shell:
             process = await asyncio.create_subprocess_shell(
                 command,
                 cwd=str(self._root),
+                env=run_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -60,6 +63,7 @@ class NoopSandboxSession:
                 process = await asyncio.create_subprocess_exec(
                     *parts,
                     cwd=str(self._root),
+                    env=run_env,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )

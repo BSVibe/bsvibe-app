@@ -114,6 +114,7 @@ def create_app() -> FastAPI:
             record_progress,
             record_question,
             resolve_client_sandbox,
+            resolve_declared_secrets,
         )
 
         retract_handler = await get_retract_handler()
@@ -129,6 +130,7 @@ def create_app() -> FastAPI:
             session_factory=session_factory,
             delivery_dispatcher=delivery_dispatcher,
             client_sandbox=resolve_client_sandbox,
+            declared_secrets=resolve_declared_secrets,
             retract_handler=retract_handler,
             narrative_generator=llm_narrative_generator(),
             record_question=record_question,

@@ -36,6 +36,7 @@ async def mcp_lifespan(
     session_factory: async_sessionmaker[Any],
     delivery_dispatcher: Any | None = None,
     client_sandbox: Any | None = None,
+    declared_secrets: Any | None = None,
     retract_handler: Any | None = None,
     narrative_generator: Any | None = None,
     record_question: Any | None = None,
@@ -57,6 +58,9 @@ async def mcp_lifespan(
     ``client_sandbox`` (optional) — same shape: resolves the founder's own machine for a
     ``client_attach`` run, injected because addressing it reaches the executor dispatch
     substrate, which the MCP import contract forbids this context.
+
+    ``declared_secrets`` (optional) — same shape: a run's product's declared secrets for its
+    server box (#691); unsealing them reaches the credential cipher.
     """
     settings = get_settings()
     issuer = settings.oauth_issuer
@@ -70,6 +74,7 @@ async def mcp_lifespan(
         registry=registry,
         delivery_dispatcher=delivery_dispatcher,
         client_sandbox=client_sandbox,
+        declared_secrets=declared_secrets,
         retract_handler=retract_handler,
         narrative_generator=narrative_generator,
     )

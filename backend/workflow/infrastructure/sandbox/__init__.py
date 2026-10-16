@@ -27,6 +27,10 @@ from __future__ import annotations
 # __init__ is imported by low-level consumers (e.g. ``backend.mcp``) whose layering
 # contract forbids reaching the executors context. Import it directly from
 # ``...sandbox.client_worker_manager`` at the (workflow-layer) call site instead.
+from backend.workflow.infrastructure.sandbox.declared_env import (
+    with_declared_env,
+    with_session_env,
+)
 from backend.workflow.infrastructure.sandbox.docker_manager import (
     DockerSandboxManager,
     DockerSandboxSession,
@@ -63,4 +67,6 @@ __all__ = [
     "get_sandbox_manager",
     "reset_sandbox_manager",
     "sandbox_reaper_loop",
+    "with_declared_env",
+    "with_session_env",
 ]

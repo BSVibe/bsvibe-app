@@ -102,7 +102,13 @@ async def record_progress(run_id: uuid.UUID, ctx: ToolContext, payload: dict[str
     await ctx.session.commit()
 
 
-__all__ = ["_ask_decision_kind", "record_deliverable", "record_progress", "record_question"]
+__all__ = [
+    "_ask_decision_kind",
+    "record_deliverable",
+    "record_progress",
+    "record_question",
+    "resolve_declared_secrets",
+]
 
 
 async def resolve_client_sandbox(run: Any, ctx: ToolContext) -> Any:
@@ -135,3 +141,15 @@ async def resolve_client_sandbox(run: Any, ctx: ToolContext) -> Any:
     # its first agent turn. This resolver runs per MCP tool call, so provisioning here would
     # charge every tool two worker round-trips and run the orphan sweep per call.
     return manager.attach()
+
+
+async def resolve_declared_secrets(run: Any, ctx: ToolContext) -> dict[str, str]:
+    """#691 — the run's product's declared secrets, for the server box the MCP tools act in.
+
+    The same unsealing the loop's box gets (:func:`declared_secrets_for_product`), handed in at
+    the composition root because it reaches the credential cipher."""
+    from backend.workflow.application.runtime import sandbox_selection  # noqa: PLC0415
+
+    if run.product_id is None:
+        return {}
+    return await sandbox_selection.declared_secrets_for_product(ctx.session, run.product_id)
