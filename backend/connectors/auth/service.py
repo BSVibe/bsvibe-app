@@ -23,12 +23,15 @@ from backend.connectors.auth.app_credentials import get_app_credentials
 from backend.connectors.auth.github_manifest import build_manifest, manifest_post_url
 from backend.connectors.auth.providers import get_provider
 from backend.connectors.auth.sentry import SentryProvider
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    CredentialCipher,
+    cipher_from_settings,
+)
 
 
 def build_credential_cipher() -> CredentialCipher:
     """Construct the credential cipher from settings (one place callers reuse)."""
-    return CredentialCipher(_key_from_settings())
+    return cipher_from_settings()
 
 
 # Pending-row marker for the App Manifest flow's CSRF state — distinct from the

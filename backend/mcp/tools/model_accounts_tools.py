@@ -27,7 +27,9 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 from backend.identity.default_account import set_default_model_account_if_unset
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.accounts.account_service import ensure_personal_account
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    cipher_from_settings,
+)
 from backend.router.accounts.schemas import ModelAccountCreate, ModelAccountOut
 from backend.router.accounts.service import EgressRefused, ModelAccountService
 
@@ -37,7 +39,7 @@ class _Envelope(RootModel[Any]):
 
 
 def _service(ctx: ToolContext) -> ModelAccountService:
-    return ModelAccountService(ctx.session, cipher=CredentialCipher(_key_from_settings()))
+    return ModelAccountService(ctx.session, cipher=cipher_from_settings())
 
 
 async def _resolve_account_id(ctx: ToolContext) -> uuid.UUID:

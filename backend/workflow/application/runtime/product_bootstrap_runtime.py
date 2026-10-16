@@ -66,7 +66,9 @@ from backend.products.application.bootstrap import (
     register_bootstrap_anchors,
     run_repo_bootstrap,
 )
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    cipher_from_settings,
+)
 from backend.shared.core.http import redact_url_password
 from backend.storage.product_workspace import (
     ProductWorkspaceError,
@@ -1106,7 +1108,7 @@ async def _resolve_clone_token(
     and, if that fails too, reports the missing credential in the status row.
     """
     try:
-        cipher = CredentialCipher(_key_from_settings())
+        cipher = cipher_from_settings()
         async with session_factory() as session:
             token = await resolve_github_token(session, workspace_id=workspace_id, cipher=cipher)
             # Persist any token refresh resolve performed under the hood — the

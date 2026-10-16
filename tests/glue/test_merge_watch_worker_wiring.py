@@ -37,9 +37,11 @@ async def test_merge_watch_worker_present_when_flag_on(monkeypatch: pytest.Monke
     # The gated construction builds a CredentialCipher from the KMS key; stub the
     # key source so the wiring test does not require BSVIBE_GATEWAY_KMS_KEY_B64.
     # merge_watch_runtime imports the name directly, so patch it there.
+    from backend.router.accounts.crypto import CredentialCipher
+
     monkeypatch.setattr(
-        "backend.workflow.application.runtime.merge_watch_runtime._key_from_settings",
-        lambda: b"0" * 32,
+        "backend.workflow.application.runtime.merge_watch_runtime.cipher_from_settings",
+        lambda: CredentialCipher(b"0" * 32),
     )
     settings = get_settings().model_copy(update={"github_auto_merge_enabled": True})
     names = _names(settings)

@@ -34,7 +34,10 @@ from backend.dispatch.adapter import ModelAccountAdapter, adapter_for
 from backend.dispatch.caller_registry import (
     get_caller_spec,
 )
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    CredentialCipher,
+    cipher_from_settings,
+)
 from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.service import ModelAccountService
 from backend.router.routing.run_routing.db import RunRoutingRuleRow
@@ -173,7 +176,7 @@ class ModelAccountResolver:
         if self._accounts is not None:
             return self._accounts
         if self._cipher is None:
-            self._cipher = CredentialCipher(_key_from_settings())
+            self._cipher = cipher_from_settings()
         self._accounts = ModelAccountService(self._session, cipher=self._cipher)
         return self._accounts
 

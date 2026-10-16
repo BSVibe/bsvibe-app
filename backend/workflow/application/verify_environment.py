@@ -215,12 +215,9 @@ def unseal_declared_secrets(
     if decrypt is not None:
         return unseal_secrets(metadata, decrypt=decrypt)
     try:
-        from backend.router.accounts.crypto import (  # noqa: PLC0415
-            CredentialCipher,
-            _key_from_settings,
-        )
+        from backend.router.accounts.crypto import cipher_from_settings  # noqa: PLC0415
 
-        cipher = CredentialCipher(_key_from_settings())
+        cipher = cipher_from_settings()
     except Exception:  # noqa: BLE001 — an unavailable key is not a verdict
         logger.warning("verify_secrets_cipher_unavailable")
         return {}

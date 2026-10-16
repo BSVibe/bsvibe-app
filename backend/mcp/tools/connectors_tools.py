@@ -44,7 +44,9 @@ from backend.connectors.catalog import get_connector_catalog
 from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.base import PluginRunError
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    cipher_from_settings,
+)
 
 _TOKEN_BYTES = 32
 _IMPORTED_COUNT_KEYS = (
@@ -238,7 +240,7 @@ class ConnectorsCreateOutput(BaseModel):
 async def _h_create(args: ConnectorsCreateInput, ctx: ToolContext) -> Any:
     if not _is_registerable_connector(args.connector):
         raise ToolError(f"unknown connector: {args.connector!r}")
-    cipher = CredentialCipher(_key_from_settings())
+    cipher = cipher_from_settings()
     webhook_token = secrets.token_urlsafe(_TOKEN_BYTES)
     row = ConnectorAccountRow(
         id=uuid.uuid4(),
@@ -406,7 +408,7 @@ async def _h_webhook_register(args: ConnectorsWebhookRegisterInput, ctx: ToolCon
     from backend.config import get_settings  # noqa: PLC0415
     from backend.connectors.telegram_webhook import register_telegram_webhook  # noqa: PLC0415
 
-    cipher = CredentialCipher(_key_from_settings())
+    cipher = cipher_from_settings()
     bot_token = cipher.decrypt(row.signing_secret_ciphertext)
     try:
         result = await register_telegram_webhook(

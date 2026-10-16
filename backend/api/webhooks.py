@@ -59,7 +59,10 @@ from backend.extensions.plugin.webhook_registry import (
     get_default_registry,
 )
 from backend.identity.workspaces_db import ProductRow, ResourceBindingRow
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    CredentialCipher,
+    cipher_from_settings,
+)
 from backend.shared.wire_kinds import (
     PAYLOAD_KEY_CONNECTOR_ACCOUNT_ID,
     PAYLOAD_KEY_RESOURCE_ID,
@@ -261,7 +264,7 @@ async def _product_id_for_repo(
 
 def get_credential_cipher() -> CredentialCipher:
     """Build the credential cipher from settings (test-overridable)."""
-    return CredentialCipher(_key_from_settings())
+    return cipher_from_settings()
 
 
 def get_webhook_parser_registry() -> WebhookParserRegistry:

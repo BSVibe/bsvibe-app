@@ -37,7 +37,9 @@ from backend.dispatch.caller_registry import (
 )
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.skill.loader import SkillLoader
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    cipher_from_settings,
+)
 from backend.workflow.application.agent_loop import (
     CanonRetriever,
     RunCompute,
@@ -298,7 +300,7 @@ def build_agent_execution_deps(
             ConnectorActionResolver(
                 session=session,
                 plugins_by_name=connector_plugins,
-                cipher=CredentialCipher(_key_from_settings()),
+                cipher=cipher_from_settings(),
             )
             if connector_plugins
             else None
@@ -338,9 +340,7 @@ def build_agent_execution_deps(
             suggested_skill_description=suggested_skill_description,
         )
 
-    github_provisioner = build_github_workspace_provisioner(
-        cipher=lambda: CredentialCipher(_key_from_settings())
-    )
+    github_provisioner = build_github_workspace_provisioner(cipher=cipher_from_settings)
     provisioner = _build_composite_workspace_provisioner(
         github=github_provisioner,
         product=_product_workspace_provisioner,

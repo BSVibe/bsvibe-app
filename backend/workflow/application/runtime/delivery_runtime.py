@@ -32,7 +32,9 @@ from backend.config import Settings, get_settings
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.plugin.loader import PluginLoader
 from backend.extensions.plugin.runner import PluginRunner
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    cipher_from_settings,
+)
 from backend.workflow.application.delivery.connector_dispatch import (
     ConnectorDeliveryAdapter,
     build_connector_delivery_adapter,
@@ -125,7 +127,7 @@ async def build_delivery_adapter(
     return build_connector_delivery_adapter(
         session_factory=session_factory,
         plugins=list(registry.values()),
-        cipher=CredentialCipher(_key_from_settings()),
+        cipher=cipher_from_settings(),
         workspace_root=Path(get_settings().run_workspace_root),
         # PR4 — thread settings so a successfully opened PR is enqueued for
         # CI-green auto-merge when ``github_auto_merge_enabled`` is on.

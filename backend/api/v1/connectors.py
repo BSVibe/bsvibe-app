@@ -74,7 +74,7 @@ from backend.connectors.telegram_webhook import (
 from backend.extensions.plugin.base import PluginMeta, PluginRunError
 from backend.extensions.plugin.context import SkillContext
 from backend.extensions.plugin.runner import PluginRunner
-from backend.router.accounts.crypto import CredentialCipher
+from backend.router.accounts.crypto import CredentialCipher, cipher_from_settings
 
 logger = structlog.get_logger(__name__)
 
@@ -592,7 +592,6 @@ async def get_import_dispatcher() -> ImportDispatcher:  # pragma: no cover — o
     from backend.config import get_settings  # noqa: PLC0415
     from backend.extensions.plugin.loader import PluginLoader  # noqa: PLC0415
     from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
-    from backend.router.accounts.crypto import _key_from_settings  # noqa: PLC0415
 
     # Lift R1 (v8 §D38) — connector plugins live at repo-root ``plugin/`` —
     # walk up from this module to find it. Path resolution is one-time per
@@ -612,7 +611,7 @@ async def get_import_dispatcher() -> ImportDispatcher:  # pragma: no cover — o
 
     return ImportDispatcher(
         plugins_by_name=dict(registry),
-        cipher=CredentialCipher(_key_from_settings()),
+        cipher=cipher_from_settings(),
         knowledge_factory=_knowledge,
     )
 

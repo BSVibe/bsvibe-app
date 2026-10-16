@@ -28,12 +28,14 @@ class TestCipherRoundTrip:
             CredentialCipher(b"short")
 
     def test_decrypt_with_wrong_key_fails(self):
-        from cryptography.exceptions import InvalidTag
+        """#957: the ciphertext names its key, so a wrong key is an UnknownCredentialKey that
+        says which key is missing — not a bare InvalidTag."""
+        from backend.router.accounts.crypto import UnknownCredentialKey
 
         c1 = CredentialCipher(b"a" * 32)
         c2 = CredentialCipher(b"b" * 32)
         ct = c1.encrypt("secret")
-        with pytest.raises(InvalidTag):
+        with pytest.raises(UnknownCredentialKey):
             c2.decrypt(ct)
 
 

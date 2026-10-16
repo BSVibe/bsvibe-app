@@ -37,11 +37,6 @@ def kms_key(monkeypatch: pytest.MonkeyPatch) -> None:
     Patching the key FUNCTION instead touches nothing global.
     """
     monkeypatch.setattr(
-        "backend.workflow.application.product_secrets._key_from_settings",
-        lambda: _KEY,
-        raising=True,
-    )
-    monkeypatch.setattr(
         "backend.router.accounts.crypto._key_from_settings", lambda: _KEY, raising=True
     )
 

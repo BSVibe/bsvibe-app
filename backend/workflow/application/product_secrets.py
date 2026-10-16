@@ -13,7 +13,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    CredentialCipher,
+    cipher_from_settings,
+)
 from backend.workflow.domain.verify_secrets import seal_secrets
 
 
@@ -39,7 +42,7 @@ def sealed_product_metadata(incoming: dict[str, Any], prior: Any) -> dict[str, A
     def _encrypt(plaintext: str) -> str:
         nonlocal cipher
         if cipher is None:
-            cipher = CredentialCipher(_key_from_settings())
+            cipher = cipher_from_settings()
         return cipher.encrypt(plaintext)
 
     return seal_secrets(incoming, encrypt=_encrypt, prior=prior or {})

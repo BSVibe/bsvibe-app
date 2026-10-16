@@ -30,7 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
 from backend.connectors.auth.resolve import resolve_connector_credentials
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    CredentialCipher,
+    cipher_from_settings,
+)
 from backend.workflow.application.delivery.connector_dispatch._resolver import (
     resolve_github_binding,
 )
@@ -350,7 +353,7 @@ def build_merge_watch_workers(
     this machine to fix a mergeability problem (§3.5)."""
     if not settings.github_auto_merge_enabled:
         return []
-    cipher = CredentialCipher(_key_from_settings())
+    cipher = cipher_from_settings()
     return [
         MergeWatchWorker(
             session_factory=session_factory,
