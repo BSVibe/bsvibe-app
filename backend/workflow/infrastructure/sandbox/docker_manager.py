@@ -102,10 +102,14 @@ class DockerSandboxSession:
             if not parts:
                 raise SandboxError("empty command")
             inner = parts
-        code, out, err = await self._mgr._docker(
-            ["exec", "-w", _WORK_MOUNT, self._container, *inner],
-            timeout_s=timeout_s,
-        )
+        # ``-e NAME`` with no ``=``: docker takes the value from ITS OWN environment, so a
+        # declared secret never sits on an argv (process list, error text, logs).
+        env_flags = [flag for name in (env or {}) for flag in ("-e", name)]
+        argv = ["exec", *env_flags, "-w", _WORK_MOUNT, self._container, *inner]
+        if env:
+            code, out, err = await self._mgr._docker(argv, timeout_s=timeout_s, extra_env=dict(env))
+        else:
+            code, out, err = await self._mgr._docker(argv, timeout_s=timeout_s)
         return SandboxResult(
             exit_code=code,
             stdout=out.decode("utf-8", errors="replace"),
@@ -209,9 +213,12 @@ class DockerSandboxManager:
         *,
         timeout_s: float,
         stdin: bytes | None = None,
+        extra_env: Mapping[str, str] | None = None,
     ) -> tuple[int | None, bytes, bytes]:
-        """The single docker-CLI boundary; the unit-test mock point."""
-        env = dict(os.environ)
+        """The single docker-CLI boundary; the unit-test mock point.
+
+        ``extra_env`` is for ``docker exec -e NAME``: the values the CLI forwards by name."""
+        env = {**os.environ, **(extra_env or {})}
         if self._docker_host:
             env["DOCKER_HOST"] = self._docker_host
         proc = await asyncio.create_subprocess_exec(

@@ -32,7 +32,7 @@ from backend.workflow.application.tool_registry import (
     assemble_run_tool_registry,
 )
 from backend.workflow.infrastructure.db import TERMINAL_RUN_STATUSES, ExecutionRun
-from backend.workflow.infrastructure.sandbox import get_sandbox_manager
+from backend.workflow.infrastructure.sandbox import get_sandbox_manager, with_session_env
 from backend.workflow.infrastructure.tools import ToolRegistry
 
 logger = structlog.get_logger(__name__)
@@ -73,7 +73,11 @@ async def _sandbox_for(run: ExecutionRun, workspace_dir: Path, ctx: ToolContext)
     if manager is None:
         return None
     # Keyed by RUN (#1107) — the same box the worker's run loop holds, adopted not recreated.
-    return await manager.acquire(run.id, str(workspace_dir))
+    box = await manager.acquire(run.id, str(workspace_dir))
+    # #691 — the product's declared secrets, as the loop's box carries them. Injected for the
+    # same reason as the client box: unsealing reaches the credential cipher.
+    resolve = ctx.extras.get("declared_secrets")
+    return with_session_env(box, await resolve(run, ctx)) if resolve is not None else box
 
 
 async def _client_sandbox_for(run: ExecutionRun, ctx: ToolContext) -> Any:

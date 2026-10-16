@@ -23,6 +23,7 @@ from backend.workflow.infrastructure.sandbox import (
     NoopSandboxManager,
     SandboxManager,
     get_sandbox_manager,
+    with_declared_env,
 )
 
 if TYPE_CHECKING:  # the runtime import stays function-level — see _client_manager
@@ -60,14 +61,17 @@ def sandbox_manager_for_run(
     ``worker_id``): that is the machine holding this product's working tree —
     another workspace worker would not have the source at all.
 
-    Every other run keeps ``default`` untouched. So does a client_attach run
+    Every other run keeps ``default`` — carrying the product's declared ``secrets``
+    when it has any (#691), otherwise the very same object. So does a client_attach run
     whose dispatch context is incomplete (no redis / no session factory / no
     local dir / not an executor account): that degrades to today's behaviour
     (the run settles UNTESTED), which is honest. What must never happen is a
     gate quietly running against the WRONG machine.
     """
     if execution_target != "client_attach" or not client_workspace_dir:
-        return default
+        # #691 — the server box gets the product's declared secrets the same way the client
+        # box does: carried by the box, so every command it runs has them.
+        return with_declared_env(default, secrets)
     extra = getattr(account, "extra_params", None) or {}
     executor_type = str(extra.get("executor_type") or "")
     if not executor_type or redis_client is None or session_factory is None:
