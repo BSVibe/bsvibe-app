@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-08
+# BSVibe session handoff — 2026-10-16
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -6,7 +6,7 @@
 |---|---|
 | **Container stack** (backend · worker) | ✅ **autodeploy every 2 min** — a **separate block** in `_infra/scripts/autodeploy.sh` (line ~171). It is not in the `PROJECTS` array (easy to misread as "not deployed"). State: `_infra/logs/bsvibe-app.deployed` |
 | **PWA** | Vercel on merge to main |
-| **Host executor workers (2)** | 🔴 **not autodeployed.** `git pull` on `main`, then `launchctl kickstart -k gui/501/com.bsvibe.worker-{admin,mac-mini-e2e}` and check the **process start time**. If you changed the plist: `bootout` + `bootstrap` |
+| **Host executor worker (1)** | 🔴 **not autodeployed.** `git pull` in `~/Works/bsvibe-app/main`, then `launchctl kickstart -k gui/501/com.bsvibe.worker-mac-mini-e2e` and check the **process start time**. If you changed the plist: `bootout` + `bootstrap`. (`worker-admin` was retired 10-16 — its plist is in `~/.bsvibe/retired/`) |
 
 ⚠️ **A PR that touches both frontend and backend opens a window** — Vercel ships at once, the backend poller every 2 min.
 
@@ -21,9 +21,26 @@
 
 ---
 
-## §0 — One line: **work from outside meets the same limits as work from 형님; ship opens the PR**
+## §0 — One line: **the meter now sees every token, a tenant cannot aim the server inward, and BSVibe opens as a free beta**
 
-10-06 → 10-07 (this session):
+10-15 → 10-16 (this session). Every PR went pause → open → `filter_rejected` → CI green → merge → deploy
+checked → restore (§Ⅳ).
+
+| PR | Issue | What | Prod check |
+|---|---|---|---|
+| #1161 | #1158 | a cancelled / worker-deadline executor session reports what it spent (Claude Code in-session tally → `failed` report; the #928 late-usage path takes it) | ✅ deployed · host worker restarted 10-15 18:31 KST · ⏳ `task_cancelled_usage_reported` on a real mid-turn cancel |
+| #1162 | #930 | the workspace budget sums `execution_runs` **+ `unattributed_llm_usage`**; a late executor report also books a ledger row (`site=executor_late_report`) — the #954 ledger had no reader | ✅ deployed · ⏳ 형님 DB read: this month's ledger sum vs the 50M budget |
+| #1163 | (found) | **model endpoints must be public**: `LlmClient.chat` checks the MERGED kwargs (`extra_params.base_url` was a way around `api_base`) — private/loopback/link-local refused, `ollama/…` must name one; save-time 422 / ToolError; executor accounts exempt; `BSVIBE_LLM_EGRESS_ALLOWED_HOSTS` | ✅ prod MCP create with `169.254.169.254` → refused, nothing saved |
+| #1164 | #928 | billing step 1 — `workspaces.plan` + `apply_plan` (Free 3/1/50M · Pro 10/2/50M · Operator ∞) | ✅ migration `workspace_plan` ran · ⏳ 형님: Settings → Plan shows "운영자" |
+| #1165 | #928 | billing step 2 — Paddle subscription webhook (signature · idempotent · out-of-order · bound subscription) | ✅ deployed, answers 404 (no secret) — **dormant** |
+| #1166 | #928 | billing step 4 — `GET /api/v1/workspace/plan` = MCP `bsvibe_workspace_plan` = Settings → Plan | ✅ route 401 unauth · ⏳ 형님 opens the tab |
+| #1167 | (CI flake) | PWA tests on Node 26 (Node's Web Storage shadowed jsdom) · knowledge-panel race forced deterministic | ✅ 845 local, CI green |
+| #1168 | #928 | billing **paused** — Plan tab links "About paid plans", never "Upgrade" | ✅ |
+| #1169 | #935 | runbook §2b: retire an unused worker instead of rotating; 8700 is the prod backend, not an ssh tunnel | ✅ `admin-test-exec` retired, old token heartbeat **401** |
+
+Closed: **#959** (all four items done; fail-closed was #1095), **#935** (runbook · 2 DB passwords · worker token retired).
+
+## §0-b — previous session (10-06 → 10-08): work from outside meets the same limits as work from 형님; ship opens the PR
 
 | PR | Issue | What | Prod check |
 |---|---|---|---|
@@ -76,10 +93,12 @@ Checklists: `docs/e2e/{run-with-nothing-to-deliver,auth-health-probe,sandbox-per
 
 Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 stays open on purpose** (no raw cache columns).
 
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16)
 
 | | |
 |---|---|
+| **Open-ended free beta** (10-16) | Billing is **paused** (business registration). Everyone is on Free: 3 concurrent runs · 1 verification stack · 50M tokens/month. No trial period, no expiry. Nothing in the UI may say "upgrade" |
+| **When billing resumes** (10-16) | Capacity subscription — tokens stay BYO, BSVibe sells platform capacity · Paddle as MoR · Pro = 10 runs · 2 stacks. Resume at step 3: `docs/design/billing-capacity-subscription.md` |
 | **Wrapping stays** | Claude Code and the files live on different machines; built-in tools stay off, the MCP work tools are the surface |
 | **No `--resume`** | Continuity is BSVibe's. Every hand-over (#1103 step, #1114 round) is plain text on the payload / messages that any executor can read |
 | **Shipped only after merge** (10-04) | A GitHub-delivered run waits at `review_ready` (`awaiting_merge`) until its PR merges; closed unmerged → `cancelled`. Runs with no merge watch row still ship on open. Awaiting-merge runs do not hold a concurrent-run slot |
@@ -113,8 +132,24 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 * **launchd runs `_infra`'s working tree.** Editing `heartbeat.sh` on a branch changes prod at once; change
   it only after the backend it calls is deployed.
 
+## §Ⅱ-c — What 10-15/16 found
+
+* **The repo is PUBLIC.** A security fix's commit/PR text is world-readable ~25 min before the fix deploys —
+  write neutral titles, keep repro and internal hosts off GitHub (#1163's first commit was amended before push).
+* **`main` requires an up-to-date branch.** Merging the second of two sibling PRs fails until rebased, and
+  `gh pr update-branch` is a push (prod action). Rebase locally before the first push.
+* **A merge restarts the containers within 2 min**, and intake verdicts in the restart gap may be in neither the
+  archived log nor the new container. When a verdict can't be found, keep the filter paused until a quiet point.
+* **Inside a workspace scope, layer 2 answers for a deleted predicate** — a wire-cut of a query's own
+  `workspace_id ==` stayed green until the test read across tenants (`cross_tenant_read`).
+* **The CI runner is this Mac mini**; heavy local test runs slow CI (22 → 30+ min).
+* **Auto mode refuses** logging in with another account's stored credentials (even with 형님's go-ahead in chat) —
+  rotating a worker of another workspace is 형님's step.
+
 ## §Ⅲ — Next
 
+0. **10-19 (Mon) 00:30 UTC BStockReport weekly run** — first real walk of #1160 (no resend loop) and the
+   10-08 schedule bundle (#1151 one run · #1152 verbatim · #1153 no approval card). Checklists in `docs/e2e/`.
 1. Prod walks in the ⏳ column (both tables). DB reads are 형님's (agents are refused prod reads by design).
 2. `human_review_required` has no creator left — kept mapped on purpose (pending prod rows would go blank).
 3. Still outside the caps on purpose: schedule ticks and next-step spawns (`run_caps` docstring).
@@ -123,10 +158,9 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
    skip all three instead of renaming 형님's worktrees.
 6. #1145 — cause unconfirmed (hypothesis: `file_edit` refuses a path not `file_read` first; the agent read via
    shell and patched with scripts). Logs now survive deploys — confirm on the next measured run.
-7. **10-12 (Mon) 00:30 UTC BStockReport weekly run** checks four PRs at once: one run (#1079) · no markers, block
-   byte-identical to `--emit` (#1152) · published once · no Safe Mode card (#1153). The schedule was recreated
-   (`4020dbf0` → `534f78a7`, same cron) with the verbatim instruction, then set `direct`. Its backend log will
-   survive (#11) — read #1145's cause from it. Note: the instruction runs `--emit` twice (commentary + publish).
+7. ~~10-12 weekly run~~ — it published, then the delivery worker re-sent the report ~750 times in 80 min
+   (`DeliveryResult(artifact_type="report")` raised after the send; the at-least-once row was never dropped).
+   Fixed by #1160 (10-13). It is re-walked by item 0. #1145's cause is still unread from that run's log.
 8. Carry-overs in GitHub issues.
 
 ## §Ⅳ — Discipline that paid off
