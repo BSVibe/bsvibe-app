@@ -164,6 +164,8 @@ function json(body: unknown, status = 200) {
 function installFetch(opts: {
   graph: () => KnowledgeGraph | Response;
   detail?: (id: string) => ConceptDetail | Response;
+  /** Hold every concept-detail response this long — CI's latency, made deterministic. */
+  detailDelayMs?: number;
 }) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -173,6 +175,7 @@ function installFetch(opts: {
     }
     const detailMatch = url.match(/\/api\/v1\/inside\/concepts\/([^?]+)/);
     if (detailMatch) {
+      if (opts.detailDelayMs) await new Promise((r) => setTimeout(r, opts.detailDelayMs));
       const id = decodeURIComponent(detailMatch[1]);
       const d = opts.detail?.(id) ?? json("not found", 404);
       return d instanceof Response ? d : json(d);
@@ -218,9 +221,11 @@ describe("Knowledge surface (BSage graph)", () => {
   });
 
   it("opens the detail panel and fetches getConceptDetail when a node is tapped", async () => {
+    // Detail held back: the heading appears while LOADING, the fields only when ready.
     installFetch({
       graph: () => GRAPH,
       detail: (id) => (id === "auth" ? AUTH_DETAIL : json("not found", 404)),
+      detailDelayMs: 50,
     });
     render(<Knowledge />);
 
@@ -235,7 +240,8 @@ describe("Knowledge surface (BSage graph)", () => {
     });
     // Detail panel renders the concept's real fields.
     expect(await screen.findByRole("heading", { name: "Auth" })).toBeInTheDocument();
-    expect(screen.getByText("authn")).toBeInTheDocument();
+    // The fields arrive with the detail, after the heading — wait for the first of them.
+    expect(await screen.findByText("authn")).toBeInTheDocument();
     // The inspector leads with the note's CONTENT (the body, as a readable note),
     // NOT the source detail — the observation title/date are no longer shown IN
     // THE INSPECTOR (the Lift 5 local graph does label its seedling leaves with
@@ -250,9 +256,13 @@ describe("Knowledge surface (BSage graph)", () => {
   });
 
   it("pivots the panel when a related concept is clicked (re-fetches the neighbour)", async () => {
+    // The panel's heading renders from the graph node while the detail is still LOADING; the
+    // related-concept chips only once it is ready. A slow detail read (CI under load) once
+    // left this test grabbing the chip between the two — so the delay is always on now.
     installFetch({
       graph: () => GRAPH,
       detail: (id) => (id === "auth" ? AUTH_DETAIL : id === "jwks" ? JWKS_DETAIL : json("nf", 404)),
+      detailDelayMs: 50,
     });
     render(<Knowledge />);
 
@@ -262,7 +272,7 @@ describe("Knowledge surface (BSage graph)", () => {
     // Click the related-concept chip inside the panel (not the same-named graph
     // node button the canvas stub renders).
     const panel = screen.getByRole("complementary", { name: /concept/i });
-    fireEvent.click(within(panel).getByRole("button", { name: /JWKS/ }));
+    fireEvent.click(await within(panel).findByRole("button", { name: /JWKS/ }));
 
     // The panel pivots onto JWKS (a fresh getConceptDetail("jwks")).
     await waitFor(() => {
