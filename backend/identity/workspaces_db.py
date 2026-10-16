@@ -200,6 +200,19 @@ class WorkspaceRow(WorkspacesBase):
     plan: Mapped[str] = mapped_column(
         String(16), nullable=False, default=DEFAULT_PLAN, server_default=DEFAULT_PLAN
     )
+    # The payment provider's view of this workspace (#928 step 2, Paddle). The subscription id
+    # is bound by the FIRST webhook that names this workspace and names it from then on — a
+    # later event's ``custom_data`` (client-set at checkout) cannot re-point it.
+    # ``billing_event_at`` is the ``occurred_at`` of the last event applied: Paddle does not
+    # order deliveries, so an older one arriving late is ignored against it.
+    billing_customer_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    billing_subscription_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    billing_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    billing_event_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # How many LLM tokens this workspace may burn in one calendar month (UTC) —
     # #930 part 1. It sits beside ``max_concurrent_runs`` and copies its shape
     # deliberately (nullable column, DDL default, ``NULL`` = unlimited), because
@@ -430,4 +443,21 @@ class ResourceBindingRow(WorkspacesBase):
         nullable=False,
         default=lambda: datetime.now(),
         onupdate=lambda: datetime.now(),
+    )
+
+
+class BillingWebhookEventRow(WorkspacesBase):
+    """A payment-provider webhook event already applied (#928 step 2) — the retry guard.
+
+    Paddle redelivers until it gets a 2xx and may deliver one event more than once; the
+    event id is the idempotency key. Not workspace-scoped: the row is written before the
+    workspace is known (an event that names none is still recorded as seen), and it holds
+    no tenant data — an opaque provider id and a timestamp.
+    """
+
+    __tablename__ = "billing_webhook_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

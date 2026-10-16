@@ -472,6 +472,21 @@ class Settings(BaseSettings):
         description="Comma-separated hosts exempt from the public-only model endpoint check.",
     )
 
+    # Paddle (#928 step 2) — the notification destination's secret key. Empty = billing is
+    # off and ``POST /api/webhooks/paddle`` answers 404. Never logged.
+    paddle_webhook_secret: str = ""
+    # Paddle price ids that put a workspace on Pro (monthly, yearly …). Comma-separated.
+    paddle_pro_price_ids: Annotated[list[str], NoDecode] = csv_list_field(
+        default=[], description="Comma-separated Paddle price ids for the Pro plan."
+    )
+    # How old a ``Paddle-Signature`` timestamp may be — bounds replay of a captured delivery.
+    paddle_signature_tolerance_s: int = 300
+
+    @field_validator("paddle_pro_price_ids", mode="before")
+    @classmethod
+    def _parse_paddle_pro_price_ids(cls, value: str | list[str] | None) -> list[str]:
+        return parse_csv_list(value) or []
+
     @field_validator("llm_egress_allowed_hosts", mode="before")
     @classmethod
     def _parse_llm_egress_allowed_hosts(cls, value: str | list[str] | None) -> list[str]:

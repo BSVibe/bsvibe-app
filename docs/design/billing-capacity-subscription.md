@@ -21,16 +21,19 @@ model (host Ollama), storage. Those are what the plan limits bound.
 
 ## Steps
 
-1. **Plan entitlements** ✅ (this PR) — `workspaces.plan` + `backend.identity.plans.apply_plan`,
+1. **Plan entitlements** ✅ (#1164) — `workspaces.plan` + `backend.identity.plans.apply_plan`,
    the ONE writer of the plan and the limits it sets. Existing uncapped workspace → `operator`.
-2. **Paddle webhook** — `POST /api/webhooks/paddle`:
+2. **Paddle webhook** ✅ — `POST /api/webhooks/paddle` (setup: `docs/e2e/paddle-subscription-webhook-checklist.md`):
    - verify `Paddle-Signature` (HMAC, secret via pydantic-settings — never logged)
    - idempotent on the event id (store processed ids, like `delivery_events`)
-   - `subscription.activated|updated` (status `active`/`trialing`) → `apply_plan(PRO)`;
-     `subscription.canceled`, `past_due` past grace → `apply_plan(FREE)`
-   - the workspace id rides `custom_data.workspace_id` set at checkout — never trust a
-     workspace id the webhook did not get from our own checkout
-   - store `paddle_customer_id` / `subscription_id` on the workspace for the portal link
+   - status `active`/`trialing` on a Pro price → `apply_plan(PRO)`; `canceled`/`paused` →
+     `apply_plan(FREE)`; `past_due` → plan kept (Paddle is still collecting and sends
+     `canceled` if it gives up)
+   - the FIRST event names the workspace via `custom_data.workspace_id` and binds the
+     subscription id; later events resolve by that id — client-set `custom_data` cannot
+     re-point a paid subscription
+   - out-of-order deliveries: an event older than the last applied (`billing_event_at`) is
+     ignored; the operator workspace is never moved by a payment
 3. **Checkout + portal** — PWA "Upgrade" opens Paddle.js overlay with
    `customData: {workspace_id}`; "Manage billing" opens the customer portal. Replaces the
    `bsvibe.dev/{locale}/pricing` link the run-cap refusal shows today
