@@ -70,6 +70,8 @@ NOTIFICATION_OUTBOX: Channel[NotificationEventRow] = Channel(
         "workflow:run_status",
         "worker:daily_brief",
         "worker:auth_dependency",
+        # A host worker's heartbeat reporting its executor sign-in failed / recovered.
+        "api:worker_heartbeat",
     ),
     consumers=("worker:notify_worker",),
     human_origin=False,

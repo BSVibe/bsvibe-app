@@ -680,6 +680,25 @@ async def handle_task(
         _RUNNING_TASKS.pop(task_id, None)
 
 
+#: The heartbeat header carrying :class:`ClaudeAuthState` (2026-10-15 outage).
+CLAUDE_AUTH_HEADER = "X-BSVibe-Worker-Claude-Auth"
+
+
+@dataclass
+class ClaudeAuthState:
+    """The keepalive's verdict on this worker's own Claude sign-in, read by every heartbeat.
+
+    Measured 2026-10-15: the worker's refresh token died (``invalid_grant``) and every agent turn
+    failed for ~17 hours while the keepalive logged it hourly to nobody. The keepalive writes its
+    verdict here; ``run_once`` sends it on the heartbeat (``X-BSVibe-Worker-Claude-Auth``) and the
+    backend alerts the founder on the transition. ``None`` = not checked yet (or not a Claude
+    worker) — no header, no claim. One instance per ``poll_and_execute``, handed to both sides,
+    never a module global.
+    """
+
+    verdict: str | None = None
+
+
 @dataclass
 class _StreamOutcome:
     """Aggregated result of one streaming-executor drain (Lift E14).
@@ -900,6 +919,7 @@ async def run_once(
     headers: dict[str, str],
     redis: _RedisPublisher | None,
     in_flight: set[asyncio.Task[None]],
+    claude_auth: ClaudeAuthState | None = None,
 ) -> set[asyncio.Task[None]]:
     """One tick: reap done tasks, heartbeat, poll (if free slots), spawn tasks.
 
@@ -917,9 +937,12 @@ async def run_once(
     # below), and the per-task timer expired before the worker ever read
     # the task. Reporting the count here is the producer side of the
     # capacity gate.
+    heartbeat_headers = headers
+    if claude_auth is not None and claude_auth.verdict is not None:
+        heartbeat_headers = {**headers, CLAUDE_AUTH_HEADER: claude_auth.verdict}
     await client.post(
         "/api/v1/workers/heartbeat",
-        headers=headers,
+        headers=heartbeat_headers,
         json={"in_flight": len(in_flight)},
     )
 
@@ -1156,9 +1179,10 @@ async def poll_and_execute(
     # A codex/opencode-only worker never authenticates with Claude, so it does
     # not need (and should not spend a thread on) the refresh tick.
     keepalive_task: asyncio.Task[None] | None = None
+    claude_auth = ClaudeAuthState()
     if "claude_code" in executors:
         keepalive_task = asyncio.create_task(
-            _claude_auth_keepalive_loop(settings=settings, stop=stop)
+            _claude_auth_keepalive_loop(settings=settings, stop=stop, auth_state=claude_auth)
         )
 
     try:
@@ -1171,6 +1195,7 @@ async def poll_and_execute(
                     headers=headers,
                     redis=redis,
                     in_flight=in_flight,
+                    claude_auth=claude_auth,
                 )
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 401:
@@ -1211,6 +1236,7 @@ async def _claude_auth_keepalive_loop(
     settings: WorkerSettings,
     stop: asyncio.Event,
     resolve: Callable[[], ClaudeBearerResult] | None = None,
+    auth_state: ClaudeAuthState | None = None,
 ) -> None:
     """Proactively refresh the worker's OWN Claude OAuth token on a cadence.
 
@@ -1260,6 +1286,8 @@ async def _claude_auth_keepalive_loop(
                 # and reading it as health is exactly what made a dead worker
                 # credential look fine for nineteen days.
                 logger.warning("claude_auth_keepalive_definitive_failure", retry_in_s=delay)
+                if auth_state is not None:
+                    auth_state.verdict = "failed"  # the heartbeat carries it to the founder
                 # Sleep the CURRENT delay and grow the NEXT one. Growing first
                 # would make the line above a lie (it would say 300 and sleep
                 # 600) and would deny the very first retry its prompt attempt.
@@ -1271,6 +1299,8 @@ async def _claude_auth_keepalive_loop(
                 # on its own. Without this the fix would trade a loud failure for
                 # a silent one — a repaired credential unnoticed for an hour.
                 delay = sleep_s = base
+                if auth_state is not None:
+                    auth_state.verdict = "ok"
                 logger.debug("claude_auth_keepalive_ok")
             else:
                 # Early-warning: auth is failing NOW, before a task hits it.

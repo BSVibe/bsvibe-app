@@ -82,6 +82,13 @@ class WorkerRow(Base):
     protocol_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
+    # When this worker last reported (``X-BSVibe-Worker-Claude-Auth: failed``) that it cannot
+    # sign in to Claude, or ``None`` while it can. The founder is alerted on the transition into
+    # failed and again when it clears — the stamp is what makes a repeat heartbeat a no-op and
+    # a recovery announceable after a backend restart.
+    claude_auth_failed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     token_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(

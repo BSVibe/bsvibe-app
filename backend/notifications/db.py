@@ -53,6 +53,9 @@ DEFAULT_EVENTS: tuple[str, ...] = (
     # cannot verify anyone's session, which is otherwise invisible: the only
     # passive signal is a sign-in failing, and a quiet stretch produces none.
     "auth_down",
+    # A host worker can no longer sign in to its executor (Claude OAuth ``invalid_grant``).
+    # Every agent turn on it fails in a second; measured 2026-10-15 — ~17 h unnoticed.
+    "worker_auth_down",
 )
 
 # The seed matrix a fresh workspace reads: ONE switch per event.
@@ -80,6 +83,8 @@ DEFAULT_MATRIX: dict[str, bool] = {
     # The worker additionally forces this on for anything bound (see
     # ``DEFAULT_ON_EVENTS``): during this outage the inbox is part of what breaks.
     "auth_down": True,
+    # Same reasoning as ``auth_down``: an outage alert nobody opted into must still arrive.
+    "worker_auth_down": True,
 }
 
 DEFAULT_QUIET_HOURS_START = "22:00"
@@ -90,7 +95,7 @@ DEFAULT_QUIET_HOURS_END = "08:00"
 #: for ordinary moments that opt-in default is right; during an auth outage the
 #: in-app inbox is part of what breaks, so an alert nobody opted into is an alert
 #: nobody gets. An explicit ``False`` is still a No.
-DEFAULT_ON_EVENTS: frozenset[str] = frozenset({"auth_down"})
+DEFAULT_ON_EVENTS: frozenset[str] = frozenset({"auth_down", "worker_auth_down"})
 
 
 def effective_switch(matrix: dict[str, bool], event: str) -> bool:

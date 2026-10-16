@@ -761,7 +761,8 @@
         "shipped": "Shipped",
         "failed": "Failed",
         "daily_brief": "Daily digest",
-        "auth_down": "Sign-in down"
+        "auth_down": "Sign-in down",
+        "worker_auth_down": "Worker sign-in lost"
       },
       "channel": {
         "in_app": "In-app inbox",

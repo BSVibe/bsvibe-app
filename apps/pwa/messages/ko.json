@@ -761,7 +761,8 @@
         "shipped": "출시됨",
         "failed": "실패함",
         "daily_brief": "일일 요약",
-        "auth_down": "로그인 장애"
+        "auth_down": "로그인 장애",
+        "worker_auth_down": "워커 로그인 끊김"
       },
       "channel": {
         "in_app": "인앱 인박스",

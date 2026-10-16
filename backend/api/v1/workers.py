@@ -42,6 +42,7 @@ from backend.api.v1.workers_register_auth import (
 )
 from backend.config import get_settings
 from backend.executors import dispatch, service
+from backend.executors.auth_alert import note_claude_auth
 from backend.executors.db import ExecutorTaskRow, WorkerRow
 from backend.workflow.infrastructure.db import UnattributedLlmUsage
 
@@ -283,6 +284,7 @@ async def heartbeat(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     body: Annotated[HeartbeatBody | None, Body()] = None,
     protocol_version: Annotated[int | None, Header(alias="X-BSVibe-Worker-Protocol")] = None,
+    claude_auth: Annotated[str | None, Header(alias="X-BSVibe-Worker-Claude-Auth")] = None,
 ) -> HeartbeatResponse:
     """Record a worker heartbeat — sets status online + stamps last_heartbeat.
 
@@ -311,6 +313,9 @@ async def heartbeat(
     await service.record_heartbeat(
         session, worker, in_flight=body.in_flight, protocol_version=protocol_version
     )
+    # Its Claude sign-in verdict — a HEADER for the reason the protocol version is one: a body
+    # field would 422 every heartbeat a newer worker sends an older backend.
+    await note_claude_auth(session, worker, claude_auth)
     await session.commit()
     return HeartbeatResponse(status="ok")
 
