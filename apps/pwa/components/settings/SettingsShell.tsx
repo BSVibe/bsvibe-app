@@ -21,6 +21,7 @@ const SLUGS: SettingsTabSlug[] = [
   "notifications",
   "schedules",
   "developer",
+  "plan",
   "account",
 ];
 

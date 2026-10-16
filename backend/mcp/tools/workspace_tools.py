@@ -25,11 +25,12 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from backend.identity.infrastructure.repositories import SqlAlchemyWorkspaceRepository
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.infrastructure.repositories import SqlAlchemyModelAccountRepository
+from backend.workflow.application.plan_summary import load_plan_summary
 
 # ---------------------------------------------------------------------------
 # bsvibe_workspace_get
@@ -177,6 +178,24 @@ async def _h_set_default_account(args: WorkspaceSetDefaultAccountInput, ctx: Too
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_workspace_plan — #928 step 4, parity with GET /api/v1/workspace/plan
+# ---------------------------------------------------------------------------
+class WorkspacePlanInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+async def _h_plan(_args: WorkspacePlanInput, ctx: ToolContext) -> Any:
+    summary = await load_plan_summary(ctx.session, ctx.principal.workspace_id)
+    if summary is None:
+        raise ToolError(f"workspace not found: {ctx.principal.workspace_id}")
+    return _PlanEnvelope(summary.to_wire())
+
+
+class _PlanEnvelope(RootModel[dict[str, Any]]):
+    """The REST body verbatim — one shape (``PlanSummary.to_wire``), so the two cannot drift."""
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 def register_workspace_tools(registry: ToolRegistry) -> None:
@@ -190,6 +209,20 @@ def register_workspace_tools(registry: ToolRegistry) -> None:
             input_schema=WorkspaceGetInput,
             output_schema=WorkspaceGetOutput,
             handler=_h_get,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_workspace_plan",
+            description=(
+                "Read the active workspace's plan (free / pro / operator), each limit — "
+                "concurrent runs, monthly tokens, verification stacks — and how much of it is "
+                "in use this period. A null limit is unlimited. Mirrors GET /api/v1/workspace/plan."
+            ),
+            input_schema=WorkspacePlanInput,
+            output_schema=_PlanEnvelope,
+            handler=_h_plan,
             required_scopes=("mcp:read",),
         )
     )
