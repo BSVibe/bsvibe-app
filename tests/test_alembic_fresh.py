@@ -797,6 +797,63 @@ def test_run_cap_backfill_prices_everyone_but_the_operator():
     )
 
 
+def test_plan_labels_the_operator_and_prices_everyone_else():
+    """``workspace_plan`` (#928): existing workspaces are ``free`` by default; the one already
+    taken off the run cap is labelled ``operator``. Seeded BEFORE the revision for the reason
+    the run-cap test above gives — a fresh database never enters the UPDATE's branch.
+
+    The label must not move a lever: the operator's ``max_concurrent_runs`` stays NULL and the
+    ordinary workspace keeps its 3.
+    """
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "unattributed_llm_usage"], env_extra=env_extra)
+
+    operator_ws = "55555555-5555-5555-5555-555555555555"
+    ordinary_ws = "66666666-6666-6666-6666-666666666666"
+
+    async def _seed() -> None:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                for ws in (operator_ws, ordinary_ws):
+                    await conn.execute(
+                        text(
+                            "INSERT INTO workspaces (id, name, created_at, updated_at) "
+                            "VALUES (:id, 'w', now(), now())"
+                        ),
+                        {"id": ws},
+                    )
+                await conn.execute(
+                    text("UPDATE workspaces SET max_concurrent_runs = NULL WHERE id = :id"),
+                    {"id": operator_ws},
+                )
+        finally:
+            await engine.dispose()
+
+    async def _plans() -> dict[str, tuple[str, int | None]]:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        text("SELECT id::text, plan, max_concurrent_runs FROM workspaces")
+                    )
+                ).all()
+                return {row[0]: (row[1], row[2]) for row in rows}
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed())
+    _alembic(["upgrade", "head"], env_extra=env_extra)
+
+    plans = asyncio.run(_plans())
+    assert plans[ordinary_ws] == ("free", 3)
+    assert plans[operator_ws] == ("operator", None)
+
+
 def test_trigger_column_default_carries_no_dead_key():
     """#924 의 나머지 절반 — **DB 가 들고 있던** 기본값.
 

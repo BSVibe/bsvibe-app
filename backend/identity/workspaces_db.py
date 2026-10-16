@@ -66,6 +66,11 @@ DEFAULT_MAX_CONCURRENT_RUNS = 3
 #: below "unbounded".
 DEFAULT_MONTHLY_TOKEN_BUDGET = 50_000_000
 
+#: The plan every workspace is born on — the default for ``workspaces.plan``. The plans
+#: themselves (and the limits each sets) live in :mod:`backend.identity.plans`, which imports
+#: this module; the value is spelled here so the DDL ``server_default`` has one source.
+DEFAULT_PLAN = "free"
+
 # GDPR L1 — Art. 6 legal-basis marker. v1 carries only the two bases that
 # describe BSVibe's own model: ``contract`` (the workspace founder operating
 # under our service contract) and ``consent`` (an end-user-driven workspace
@@ -187,6 +192,13 @@ class WorkspaceRow(WorkspacesBase):
     # round for a price lever: new workspaces cannot be born uncapped.
     max_concurrent_runs: Mapped[int | None] = mapped_column(
         Integer, nullable=True, server_default=str(DEFAULT_MAX_CONCURRENT_RUNS)
+    )
+    # Which plan this workspace is on (#928) — ``free`` · ``pro`` · ``operator``. The plan is
+    # the NAME; the limits it sets are still the columns around it, which every rule already
+    # reads. :func:`backend.identity.plans.apply_plan` is the only writer of both, so a
+    # workspace's plan and its levers move together.
+    plan: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=DEFAULT_PLAN, server_default=DEFAULT_PLAN
     )
     # How many LLM tokens this workspace may burn in one calendar month (UTC) —
     # #930 part 1. It sits beside ``max_concurrent_runs`` and copies its shape
