@@ -54,6 +54,9 @@ const DELIVERING_EVENTS = [
   // bound connector (backend `DEFAULT_ON_EVENTS`) — during this outage the
   // in-app inbox is part of what breaks, so opt-in-by-absence defeats it.
   "auth_down",
+  // A host worker lost its Claude sign-in — every run on it fails until the founder runs
+  // `bsvibe-worker claude-login` (outage 2026-10-15). Default ON like `auth_down`.
+  "worker_auth_down",
 ] as const;
 const IN_APP = "in_app";
 

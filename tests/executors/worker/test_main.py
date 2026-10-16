@@ -1196,7 +1196,7 @@ async def test_poll_and_execute_starts_keepalive_when_claude_code(monkeypatch: A
     monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["claude_code"])
     monkeypatch.setattr(worker_main, "select_executor", lambda _t: _StubExecutor())
 
-    async def _fake_keepalive(*, settings: Any, stop: asyncio.Event) -> None:
+    async def _fake_keepalive(*, settings: Any, stop: asyncio.Event, **_: Any) -> None:
         started.append("yes")
         await stop.wait()
 
@@ -1230,7 +1230,7 @@ async def test_poll_and_execute_skips_keepalive_without_claude_code(monkeypatch:
     monkeypatch.setattr(worker_main, "detect_capabilities", lambda: ["codex"])
     monkeypatch.setattr(worker_main, "select_executor", lambda _t: _StubExecutor())
 
-    async def _fake_keepalive(*, settings: Any, stop: asyncio.Event) -> None:
+    async def _fake_keepalive(*, settings: Any, stop: asyncio.Event, **_: Any) -> None:
         started.append("yes")  # pragma: no cover — must never run
         await stop.wait()
 

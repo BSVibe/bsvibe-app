@@ -57,6 +57,47 @@ AUTH_RECOVERED_COPY: dict[str, dict[str, str]] = {
 }
 
 
+#: ``worker_auth_down`` with the worker named and the fix spelled out — the founder reads this
+#: on a phone and has to walk to the machine; "something is wrong" is not enough to act on.
+_WORKER_AUTH_COPY: dict[str, dict[str, dict[str, str]]] = {
+    "down": {
+        "en": {
+            "title": "A worker can't sign in to Claude",
+            "body": (
+                "Worker '{name}' lost its Claude sign-in, so every run it takes fails. On that "
+                "machine run `bsvibe-worker claude-login`, then restart the worker."
+            ),
+        },
+        "ko": {
+            "title": "워커가 Claude 에 로그인하지 못해요",
+            "body": (
+                "워커 '{name}' 의 Claude 로그인이 끊겨서 이 워커가 맡는 작업이 모두 실패해요. "
+                "그 맥에서 `bsvibe-worker claude-login` 을 실행한 뒤 워커를 재시작해 주세요."
+            ),
+        },
+    },
+    "up": {
+        "en": {
+            "title": "The worker is signed back in to Claude",
+            "body": "Worker '{name}' can run Claude again.",
+        },
+        "ko": {
+            "title": "워커가 Claude 에 다시 로그인했어요",
+            "body": "워커 '{name}' 가 다시 Claude 로 작업할 수 있어요.",
+        },
+    },
+}
+
+
+def worker_auth_copy(
+    language: str | None, *, worker_name: str, recovered: bool
+) -> NotificationCopy:
+    """The localized ``worker_auth_down`` alert (or its all-clear) naming ``worker_name``."""
+    lang = language if language in _SUPPORTED else _DEFAULT_LANGUAGE
+    entry = _WORKER_AUTH_COPY["up" if recovered else "down"][lang]
+    return NotificationCopy(title=entry["title"], body=entry["body"].format(name=worker_name))
+
+
 def auth_recovered_copy(language: str | None) -> NotificationCopy:
     """The localized all-clear. Unknown / missing language falls back to English."""
     lang = language if language in _SUPPORTED else _DEFAULT_LANGUAGE
@@ -86,6 +127,10 @@ _TITLES: dict[str, dict[str, str]] = {
         "en": "Sign-in is down",
         "ko": "로그인이 안 되고 있어요",
     },
+    "worker_auth_down": {
+        "en": "A worker can't sign in to Claude",
+        "ko": "워커가 Claude 에 로그인하지 못해요",
+    },
 }
 
 #: Localized fallback BODY for the "detail-bearing" events — used only when the
@@ -111,6 +156,10 @@ _FALLBACK_BODY: dict[str, dict[str, str]] = {
     "auth_down": {
         "en": "The service that verifies your session is unreachable, so nobody can sign in.",
         "ko": "세션을 확인하는 서비스에 닿지 않아서 아무도 로그인할 수 없어요.",
+    },
+    "worker_auth_down": {
+        "en": "A worker's Claude sign-in has expired, so its runs fail.",
+        "ko": "워커의 Claude 로그인이 만료돼서 그 워커의 작업이 실패해요.",
     },
 }
 
@@ -342,4 +391,5 @@ __all__ = [
     "notification_copy",
     "notification_cta",
     "notification_cta_parts",
+    "worker_auth_copy",
 ]
