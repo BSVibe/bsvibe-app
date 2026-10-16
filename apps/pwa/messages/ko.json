@@ -948,8 +948,8 @@
       "verifyStacks": "검증 스택",
       "unlimited": "무제한",
       "pastDue": "결제가 밀려 있어요 — 재시도하는 동안 플랜은 유지돼요.",
-      "upgrade": "Pro로 업그레이드",
-      "loadError": "플랜을 불러오지 못했어요. 잠시 후 다시 시도해 주세요."
+      "loadError": "플랜을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+      "paidPlans": "유료 플랜 안내"
     }
   },
   "report": {

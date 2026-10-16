@@ -948,8 +948,8 @@
       "verifyStacks": "Verification stacks",
       "unlimited": "Unlimited",
       "pastDue": "Your payment is past due — the plan stays active while it is retried.",
-      "upgrade": "Upgrade to Pro",
-      "loadError": "We couldn't load your plan. Try again in a moment."
+      "loadError": "We couldn't load your plan. Try again in a moment.",
+      "paidPlans": "About paid plans"
     }
   },
   "report": {
