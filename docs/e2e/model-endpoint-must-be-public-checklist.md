@@ -27,7 +27,7 @@ Backend only — autodeployed. No migration.
 
 ## Prod (after deploy)
 
-- [ ] `bsvibe_model_accounts_create` with `api_base=http://169.254.169.254` → refused, nothing listed
+- [x] `bsvibe_model_accounts_create` with `api_base=http://169.254.169.254` → refused, nothing listed (measured 2026-10-15)
 - [ ] Existing accounts in OTHER workspaces that point inward will now fail their runs with
       `run_drive_failed` carrying "is not a public address". 형님 DB read to know beforehand:
       `SELECT workspace_id, provider, litellm_model, api_base FROM model_accounts WHERE provider <> 'executor' AND (api_base IS NULL AND litellm_model ~ '^(ollama|ollama_chat|lm_studio|hosted_vllm|vllm|llamafile)/' OR api_base ~* '(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|host\.docker\.internal)')`

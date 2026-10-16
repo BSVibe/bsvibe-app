@@ -20,6 +20,7 @@ Backend only — autodeployed by the container poller. No migration.
 
 ## Prod (after deploy)
 
+- [x] Settings → Plan shows this month's tokens — 형님's screen 2026-10-16: 1,247,237 / 50,000,000 (well inside the budget)
 - [ ] 형님 DB read, before vs after: for the founder workspace this month,
       `SELECT sum(usage_prompt_tokens+usage_completion_tokens) FROM unattributed_llm_usage WHERE workspace_id=… AND created_at >= date_trunc('month', now())`
       — that is how much the budget grew by. Compare to `monthly_token_budget` before anything gets refused

@@ -1,5 +1,8 @@
 # Paddle subscription webhook → workspace plan (#928 step 2)
 
+> ⏸ **Paused — 형님, 2026-10-16.** No payments for now (business registration); BSVibe opens as a free beta.
+> This webhook stays **dormant** (404 while the secret is empty). The Paddle setup below is for when billing resumes.
+
 `POST /api/webhooks/paddle` verifies `Paddle-Signature`, then moves the workspace through
 `apply_plan`: active/trialing on a Pro price → Pro, canceled/paused → Free, past_due → no change.
 Backend only — autodeployed; migration `workspace_billing` (additive).
