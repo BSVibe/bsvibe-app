@@ -1,5 +1,17 @@
 # Billing — capacity subscription (#928, gate 4)
 
+> ⏸ **Paused — 형님, 2026-10-16.** Business registration and related matters make payments
+> impractical for now. BSVibe **launches free** (everyone on the Free plan) and billing resumes
+> once demand is visible. What is shipped stays dormant and harmless:
+>
+> - `POST /api/webhooks/paddle` answers 404 while `BSVIBE_PADDLE_WEBHOOK_SECRET` is empty
+> - the `pro` plan exists; only an operator can put a workspace on it (`apply_plan`)
+> - Settings → Plan shows the plan and its use; on Free it links "About paid plans" to the
+>   public pricing page, which says paid plans are coming — never "Upgrade"
+>
+> To resume: step 3 below, then the Paddle setup in
+> `docs/e2e/paddle-subscription-webhook-checklist.md`.
+
 ## Decisions (형님, 2026-10-16)
 
 | | |

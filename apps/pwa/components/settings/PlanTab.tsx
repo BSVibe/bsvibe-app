@@ -9,8 +9,9 @@ import { useEffect, useState } from "react";
  * it is in use — read from GET /api/v1/workspace/plan, which counts use with the same
  * functions the gates refuse with, so "3 / 3" here is exactly when a submission gets 429.
  *
- * A `null` limit is unlimited and reads "Unlimited", never 0. The upgrade link points at the
- * public pricing page until Paddle checkout lands (step 3).
+ * A `null` limit is unlimited and reads "Unlimited", never 0. On the free plan a link points at
+ * the public pricing page — worded as "about paid plans", not "upgrade": billing is paused
+ * (founder decision 2026-10-16, BSVibe launches free) and that page says paid plans are coming.
  */
 
 type State = { kind: "loading" } | { kind: "loaded"; plan: WorkspacePlan } | { kind: "failed" };
@@ -75,7 +76,7 @@ export default function PlanTab() {
           target="_blank"
           rel="noreferrer"
         >
-          {t("upgrade")}
+          {t("paidPlans")}
         </a>
       ) : null}
     </>

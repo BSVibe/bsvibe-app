@@ -64,16 +64,19 @@ describe("Settings → Plan", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/past due/i);
   });
 
-  it("offers the upgrade on the free plan only", async () => {
+  it("points the free plan at the paid-plan page without promising an upgrade", async () => {
+    // Founder decision 2026-10-16: billing is paused and BSVibe launches free. The pricing page
+    // says paid plans are coming — a button saying "Upgrade" would promise what it cannot do.
     getWorkspacePlan.mockResolvedValue(plan());
     const { unmount } = render(<PlanTab />);
-    expect(await screen.findByRole("link", { name: /upgrade/i })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /paid plans/i })).toBeInTheDocument();
+    expect(screen.queryByText(/upgrade/i)).toBeNull();
     unmount();
 
     getWorkspacePlan.mockResolvedValue(plan({ plan: "pro" }));
     render(<PlanTab />);
     await screen.findByText("Pro");
-    expect(screen.queryByRole("link", { name: /upgrade/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /paid plans/i })).toBeNull();
   });
 
   it("fails calmly when the plan cannot be read", async () => {
