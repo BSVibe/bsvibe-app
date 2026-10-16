@@ -220,6 +220,18 @@ class Settings(BaseSettings):
     # 32-byte AES-256-GCM key, base64-url-encoded. Generate with:
     # `python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"`.
     gateway_kms_key_b64: str = ""
+    # #957 — retired keys that still DECRYPT (comma-separated urlsafe-b64, 32 bytes each). New
+    # ciphertext always uses ``gateway_kms_key_b64``. Empty unless a rotation is in progress:
+    # move the old key here, deploy, run ``python -m backend.tools.rewrap_credentials``, then
+    # remove it. Never logged.
+    gateway_kms_previous_keys_b64: Annotated[list[str], NoDecode] = csv_list_field(
+        default=[], description="Comma-separated retired KMS keys kept for decryption."
+    )
+
+    @field_validator("gateway_kms_previous_keys_b64", mode="before")
+    @classmethod
+    def _parse_gateway_kms_previous_keys_b64(cls, value: str | list[str] | None) -> list[str]:
+        return parse_csv_list(value) or []
 
     # Knowledge settings (backend.knowledge) — vault FS root + region.
     # Per-workspace vault lives at ``<knowledge_vault_root>/<region>/<workspace_id>/``.

@@ -54,14 +54,11 @@ async def _bootstrap_db_oauth_providers(session_factory: Any) -> None:
     from backend.connectors.auth.bootstrap import (  # noqa: PLC0415 — lazy
         load_app_credential_providers,
     )
-    from backend.router.accounts.crypto import (  # noqa: PLC0415 — lazy
-        CredentialCipher,
-        _key_from_settings,
-    )
+    from backend.router.accounts.crypto import cipher_from_settings  # noqa: PLC0415 — lazy
 
     try:
         async with session_factory() as session:
-            await load_app_credential_providers(session, CredentialCipher(_key_from_settings()))
+            await load_app_credential_providers(session, cipher_from_settings())
     except Exception:  # noqa: BLE001 — provider load must never break worker boot
         logger.warning("connector_oauth_db_provider_load_failed", exc_info=True)
 
@@ -154,14 +151,11 @@ async def run_workers() -> None:
     # Notifier N2 — the founder-notification push sender reuses the SAME loaded
     # plugin registry + settings cipher as delivery (no second plugin load, no
     # second key source).
-    from backend.router.accounts.crypto import (  # noqa: PLC0415 — lazy, matches oauth bootstrap
-        CredentialCipher,
-        _key_from_settings,
-    )
+    from backend.router.accounts.crypto import cipher_from_settings  # noqa: PLC0415
 
     notify_sender = build_notify_sender(
         plugins=list(connector_plugins.values()),
-        cipher=CredentialCipher(_key_from_settings()),
+        cipher=cipher_from_settings(),
     )
     runtime = build_worker_runtime(
         session_factory=session_factory,

@@ -211,10 +211,14 @@ async def test_stall_escalation_is_wired_into_the_worker_construction(
     """빌더가 있어도 워커에 안 꽂히면 프로덕션에서는 여전히 조용하다
     (half-wired-subsystem: 보이는 절반만 만들어지는 그 결함)."""
     from backend.config import get_settings
-    from backend.workflow.application.runtime import merge_watch_runtime
 
     # 크리덴셜 키는 이 테스트의 대상이 아니다 — 워커 구성만 보면 된다.
-    monkeypatch.setattr(merge_watch_runtime, "_key_from_settings", lambda: b"\x00" * 32)
+    from backend.router.accounts.crypto import CredentialCipher
+    from backend.workflow.application.runtime import merge_watch_runtime
+
+    monkeypatch.setattr(
+        merge_watch_runtime, "cipher_from_settings", lambda: CredentialCipher(b"\x00" * 32)
+    )
 
     async with db_engine(Base) as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)

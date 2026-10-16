@@ -30,7 +30,7 @@ from backend.connectors.db import ConnectorAccountRow
 from backend.extensions.plugin.base import PluginMeta, PluginRunError
 from backend.extensions.plugin.context import SkillContext
 from backend.extensions.plugin.runner import PluginRunner
-from backend.router.accounts.crypto import CredentialCipher
+from backend.router.accounts.crypto import CredentialCipher, cipher_from_settings
 from backend.workflow.application.deliverable_retraction import RetractHandler
 
 logger = structlog.get_logger(__name__)
@@ -128,7 +128,6 @@ async def get_retract_handler() -> RetractHandler:  # pragma: no cover — overr
     """
     from backend.api.deps import _get_session_factory  # noqa: PLC0415 — avoid import cycle
     from backend.extensions.plugin.loader import PluginLoader  # noqa: PLC0415
-    from backend.router.accounts.crypto import _key_from_settings  # noqa: PLC0415
 
     # Lift R1 (v8 §D38) — connector plugins live at repo-root ``plugin/`` —
     # walk up from this module to find it. Path resolution is one-time per
@@ -143,5 +142,5 @@ async def get_retract_handler() -> RetractHandler:  # pragma: no cover — overr
     return PluginRetractHandler(
         session_factory=_get_session_factory(),
         plugins_by_name=dict(registry),
-        cipher=CredentialCipher(_key_from_settings()),
+        cipher=cipher_from_settings(),
     )

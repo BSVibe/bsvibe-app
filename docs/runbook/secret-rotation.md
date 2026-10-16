@@ -241,7 +241,52 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ---
 
-## 3. ❌ `BSVIBE_GATEWAY_KMS_KEY_B64` — **절차로는 돌릴 수 없다**
+## 3. `BSVIBE_GATEWAY_KMS_KEY_B64` — rotatable since #957 (2026-10-16)
+
+Until #957 this section was a warning, not a procedure: ciphertext was `base64(nonce ‖ ct)`
+with **no key id**, so no dual-key period was possible and the key was effectively permanent.
+Now new ciphertext is `kms1.<kid>.<base64>` (`kid` = first 8 hex of SHA-256 over the key),
+`BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64` keeps retired keys readable, and a missing key fails
+LOUDLY (`UnknownCredentialKey: … key <kid> …`) instead of as a bare `InvalidTag`.
+
+### What is encrypted (the rewrap inventory — pinned by `tests/router/test_rewrap_credentials.py`)
+`connector_accounts.signing_secret_ciphertext` · `connector_oauth_tokens.{access,refresh}_token_ciphertext` ·
+`connector_oauth_app_credentials.{client_secret,private_key_pem,webhook_secret}_ciphertext` ·
+`connector_oauth_unclaimed.{access,refresh}_token_ciphertext` · `model_accounts.api_key_encrypted` ·
+`products.metadata.verify_secrets.*` (`enc:` values).
+
+### Procedure
+```bash
+# 1. a new 32-byte key
+python3 -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'
+
+# 2. .env.prod: the new key becomes current, the old one moves to "previous"
+BSVIBE_GATEWAY_KMS_KEY_B64=<new>
+BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64=<old>
+
+# 3. recreate backend + worker (both decrypt). Everything still reads; new writes use <new>.
+
+# 4. dry run, then apply — as the OWNER role, inside the backend container
+docker --context colima exec bsvibe-prod-backend-1 python -m backend.router.accounts.rewrap
+docker --context colima exec bsvibe-prod-backend-1 python -m backend.router.accounts.rewrap --apply
+#    → "current N · rewrapped M · undecryptable 0", exit 0
+
+# 5. ONLY when step 4 exited 0: remove the old key and recreate again
+BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64=
+```
+
+⚠️ **Never drop the old key while `undecryptable` > 0.** Those rows (listed by
+`table.column[row key]`, never the value) open with no configured key — dropping the old key
+does not cause that, but it removes your last chance to tell whether the old key would have.
+`verify_secrets` values that fail to decrypt are still DROPPED at use (a run must not crash on
+one unreadable secret), so the rewrap report — not a run failure — is where you see them.
+
+⚠️ Step 4 must run where `BSVIBE_MIGRATION_DATABASE_URL` (owner) and both keys are set — the
+backend container. Agents are refused prod `docker exec`; this step is 형님's.
+
+<details><summary>Pre-#957 text (kept: why rotation used to be impossible)</summary>
+
+### (was §3) ❌ `BSVIBE_GATEWAY_KMS_KEY_B64` — **절차로는 돌릴 수 없다**
 
 **이 절은 절차가 아니라 경고다.**
 
@@ -281,6 +326,9 @@ curl -s -o /dev/null -w '%{http_code}\n' \
    "돌리고 나중에 확인"은 불가능하다 — 실패가 조용하므로 확인할 것이 없다.
 
 ---
+
+
+</details>
 
 ## 4. 로테이션 후 검증 — 음성 대조군을 반드시 같이
 

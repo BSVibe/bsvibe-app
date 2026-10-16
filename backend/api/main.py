@@ -42,7 +42,9 @@ from backend.connectors.auth.bootstrap import (
 from backend.extensions.plugin.bootstrap import discover_webhook_parsers
 from backend.identity.oauth_keys import ensure_signing_key_is_shareable
 from backend.mcp.lifespan import mcp_lifespan
-from backend.router.accounts.crypto import CredentialCipher, _key_from_settings
+from backend.router.accounts.crypto import (
+    cipher_from_settings,
+)
 from backend.shared.core.access_log import install_access_log_redaction
 from backend.shared.core.http import redact_url_password
 from backend.shared.core.logging import configure_logging
@@ -140,9 +142,7 @@ def create_app() -> FastAPI:
             # falls back to env / the legacy secret path.
             try:
                 async with session_factory() as session:
-                    await load_app_credential_providers(
-                        session, CredentialCipher(_key_from_settings())
-                    )
+                    await load_app_credential_providers(session, cipher_from_settings())
             except Exception:  # noqa: BLE001 — provider load must never break boot
                 logger.warning("connector_oauth_db_provider_load_failed", exc_info=True)
             yield

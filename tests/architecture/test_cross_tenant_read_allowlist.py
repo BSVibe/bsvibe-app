@@ -31,6 +31,9 @@ ALLOWED: dict[str, str] = {
         "운영 CLI — 완료된 제품을 테넌트 가로질러 고른다"
     ),
     "backend/workflow/application/decision_answer_drain.py": "채팅 답이 큐에 든 Decision 스캔",
+    "backend/router/accounts/rewrap.py": (
+        "KMS 키 회전 재암호화 — 모든 제품의 봉인 시크릿을 읽는다. 쓰기는 그 워크스페이스 스코프 안"
+    ),
     "backend/identity/billing_paddle.py": (
         "Paddle 웹훅 — 세션 없이 구독 id·custom_data 로 워크스페이스를 찾는다. 쓰기는 그 워크스페이스 스코프 안"
     ),
