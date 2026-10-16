@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_db_session, get_workspace_id, require_role
 from backend.api.v1._identity_deps import get_workspace_repository
 from backend.identity.domain.repositories import WorkspaceRepository
+from backend.workflow.application.plan_summary import load_plan_summary
 
 router = APIRouter()
 
@@ -126,6 +127,21 @@ class WorkspaceUpdate(BaseModel):
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"invalid IANA timezone: {value!r}") from exc
         return value
+
+
+@router.get("/plan")
+async def get_workspace_plan(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, object]:
+    """The active workspace's plan, each limit, and how much of it is in use (#928).
+
+    Same function and same shape as MCP ``bsvibe_workspace_plan``. A ``null`` limit is
+    unlimited."""
+    summary = await load_plan_summary(session, workspace_id)
+    if summary is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return summary.to_wire()
 
 
 @router.get("", response_model=WorkspaceOut)

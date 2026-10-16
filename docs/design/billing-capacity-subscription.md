@@ -38,7 +38,7 @@ model (host Ollama), storage. Those are what the plan limits bound.
    `customData: {workspace_id}`; "Manage billing" opens the customer portal. Replaces the
    `bsvibe.dev/{locale}/pricing` link the run-cap refusal shows today
    (`apps/pwa/components/shell/DirectAction.tsx`)
-4. **Surface the plan** — `bsvibe_workspace_get` / Settings show the plan and its limits
+4. **Surface the plan** ✅ — `GET /api/v1/workspace/plan` = MCP `bsvibe_workspace_plan` (one `PlanSummary.to_wire`), PWA Settings → Plan. Use is counted by the gates' own functions; a `null` limit reads "Unlimited"
 
 ## Rules that hold across steps
 

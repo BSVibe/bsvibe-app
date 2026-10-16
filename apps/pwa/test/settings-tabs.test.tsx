@@ -19,6 +19,7 @@ const LABELS = [
   "Notifications",
   "Schedules",
   "Developer",
+  "Plan",
   "Account",
 ] as const;
 

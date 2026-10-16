@@ -94,3 +94,20 @@ export function setWorkspaceSafeMode(safeMode: boolean): Promise<WorkspaceInfo> 
     body: JSON.stringify({ safe_mode: safeMode }),
   });
 }
+
+/** #928 — the workspace's plan, each limit and how much of it is in use. `null` limit =
+ *  unlimited (never 0). Same shape as MCP `bsvibe_workspace_plan`. */
+export interface WorkspacePlan {
+  plan: "free" | "pro" | "operator" | string;
+  runs: { held: number; limit: number | null };
+  tokens: { used: number; limit: number | null; period_start: string };
+  verify_stack_slots: number;
+  /** The payment provider's last subscription status (`active`, `past_due`, …); `null` when
+   *  the workspace never subscribed. */
+  billing_status: string | null;
+}
+
+/** GET — the active workspace's plan summary. */
+export function getWorkspacePlan(): Promise<WorkspacePlan> {
+  return apiFetch<WorkspacePlan>("/api/v1/workspace/plan");
+}

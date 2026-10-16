@@ -438,7 +438,8 @@
       "schedules": "Schedules",
       "account": "Account",
       "sectionsLabel": "Settings sections",
-      "developer": "Developer"
+      "developer": "Developer",
+      "plan": "Plan"
     },
     "models": {
       "lede": "Models: how BSVibe gets its thinking done.",
@@ -934,6 +935,21 @@
         "error": "Rebuild failed: {message}",
         "stalled": "Stopped after many passes and the index still had work left — {embedded} rebuilt so far. Something is wrong on the server; try again later."
       }
+    },
+    "plan": {
+      "current": "Current plan",
+      "names": {
+        "free": "Free",
+        "pro": "Pro",
+        "operator": "Operator"
+      },
+      "runs": "Concurrent runs",
+      "tokens": "Tokens this month",
+      "verifyStacks": "Verification stacks",
+      "unlimited": "Unlimited",
+      "pastDue": "Your payment is past due — the plan stays active while it is retried.",
+      "upgrade": "Upgrade to Pro",
+      "loadError": "We couldn't load your plan. Try again in a moment."
     }
   },
   "report": {

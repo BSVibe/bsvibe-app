@@ -22,6 +22,7 @@ export type SettingsTabSlug =
   | "notifications"
   | "schedules"
   | "developer"
+  | "plan"
   | "account";
 
 export const TABS: SettingsTabSlug[] = [
@@ -31,6 +32,7 @@ export const TABS: SettingsTabSlug[] = [
   "notifications",
   "schedules",
   "developer",
+  "plan",
   "account",
 ];
 

@@ -4018,6 +4018,14 @@ main.login {
   text-align: right;
 }
 
+/* A standing note under a settings field — e.g. Settings → Plan's "payment past due". */
+.settings-field__hint {
+  display: block;
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--amber-ink);
+}
+
 /* Theme segmented control (Light / System / Dark) */
 .theme-segmented {
   display: inline-flex;
