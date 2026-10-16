@@ -205,13 +205,36 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 로 소프트 삭제하며 Redis 디스패치 스트림도 같이 지운다. **그래도 위 401 을 직접 봐라** —
 코드를 읽은 것과 그 경로가 prod 에서 도는 것은 다른 주장이다.
 
+### 퇴역 경로 — 쓰지 않는 워커라면 교체하지 말고 내린다 (2026-10-16 실측)
+
+새 토큰 발급은 **그 워커가 속한 워크스페이스의 로그인**이 필요하다(register 가 베어러에서
+워크스페이스를 끌어낸다). 쓰이지 않는 워커라면 발급 없이 끝낼 수 있다 — 노출된 토큰이
+아예 사라진다. `admin-test-exec` 로 실제로 걸었다:
+
+1. 그 워크스페이스로 로그인해 폐기 — PWA 설정 → Workers, 또는 그 워크스페이스에 연결된
+   MCP 의 `bsvibe_workers_revoke`
+2. 호스트에서 데몬을 내리고 재부팅에 다시 뜨지 않게 plist 를 LaunchAgents **밖으로** 옮긴다
+   (토큰이 들어 있으니 600 으로 보관하거나 지운다)
+   ```bash
+   launchctl bootout gui/501/com.bsvibe.worker-<name>
+   mkdir -p ~/.bsvibe/retired && chmod 700 ~/.bsvibe/retired
+   mv ~/Library/LaunchAgents/com.bsvibe.worker-<name>.plist ~/.bsvibe/retired/
+   chmod 600 ~/.bsvibe/retired/com.bsvibe.worker-<name>.plist
+   ```
+3. 음성 대조군 — 옛 토큰 heartbeat 가 **401** (위 검증 표와 같다). 실측 401
+4. 토큰 사본을 지운다. ⚠️ 2026-10-16 에 `~/.config/bsvibe/admin-test-exec.token` 과
+   `.fresh_token` 이 **644**(로컬 누구나 읽음)로 있었다 — 토큰 파일을 만들면 600 으로
+
+⚠️ 에이전트(자동 모드)는 저장된 다른 계정 자격으로 로그인하는 단계를 **거절당한다**
+(자격 탐색으로 분류). 1단계는 형님 몫이다.
+
 ### ⚠️ 이 절이 못 덮는 것
 
-* **`com.bsvibe.worker-admin` 은 위 절차가 그대로 안 맞는다.** 그 plist 는 서버로
-  `http://localhost:8700` 을 보는데 그 포트는 **ssh 터널**(`lsof` 실측)이고, prod
-  워크스페이스의 `bsvibe_workers_list` 에는 **그 이름의 워커가 없다.**
-  ⇒ **어느 백엔드가 그 토큰을 발급했는지 확인하기 전에는 폐기 대상을 특정할 수 없다.**
-  터널 반대쪽을 먼저 확인하라
+* ~~`com.bsvibe.worker-admin` 의 `localhost:8700` 은 ssh 터널~~ — **2026-10-16 정정:**
+  8700 은 **prod 백엔드 컨테이너**(`bsvibe-prod-backend-1  0.0.0.0:8700->8000`) 였다.
+  형님 워크스페이스의 `bsvibe_workers_list` 에 안 보인 이유는 워커가 **admin
+  워크스페이스 소속**이어서다 — MCP 목록/폐기는 토큰이 묶인 워크스페이스 안만 본다.
+  이 워커는 아래 「퇴역 경로」로 내렸다
 * **낡은 등록이 살아 있다.** 2026-09-23 실측: `dogfood-mac` 이 `is_active: true` 인데
   마지막 하트비트가 **2026-07-20**(두 달 전)이다. 보고를 멈춘 지 두 달 된 머신의 토큰이
   **아직 유효하다.** 로테이션과 별개로 폐기 후보다
