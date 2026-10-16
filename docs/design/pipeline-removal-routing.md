@@ -1,6 +1,11 @@
 # `pipeline` 제거 + 라우팅 재설계 — 설계 브리프 (2026-08-24)
 
-> **이 문서는 다음 세션의 시작점이다.** 코드 변경은 아직 없다.
+> ✅ **Corrected 2026-10-16 — this design is implemented.** #818 (`913ca92`, 2026-08-24) deleted
+> `PipelineKind` / `_derive_pipeline`, and the routing engine's allowed fields
+> (`backend/router/routing/run_routing/engine.py`) carry no `pipeline`. The "no code changes yet"
+> line below was true when written; #936 copied it and stayed open.
+>
+> ~~**이 문서는 다음 세션의 시작점이다.** 코드 변경은 아직 없다.~~
 >
 > 형님 판단 (2026-08-24, 원문):
 > > *"애초에 이게 있는거 자체가 문제인것 같은데. design_then_impl이 나온거는 내가 세팅한

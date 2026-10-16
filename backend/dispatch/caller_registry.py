@@ -33,7 +33,6 @@ from dataclasses import dataclass
 
 __all__ = [
     "CALLER_AGENT_LOOP_ACT",
-    "CALLER_CHAT_COMPLETIONS",
     "CALLER_FRAME",
     "CALLER_JUDGE",
     "CALLER_KNOWLEDGE_CANONICALIZATION",
@@ -108,10 +107,6 @@ CALLER_AGENT_LOOP_ACT = "workflow.agent_loop.act"
 CALLER_JUDGE = "workflow.judge"
 #: Settle worker's entity extractor — populates the ontology from finished runs.
 CALLER_SETTLE_EXTRACT = "workflow.settle.extract"
-#: External OpenAI-compatible ``/api/v1/chat/completions`` gateway. Lift 3 —
-#: this surface now routes through the resolver like every internal caller
-#: instead of demanding an explicit ``metadata.bsvibe_model_account_id``.
-CALLER_CHAT_COMPLETIONS = "chat.completions"
 #: The NL → run-routing-rules compiler (Lift 5) — one cheap chat call that turns
 #: the founder's plain-language routing description into structured proposals.
 CALLER_ROUTING_COMPILE = "routing.compile"
@@ -192,15 +187,6 @@ KNOWN_CALLERS: dict[str, CallerSpec] = {
             "verified deliverable's transcript to populate the ontology."
         ),
         default_timeout_s=300.0,
-    ),
-    CALLER_CHAT_COMPLETIONS: CallerSpec(
-        caller_id=CALLER_CHAT_COMPLETIONS,
-        description=(
-            "External OpenAI-compatible /chat/completions gateway — routes to a "
-            "ModelAccount by rule + workspace default, like the internal callers."
-        ),
-        # Interactive proxy surface — a caller is waiting on the response.
-        default_timeout_s=120.0,
     ),
     CALLER_ROUTING_COMPILE: CallerSpec(
         caller_id=CALLER_ROUTING_COMPILE,

@@ -21,7 +21,6 @@ def test_openapi_advertises_all_v1_routes() -> None:
     spec = _client().get("/api/openapi.json").json()
     paths = set(spec["paths"].keys())
     for route in (
-        "/api/v1/chat/completions",
         "/api/v1/workspaces",
         "/api/v1/products",
         "/api/v1/accounts",
@@ -31,16 +30,6 @@ def test_openapi_advertises_all_v1_routes() -> None:
         "/api/v1/runs",
     ):
         assert route in paths, f"missing {route} in OpenAPI"
-
-
-def test_chat_completions_requires_auth() -> None:
-    # The v1 router-level auth dependency fires before Pydantic validation;
-    # an unauthenticated request is rejected with 401.
-    r = _client().post(
-        "/api/v1/chat/completions",
-        json={"model": "openai/gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
-    )
-    assert r.status_code == 401
 
 
 def test_intents_list_requires_auth() -> None:

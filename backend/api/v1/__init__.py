@@ -8,7 +8,6 @@ from backend.api.deps import get_current_user
 from backend.api.v1 import (
     account,
     accounts,
-    chat,
     checkpoints,
     connector_oauth,
     connectors,
@@ -35,7 +34,6 @@ from backend.api.v1 import (
 # guarantees even routes without it (intents list) return 401 when
 # unauthenticated.
 router = APIRouter(prefix="/v1", dependencies=[Depends(get_current_user)])
-router.include_router(chat.router, prefix="/chat", tags=["chat"])
 router.include_router(workspaces.router, prefix="/workspaces", tags=["workspaces"])
 # GDPR L1 — Art. 15 / 20 export + Art. 30 processing record. Singular
 # /workspace because both routes operate on the *caller's* one resolved

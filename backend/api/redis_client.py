@@ -15,7 +15,7 @@ workflow runtime does thread it (see
 :func:`backend.workflow.application.runtime.account_resolution.resolve_via_caller`);
 the API layer did not. Every NL routing compile (``/api/v1/run-routing/compile``,
 ``/compile/apply``, the ``source_text`` compile on rule create/update) and the
-external ``/api/v1/chat/completions`` gateway therefore failed on any workspace
+external ``/api/v1/chat/completions`` gateway (deleted 2026-10-16) therefore failed on any workspace
 whose routed account is an executor — which is the default for a founder running
 claude_code.
 

@@ -82,8 +82,12 @@ def test_every_caller_spec_still_declares_its_identity() -> None:
     """양성 대조군 — caller 레지스트리(INV-7 이 걸린 그 표면)는 살아 있어야 한다."""
     from backend.dispatch import caller_registry as reg
 
-    callers = [v for k, v in vars(reg).items() if k.startswith("CALLER_") and isinstance(v, str)]
-    assert len(callers) >= 8, f"caller 상수가 사라졌다: {callers}"
+    callers = {v for k, v in vars(reg).items() if k.startswith("CALLER_") and isinstance(v, str)}
+    # The callers every run actually goes through. A COUNT used to stand in for this and broke on
+    # a deliberate deletion (``chat.completions``, 2026-10-16) — what must survive is these.
+    core = {"workflow.frame", "workflow.agent_loop.act", "workflow.judge", "knowledge.ingest"}
+    assert core <= callers, f"caller 상수가 사라졌다: {sorted(core - callers)}"
+    assert callers <= set(reg.KNOWN_CALLERS), "a CALLER_ constant is not registered"
 
 
 # ── B9 ────────────────────────────────────────────────────────────────────

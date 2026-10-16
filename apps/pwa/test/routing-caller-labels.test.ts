@@ -8,7 +8,7 @@ describe("routing caller labels", () => {
   it("maps known callers to a label key", () => {
     expect(callerLabelKey("workflow.agent_loop.act")).toBe("act");
     expect(callerLabelKey("knowledge.ingest")).toBe("ingest");
-    expect(callerLabelKey("chat.completions")).toBe("chat");
+    expect(callerLabelKey("routing.compile")).toBe("compile");
     expect(callerLabelKey("nope")).toBeNull();
   });
 
