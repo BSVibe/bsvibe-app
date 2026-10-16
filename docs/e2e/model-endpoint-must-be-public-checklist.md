@@ -1,38 +1,36 @@
-# A workspace's model account cannot aim the server at its own network
+# 워크스페이스 모델 계정은 서버를 내부망으로 겨눌 수 없다
 
-`ModelAccount.api_base` and `extra_params` (merged last into `litellm.acompletion`'s kwargs)
-were never checked. With public signup, any workspace could point them at `postgres:5432`,
-`169.254.169.254`, or the host's Ollama (`host.docker.internal:11434` — the embedding model
-lives there) and have the backend make that request on every turn.
+`ModelAccount.api_base` 와 `extra_params`(`litellm.acompletion` kwargs 에 마지막으로 합쳐진다)를
+아무도 검사하지 않았다. 공개 가입이면 어떤 워크스페이스든 사설 주소 · 메타데이터 주소 · 호스트 서비스로
+백엔드가 매 턴 요청을 보내게 만들 수 있었다.
 
-Now:
-- `LlmClient.chat` checks the MERGED kwargs before every call: every endpoint must be http(s)
-  and resolve entirely to global addresses; an `ollama/` · `ollama_chat/` · `hosted_vllm/` …
-  model must name one (LiteLLM's default is the server's loopback)
-- saving an account (REST create/patch, MCP create) runs the same check → 422 / ToolError
-- executor accounts are exempt (they run on the founder's worker, not the server)
-- `BSVIBE_LLM_EGRESS_ALLOWED_HOSTS` — deployment-wide exact-host exemptions, empty by default
+이제:
+- `LlmClient.chat` 이 매 호출 전 **합쳐진** kwargs 를 검사: 모든 엔드포인트가 http(s) 이고 해석된 주소가
+  전부 공개여야 한다. `ollama/` · `ollama_chat/` · `hosted_vllm/` … 모델은 엔드포인트를 반드시 지정
+  (LiteLLM 기본값이 서버 자신의 루프백이다)
+- 계정 저장(REST create/patch, MCP create)도 같은 검사 → 422 / ToolError
+- 실행기 계정은 예외 (서버가 아니라 형님 워커에서 돈다)
+- `BSVIBE_LLM_EGRESS_ALLOWED_HOSTS` — 배포 전역 정확-호스트 예외, 기본 비어 있음
 
-Backend only — autodeployed. No migration.
+백엔드만 — 자동 배포. 마이그레이션 없음.
 
-## Unit / wire (local)
+## 유닛 / 배선 (로컬)
 
-- [x] 9 inward endpoints refused before any request (loopback, RFC1918, link-local, CGNAT, `::1`, `0.0.0.0`)
-- [x] a public name resolving to ANY private address is refused; docker service names refused
-- [x] `extra_params.base_url` and `extra_params.api_base` cannot route around the check
-- [x] local-runtime models without an endpoint refused; `file://` refused; unresolvable refused
-- [x] controls: public endpoint, hosted provider with no endpoint, operator allowlist
-- [x] REST create/patch → 422 with nothing saved/changed; MCP create → ToolError; executor exempt
-- [x] wire cuts (10: call site · `base_url` key · all-addresses · loopback default · allowlist · create · patch · executor exemption · REST map · MCP map) each red
+- [x] 내부 엔드포인트 9종 — 요청 전에 거절 (루프백, RFC1918, 링크로컬, CGNAT, `::1`, `0.0.0.0`)
+- [x] 공개 이름이 사설 주소로 하나라도 해석되면 거절, docker 서비스 이름 거절
+- [x] `extra_params.base_url` · `extra_params.api_base` 로 검사를 우회할 수 없다
+- [x] 엔드포인트 없는 로컬 런타임 모델 거절 · `file://` 거절 · 해석 안 되는 호스트 거절
+- [x] 대조군: 공개 엔드포인트, 엔드포인트 없는 호스팅 provider, 운영자 허용 목록
+- [x] REST create/patch → 422 + 저장·변경 없음, MCP create → ToolError, 실행기 예외
+- [x] 전선 절단 10곳(호출 지점 · `base_url` 키 · 전 주소 검사 · 루프백 기본값 · 허용 목록 · create · patch · 실행기 예외 · REST 매핑 · MCP 매핑) 각자 빨강
 
-## Prod (after deploy)
+## prod (배포 후)
 
-- [ ] `bsvibe_model_accounts_create` with `api_base=http://169.254.169.254` → refused, nothing listed
-- [ ] Existing accounts in OTHER workspaces that point inward will now fail their runs with
-      `run_drive_failed` carrying "is not a public address". 형님 DB read to know beforehand:
+- [x] `bsvibe_model_accounts_create` 에 `api_base=http://169.254.169.254` → 거절, 목록에 아무것도 없음 (2026-10-15 실측)
+- [ ] 다른 워크스페이스의 기존 계정 중 내부를 가리키는 것은 이제 런이 `run_drive_failed`("is not a public address")로
+      멈춘다. 미리 알려면 형님 DB 읽기:
       `SELECT workspace_id, provider, litellm_model, api_base FROM model_accounts WHERE provider <> 'executor' AND (api_base IS NULL AND litellm_model ~ '^(ollama|ollama_chat|lm_studio|hosted_vllm|vllm|llamafile)/' OR api_base ~* '(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|host\.docker\.internal)')`
 
-## Not closed
+## 닫히지 않은 것
 
-- DNS rebinding: the name is resolved here and again by the HTTP client. An egress firewall on
-  the backend container is the complete answer.
+- DNS 리바인딩: 이름을 여기서 한 번, HTTP 클라이언트가 한 번 더 해석한다. 완전한 답은 백엔드 컨테이너의 egress 방화벽.
