@@ -67,10 +67,8 @@ def test_router_root_exports_the_surface_callers_actually_use() -> None:
     *Router 컨텍스트*를 가리키는 docstring 산문이었다. 남은 것이 실제 표면이다."""
     router = importlib.import_module("backend.router")
     expected = {
-        "DispatchError",
         "LlmClient",
         "LlmResponse",
-        "ModelAccountNotFound",
     }
     available = set(dir(router))
     missing = expected - available
@@ -99,11 +97,11 @@ def test_router_accounts_repository_shim_is_gone() -> None:
         importlib.import_module("backend.router.accounts.repository")
 
 
-def test_router_dispatch_importable() -> None:
-    mod = importlib.import_module("backend.router.dispatch")
-    # Lift E2 — GatewayDispatcher is gone; only the error surface remains.
-    assert hasattr(mod, "DispatchError")
-    assert hasattr(mod, "ModelAccountNotFound")
+def test_router_dispatch_is_gone() -> None:
+    """Its error types' last raiser — the ``/api/v1/chat/completions`` proxy — was deleted on
+    2026-10-16; the package went with it."""
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("backend.router.dispatch")
 
 
 def test_router_routing_subpackage_importable() -> None:

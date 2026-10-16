@@ -26,7 +26,6 @@ def test_all_three_modules_import():
 
     # Lift E2 — GatewayDispatcher / LocalVsCloudClassifier removed.
     assert backend.router.LlmClient is not None
-    assert backend.router.ModelAccountNotFound is not None
     assert backend.router.accounts.ModelAccountService is not None
 
 

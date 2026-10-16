@@ -14,7 +14,6 @@ const KEY_BY_CALLER: Record<string, string> = {
   "knowledge.ingest": "ingest",
   "knowledge.query": "query",
   "knowledge.canonicalization": "canonicalization",
-  "chat.completions": "chat",
   "routing.compile": "compile",
 };
 

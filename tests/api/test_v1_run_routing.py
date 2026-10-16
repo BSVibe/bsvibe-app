@@ -116,7 +116,7 @@ async def test_list_callers_returns_known_callers(client) -> None:
     body = r.json()
     ids = {c["caller_id"] for c in body}
     assert "workflow.settle.extract" in ids
-    assert "chat.completions" in ids
+    assert "routing.compile" in ids
     assert all(c["description"] for c in body)
 
 

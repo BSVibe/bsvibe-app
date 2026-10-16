@@ -28,7 +28,6 @@ green 이었다 — 테스트가 프로덕션이 주지 않는 값을 자기가 
 from __future__ import annotations
 
 import importlib
-import inspect
 
 import pytest
 
@@ -44,19 +43,7 @@ def test_the_router_package_no_longer_advertises_it() -> None:
     assert "budget" not in router.__all__
 
 
-def test_the_chat_path_no_longer_speaks_of_budget() -> None:
-    """호출부가 남아 있으면 삭제가 절반만 된 것이다 — 그리고 import 가 깨진다."""
-    for module_path in ("backend.api.v1.chat", "backend.api.v1.chat_service"):
-        source = inspect.getsource(importlib.import_module(module_path))
-        for token in ("BudgetExceeded", "BudgetPolicyService", "BudgetTracker", "budget_check"):
-            assert token not in source, f"{module_path} 에 {token} 이 남아 있다"
-
-
-def test_cost_reporting_survives() -> None:
-    """비용 보고는 예산 강제와 다른 축이다 — 함께 지우면 관측을 잃는다.
-
-    ``bsvibe.actual_cost_cents`` 는 프록시 응답에 실려 나가는 살아 있는 필드다."""
-    chat_service = importlib.import_module("backend.api.v1.chat_service")
-    source = inspect.getsource(chat_service)
-    assert "_COST_PER_TOKEN_CENTS" in source
-    assert '"actual_cost_cents": actual_cost_cents' in source
+# The chat proxy these two tests guarded (``backend.api.v1.chat`` / ``chat_service`` — the
+# budget call sites and the ``bsvibe.actual_cost_cents`` response field) was itself deleted on
+# 2026-10-16 (#949 item 1, ``tests/api/test_chat_completions_is_gone.py``): no consumer, no
+# prod traffic, and a 500 on executor workspaces. Its cost field had no other reader.

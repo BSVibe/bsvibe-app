@@ -8,7 +8,7 @@ reply (or the error body) back to the tenant. With public signup that is server-
 forgery against the operator's box.
 
 The guard sits in :meth:`LlmClient.chat` because it is the one place every tenant-configured
-completion passes (the LiteLLM adapter and the chat-completions proxy both call it), and it
+completion passes (the LiteLLM adapter calls it), and it
 checks the FINAL kwargs — after ``extra_params`` is merged — so ``extra_params.base_url`` is
 not a way around it. A hostname is resolved and every address must be global: a public name
 that resolves to a private address is the same request.

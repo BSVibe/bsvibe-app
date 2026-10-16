@@ -139,21 +139,6 @@ async def test_source_text_create_threads_api_redis_into_the_resolver(client, re
     assert resolver_spy[-1].get("redis") is redis
 
 
-async def test_chat_completions_threads_api_redis_into_the_resolver(client, resolver_spy) -> None:
-    """The external gateway carries the SAME latent bug — an executor-backed
-    default account resolves here too."""
-    redis = _SentinelRedis()
-    set_api_redis(redis)
-
-    await client.post(
-        "/api/v1/chat/completions",
-        json={"model": "opus", "messages": [{"role": "user", "content": "hi"}]},
-    )
-
-    assert resolver_spy, "the chat path never constructed a ModelAccountResolver"
-    assert resolver_spy[-1].get("redis") is redis
-
-
 # ---------------------------------------------------------------------------
 # No redis configured (tests / dev) → a clean None, never a crash.
 # ---------------------------------------------------------------------------
