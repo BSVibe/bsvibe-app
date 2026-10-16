@@ -19,6 +19,7 @@ from starlette.responses import RedirectResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.api.auth import router as auth_router
+from backend.api.billing_webhooks import router as billing_webhooks_router
 from backend.api.deps import _get_session_factory
 from backend.api.health import router as health_router
 from backend.api.install_script import router as install_script_router
@@ -191,6 +192,7 @@ def create_app() -> FastAPI:
     # Connector webhook ingress is PUBLIC (external callback) — mounted under
     # /api directly, NOT under the auth-gated v1 router (Workflow §11.2).
     app.include_router(webhooks_router, prefix="/api")
+    app.include_router(billing_webhooks_router, prefix="/api")
     # Executor-worker register/heartbeat are bearer / worker-token authed
     # (a headless worker registers with the host OAuth credential; subsequent
     # heartbeat/poll/result use the per-worker token) — mounted under /api/v1
