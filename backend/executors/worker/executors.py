@@ -103,6 +103,9 @@ class ExecutionChunk:
     usage_completion_tokens: int = 0
     #: The raw split behind ``usage_prompt_tokens``, when the CLI reports one (#1104).
     usage_breakdown: UsageBreakdown | None = None
+    #: The CLI's own final answer for the turn, when it reports one apart from the stream
+    #: (#949). The joined ``delta`` stream is the session's narration; this is the answer.
+    final_text: str | None = None
 
 
 @runtime_checkable

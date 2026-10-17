@@ -700,6 +700,7 @@ def _terminal_chunk(rc: int, err_text: str, scrape: _StreamScrape) -> ExecutionC
         usage_prompt_tokens=prompt_tokens,
         usage_completion_tokens=completion_tokens,
         usage_breakdown=scrape.breakdown,
+        final_text=scrape.final_text,
     )
 
 
@@ -736,8 +737,14 @@ class _StreamScrape:
     rate_status: str | None = None
     usage: tuple[int, int] = (0, 0)
     breakdown: UsageBreakdown | None = None
+    #: The ``result`` event's own text — the turn's answer, without the narration (#949).
+    final_text: str | None = None
 
     def feed(self, event: dict[str, Any]) -> None:
+        if event.get("type") == "result":
+            text = event.get("result")
+            if isinstance(text, str) and text.strip():
+                self.final_text = text
         status = _rate_limit_event_status(event)
         if status is not None and status != "allowed":
             self.rate_status = status
