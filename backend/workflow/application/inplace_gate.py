@@ -129,7 +129,26 @@ async def changed_paths(box: SandboxSession, baseline: str | None) -> list[str]:
     run which genuinely changed nothing reporting nothing — a no-op must not
     collect a proof.
     """
-    paths: set[str] = set()
+    probed = await _git_changed(box, baseline)
+    if probed is None:
+        return []
+    tracked, untracked = probed
+    return sorted(tracked | untracked)
+
+
+async def _git_changed(
+    box: SandboxSession, baseline: str | None
+) -> tuple[set[str], set[str]] | None:
+    """``(tracked, untracked)`` changes as git sees them — ``None`` when git could not answer.
+
+    ``None`` (the status query itself failed: not a git tree, an unreachable machine) is kept
+    apart from empty sets, because :func:`reconcile_written_paths` must never trade a real
+    list for a failed probe. Untracked entries are kept apart because they are where build
+    noise lives (``__pycache__/``, ``node_modules/`` in a repo that ignores neither).
+    """
+    tracked: set[str] = set()
+    untracked: set[str] = set()
+    answered = False
     queries = ["git status --porcelain"]
     if baseline:
         queries.append(f"git diff --name-only {shlex.quote(baseline)}..HEAD")
@@ -145,10 +164,44 @@ async def changed_paths(box: SandboxSession, baseline: str | None) -> list[str]:
         if res.timed_out or res.exit_code != 0:
             continue
         if query.startswith("git status"):
-            paths |= _porcelain_paths(res.stdout)
+            answered = True
+            lines = res.stdout.splitlines()
+            untracked |= _porcelain_paths("\n".join(ln for ln in lines if ln.startswith("??")))
+            tracked |= _porcelain_paths("\n".join(ln for ln in lines if not ln.startswith("??")))
         else:
-            paths |= {line.strip() for line in res.stdout.splitlines() if line.strip()}
-    return sorted(paths)
+            tracked |= {line.strip() for line in res.stdout.splitlines() if line.strip()}
+    return (tracked, untracked) if answered else None
+
+
+async def reconcile_written_paths(
+    box: SandboxSession, baseline: str | None, written_paths: list[str]
+) -> list[str]:
+    """What the run changed, re-read from the tree (#1145) — or ``written_paths`` unchanged.
+
+    ``written_paths`` is a log of write-tool calls: a scratch script written then deleted
+    stays in it, and a tracked file edited through the shell never enters it. Both reached
+    the deliverable's ``artifact_refs``. So:
+
+    * every TRACKED change git sees since ``baseline`` is in — shell edits included;
+    * an untracked file is in only if a write tool made it AND it still exists — git's own
+      untracked list would also bring in whatever build noise the repo does not ignore;
+    * when git cannot answer, the log is all there is and it is returned as it was.
+    """
+    probed = await _git_changed(box, baseline)
+    if probed is None:
+        return list(written_paths)
+    tracked, _untracked = probed
+    kept = {p for p in written_paths if p not in tracked and await _exists(box, p)}
+    return sorted(tracked | kept)
+
+
+async def _exists(box: SandboxSession, path: str) -> bool:
+    """A one-byte read — the sandbox protocol's own existence question."""
+    try:
+        await box.read_file(path, 1)
+    except Exception:  # noqa: BLE001 — unreadable or gone: not a change to report
+        return False
+    return True
 
 
 async def run_inplace_gate(
