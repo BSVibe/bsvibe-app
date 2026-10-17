@@ -274,7 +274,18 @@ _FORWARDING_PRESENTATION: dict[str, tuple[type[BaseModel], str, bool]] = {
     "file_read": (FileReadInput, "Read a text file from the run's workspace.", False),
     "file_list": (FileListInput, "List directory entries in the run's workspace.", False),
     "file_write": (FileWriteInput, "Create or overwrite a file in the run's workspace.", True),
-    "file_edit": (FileEditInput, "Replace an exact string in a file in the run's workspace.", True),
+    "file_edit": (
+        FileEditInput,
+        (
+            "Edit an EXISTING file in the run's workspace by replacing an exact string. Read "
+            "the file with bsvibe_work_file_read first (a read through shell_exec does not "
+            "count). old_string must match the file exactly, whitespace included, and be "
+            "UNIQUE in it — add surrounding context — or set replace_all to change every "
+            "occurrence. Use this for source changes; do not write throwaway scripts to "
+            "rewrite files, since they end up in the run's changes."
+        ),
+        True,
+    ),
     "shell_exec": (
         ShellExecInput,
         (

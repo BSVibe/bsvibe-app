@@ -753,7 +753,8 @@ class ToolRegistry:
         if os.path.normpath(raw_path) not in self._grounded_paths:
             raise ToolError(
                 f"file_edit: file_read {raw_path} before editing it — "
-                "old_string must match the file's actual content"
+                "old_string must match the file's actual content (a read through "
+                "shell_exec does not count: the edit tool cannot see it)"
             )
         content = await self._read_for_edit(raw_path)
         occurrences = content.count(old_string)

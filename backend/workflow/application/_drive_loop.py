@@ -34,7 +34,10 @@ from backend.workflow.application.audit_events import (
     ToolCall,
     VerifyRun,
 )
-from backend.workflow.application.inplace_gate import capture_inplace_baseline
+from backend.workflow.application.inplace_gate import (
+    capture_inplace_baseline,
+    reconcile_written_paths,
+)
 from backend.workflow.application.round_budget import (
     RoundBudgetTracker,
     finalize_round_cap_decision,
@@ -447,6 +450,9 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             )
             continue
 
+        # #1145 — the list is a log of write-tool calls; the tree is the truth. A deleted scratch
+        # script leaves it, a file edited through the shell joins it, before anything reads it.
+        written_paths[:] = await reconcile_written_paths(box, run_baseline, written_paths)
         attempt.phase = RunAttemptPhase.VERIFYING
         # Verify-session-release (#686) — the SAME treatment the executor turn
         # boundary gets above, for the same reason. What follows is minutes of
