@@ -716,6 +716,8 @@ class _StreamOutcome:
     usage_completion_tokens: int = 0
     reported_usage: bool = False
     usage_breakdown: UsageBreakdown | None = None
+    #: The CLI's final answer, when it gave one (#949) — preferred over the joined stream.
+    final_text: str | None = None
 
 
 def _usage_fields(
@@ -785,7 +787,9 @@ def _result_payload(task_id: str, outcome: _StreamOutcome) -> dict[str, Any]:
     return {
         "task_id": task_id,
         "success": outcome.success,
-        "output": "".join(outcome.parts),
+        # The CLI's final answer when it reported one: the joined stream is the session's
+        # narration, and what reads ``output`` (the judge, criteria search) wants the answer.
+        "output": outcome.final_text if outcome.final_text else "".join(outcome.parts),
         "error_message": outcome.error,
         **_usage_fields(
             outcome.usage_prompt_tokens, outcome.usage_completion_tokens, outcome.usage_breakdown
@@ -821,6 +825,7 @@ async def _stream_and_collect(
     usage_completion = 0
     reported_usage = False
     breakdown: UsageBreakdown | None = None
+    final_text: str | None = None
 
     stream = executor.execute(prompt, context)
     try:
@@ -834,6 +839,8 @@ async def _stream_and_collect(
                 usage_completion = chunk.usage_completion_tokens
                 breakdown = chunk.usage_breakdown
                 reported_usage = True
+            if chunk.final_text:
+                final_text = chunk.final_text
             if chunk.error:
                 error = chunk.error
                 success = False
@@ -868,6 +875,7 @@ async def _stream_and_collect(
         usage_completion_tokens=usage_completion,
         reported_usage=reported_usage,
         usage_breakdown=breakdown,
+        final_text=final_text,
     )
 
 
