@@ -52,6 +52,7 @@ from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime.account_resolution import (
     product_dispatch_config,
     resolve_account_for_caller,
+    resolve_judge_llm,
     resolve_via_caller,
 )
 from backend.workflow.application.runtime.dispatcher import _ResolverFrameLlm
@@ -327,9 +328,19 @@ def build_agent_execution_deps(
                 else {}
             ),
         )
+        # #949 item 4 — verification grades on the judge route, unbound to the run. A
+        # workspace whose judge route resolves nothing keeps grading on the act LLM.
+        judge_llm = await resolve_judge_llm(
+            session,
+            run,
+            settings,
+            redis=redis_client,
+            session_factory=session_factory,
+        )
         return RunOrchestrator(
             session=session,
             llm=llm,
+            judge_llm=judge_llm,
             sandbox_manager=run_box,
             retriever=retriever,
             skill_loader=skill_loader,
