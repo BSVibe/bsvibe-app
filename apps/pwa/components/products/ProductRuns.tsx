@@ -1,5 +1,5 @@
 import type { ProductDetailRun } from "@/lib/api/types";
-import { type ActivityRow, groupProductRuns } from "@/lib/runs/activity-groups";
+import { type ActivityEntry, type ActivityRow, groupProductRuns } from "@/lib/runs/activity-groups";
 import { STATUS_LABEL_KEY } from "@/lib/runs/status";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
@@ -48,7 +48,11 @@ export default function ProductRuns({ runs }: { runs: ProductDetailRun[] }) {
         <span className={`product-run__status product-run__status--${run.tone}`}>
           {tBrief(STATUS_LABEL_KEY[run.status])}
         </span>
-        {run.title && <span className="product-run__title">{run.title}</span>}
+        {run.title ? (
+          <span className="product-run__title">{run.title}</span>
+        ) : (
+          <span className="product-run__title product-run__title--none">{t("untitledRun")}</span>
+        )}
         {count > 1 && <span className="product-run__repeat">{t("repeatedTimes", { count })}</span>}
         <span className="product-run__when">{formatTime(run.updatedAt)}</span>
       </>
@@ -62,6 +66,27 @@ export default function ProductRuns({ runs }: { runs: ProductDetailRun[] }) {
         ) : (
           body
         )}
+      </li>
+    );
+  };
+
+  // 한 배치는 한 줄로 접고, 펼치면 개별 줄이 그대로 있다(<details> — 키보드·스크린리더 기본 지원).
+  const renderEntry = (entry: ActivityEntry) => {
+    if (entry.kind === "run") return renderRow(entry);
+    const head = entry.rows[0].run;
+    const total = entry.rows.reduce((n, r) => n + r.count, 0);
+    return (
+      <li key={`batch-${head.runId}`} className="product-runs__batch-item">
+        <details className="product-runs__batch">
+          <summary className="product-run product-runs__batch-summary">
+            <span className={`product-run__status product-run__status--${head.tone}`}>
+              {tBrief(STATUS_LABEL_KEY[head.status])}
+            </span>
+            <span className="product-run__title">{t("batchCount", { count: total })}</span>
+            <span className="product-run__when">{formatTime(head.updatedAt)}</span>
+          </summary>
+          <ul className="product-runs__batch-list">{entry.rows.map(renderRow)}</ul>
+        </details>
       </li>
     );
   };
@@ -88,7 +113,7 @@ export default function ProductRuns({ runs }: { runs: ProductDetailRun[] }) {
                     ? t("yesterday")
                     : formatDate(group.dateKey)}
               </h3>
-              <ul className="product-runs__list">{group.rows.map(renderRow)}</ul>
+              <ul className="product-runs__list">{group.rows.map(renderEntry)}</ul>
             </div>
           ))}
         </>

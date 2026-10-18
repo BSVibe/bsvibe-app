@@ -18,10 +18,18 @@ import type { ProductDetailRun } from "@/lib/api/types";
  * 순수 함수로 두는 이유 — 컴포넌트 안에 두면 렌더 테스트로만 닿고, 경계(날짜 넘김,
  * 연속 판정)는 렌더로 재기 어렵다.
  */
-import { groupProductRuns } from "@/lib/runs/activity-groups";
+import { type ActivityEntry, type ActivityRow, groupProductRuns } from "@/lib/runs/activity-groups";
 import { describe, expect, it } from "vitest";
 
 const NOW = new Date("2026-09-23T12:00:00Z");
+
+/** The plain rows of a group — fails loudly if a batch shows up where a test expects none. */
+function runRows(entries: ActivityEntry[]): ActivityRow[] {
+  return entries.map((e) => {
+    if (e.kind !== "run") throw new Error("unexpected batch");
+    return e;
+  });
+}
 
 function run(over: Partial<ProductDetailRun> & { updatedAt: string }): ProductDetailRun {
   return {
@@ -45,7 +53,7 @@ describe("groupProductRuns", () => {
     const { needsYou, groups } = groupProductRuns(runs, NOW);
     expect(needsYou.map((r) => r.run.title)).toEqual(["B"]);
     // 뽑힌 런은 날짜 그룹에 **다시 나타나지 않는다** (두 번 보이면 세는 게 틀린다)
-    const inGroups = groups.flatMap((g) => g.rows.map((r) => r.run.title));
+    const inGroups = groups.flatMap((g) => runRows(g.rows).map((r) => r.run.title));
     expect(inGroups).not.toContain("B");
     expect(inGroups).toEqual(["A", "C"]);
   });
@@ -59,7 +67,7 @@ describe("groupProductRuns", () => {
       run({ updatedAt: "2026-09-17T08:50:00Z", title: "handoff 문서 첫 줄 보고" }),
     ];
     const { groups } = groupProductRuns(runs, NOW);
-    const rows = groups.flatMap((g) => g.rows);
+    const rows = groups.flatMap((g) => runRows(g.rows));
     expect(rows).toHaveLength(1);
     expect(rows[0].count).toBe(4);
     // 묶였어도 개별 런에 닿을 수 있어야 한다 — 디버깅 근거가 사라지면 안 된다
@@ -71,7 +79,7 @@ describe("groupProductRuns", () => {
       run({ updatedAt: "2026-09-17T09:00:00Z", title: "A" }),
       run({ updatedAt: "2026-09-17T08:00:00Z", title: "B" }),
     ];
-    const rows = groupProductRuns(runs, NOW).groups.flatMap((g) => g.rows);
+    const rows = groupProductRuns(runs, NOW).groups.flatMap((g) => runRows(g.rows));
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.count === 1)).toBe(true);
   });
@@ -82,7 +90,7 @@ describe("groupProductRuns", () => {
       run({ updatedAt: "2026-09-17T09:00:00Z", title: "같은일", status: "cancelled" }),
       run({ updatedAt: "2026-09-17T08:00:00Z", title: "같은일", status: "failed" }),
     ];
-    const rows = groupProductRuns(runs, NOW).groups.flatMap((g) => g.rows);
+    const rows = groupProductRuns(runs, NOW).groups.flatMap((g) => runRows(g.rows));
     expect(rows).toHaveLength(2);
   });
 
@@ -93,7 +101,7 @@ describe("groupProductRuns", () => {
       run({ updatedAt: "2026-09-17T08:30:00Z", title: "다른일" }),
       run({ updatedAt: "2026-09-17T08:00:00Z", title: "X" }),
     ];
-    const rows = groupProductRuns(runs, NOW).groups.flatMap((g) => g.rows);
+    const rows = groupProductRuns(runs, NOW).groups.flatMap((g) => runRows(g.rows));
     expect(rows.map((r) => r.count)).toEqual([1, 1, 1]);
   });
 
@@ -109,7 +117,7 @@ describe("groupProductRuns", () => {
     expect(groups[1].kind).toBe("yesterday");
     expect(groups[2].kind).toBe("date");
     // 날짜 그룹은 최신순
-    expect(groups.flatMap((g) => g.rows.map((r) => r.run.title))).toEqual([
+    expect(groups.flatMap((g) => runRows(g.rows).map((r) => r.run.title))).toEqual([
       "오늘것",
       "어제것",
       "옛날것",
@@ -145,7 +153,7 @@ describe("groupProductRuns", () => {
       run({ updatedAt: "2026-09-18T01:00:00Z", title: "아침" }),
       run({ updatedAt: "2026-09-18T05:00:00Z", title: "저녁" }),
     ];
-    const rows = groupProductRuns(runs, NOW).groups[0].rows;
+    const rows = runRows(groupProductRuns(runs, NOW).groups[0].rows);
     expect(rows.map((r) => r.run.title)).toEqual(["저녁", "아침"]);
   });
 
@@ -164,7 +172,52 @@ describe("groupProductRuns", () => {
     const { groups } = groupProductRuns(runs, NOW);
     // 날짜가 다르면 묶이지 않는다 — 날짜 경계가 연속을 끊는다
     expect(groups).toHaveLength(2);
-    expect(groups[0].rows[0].count).toBe(2);
-    expect(groups[1].rows[0].count).toBe(1);
+    expect(groups[0].rows[0]).toMatchObject({ kind: "run", count: 2 });
+    expect(groups[1].rows[0]).toMatchObject({ kind: "run", count: 1 });
+  });
+
+  describe("한 배치로 들어온 런 (#1042 잔여 — 2026-09-24 prod: Sep 18 그룹 27행이 전부 2:44 PM · 중단됨)", () => {
+    const at = (sec: number) => `2026-09-18T05:44:${String(sec).padStart(2, "0")}Z`;
+
+    it("⭐ 같은 분·같은 상태가 연속으로 셋 이상이면 한 배치로 묶는다 — 제목이 달라도", () => {
+      const runs = Array.from({ length: 27 }, (_, i) =>
+        run({ updatedAt: at(i), title: `작업 ${i}` }),
+      );
+      const rows = groupProductRuns(runs, NOW).groups[0].rows;
+      expect(rows).toHaveLength(1);
+      const batch = rows[0];
+      expect(batch.kind).toBe("batch");
+      if (batch.kind !== "batch") throw new Error("unreachable");
+      expect(batch.rows).toHaveLength(27);
+      // 개별 런에 닿는 길을 잃지 않는다
+      expect(batch.rows.flatMap((r) => r.runIds)).toHaveLength(27);
+    });
+
+    it("둘은 배치가 아니다 — 그냥 두 줄", () => {
+      const runs = [run({ updatedAt: at(1), title: "A" }), run({ updatedAt: at(2), title: "B" })];
+      const rows = groupProductRuns(runs, NOW).groups[0].rows;
+      expect(rows.map((r) => r.kind)).toEqual(["run", "run"]);
+    });
+
+    it("상태가 다르면 배치가 끊긴다", () => {
+      const runs = [
+        run({ updatedAt: at(5), title: "A" }),
+        run({ updatedAt: at(4), title: "B" }),
+        run({ updatedAt: at(3), title: "C", status: "failed", tone: "failed" }),
+        run({ updatedAt: at(2), title: "D" }),
+      ];
+      const rows = groupProductRuns(runs, NOW).groups[0].rows;
+      expect(rows.map((r) => r.kind)).toEqual(["run", "run", "run", "run"]);
+    });
+
+    it("분이 다르면 배치가 끊긴다", () => {
+      const runs = [
+        run({ updatedAt: "2026-09-18T05:45:01Z", title: "A" }),
+        run({ updatedAt: "2026-09-18T05:44:59Z", title: "B" }),
+        run({ updatedAt: "2026-09-18T05:44:58Z", title: "C" }),
+      ];
+      const rows = groupProductRuns(runs, NOW).groups[0].rows;
+      expect(rows.map((r) => r.kind)).toEqual(["run", "run", "run"]);
+    });
   });
 });
