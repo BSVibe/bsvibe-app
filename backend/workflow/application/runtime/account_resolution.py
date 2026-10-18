@@ -295,11 +295,15 @@ async def resolve_judge_llm(
     settings: Settings,
     *,
     redis: Any = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> ResolverLoopLlm | None:
-    """Resolve a judge LLM for the executor verification path.
+    """Resolve a judge LLM for the run's verification (#949 item 4).
 
-    Routes via caller_id ``workflow.judge``. ``None`` on miss — the judge
-    contract then routes to a human-review Decision (never a silent pass).
+    Routes via caller_id ``workflow.judge`` and is deliberately NOT bound to the run (no
+    ``run_id`` / ``repo_url`` / execution target): grading is a chat turn, not work in the
+    run's tree. ``session_factory`` is threaded for the same reason the act turn threads it —
+    an executor judge must poll in short sessions, not hold the run's connection. ``None`` on
+    miss; the loop factory then keeps the act LLM.
     """
     from backend.dispatch.caller_registry import CALLER_JUDGE  # noqa: PLC0415
 
@@ -309,6 +313,7 @@ async def resolve_judge_llm(
         workspace_id=run.workspace_id,
         settings=settings,
         redis=redis,
+        session_factory=session_factory,
     )
     if resolved is None:
         logger.info(
