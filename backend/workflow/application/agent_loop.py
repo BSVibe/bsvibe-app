@@ -197,9 +197,12 @@ class RunOrchestrator:
         suggested_skill: str | None = None,
         suggested_skill_description: str | None = None,
         live_event_bus: Any = None,
+        judge_llm: LoopLlm | None = None,
     ) -> None:
         self._session = session
         self._llm = llm
+        # #949 item 4 — verification grades on the judge route; ``None`` keeps the act LLM.
+        self._judge_llm = judge_llm
         self._sandbox_manager = sandbox_manager
         self._settings = settings or get_settings()
         # B9a — the frame stage's matched skill (+ description), consumed as a
@@ -418,7 +421,9 @@ class RunOrchestrator:
         """Build the shared verifier with this run's deps. The native loop and
         the executor orchestrator both go through this SAME service so they
         verify identically (Lift B2a)."""
-        return VerificationService(session=self._session, llm=self._llm, retriever=self._retriever)
+        return VerificationService(
+            session=self._session, llm=self._judge_llm or self._llm, retriever=self._retriever
+        )
 
     async def _verify(
         self,
