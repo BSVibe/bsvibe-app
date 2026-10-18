@@ -92,4 +92,27 @@ describe("ProductRuns", () => {
     render(<ProductRuns runs={[]} />);
     expect(screen.getByText(/No runs for this product yet/i)).toBeInTheDocument();
   });
+
+  it("제목 없는 런은 빈 줄이 아니라 '제목 없음'으로 보인다 (2026-09-24 prod: Jul 23 행)", () => {
+    render(<ProductRuns runs={[run({ updatedAt: new Date().toISOString(), title: null })]} />);
+    expect(screen.getByText(/Untitled run/i)).toBeInTheDocument();
+  });
+
+  it("⭐ 한 배치는 한 줄로 접히고, 펼치면 개별 런이 다 있다", () => {
+    const base = new Date();
+    base.setSeconds(0, 0);
+    const runs = Array.from({ length: 27 }, (_, i) =>
+      run({ updatedAt: new Date(base.getTime() + i * 1000).toISOString(), title: `배치작업 ${i}` }),
+    );
+    const { container } = render(<ProductRuns runs={runs} />);
+    const summary = container.querySelector("details.product-runs__batch > summary");
+    expect(summary).not.toBeNull();
+    expect(summary?.textContent).toMatch(/27/);
+    // 개별 런은 펼친 안쪽에 그대로 있다 — 근거를 버리지 않는다
+    expect(container.querySelectorAll("details.product-runs__batch li.product-run")).toHaveLength(
+      27,
+    );
+    // 그리고 바깥 목록에는 27줄이 아니라 한 줄
+    expect(container.querySelectorAll(".product-runs__list > li")).toHaveLength(1);
+  });
 });

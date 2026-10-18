@@ -26,6 +26,7 @@ import type { ProductDetailRun } from "@/lib/api/types";
  */
 
 export type ActivityRow = {
+  kind: "run";
   /** 접힌 묶음의 대표(가장 최근). */
   run: ProductDetailRun;
   /** 접힌 런 개수. 1 이면 안 접혔다는 뜻. */
@@ -34,11 +35,29 @@ export type ActivityRow = {
   runIds: string[];
 };
 
+/**
+ * 한 배치로 들어온 런들 — 같은 분·같은 상태가 **연속으로** {@link BATCH_MIN}개 이상.
+ *
+ * 2026-09-24 prod: Sep 18 그룹 27행이 전부 `2:44 PM` · `중단됨` 이었다. 제목은 달라서
+ * 반복 접기에 안 걸렸고, 시각 열은 아무것도 구분해 주지 못했다. 한 줄로 접되 안쪽에 개별
+ * 줄을 그대로 둔다 — 과거 런 기록은 판정 근거로 실제로 쓰인다.
+ */
+export type ActivityBatch = {
+  kind: "batch";
+  /** 최신순. 각 줄은 반복 접기까지 끝난 줄이다. */
+  rows: ActivityRow[];
+};
+
+export type ActivityEntry = ActivityRow | ActivityBatch;
+
+/** 이보다 적으면 그냥 줄로 둔다 — 둘을 접으면 접힌 줄을 펼치는 수고가 읽는 수고보다 크다. */
+export const BATCH_MIN = 3;
+
 export type ActivityGroup = {
   kind: "today" | "yesterday" | "date";
   /** 그 그룹의 날짜(로컬 자정 기준 ISO date, `YYYY-MM-DD`). */
   dateKey: string;
-  rows: ActivityRow[];
+  rows: ActivityEntry[];
 };
 
 function dateKeyOf(iso: string): string {
@@ -70,9 +89,36 @@ function collapseConsecutive(runs: ProductDetailRun[]): ActivityRow[] {
       last.runIds.push(run.runId);
       continue;
     }
-    rows.push({ run, count: 1, runIds: [run.runId] });
+    rows.push({ kind: "run", run, count: 1, runIds: [run.runId] });
   }
   return rows;
+}
+
+function minuteOf(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : String(Math.floor(d.getTime() / 60_000));
+}
+
+/** 연속된 같은 (분, 상태) 줄을 {@link BATCH_MIN}개 이상일 때만 한 배치로 묶는다. */
+function batchSameMinute(rows: ActivityRow[]): ActivityEntry[] {
+  const out: ActivityEntry[] = [];
+  let i = 0;
+  while (i < rows.length) {
+    const head = rows[i];
+    let j = i + 1;
+    while (
+      j < rows.length &&
+      rows[j].run.status === head.run.status &&
+      minuteOf(rows[j].run.updatedAt) === minuteOf(head.run.updatedAt)
+    ) {
+      j += 1;
+    }
+    const run = rows.slice(i, j);
+    if (run.length >= BATCH_MIN) out.push({ kind: "batch", rows: run });
+    else out.push(...run);
+    i = j;
+  }
+  return out;
 }
 
 /** 행동이 필요한 상태 — 이것만 위로 뽑는다. */
@@ -109,7 +155,11 @@ export function groupProductRuns(
 
   const groups: ActivityGroup[] = [];
   for (const [dateKey, items] of byDate) {
-    groups.push({ kind: kindOf(dateKey, now), dateKey, rows: collapseConsecutive(items) });
+    groups.push({
+      kind: kindOf(dateKey, now),
+      dateKey,
+      rows: batchSameMinute(collapseConsecutive(items)),
+    });
   }
   // 여기서 `groups.sort` 를 한 번 더 하지 **않는다.** 위에서 입력을 정렬했으므로
   // Map 삽입 순서가 곧 날짜 내림차순이고(JS Map 은 삽입 순서를 보장한다),
@@ -121,7 +171,7 @@ export function groupProductRuns(
     // 행동이 필요한 줄은 접지 않는다 — 각각이 형님의 결정을 기다린다.
     needsYou: [...needsYouRuns]
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      .map((run) => ({ run, count: 1, runIds: [run.runId] })),
+      .map((run) => ({ kind: "run" as const, run, count: 1, runIds: [run.runId] })),
     groups,
   };
 }

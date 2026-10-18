@@ -3343,6 +3343,45 @@ main.login {
   white-space: nowrap;
 }
 
+/* #1042 — 제목 없는 런은 빈 줄이 아니라 조용한 "제목 없음"이다. */
+.product-run__title--none {
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+/* #1042 — 한 배치로 들어온 런(같은 분·같은 상태 연속 3+)을 한 줄로 접는다.
+   펼치면 개별 줄이 들여쓰기 없이 그대로 — 같은 목록의 연장으로 읽혀야 한다. */
+.product-runs__batch-item {
+  border-top: 1px solid var(--hair);
+}
+.product-runs__batch-item:first-child {
+  border-top: none;
+}
+.product-runs__batch-summary {
+  cursor: pointer;
+  list-style: none;
+  border-top: none;
+}
+.product-runs__batch-summary::-webkit-details-marker {
+  display: none;
+}
+.product-runs__batch-summary .product-run__title::before {
+  content: "▸ ";
+  color: var(--ink-3);
+}
+.product-runs__batch[open] .product-runs__batch-summary .product-run__title::before {
+  content: "▾ ";
+}
+.product-runs__batch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface-2, var(--surface));
+}
+.product-runs__batch-list .product-run:first-child {
+  border-top: 1px solid var(--hair);
+}
+
 /* R20 — BootstrapStatusPanel: a calm one/two-line setup-status strip (was
    unstyled). The only repo-adjacent surface, kept quiet; red tones on failure. */
 .bootstrap-status {
@@ -3383,10 +3422,15 @@ main.login {
 
 /* R20 — ProductDanger: the delete affordance + confirm step (was unstyled — raw
    browser buttons). A muted-red outline to delete, a solid-red confirm. */
+/* #1042 — 위 섹션들(28px)보다 더 떨어지고 경계선으로 갈린다: 바인딩 빈 상태에 바짝
+   붙어 그 섹션의 일부처럼 읽혔다(2026-09-24 prod). */
 .product-danger {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  margin-top: 44px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hair);
 }
 .product-danger__delete {
   align-self: flex-start;

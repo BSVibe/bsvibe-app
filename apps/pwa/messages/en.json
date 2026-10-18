@@ -156,6 +156,8 @@
     "today": "Today",
     "yesterday": "Yesterday",
     "repeatedTimes": "×{count}",
+    "untitledRun": "Untitled run",
+    "batchCount": "{count} runs at once",
     "shipped": "Shipped",
     "noShipped": "Nothing shipped for this product yet.",
     "untitled": "Shipped deliverable",
