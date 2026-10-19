@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-16
+# BSVibe session handoff — 2026-10-19
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,9 +21,34 @@
 
 ---
 
-## §0 — One line: **the meter now sees every token, a tenant cannot aim the server inward, and BSVibe opens as a free beta**
+## §0 — One line: **keys rotate, product secrets reach the server box, a delivered run ships whatever the order, and the settings screens read**
 
-10-15 → 10-16 (this session). Every PR went pause → open → `filter_rejected` → CI green → merge → deploy
+10-16 → 10-19 (this session). Every GitHub write went pause → act → CI green → merge → deploy checked →
+no new run → restore (§Ⅳ).
+
+| PR | Issue | What | Prod check |
+|---|---|---|---|
+| #1172 | #949 (1) | `/api/v1/chat/completions` deleted — no consumer | ✅ |
+| #1173 | #957 | credential ciphertext names its key (`kms1.<kid>.…`), `BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64` still decrypts, `python -m backend.router.accounts.rewrap [--apply]` re-encrypts; one factory (AST guard) | ✅ deployed, 0 decrypt errors in logs · ⏳ **형님:** rewrap dry-run in the backend container (agents are refused prod exec) |
+| #1174 | #691 | a `server_sandbox` product's commands get its `verify_secrets` (`docker exec -e NAME`, value only in the CLI's env) — loop and MCP paths | ⏳ `docs/e2e/server-sandbox-secrets-checklist.md` |
+| #1175 | #949 (2) | an agentic Claude Code turn's output is the CLI's final `result` text, not the joined narration | ✅ deployed, host worker restarted |
+| #1176 | #1145 | `written_paths` re-read from the tree when the agent says done (tracked changes from git + still-existing write-tool files); MCP `file_edit` states its rules | ⏳ next agent run that edits through the shell |
+| #1177 | #949 (4) | verification grades on the judge route (`workflow.judge`, unbound to the run), act LLM as fallback | ⏳ next verified executor run |
+| #1178 | #1042 | activity: same-minute batches fold into one row, untitled runs say so · danger zone spaced | ✅ live stack (#1181) |
+| #1179 | (형님 screenshots) | settings 알림/예약: standalone hints left-aligned full width, events list unbulleted, schedule form stacked, long instruction clamped | ✅ live stack red → green, screenshots |
+| #1180 | (10-19 incident) | **`deliverables.delivered_at`** + `ship_if_delivered` at the REVIEW_READY transition and on every delivery-worker tick — a run whose output went out before REVIEW_READY ships | ✅ stranded weekly run `4f5e9bfb` shipped 03:20Z by the sweep, 0 re-sends |
+| #1181 | #1042 §4 | settings tab no longer starts 34px lower than activity; floating button verified not to cover the last line | ✅ live stack 6/6 · merged |
+
+Closed: **#957**, **#691**, **#1145**, **#949** (all four), **#1042** (with #1181).
+
+**10-19 weekly report (BStockReport):** published once (one deliverable, verbatim block intact, no re-send loop
+— #1160 held), but sat at REVIEW_READY: it was delivered while RUNNING, and delivery only ships a REVIEW_READY
+run. → #1180, which also shipped that run. Re-walk on **10-26 09:30 KST**: it should end `shipped` with one
+Telegram message and no human step.
+
+## §0-b — previous session (10-15 → 10-16): the meter sees every token, a tenant cannot aim the server inward, free beta
+
+Every PR went pause → open → `filter_rejected` → CI green → merge → deploy
 checked → restore (§Ⅳ).
 
 | PR | Issue | What | Prod check |
@@ -40,60 +65,7 @@ checked → restore (§Ⅳ).
 
 Closed: **#959** (all four items done; fail-closed was #1095), **#935** (runbook · 2 DB passwords · worker token retired).
 
-## §0-b — previous session (10-06 → 10-08): work from outside meets the same limits as work from 형님; ship opens the PR
-
-| PR | Issue | What | Prod check |
-|---|---|---|---|
-| #1133 | #1115 | a run whose last Safe Mode item ends undelivered is cancelled — frees the cap slot | ⏳ next cleanup deny |
-| #1134 | (log noise) | `GET /api/health/auth` relays GoTrue `/auth/v1/health`; offbox probe + heartbeat (workstation #10) read it instead of a bogus login | ✅ 200 via real Supabase · `supabase_token_failed` gone |
-| #1135 | #1107 | **one sandbox container per RUN** (`bsvibe-sbx-<run id>`) · a live box of the same run + worktree is adopted, not `rm -f`-ed (worker ↔ API) · slots of boxes removed elsewhere are freed | ✅ `bsvibe-sbx-<run id>` per run (runs `4414bcd5`, `b2ebd3c4`) · ⏳ `sandbox_adopted` not yet seen |
-| #1136 | #1112 | "승인하고 출시" on a GitHub product writes the delivery event (`founder_approved` → skips Safe Mode), no local force-merge, run stays review_ready → PR → ships on merge | ⏳ next ship on a BSVibe run |
-| #1137 | #1113 | **webhook work at intake:** run cap full → held (`_intake_held`, released oldest-first per free slot) · monthly token budget spent → refused + `needs_you` · **claim excludes refused/held rows in SQL** | ⏳ held / released / refused log lines |
-| #1138 | #1116 | tool-menu guard (every `bsvibe_*` / `executor/<x>` a description names must exist) · webhook skips client_attach `run/<8hex>` PR branches | ⏳ next BStockReport PR makes no run |
-| #1139 | (tests) | two order-dependent tests fixed (unrestored module patch · idempotence counted as a delta) | ✅ whole suite in one process, 6732 passed |
-| #1141 | (measured) | the server-side gate derives commands only over changed paths still present — a removed scratch file no longer yields `ruff … E902` | ✅ run `b2ebd3c4` passed with 3 removed `_patch_*.py` |
-| #1150 | #1077 | agentic turn switches CLI built-ins off with `--tools ""` (measured: MCP tools survive) — no name list to rot | ✅ host workers restarted 10-08 11:24 KST · ⏳ next agentic run |
-| #1151 | #1079 | a SCHEDULE-sourced request is framed with no stage vocabulary → one run | ⏳ 10-12 weekly run |
-| #1152 | #673 · #1078 | `emit_deliverable(verbatim_command, verbatim_start, verbatim_end)` — the server runs the command in the run's box and publishes the block byte-for-byte; failure/missing markers publish nothing · same-content partials dedupe | ⏳ 10-12 weekly run |
-| #1153 | #1072 | schedule `output_mode` (safe · direct; product_tick safe only) — REST/MCP/PWA toggle; gate: PT3 > schedule direct > workspace Safe Mode | ✅ PWA toggle → `534f78a7` direct (형님 10-08) · ⏳ 10-12 run arrives without approval |
-| #1147 | #1143 | the merge watch's squash sends `commit_title` = PR title + ` (#N)` — main no longer gets the run commit (`work: <directive first line>`) | ⏳ next auto-merge |
-| #1148 | #1144 | a Direct run's PR body quotes the founder's directive (`**요청**`) and links every `#N` it names with a non-closing `Refs` (issue-sourced runs keep `Closes #N`) | ⏳ next Direct run PR |
-| workstation #11 | (#1145 prereq) | autodeploy archives backend/worker logs to `_infra/logs/bsvibe-prod/<container>--<started>.log` before `--force-recreate` (20 kept) | ⏳ open — 형님 merges; live already (launchd runs the `_infra` tree) |
-| #1142 | #1073 | **written by BSVibe itself:** a rule whose target has no account is skipped (`routing_rule_target_missing`) → next rule → default; the runtime keeps the account the fallback found | ✅ CI green, auto-merged, run shipped |
-
-**Measurement 10-07 — #1073 handed to BSVibe** (`bsvibe_direct`, product `bsvibe`):
-
-| Run | Outcome | Tokens in/out | Why |
-|---|---|---|---|
-| `4414bcd5` | stopped on a question after 2 failed verifies (15 min) → discarded | 358k / 28k | gate linted a scratch file the agent had removed (E902) → #1141 |
-| `b2ebd3c4` | verified in 8 m 48 s → approved → PR #1142 → auto-merged → shipped | 379k / 24k | — |
-
-Found by it: #1143 (auto-merge leaves the run commit message — the directive's first line — on main) · #1144
-(PR body has no `Closes #N`, no why) · #1145 (the agent writes scratch `_patch_*.py` at the repo root, twice).
-The own-PR skip held (#1142 made no run). A run that stops on a QUESTION makes no status transition —
-watch `agent_worker_driven`, not transitions.
-
-Checklists: `docs/e2e/{run-with-nothing-to-deliver,auth-health-probe,sandbox-per-run,ship-on-github-product,intake-gates-webhook-work,tool-menu-and-own-branches}-checklist.md`.
-
-10-05 → 10-06 (previous session) — **the run state machine is one function with a table; notifications say what happened**:
-
-| PR | Issue | What | Prod check |
-|---|---|---|---|
-| #1119 | #1106 · #1104 · #1114 | cancel kills the executor session · in-session token budget · `--max-turns` | ✅ cancel 4 s · budget kill at 15k · `--max-turns 60` |
-| #1121 | #1103 | adjacent same-stage steps merge · TDD unit is one step · executor-neutral step handoff | ✅ one run carried test + fix, 86k input |
-| #1122 | #1114 | a failed round hands its report + changed files to the next round | ⏳ a run that fails verification once |
-| #1123 | #1102 | `transition()` is a compare-and-set | ⏳ CI ran it on Postgres |
-| #1124 | #1105 | `run_token_cap_reached` gets a question + "예산 늘려 계속" | ⏳ next cap stop |
-| #1125 | #1108 | next chain step keeps `binding_id` · `kind` → delivery gate survives | ⏳ a real cross-stage split |
-| #1127 | #1110 | **every run status change goes through `run_status.move_run_status`** (AST guard) | ✅ BStockReport weekly run 10-05 reached review_ready normally |
-| #1128 | #1109 | transition table (shipped is final) · **GitHub runs ship on MERGE** (awaiting_merge, PrConcluded callback, cap exclusion) | ✅ run `b2ebd3c4`: PR #1142 → review_ready + awaiting_merge → merge watch auto-merged → shipped 2 s later |
-| #1129 | #1074 | model-account Decisions ask + offer accounts + notify · **guard: every Decision kind has a question and a way out** | ⏳ next unresolved account |
-| #1131 | (inventory) | frame-unresolved run no longer parks without a Decision · account lookup writes no Decision · bundle publish conflict is a report | ⏳ rare paths |
-| #1132 | #1111 | **notifications split:** `review_ready` (approval card, at verify) · `shipped` (when the run ships, no buttons); old matrices inherit `shipped` | ✅ prod prefs read whole, `review_ready` inherited `true` |
-
-Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 stays open on purpose** (no raw cache columns).
-
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19)
 
 | | |
 |---|---|
@@ -106,6 +78,8 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 | **Every GitHub issue / PR / comment is work** (10-06) | No label or command opt-in — "일단 받고, 단순 질의거나 의미 없으면 종료된다". Webhook work: **cap → wait, budget → refuse** |
 | **Ship is the approval** (10-06) | "승인하고 출시" does not raise a second Safe Mode card |
 | **One sandbox per run** (10-06) | `sandbox_max_concurrent=2` now counts runs; a third server_sandbox run waits for a slot |
+| **codex and opencode go onto the MCP surface too** (10-19) | Same as claude_code, no exception kept (#1000). Re-measure both CLIs' current versions against the issue's two gates before wiring |
+| **Live UI checks sign in on the disposable stack** (10-19) | `admin@bsvibe.dev` + `~/.bsvibe/e2e-live.password` into `BSVIBE_E2E_PASSWORD` only, never printed, never prod. Export just the 4 public IdP keys from `.env.prod` |
 
 ## §Ⅱ — What this session found that the issues had wrong
 
@@ -146,22 +120,29 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 * **Auto mode refuses** logging in with another account's stored credentials (even with 형님's go-ahead in chat) —
   rotating a worker of another workspace is 형님's step.
 
+## §Ⅱ-d — What 10-17/19 found
+
+* **"Delivered" was an event, never a fact.** Completion depended on which of "delivery succeeded" and
+  "REVIEW_READY" came second. Anything that must hold whatever the order needs a recorded fact plus a sweep.
+* **`DockerSandboxSession.exec` dropped `env` silently** — the protocol docstring promised it; the
+  verification stack's boot env never reached a server box either (#1174).
+* **`approve_run` on a run with nothing pending is a no-op (0, 0)** — there is no "ship without delivering"
+  button; a stranded run needs the sweep or a discard.
+* **A full-page Playwright screenshot draws fixed elements at the first viewport's bottom** — the "button covers
+  the last line" was an artifact; measure on a real scroll.
+* **jsdom cannot see layout.** Both settings screens and the tab gap were green in vitest and wrong on screen;
+  `apps/pwa/e2e-live/` now has `settings-layout` and `product-detail-and-fab` specs.
+
 ## §Ⅲ — Next
 
-0. **10-19 (Mon) 00:30 UTC BStockReport weekly run** — first real walk of #1160 (no resend loop) and the
-   10-08 schedule bundle (#1151 one run · #1152 verbatim · #1153 no approval card). Checklists in `docs/e2e/`.
-1. Prod walks in the ⏳ column (both tables). DB reads are 형님's (agents are refused prod reads by design).
-2. `human_review_required` has no creator left — kept mapped on purpose (pending prod rows would go blank).
-3. Still outside the caps on purpose: schedule ticks and next-step spawns (`run_caps` docstring).
-4. Held webhook triggers are invisible in the PWA (logs only) — a `triggered` notification goes when released.
-5. Branch rules are still three (`bsvibe/run/<uuid>` · `bsvibe/run-<8hex>` · `run/<8hex>`); #1116 taught the
-   skip all three instead of renaming 형님's worktrees.
-6. #1145 — cause unconfirmed (hypothesis: `file_edit` refuses a path not `file_read` first; the agent read via
-   shell and patched with scripts). Logs now survive deploys — confirm on the next measured run.
-7. ~~10-12 weekly run~~ — it published, then the delivery worker re-sent the report ~750 times in 80 min
-   (`DeliveryResult(artifact_type="report")` raised after the send; the at-least-once row was never dropped).
-   Fixed by #1160 (10-13). It is re-walked by item 0. #1145's cause is still unread from that run's log.
-8. Carry-overs in GitHub issues.
+0. **10-26 (Mon) 00:30 UTC weekly run** — must end `shipped` with one Telegram message, no human step (#1180).
+1. **#1000** — codex/opencode onto the MCP surface (decided 10-19): re-measure, then wire.
+2. **#967** — client_worker_manager tests flake under CI load; the error cannot tell starvation from an
+   invisible row.
+3. ⏳ walks: #1173 rewrap dry-run (형님), #1174 server-sandbox secrets checklist, #1176/#1177 on the next runs.
+4. Decision pending: **#961** (product_tick from the PWA). Later: #929, #930, #951. Outside the repo: #937
+   (cold-boot test, Supabase SMTP).
+5. Carry-overs in GitHub issues.
 
 ## §Ⅳ — Discipline that paid off
 
@@ -212,3 +193,7 @@ Checklists: `docs/e2e/*` — the unchecked boxes are the ⏳ column. **#1104 sta
 * **🐘 Throwaway Postgres for JSON-path SQL:** `docker --context colima run -d --rm … pgvector/pgvector:pg16`,
   then `CREATE EXTENSION vector` before the schema is created. `payload[KEY].as_string().is_(None)` behaves
   the same on PG and SQLite (`->>` / `json_extract`).
+* **🐚⭐ zsh does not word-split `$P`** — `P="docker … psql"; $P …` runs nothing ("command not found"). Use a
+  function: `P(){ docker --context colima exec -i pg psql "$@"; }`. Happened twice this session.
+* **🖥 For a signed-in screen, use the live suite, not jsdom** — answer only the list reads a fresh stack
+  cannot (`page.route`), keep the rest real, assert computed styles, look at the screenshots.
