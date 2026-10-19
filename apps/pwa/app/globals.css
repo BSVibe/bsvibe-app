@@ -7845,6 +7845,12 @@ main.login {
   margin-top: 28px;
 }
 
+/* #1042 §4 — the tab row already spaces itself from what follows; the settings tab's first
+   section adding its own 28px made that tab start ~34px lower than the activity tab. */
+.product-tabs + .product-resources {
+  margin-top: 0;
+}
+
 .product-resources__head,
 .product-bindings__head {
   display: flex;
