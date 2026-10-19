@@ -33,3 +33,10 @@ describe("settings tab rhythm", () => {
     expect(danger).toMatch(/border-top\s*:/);
   });
 });
+
+describe("tab row → first section", () => {
+  it("설정 탭의 첫 섹션은 자기 위 여백을 더하지 않는다 (live: 활동 탭보다 34px 아래서 시작했다)", () => {
+    const m = css.match(/\.product-tabs\s*\+\s*\.product-resources\s*\{([^}]*)\}/);
+    expect(m?.[1]).toMatch(/margin-top:\s*0/);
+  });
+});
