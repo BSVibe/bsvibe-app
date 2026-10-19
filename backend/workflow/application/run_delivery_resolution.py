@@ -367,6 +367,107 @@ def _should_ship_review_ready_without_local_auto_ship(run: ExecutionRun) -> bool
     return _recorded_local_auto_ship(run) is False
 
 
+async def ship_if_delivered(session: AsyncSession, run: ExecutionRun) -> bool:
+    """Ship ``run`` if what is TRUE now says it is done — independent of event order.
+
+    2026-10-19, run ``4f5e9bfb``: the weekly report went out while the run was still RUNNING,
+    so :func:`auto_resolve_run_on_delivery` (which only completes a REVIEW_READY run) did
+    nothing, and nothing asked again once the run got there. This asks the facts instead:
+
+    * REVIEW_READY with no local ship path recorded — the shape delivery completes;
+    * at least one of its deliverables delivered (``delivered_at``) and not retracted;
+    * nothing of the run still waiting to go out: no queued delivery event, no Safe Mode item
+      pending approval, no pending Decision. A run whose PR is still queued is not done just
+      because a partial went out earlier.
+
+    Called at the REVIEW_READY transition and by the delivery worker's sweep, so neither the
+    order of the two moments nor a race between their sessions can strand a run. Flush-only.
+    """
+    from backend.workflow.infrastructure.delivery.db import (  # noqa: PLC0415
+        DeliveryEventRow,
+        SafeModeQueueItemRow,
+        SafeModeStatus,
+    )
+
+    if not _should_ship_review_ready_without_local_auto_ship(run):
+        return False
+
+    async def _exists(stmt: Any) -> bool:
+        return (await session.execute(stmt.limit(1))).first() is not None
+
+    delivered = await _exists(
+        select(Deliverable.id).where(
+            Deliverable.run_id == run.id,
+            Deliverable.delivered_at.is_not(None),
+            Deliverable.retracted_at.is_(None),
+        )
+    )
+    if not delivered:
+        return False
+    still_out = (
+        await _exists(select(DeliveryEventRow.id).where(DeliveryEventRow.run_id == run.id))
+        or await _exists(
+            select(SafeModeQueueItemRow.id).where(
+                SafeModeQueueItemRow.run_id == run.id,
+                SafeModeQueueItemRow.status == SafeModeStatus.PENDING,
+            )
+        )
+        or any(
+            d.status is DecisionStatus.PENDING
+            for d in await SqlAlchemyDecisionRepository(session).list_by_run(
+                run.id, run.workspace_id
+            )
+        )
+    )
+    if still_out:
+        return False
+    reason = "auto-resolved: its output was already delivered (no local auto-ship path)"
+    if not (
+        await _await_merge_if_watched(session, run)
+        or await move_run_status(session, run, RunStatus.SHIPPED, reason=reason)
+    ):
+        return False
+    logger.info("run_shipped_after_earlier_delivery", run_id=str(run.id))
+    return True
+
+
+async def ship_delivered_review_ready_runs(session: AsyncSession, *, limit: int = 50) -> int:
+    """The sweep behind :func:`ship_if_delivered` — every tenant's stranded runs.
+
+    Enumerates candidates across workspaces (REVIEW_READY with a delivered deliverable), then
+    decides and writes each inside its own workspace scope. Commits per run; returns the number
+    shipped. Cheap when there is nothing to do: one indexed read.
+    """
+    from backend.data.rls import (  # noqa: PLC0415
+        cross_tenant_session_read,
+        workspace_session_scope,
+    )
+
+    async with cross_tenant_session_read(session):
+        candidates = (
+            await session.execute(
+                select(ExecutionRun.id, ExecutionRun.workspace_id)
+                .join(Deliverable, Deliverable.run_id == ExecutionRun.id)
+                .where(
+                    ExecutionRun.status == RunStatus.REVIEW_READY,
+                    Deliverable.delivered_at.is_not(None),
+                    Deliverable.retracted_at.is_(None),
+                )
+                .distinct()
+                .limit(limit)
+            )
+        ).all()
+    await session.commit()
+    shipped = 0
+    for run_id, workspace_id in candidates:
+        async with workspace_session_scope(session, workspace_id):
+            run = await SqlAlchemyRunRepository(session).get(run_id)
+            if run is not None and await ship_if_delivered(session, run):
+                shipped += 1
+            await session.commit()
+    return shipped
+
+
 async def _ship_run_via_review_ready(
     session: AsyncSession,
     run: ExecutionRun,
@@ -393,4 +494,6 @@ __all__ = [
     "AUTO_RESOLVED_DELIVERABLE_SHIPPED",
     "SYSTEM_AUTO_RESOLVE_ACTOR_ID",
     "auto_resolve_run_on_delivery",
+    "ship_delivered_review_ready_runs",
+    "ship_if_delivered",
 ]

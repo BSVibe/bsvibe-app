@@ -326,6 +326,11 @@ class Deliverable(ExecutionBase):
     # compensate dispatch succeeds. Idempotency: re-retract on a row whose value
     # is non-None short-circuits to a 200 no-op rather than dispatching twice.
     retracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When an outbound dispatch of this deliverable first SUCCEEDED, else ``None``. A fact, not
+    # an event: a run whose output went out before it reached REVIEW_READY is shipped by asking
+    # this later (``run_delivery_resolution.ship_if_delivered``) — the delivery moment itself
+    # could not ship a run that was still RUNNING (2026-10-19, run 4f5e9bfb).
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )

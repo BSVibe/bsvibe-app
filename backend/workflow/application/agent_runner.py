@@ -350,6 +350,14 @@ class AgentRunner:
             }
             if local_auto_ship:
                 await self._auto_ship_product_run(run)
+            else:
+                # Its output may already be out: a partial delivered while the run was
+                # RUNNING could not ship it then (2026-10-19). Ask the facts now.
+                from backend.workflow.application.run_delivery_resolution import (  # noqa: PLC0415
+                    ship_if_delivered,
+                )
+
+                await ship_if_delivered(self._session, run)
 
         # Step handoff — when a step of a split request reaches its verified
         # terminal, spawn the next one (seeded with this run's id + produced
