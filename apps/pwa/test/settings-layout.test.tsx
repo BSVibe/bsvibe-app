@@ -39,6 +39,7 @@ vi.mock("@/lib/api/schedules", async (importOriginal) => ({
   setScheduleEnabled: vi.fn(),
 }));
 vi.mock("@/lib/api/workspace", () => ({ getWorkspace }));
+vi.mock("@/lib/api/products", () => ({ listProducts: () => Promise.resolve([]) }));
 
 // Comments stripped: a rule's selector text would otherwise carry the comment above it.
 const css = readFileSync(join(__dirname, "..", "app", "globals.css"), "utf8").replace(

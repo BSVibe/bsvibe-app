@@ -170,6 +170,28 @@ class ScheduleService:
             schedule_id=schedule_id, workspace_id=workspace_id, enabled=enabled
         )
 
+    async def retire_for_product(
+        self, *, workspace_id: uuid.UUID, product_id: uuid.UUID
+    ) -> tuple[int, int]:
+        """#961 — the product is being deleted: retire what names it → ``(deleted, disabled)``.
+
+        ``product_id`` is a loose reference, so nothing else would: a ``product_tick`` kept
+        firing for a product that no longer existed. A tick IS the product's cadence and is
+        deleted; an instruction pinned to the product carries the founder's own words and is
+        kept, switched off. Flush-only — the caller's delete owns the transaction."""
+        deleted = disabled = 0
+        for row in await self._repo.list_for_workspace(workspace_id=workspace_id):
+            if row.product_id != product_id:
+                continue
+            if row.kind == SCHEDULE_KIND_PRODUCT_TICK:
+                await self._session.delete(row)
+                deleted += 1
+            elif row.enabled:
+                row.enabled = False
+                disabled += 1
+        await self._session.flush()
+        return deleted, disabled
+
     async def set_output_mode(
         self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID, output_mode: str
     ) -> WorkspaceScheduleRow | None:

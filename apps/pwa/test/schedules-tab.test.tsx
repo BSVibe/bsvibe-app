@@ -25,6 +25,7 @@ import SchedulesTab from "@/components/settings/SchedulesTab";
 import {
   PWA_AUTHORABLE_SCHEDULE_KINDS,
   SCHEDULE_KIND_INSTRUCTION,
+  SCHEDULE_KIND_PRODUCT_TICK,
   type Schedule,
 } from "@/lib/api/schedules";
 import { render, screen } from "@testing-library/react";
@@ -55,6 +56,7 @@ vi.mock("@/lib/api/schedules", async (importOriginal) => {
 
 const { getWorkspace } = vi.hoisted(() => ({ getWorkspace: vi.fn() }));
 vi.mock("@/lib/api/workspace", () => ({ getWorkspace }));
+vi.mock("@/lib/api/products", () => ({ listProducts: () => Promise.resolve([]) }));
 
 function schedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
@@ -101,32 +103,19 @@ describe("SchedulesTab — authoring surface", () => {
     expect(await screen.findByText(/no scheduled/i)).toBeInTheDocument();
   });
 
-  it("authors only the kinds this UI has a form for — today that is `instruction`", async () => {
-    // WHAT THIS PINS (#948): the tab's CURRENT SCOPE, not the backend's
-    // capabilities. The previous version of this test read the same absence as a
-    // correctness property ("product_tick is not built"), which stopped being
-    // true when PR #609 shipped the kind on 2026-07-21 — and because it was a
-    // test, nobody could correct the comments without turning CI red.
-    //
-    // `product_tick` is absent from this form because it takes no `text` and
-    // REQUIRES a `product_id`, so it needs a different form plus a product
-    // picker (the open product decision in #948) — NOT because the backend
-    // lacks it. It is authorable through MCP/REST right now.
-    //
-    // The assertions below are therefore scoped to `PWA_AUTHORABLE_SCHEDULE_KINDS`:
-    // building the picker means adding a kind to that list, which makes the
-    // first expect fail loudly and points the next person at this comment,
-    // instead of leaving a stale absence quietly passing.
-    expect([...PWA_AUTHORABLE_SCHEDULE_KINDS]).toEqual([SCHEDULE_KIND_INSTRUCTION]);
+  it("authors exactly the kinds this UI has a form for — instruction and product_tick", async () => {
+    // #948 → #961: the tab's scope is pinned to `PWA_AUTHORABLE_SCHEDULE_KINDS`. Since #961 that
+    // is both kinds the backend runs; a new backend kind must turn this red before a form that
+    // cannot fill it offers it. `skill` / `plugin_action` are still genuinely unbuilt.
+    expect([...PWA_AUTHORABLE_SCHEDULE_KINDS]).toEqual([
+      SCHEDULE_KIND_INSTRUCTION,
+      SCHEDULE_KIND_PRODUCT_TICK,
+    ]);
 
     getSchedules.mockResolvedValue([]);
     render(<SchedulesTab />);
-    // Wait for the form to settle.
-    await screen.findByRole("textbox", { name: /instruction/i });
-    // No kind selector, and no kind offered that the form cannot actually fill.
-    expect(screen.queryByRole("combobox", { name: /kind/i })).toBeNull();
-    expect(screen.queryByText(/product_tick/i)).toBeNull();
-    // Still genuinely unbuilt on the backend — this half of the old claim stands.
+    const radios = await screen.findAllByRole("radio");
+    expect(radios.map((r) => r.getAttribute("value"))).toEqual([...PWA_AUTHORABLE_SCHEDULE_KINDS]);
     expect(screen.queryByText(/plugin_action/i)).toBeNull();
     expect(screen.queryByText(/\bskill\b/i)).toBeNull();
   });

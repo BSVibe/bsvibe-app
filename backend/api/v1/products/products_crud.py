@@ -253,6 +253,13 @@ async def delete_product(
     cancelled = await cancel_product_runs(
         session, product_id=product_id, workspace_id=workspace_id, reason="product deleted"
     )
+    # #961 — its schedules too: a product_tick would otherwise keep firing for a product that
+    # no longer exists (same loose reference as the runs above).
+    from backend.schedule.application.schedule_service import ScheduleService  # noqa: PLC0415
+
+    schedules_deleted, schedules_disabled = await ScheduleService(session).retire_for_product(
+        workspace_id=workspace_id, product_id=product_id
+    )
     await session.delete(row)
     await session.commit()
     # Reclaim the product's git repo AFTER the row is committed away — a deleted
@@ -272,7 +279,13 @@ async def delete_product(
         await build_bundle_store().delete(product_id)
     except Exception:  # noqa: BLE001 — the DB delete already committed
         logger.warning("product_bundle_delete_failed", product_id=str(product_id), exc_info=True)
-    logger.info("product_deleted", product_id=str(product_id), runs_cancelled=cancelled)
+    logger.info(
+        "product_deleted",
+        product_id=str(product_id),
+        runs_cancelled=cancelled,
+        schedules_deleted=schedules_deleted,
+        schedules_disabled=schedules_disabled,
+    )
 
 
 __all__ = ["BootstrapScheduler", "get_bootstrap_scheduler", "router"]

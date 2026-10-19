@@ -41,6 +41,7 @@ vi.mock("@/lib/api/schedules", async (importOriginal) => {
 
 const { getWorkspace } = vi.hoisted(() => ({ getWorkspace: vi.fn() }));
 vi.mock("@/lib/api/workspace", () => ({ getWorkspace }));
+vi.mock("@/lib/api/products", () => ({ listProducts: () => Promise.resolve([]) }));
 
 function schedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
