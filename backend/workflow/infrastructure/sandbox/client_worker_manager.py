@@ -248,6 +248,13 @@ class ClientWorkerSandboxSession:
                     if exc.last_status is not None
                     else "row not visible"
                 )
+                # #967 — which tenant the reads were filtered to, and what an unfiltered read
+                # saw: a hidden row and a never-reported one stop printing the same line.
+                unscoped = (
+                    f"unscoped {exc.unscoped_status!r}"
+                    if exc.unscoped_status is not None
+                    else "unscoped not visible"
+                )
                 logger.info(
                     "client_worker_exec_timeout",
                     workspace_id=str(self._workspace_id),
@@ -255,6 +262,8 @@ class ClientWorkerSandboxSession:
                     task_id=str(task_id),
                     polls=exc.polls,
                     last_status=exc.last_status,
+                    scope=str(exc.scope) if exc.scope else None,
+                    unscoped_status=exc.unscoped_status,
                     elapsed_s=round(exc.elapsed_s, 1),
                     awaiter_budget_s=timeout_s + _AWAIT_SLACK_S,
                 )
@@ -270,7 +279,8 @@ class ClientWorkerSandboxSession:
                         # on 2026-09-01. Reproduced on an idle laptop.
                         f"{_AWAITER_TIMEOUT_PREFIX}{timeout_s + _AWAIT_SLACK_S}s "
                         f"(command budget {timeout_s}s + {_AWAIT_SLACK_S}s report slack; "
-                        f"{exc.polls} polls in {exc.elapsed_s:.1f}s, {seen})"
+                        f"{exc.polls} polls in {exc.elapsed_s:.1f}s, {seen}; "
+                        f"scope={exc.scope or 'none'}, {unscoped})"
                     ),
                     timed_out=True,
                 )

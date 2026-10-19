@@ -37,6 +37,7 @@ import structlog
 from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.data.scoping import current_workspace_id
 from backend.executors.db import ExecutorTaskRow, WorkerRow
 
 logger = structlog.get_logger(__name__)
@@ -168,12 +169,19 @@ class TaskTimeout(Exception):
         polls: int = 0,
         last_status: str | None = None,
         elapsed_s: float = 0.0,
+        scope: uuid.UUID | None = None,
+        unscoped_status: str | None = None,
     ) -> None:
         super().__init__(message)
         self.task_id = task_id
         self.polls = polls
         self.last_status = last_status
         self.elapsed_s = elapsed_s
+        #: #967 — the tenant the awaiter's reads were filtered to, and the row as a read with
+        #: no tenant filter sees it. Scoped "not visible" beside an unscoped status = a scope
+        #: problem (a leaked contextvar measured exactly that), not a worker that never reported.
+        self.scope = scope
+        self.unscoped_status = unscoped_status
 
 
 class _RedisDispatch(Protocol):
@@ -1023,6 +1031,42 @@ async def _read_status_isolated(
         return None
 
 
+async def _read_status_unscoped(
+    task_id: uuid.UUID,
+    *,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+) -> str | None:
+    """The row's raw status as a read with NO tenant filter sees it (#967) — diagnosis only.
+
+    Both layers are lifted for this one read: the ORM auto-filter (the contextvar, put back on
+    the way out — leaking a scope is the very bug this reports) and RLS (a ``'*'`` read
+    window). Never raises; ``None`` means not visible even unscoped.
+    """
+    from backend.data.rls import cross_tenant_session_read  # noqa: PLC0415
+
+    async def _read(s: AsyncSession) -> str | None:
+        token = current_workspace_id.set(None)
+        try:
+            async with cross_tenant_session_read(s):
+                status = (
+                    await s.execute(
+                        select(ExecutorTaskRow.status).where(ExecutorTaskRow.id == task_id)
+                    )
+                ).scalar_one_or_none()
+        finally:
+            current_workspace_id.reset(token)
+        return None if status is None else str(status)
+
+    try:
+        if session_factory is not None:
+            async with session_factory() as short:
+                return await _read(short)
+        return await _read(session)
+    except Exception:  # noqa: BLE001 — diagnosis must never mask the timeout
+        return None
+
+
 async def _flip_dispatched_to_failed(
     session: AsyncSession,
     task_id: uuid.UUID,
@@ -1361,13 +1405,22 @@ async def await_completion(
             task_id, session=session, session_factory=session_factory, timeout_s=timeout_s
         )
     seen = f"last status {last_status!r}" if last_status is not None else "row not visible"
+    scope = current_workspace_id.get()
+    unscoped_status = await _read_status_unscoped(
+        task_id, session=session, session_factory=session_factory
+    )
+    unscoped = (
+        f"unscoped {unscoped_status!r}" if unscoped_status is not None else "unscoped not visible"
+    )
     raise TaskTimeout(
         f"executor task {task_id} did not complete within {timeout_s}s "
-        f"({polls} polls in {elapsed_s:.1f}s, {seen})",
+        f"({polls} polls in {elapsed_s:.1f}s, {seen}; scope={scope or 'none'}, {unscoped})",
         task_id=task_id,
         polls=polls,
         last_status=last_status,
         elapsed_s=elapsed_s,
+        scope=scope,
+        unscoped_status=unscoped_status,
     )
 
 
