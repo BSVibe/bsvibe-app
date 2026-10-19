@@ -160,9 +160,9 @@ export default function NotificationsTab() {
       ) : (
         <section className="notifications-matrix" aria-label={t("matrixTitle")}>
           <h2 className="section-label">{t("matrixTitle")}</h2>
-          <p className="settings-field__caption">{t("matrixCaption")}</p>
+          <p className="settings-hint">{t("matrixCaption")}</p>
           {/* 켜면 어디로 가는지 이름을 밝힌다 — 스위치가 과약속하지 않도록. */}
-          <p className="settings-field__caption">
+          <p className="settings-hint">
             {t("deliversTo", {
               channels: [channelLabel(IN_APP), ...pushChannels.map(channelLabel)].join(", "),
             })}
@@ -184,7 +184,7 @@ export default function NotificationsTab() {
               </li>
             ))}
           </ul>
-          <p className="settings-field__caption">{t("inAppCaption")}</p>
+          <p className="settings-hint">{t("inAppCaption")}</p>
         </section>
       )}
 
@@ -222,7 +222,7 @@ export default function NotificationsTab() {
             />
           </label>
         </div>
-        <p className="settings-field__caption">{t("quietCaption")}</p>
+        <p className="settings-hint">{t("quietCaption")}</p>
       </section>
     </div>
   );
