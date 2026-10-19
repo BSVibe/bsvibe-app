@@ -57,6 +57,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import structlog
@@ -285,6 +286,18 @@ async def persist_compensation_handles(
     return len(entries)
 
 
+async def _mark_delivered(session: AsyncSession, deliverable_id: uuid.UUID) -> None:
+    """Record that this deliverable went out — the FIRST time only, and committed at once.
+
+    The fact a later moment needs: a run whose output was delivered while it was still RUNNING
+    is shipped when it reaches REVIEW_READY by asking this (2026-10-19)."""
+    row = await session.get(Deliverable, deliverable_id)
+    if row is None or row.delivered_at is not None:
+        return
+    row.delivered_at = datetime.now(tz=UTC)
+    await session.commit()
+
+
 def _delivery_succeeded(result: DeliveryResult) -> bool:
     """True when the dispatch actually DELIVERED — no top-level error and at
     least one outbound action succeeded. A wholly-failed dispatch (nothing
@@ -360,6 +373,7 @@ async def dispatch_delivery(
     try:
         if session_factory is not None:
             async with session_factory() as owned:
+                await _mark_delivered(owned, deliverable_id)
                 await persist_compensation_handles(
                     owned,
                     deliverable_id=deliverable_id,
@@ -368,6 +382,7 @@ async def dispatch_delivery(
                 if await auto_resolve_run_on_delivery(owned, deliverable_id=deliverable_id):
                     await owned.commit()
         elif session is not None:
+            await _mark_delivered(session, deliverable_id)
             # Caller-owned session (REST / MCP / Telegram approve): resolve within
             # their transaction and commit our writes (these handlers already
             # multi-commit per request — approve, then dispatch, then persist).
@@ -432,7 +447,24 @@ class DeliveryWorker(BaseWorker):
         self._failures: dict[uuid.UUID, int] = {}
 
     async def _tick(self) -> int:
-        return await self.drain_once()
+        processed = await self.drain_once()
+        await self.ship_delivered_runs()
+        return processed
+
+    async def ship_delivered_runs(self) -> int:
+        """Ship runs whose output already went out but that nothing completed — the order of
+        "delivered" and "REVIEW_READY", or a race between their sessions, must not strand one.
+        Never fails the tick: the drain above is this worker's job."""
+        from backend.workflow.application.run_delivery_resolution import (  # noqa: PLC0415
+            ship_delivered_review_ready_runs,
+        )
+
+        try:
+            async with self._session_factory() as session:
+                return await ship_delivered_review_ready_runs(session)
+        except Exception:  # noqa: BLE001 — a sweep fault must not stop deliveries
+            logger.warning("delivery_worker_ship_sweep_failed", exc_info=True)
+            return 0
 
     async def drain_once(self) -> int:
         """Pull a batch of pending events + dispatch each. Returns count delivered.
