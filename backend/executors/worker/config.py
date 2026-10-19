@@ -69,6 +69,12 @@ class WorkerSettings(BaseSettings):
     #: that setting, it only resolved the path.
     claude_config_dir: str = ""
 
+    #: The ``codex`` login this worker copies into each run's own ``CODEX_HOME`` (#1000).
+    #: Empty → ``~/.codex/auth.json`` (where ``codex login`` writes it). Only this file is
+    #: copied: the host's ``config.toml`` attaches the operator's personal MCP servers and
+    #: memories DB to every run (measured), so the host home itself is never used.
+    codex_auth_file: str = ""
+
     # Streaming chunks back to the backend via Redis pub/sub (the same Redis the
     # backend dispatch substrate uses). Empty disables streaming — executors
     # still run and results are still POSTed, the backend just falls back to its

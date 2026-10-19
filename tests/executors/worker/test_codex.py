@@ -23,6 +23,29 @@ from tests.executors.worker._drain import drain
 
 pytestmark = pytest.mark.asyncio
 
+#: Since #1000 an agent run needs BSVibe's MCP surface and a codex login; these tests are about
+#: the subprocess and the stream, so every agent run here carries both.
+SURFACE: dict[str, Any] = {
+    "mcp_config": json.dumps(
+        {
+            "mcpServers": {
+                "bsvibe": {
+                    "url": "https://api.bsvibe.dev/mcp/",
+                    "headers": {"Authorization": "Bearer t"},
+                }
+            }
+        }
+    ),
+    "allowed_tools": ["mcp__bsvibe__bsvibe_work_file_read"],
+}
+
+
+@pytest.fixture(autouse=True)
+def _codex_login(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    auth = tmp_path / "auth.json"
+    auth.write_text("{}")
+    monkeypatch.setenv("BSVIBE_WORKER_CODEX_AUTH_FILE", str(auth))
+
 
 # ── A fake asyncio subprocess emitting canned stdout/stderr ──────────────────
 
@@ -122,7 +145,7 @@ async def test_streams_agent_message_then_done(monkeypatch: pytest.MonkeyPatch) 
     )
     _patch_subprocess(monkeypatch, proc)
 
-    chunks = await _drain(CodexExecutor().execute("do it", {"workspace_dir": "."}))
+    chunks = await _drain(CodexExecutor().execute("do it", {"workspace_dir": ".", **SURFACE}))
 
     deltas = [c.delta for c in chunks if c.delta]
     assert deltas == ["Hello world"]
@@ -136,7 +159,7 @@ async def test_collect_aggregates_output(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     _patch_subprocess(monkeypatch, proc)
 
-    result = await drain(CodexExecutor().execute("p", {}))
+    result = await drain(CodexExecutor().execute("p", dict(SURFACE)))
 
     assert result.success is True
     assert result.stdout == "abcdef"
@@ -147,7 +170,9 @@ async def test_command_includes_exec_and_json(monkeypatch: pytest.MonkeyPatch) -
     proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
-    await _drain(CodexExecutor().execute("p", {"system": "be brief", "model": "gpt-5"}))
+    await _drain(
+        CodexExecutor().execute("p", {"system": "be brief", "model": "gpt-5.1", **SURFACE})
+    )
 
     argv = calls[0]
     assert "exec" in argv
@@ -156,7 +181,7 @@ async def test_command_includes_exec_and_json(monkeypatch: pytest.MonkeyPatch) -
     assert any(a.startswith("model_instructions_file=") for a in argv)
     # model is forwarded.
     assert "--model" in argv
-    assert "gpt-5" in argv
+    assert "gpt-5.1" in argv
 
 
 async def test_command_includes_skip_git_repo_check(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,7 +192,7 @@ async def test_command_includes_skip_git_repo_check(monkeypatch: pytest.MonkeyPa
     proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
-    await _drain(CodexExecutor().execute("p", {"workspace_dir": "."}))
+    await _drain(CodexExecutor().execute("p", {"workspace_dir": ".", **SURFACE}))
 
     assert "--skip-git-repo-check" in calls[0]
 
@@ -179,7 +204,7 @@ async def test_nonzero_exit_yields_error_chunk(monkeypatch: pytest.MonkeyPatch) 
     proc = _FakeProcess(stdout_lines=[], stderr_lines=[b"boom\n"], returncode=2)
     _patch_subprocess(monkeypatch, proc)
 
-    chunks = await _drain(CodexExecutor().execute("p", {}))
+    chunks = await _drain(CodexExecutor().execute("p", dict(SURFACE)))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -193,7 +218,7 @@ async def test_bad_json_lines_are_skipped_no_crash(monkeypatch: pytest.MonkeyPat
     )
     _patch_subprocess(monkeypatch, proc)
 
-    chunks = await _drain(CodexExecutor().execute("p", {}))
+    chunks = await _drain(CodexExecutor().execute("p", dict(SURFACE)))
 
     deltas = [c.delta for c in chunks if c.delta]
     assert deltas == ["ok"]
@@ -207,7 +232,7 @@ async def test_missing_binary_yields_error(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _raise)
 
-    chunks = await _drain(CodexExecutor().execute("p", {}))
+    chunks = await _drain(CodexExecutor().execute("p", dict(SURFACE)))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -222,7 +247,7 @@ async def test_timeout_yields_explicit_timeout_message(monkeypatch: pytest.Monke
     _patch_subprocess(monkeypatch, proc)
 
     executor = CodexExecutor(timeout_seconds=0)
-    chunks = await _drain(executor.execute("p", {}))
+    chunks = await _drain(executor.execute("p", dict(SURFACE)))
 
     assert chunks[-1].done is True
     assert chunks[-1].error is not None
@@ -245,8 +270,9 @@ async def test_timeout_yields_explicit_timeout_message(monkeypatch: pytest.Monke
 # silently run agentic.
 
 
-async def test_chat_turn_is_refused_not_run_agentic(monkeypatch: pytest.MonkeyPatch) -> None:
-    """agentic=False → a terminal error chunk, and codex is NEVER spawned."""
+async def test_chat_turn_runs_with_its_tools_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """agentic=False → since codex 0.163 its tools switch off (#1000), so a chat turn is
+    served instead of refused — with no MCP surface at all."""
     proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
@@ -254,14 +280,9 @@ async def test_chat_turn_is_refused_not_run_agentic(monkeypatch: pytest.MonkeyPa
         CodexExecutor().execute("p", {"system": "ctx", "agentic": False, "workspace_dir": "."})
     )
 
-    # No subprocess: the refusal happens before any exec.
-    assert calls == []
-    # A single terminal error chunk naming the limitation.
-    assert len(chunks) == 1
-    assert chunks[0].done is True
-    assert chunks[0].error is not None
-    assert "codex" in chunks[0].error.lower()
-    assert "tool" in chunks[0].error.lower()
+    assert len(calls) == 1
+    assert calls[0][calls[0].index("shell_tool") - 1] == "--disable"
+    assert chunks[-1].error is None
 
 
 async def test_agent_run_still_spawns_agentic(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -269,7 +290,7 @@ async def test_agent_run_still_spawns_agentic(monkeypatch: pytest.MonkeyPatch) -
     proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
-    await _drain(CodexExecutor().execute("p", {"agentic": True, "workspace_dir": "."}))
+    await _drain(CodexExecutor().execute("p", {"agentic": True, "workspace_dir": ".", **SURFACE}))
 
     assert len(calls) == 1
     assert "exec" in calls[0]
@@ -283,7 +304,7 @@ async def test_missing_agentic_defaults_to_agent_run(monkeypatch: pytest.MonkeyP
     proc = _FakeProcess(stdout_lines=[_agent_message_line("x")])
     calls = _patch_subprocess(monkeypatch, proc)
 
-    await _drain(CodexExecutor().execute("p", {"workspace_dir": "."}))
+    await _drain(CodexExecutor().execute("p", {"workspace_dir": ".", **SURFACE}))
 
     assert len(calls) == 1
     assert "exec" in calls[0]
@@ -309,7 +330,7 @@ async def test_subprocess_env_strips_session_markers_keeps_normal(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
 
-    await _drain(CodexExecutor().execute("p", {}))
+    await _drain(CodexExecutor().execute("p", dict(SURFACE)))
 
     env = envs[0]
     assert "CLAUDE_CODE_SESSION_ID" not in env
@@ -372,7 +393,7 @@ async def test_cancel_kills_subprocess_promptly_no_wait_block(
     monkeypatch.setattr(codex_mod, "_kill_process_group", _fake_group_kill)
 
     executor = CodexExecutor(timeout_seconds=3600)
-    stream = executor.execute("long task", {"workspace_dir": "."})
+    stream = executor.execute("long task", {"workspace_dir": ".", **SURFACE})
     task = asyncio.create_task(_drain(stream))
 
     # Give the executor time to spawn and reach readline await.
@@ -403,7 +424,7 @@ async def test_subprocess_started_in_new_session_for_pgrp_signal(
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _capture_exec)
-    await _drain(CodexExecutor().execute("p", {"workspace_dir": "."}))
+    await _drain(CodexExecutor().execute("p", {"workspace_dir": ".", **SURFACE}))
 
     assert spawn_kwargs, "create_subprocess_exec was never called"
     assert spawn_kwargs[0].get("start_new_session") is True, (
@@ -425,7 +446,7 @@ async def test_subprocess_uses_large_stream_limit(monkeypatch: pytest.MonkeyPatc
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
-    await _drain(CodexExecutor().execute("p", {"system": "s", "model": "gpt-5"}))
+    await _drain(CodexExecutor().execute("p", {"system": "s", "model": "gpt-5.1", **SURFACE}))
     assert captured.get("limit", 0) >= 1024 * 1024, (
         "stream limit must be >= 1 MiB for large JSON lines"
     )

@@ -47,15 +47,12 @@ def test_opencode_can_too_since_1000() -> None:
     assert supports_remote_tools("opencode") is True
 
 
-def test_codex_still_cannot() -> None:
-    """Measured, not assumed (#1000): ``view_image`` survives all 74 feature flags.
-
-    Execution, agent-spawn and web-search all switch off, so codex is close — but "exactly
-    the tools we allow" is the contract, and one tool we cannot take away breaks it. The
-    open question is a product one (does the contract accept a residual reader?), not a
-    hunt for another flag.
-    """
-    assert supports_remote_tools("codex") is False
+def test_codex_can_since_0_163() -> None:
+    """Measured on codex-cli 0.163.0 (#1000, 2026-10-19), off the request body codex sends its
+    model provider: with its built-ins off, gpt-5.1-codex keeps only ``request_user_input`` (no
+    file, no command) beside our server's tools, and ``enabled_tools`` narrows those to the
+    dispatched set. ``view_image`` — the reason this was False on 0.130 — is now a flag."""
+    assert supports_remote_tools("codex") is True
 
 
 class _Account:
@@ -79,7 +76,7 @@ def _adapter(executor_type: str, *, redis: Any = object()) -> ExecutorAdapter:
     )
 
 
-@pytest.mark.parametrize("executor", ["codex"])
+@pytest.mark.parametrize("executor", ["not_a_verified_cli"])
 async def test_agentic_work_on_an_unsupported_executor_is_refused(executor: str) -> None:
     """The founder routed a coding run to an executor that cannot be given BSVibe's tools.
 
