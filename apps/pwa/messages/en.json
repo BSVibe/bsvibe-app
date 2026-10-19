@@ -775,7 +775,7 @@
       "deliversTo": "When on, delivered to: {channels}"
     },
     "schedules": {
-      "lede": "Schedule instructions for BSVibe to run on its own, on a recurring cadence. The instruction is the task the scheduled run works on.",
+      "lede": "Schedule work for BSVibe to do on its own, on a recurring cadence — your own instruction, or a product check where BSVibe decides the next step.",
       "createTitle": "New schedule",
       "instructionLabel": "Instruction",
       "instructionPlaceholder": "e.g. Summarize this week's market research every Monday",
@@ -801,7 +801,18 @@
       "enabledLabel": "Enabled",
       "directLabel": "Deliver without approval",
       "directCaption": "This schedule's results are delivered without a Safe Mode approval card — writing the schedule is the approval.",
-      "delete": "Delete"
+      "delete": "Delete",
+      "kindLabel": "What runs",
+      "kind": {
+        "instruction": "Your instruction",
+        "product_tick": "Product check"
+      },
+      "productLabel": "Product",
+      "productPlaceholder": "Choose a product",
+      "tickCaption": "BSVibe looks at the product and does its next step on its own. Results always wait for your approval.",
+      "tickNeedsProduct": "A product check needs a product — add one first.",
+      "tickHeading": "Product check · {product}",
+      "deletedProduct": "(deleted product)"
     },
     "account": {
       "lede": "Account: your profile and sign-in.",

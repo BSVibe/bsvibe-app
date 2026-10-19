@@ -13,12 +13,9 @@
  *
  *  The backend accepts TWO kinds today — `instruction` and `product_tick`
  *  (`_SUPPORTED_KINDS` in `backend/schedule/application/schedule_service.py`;
- *  `product_tick` shipped 2026-07-21 in PR #609 and is live in prod). THIS UI
- *  authors `instruction` only. Read that as the UI's current scope, not as a
- *  claim about the capability: `product_tick` is authorable today through
- *  MCP/REST, and is absent here only because it takes no `text` and REQUIRES a
- *  `product_id` — a different form plus a product picker, a product decision
- *  still open in #948. `skill` / `plugin_action` genuinely do NOT exist (they
+ *  `product_tick` shipped 2026-07-21 in PR #609). THIS UI authors both since #961:
+ *  `product_tick` takes no `text` and REQUIRES a `product_id`, so the form swaps the
+ *  instruction for a product picker. `skill` / `plugin_action` genuinely do NOT exist (they
  *  are not in `_SUPPORTED_KINDS`). That split is machine-checked in
  *  `test/schedule-kinds-backend-parity.test.ts` so it cannot silently rot the
  *  way the sentence this one replaces did. Times (`next_run_at`) come back as
@@ -31,8 +28,7 @@ import { apiFetch } from "./client";
 export const SCHEDULE_KIND_INSTRUCTION = "instruction";
 
 /** An autonomous cadence tick: the founder sets only WHEN (per product) and
- *  BSVibe decides WHAT at fire time. The backend accepts it; this UI does not
- *  author it yet (no product picker — #948), so it is created via MCP/REST. */
+ *  BSVibe decides WHAT at fire time. Authored here since #961 (product picker). */
 export const SCHEDULE_KIND_PRODUCT_TICK = "product_tick";
 
 /** Every kind `POST /api/v1/schedules` accepts — a mirror of the backend's
@@ -47,7 +43,10 @@ export const BACKEND_SUPPORTED_SCHEDULE_KINDS = [
 /** Every kind THIS UI can author today — deliberately a SUBSET of the above.
  *  The gap is unbuilt UI, never an unbuilt capability; keeping the two lists
  *  apart is the whole of #948. */
-export const PWA_AUTHORABLE_SCHEDULE_KINDS = [SCHEDULE_KIND_INSTRUCTION] as const;
+export const PWA_AUTHORABLE_SCHEDULE_KINDS = [
+  SCHEDULE_KIND_INSTRUCTION,
+  SCHEDULE_KIND_PRODUCT_TICK,
+] as const;
 
 /** A stored schedule row — mirrors the backend `ScheduleView`. `next_run_at` /
  *  `last_fired_at` are UTC ISO datetime strings. */

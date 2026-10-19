@@ -1,6 +1,8 @@
 "use client";
 
+import { listProducts } from "@/lib/api/products";
 import {
+  SCHEDULE_KIND_INSTRUCTION,
   SCHEDULE_KIND_PRODUCT_TICK,
   type Schedule,
   type ScheduleCreate,
@@ -19,14 +21,12 @@ import { useEffect, useMemo, useState } from "react";
  * channel that lets BSVibe start work on its own on a recurring cadence.
  *
  * Honesty rules baked in here:
- *  - This tab authors the `instruction` kind only and there is NO kind selector.
- *    That is a statement about THIS SURFACE, not about the capability: the
- *    backend also accepts `product_tick` (shipped 2026-07-21 in PR #609, live in
- *    prod), which the founder can author today through MCP/REST. It is missing
- *    here because it takes no `text` and REQUIRES a `product_id` — a different
- *    form plus a product picker, a product decision still open in #948. The
- *    earlier version of this comment said `product_tick` was "not built"; that
- *    was true when written and stopped being true when #609 shipped.
+ *  - It authors BOTH kinds the backend runs (#961): `instruction` (the founder's text is
+ *    the task) and `product_tick` (for one product, BSVibe decides and does the next
+ *    step). A tick takes a product instead of text, is pre-selected only when there is
+ *    exactly one product (a wrong default would start autonomous work on the wrong one),
+ *    is disabled with a reason when there is none, and never offers "deliver without
+ *    approval" — PT3: BSVibe chose the work, so the founder approves the result.
  *  - `skill` / `plugin_action` ARE genuinely unbuilt (they are not in the
  *    backend's `_SUPPORTED_KINDS`), so the surface still never advertises a
  *    capability that would silently do nothing. Both halves are machine-checked
@@ -62,6 +62,9 @@ export default function SchedulesTab() {
   const [timezone, setTimezone] = useState<string>("UTC");
 
   // Create-form state.
+  const [kind, setKind] = useState<string>(SCHEDULE_KIND_INSTRUCTION);
+  const [products, setProducts] = useState<{ id: string; name: string }[]>([]);
+  const [productId, setProductId] = useState("");
   const [text, setText] = useState("");
   const [cron, setCron] = useState("");
   const [title, setTitle] = useState("");
@@ -77,6 +80,16 @@ export default function SchedulesTab() {
       })
       .catch(() => {
         if (active) setLoadFailed(true);
+      });
+    listProducts()
+      .then((rows) => {
+        if (!active) return;
+        setProducts(rows.map((p) => ({ id: p.id, name: p.name })));
+        // One product → it is the only sensible target. Several → the founder picks.
+        if (rows.length === 1) setProductId(rows[0].id);
+      })
+      .catch(() => {
+        /* no products listed → the tick option stays disabled, which is honest */
       });
     getWorkspace()
       .then((w) => {
@@ -115,17 +128,26 @@ export default function SchedulesTab() {
     if (creating) return;
     const trimmedText = text.trim();
     const trimmedCron = cron.trim();
-    if (!trimmedText || !trimmedCron) return;
+    if (!canSubmit) return;
 
     setCreating(true);
     setCreateError(null);
-    const body: ScheduleCreate = {
-      kind: "instruction",
-      text: trimmedText,
-      cron_expr: trimmedCron,
-      title: title.trim() || undefined,
-      output_mode: direct ? "direct" : "safe",
-    };
+    const body: ScheduleCreate = isTick
+      ? {
+          kind: SCHEDULE_KIND_PRODUCT_TICK,
+          text: "",
+          cron_expr: trimmedCron,
+          product_id: productId,
+          title: title.trim() || undefined,
+          output_mode: "safe",
+        }
+      : {
+          kind: SCHEDULE_KIND_INSTRUCTION,
+          text: trimmedText,
+          cron_expr: trimmedCron,
+          title: title.trim() || undefined,
+          output_mode: direct ? "direct" : "safe",
+        };
     createSchedule(body)
       .then((row) => {
         setSchedules((prev) => [row, ...(prev ?? [])]);
@@ -137,6 +159,12 @@ export default function SchedulesTab() {
       .catch(() => setCreateError(t("createError")))
       .finally(() => setCreating(false));
   }
+
+  const isTick = kind === SCHEDULE_KIND_PRODUCT_TICK;
+  const canSubmit =
+    !creating && cron.trim() !== "" && (isTick ? productId !== "" : text.trim() !== "");
+  const productName = (id: string | null) =>
+    products.find((p) => p.id === id)?.name ?? t("deletedProduct");
 
   function toggleEnabled(row: Schedule) {
     const next = !row.enabled;
@@ -185,18 +213,61 @@ export default function SchedulesTab() {
       <form className="schedules-form" onSubmit={submit} aria-label={t("createTitle")}>
         <h2 className="section-label">{t("createTitle")}</h2>
 
-        <label className="settings-field settings-field--stacked">
-          <span className="settings-field__label">{t("instructionLabel")}</span>
-          <textarea
-            className="settings-field__input schedules-form__instruction"
-            aria-label={t("instructionLabel")}
-            placeholder={t("instructionPlaceholder")}
-            value={text}
-            rows={3}
-            disabled={creating}
-            onChange={(e) => setText(e.target.value)}
-          />
-        </label>
+        <fieldset className="schedules-form__kind">
+          <legend className="settings-field__label">{t("kindLabel")}</legend>
+          <div className="schedules-form__kind-options">
+            {[SCHEDULE_KIND_INSTRUCTION, SCHEDULE_KIND_PRODUCT_TICK].map((k) => (
+              <label key={k} className="schedules-form__kind-option">
+                <input
+                  type="radio"
+                  name="schedule-kind"
+                  value={k}
+                  checked={kind === k}
+                  disabled={creating || (k === SCHEDULE_KIND_PRODUCT_TICK && products.length === 0)}
+                  onChange={() => setKind(k)}
+                />
+                <span>{t(`kind.${k}`)}</span>
+              </label>
+            ))}
+          </div>
+          {products.length === 0 && <p className="settings-hint">{t("tickNeedsProduct")}</p>}
+        </fieldset>
+
+        {isTick ? (
+          <>
+            <label className="settings-field settings-field--stacked">
+              <span className="settings-field__label">{t("productLabel")}</span>
+              <select
+                className="settings-field__input"
+                aria-label={t("productLabel")}
+                value={productId}
+                disabled={creating}
+                onChange={(e) => setProductId(e.target.value)}
+              >
+                {products.length > 1 && <option value="">{t("productPlaceholder")}</option>}
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="settings-hint">{t("tickCaption")}</p>
+          </>
+        ) : (
+          <label className="settings-field settings-field--stacked">
+            <span className="settings-field__label">{t("instructionLabel")}</span>
+            <textarea
+              className="settings-field__input schedules-form__instruction"
+              aria-label={t("instructionLabel")}
+              placeholder={t("instructionPlaceholder")}
+              value={text}
+              rows={3}
+              disabled={creating}
+              onChange={(e) => setText(e.target.value)}
+            />
+          </label>
+        )}
 
         <fieldset className="schedules-form__recurrence">
           <legend className="settings-field__label">{t("recurrenceLabel")}</legend>
@@ -242,23 +313,23 @@ export default function SchedulesTab() {
           />
         </label>
 
-        <label className="schedule-row__toggle">
-          <input
-            type="checkbox"
-            aria-label={t("directLabel")}
-            checked={direct}
-            disabled={creating}
-            onChange={(e) => setDirect(e.target.checked)}
-          />
-          <span>{t("directLabel")}</span>
-        </label>
-        <p className="settings-hint">{t("directCaption")}</p>
+        {!isTick && (
+          <>
+            <label className="schedule-row__toggle">
+              <input
+                type="checkbox"
+                aria-label={t("directLabel")}
+                checked={direct}
+                disabled={creating}
+                onChange={(e) => setDirect(e.target.checked)}
+              />
+              <span>{t("directLabel")}</span>
+            </label>
+            <p className="settings-hint">{t("directCaption")}</p>
+          </>
+        )}
 
-        <button
-          type="submit"
-          className="schedules-form__submit"
-          disabled={creating || !text.trim() || !cron.trim()}
-        >
+        <button type="submit" className="schedules-form__submit" disabled={!canSubmit}>
           {creating ? t("creating") : t("create")}
         </button>
         {createError && (
@@ -285,7 +356,11 @@ export default function SchedulesTab() {
         ) : (
           <ul className="schedules-list__items">
             {schedules.map((row) => {
-              const heading = row.title?.trim() || row.text;
+              const heading =
+                row.title?.trim() ||
+                (row.kind === SCHEDULE_KIND_PRODUCT_TICK
+                  ? t("tickHeading", { product: productName(row.product_id) })
+                  : row.text);
               return (
                 <li key={row.id} className="schedule-row">
                   <div className="schedule-row__main">

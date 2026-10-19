@@ -131,10 +131,11 @@ describe("schedule kinds — the PWA's claims vs the backend's frozenset", () =>
     for (const kind of PWA_AUTHORABLE_SCHEDULE_KINDS) {
       expect(kinds).toContain(kind);
     }
-    // Today the UI authors `instruction` alone — `product_tick` needs a product
-    // picker (it takes no `text` and REQUIRES a `product_id`), a product
-    // decision still open in #948. Building that picker must make this line
-    // fail loudly rather than pass in silence.
-    expect([...PWA_AUTHORABLE_SCHEDULE_KINDS]).toEqual([SCHEDULE_KIND_INSTRUCTION]);
+    // Since #961 the UI authors both kinds the backend runs. A third backend kind must
+    // still turn this red rather than be offered by a form that cannot fill it.
+    expect([...PWA_AUTHORABLE_SCHEDULE_KINDS]).toEqual([
+      SCHEDULE_KIND_INSTRUCTION,
+      SCHEDULE_KIND_PRODUCT_TICK,
+    ]);
   });
 });
