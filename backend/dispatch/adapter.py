@@ -154,13 +154,15 @@ class ModelAccountAdapter(Protocol):
 #: ones we name — both read off the request body opencode sends the model, not off what the
 #: model says about itself.
 #:
-#: ``codex`` is NOT. Measured in the same pass: its execution, agent-spawn and web-search
-#: tools can all be disabled, but ``view_image`` survives every combination of all 74
-#: feature flags — so "exactly the tools we allow" does not hold, and finding more flags is
-#: not the open question (they were all tried). Until a CLI is verified, agentic work routed
-#: to it is REFUSED rather than quietly run in the old shape: "which account did I route?"
-#: must not change what the product does.
-_REMOTE_TOOL_EXECUTORS: frozenset[str] = frozenset({"claude_code", "opencode"})
+#: ``codex`` too since codex-cli 0.163.0 (#1000, founder decision 2026-10-19). On 0.130
+#: ``view_image`` survived every flag; 0.163 made it a feature, and with the built-ins off
+#: gpt-5.1-codex keeps only ``request_user_input`` (no file, no command) besides our server's
+#: tools, which ``enabled_tools`` narrows to exactly the dispatched set — all read off the
+#: request body codex sends its model provider. ``apply_patch`` still survives on gpt-5.5,
+#: so the worker pins agent runs to models measured without it (``codex._AGENT_MODELS``).
+#: A CLI not listed here is REFUSED agentic work rather than quietly run in the old shape:
+#: "which account did I route?" must not change what the product does.
+_REMOTE_TOOL_EXECUTORS: frozenset[str] = frozenset({"claude_code", "opencode", "codex"})
 
 
 #: The tools an executor agent may use — BSVibe's, over MCP. The CLI is given exactly these
