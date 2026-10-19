@@ -185,7 +185,7 @@ export default function SchedulesTab() {
       <form className="schedules-form" onSubmit={submit} aria-label={t("createTitle")}>
         <h2 className="section-label">{t("createTitle")}</h2>
 
-        <label className="settings-field">
+        <label className="settings-field settings-field--stacked">
           <span className="settings-field__label">{t("instructionLabel")}</span>
           <textarea
             className="settings-field__input schedules-form__instruction"
@@ -214,7 +214,7 @@ export default function SchedulesTab() {
               </button>
             ))}
           </div>
-          <label className="settings-field">
+          <label className="settings-field settings-field--stacked">
             <span className="settings-field__label">{t("cronLabel")}</span>
             <input
               type="text"
@@ -229,7 +229,7 @@ export default function SchedulesTab() {
           </label>
         </fieldset>
 
-        <label className="settings-field">
+        <label className="settings-field settings-field--stacked">
           <span className="settings-field__label">{t("titleLabel")}</span>
           <input
             type="text"
@@ -252,7 +252,7 @@ export default function SchedulesTab() {
           />
           <span>{t("directLabel")}</span>
         </label>
-        <p className="settings-field__caption">{t("directCaption")}</p>
+        <p className="settings-hint">{t("directCaption")}</p>
 
         <button
           type="submit"
@@ -289,8 +289,14 @@ export default function SchedulesTab() {
               return (
                 <li key={row.id} className="schedule-row">
                   <div className="schedule-row__main">
-                    <p className="schedule-row__title">{heading}</p>
-                    {row.title?.trim() && <p className="schedule-row__text">{row.text}</p>}
+                    <p className="schedule-row__title" title={heading}>
+                      {heading}
+                    </p>
+                    {row.title?.trim() && (
+                      <p className="schedule-row__text" title={row.text}>
+                        {row.text}
+                      </p>
+                    )}
                     <p className="schedule-row__meta">
                       <code className="schedule-row__cron">{row.cron_expr}</code>
                       <span className="schedule-row__next">

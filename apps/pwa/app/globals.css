@@ -3922,6 +3922,34 @@ main.login {
   text-align: right;
 }
 
+/* 2026-10-19 — a STANDALONE helper sentence. ``.settings-field__caption`` above is the caption
+   of a label | value row; reused as a paragraph it became a narrow right-aligned column. */
+.settings-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+/* A form field: label on top, the input across the full width beneath it (the row layout put
+   each input at the far right edge of the schedule form, away from its label). */
+.settings-field--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 0;
+  border-bottom: none;
+}
+.settings-field--stacked .settings-field__input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.settings-field--stacked .settings-field__caption {
+  max-width: none;
+  text-align: left;
+}
+
 /* Settings → Models → "Default model for this workspace" (Lift E2 / L5).
    Workspace default-account picker. Mirrors the .settings-field__select
    border/radius/padding/background tokens so the native <select> matches the
@@ -5461,6 +5489,32 @@ main.login {
 .notifications-grid__toggle:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* The events list had no rules at all and rendered with browser bullets. */
+.notifications-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--hair-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.notifications-events__row {
+  border-top: 1px solid var(--hair);
+}
+.notifications-events__row:first-child {
+  border-top: none;
+}
+.notifications-events__label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  font-size: 0.88rem;
+  color: var(--ink);
+  cursor: pointer;
 }
 
 .notifications-quiet__enable {
@@ -10215,6 +10269,10 @@ main.login {
   flex-direction: column;
   gap: 10px;
 }
+.schedules-form__recurrence > legend {
+  padding: 0;
+  margin-bottom: 6px;
+}
 
 .schedules-form__presets {
   display: flex;
@@ -10295,6 +10353,30 @@ main.login {
   margin: 0 0 6px;
   font-size: 0.86rem;
   color: var(--muted, #667085);
+}
+
+/* A schedule's instruction can be a whole prompt; three lines of it say which schedule this
+   is, the rest is on hover (``title``) — the row was one wall of text. */
+.schedule-row__title,
+.schedule-row__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.schedule-row__main {
+  flex: 1;
+  min-width: 0;
+}
+.schedule-row__next {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+.schedules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .schedule-row__meta {
