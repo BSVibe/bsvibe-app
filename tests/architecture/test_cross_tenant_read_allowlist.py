@@ -34,6 +34,9 @@ ALLOWED: dict[str, str] = {
     "backend/workflow/application/run_delivery_resolution.py": (
         "출력이 이미 나간 REVIEW_READY 런 스윕 — 후보만 전 테넌트에서 읽는다. 판정·쓰기는 그 워크스페이스 스코프 안"
     ),
+    "backend/executors/dispatch.py": (
+        "태스크 대기 타임아웃 진단(#967) — 그 행 하나의 상태만 스코프 없이 읽는다. 쓰기 없음"
+    ),
     "backend/router/accounts/rewrap.py": (
         "KMS 키 회전 재암호화 — 모든 제품의 봉인 시크릿을 읽는다. 쓰기는 그 워크스페이스 스코프 안"
     ),

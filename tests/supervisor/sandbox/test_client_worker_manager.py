@@ -80,6 +80,20 @@ async def _seed_worker(
     return wid
 
 
+@pytest.fixture(autouse=True)
+def _no_tenant_scope_leaked_in() -> None:
+    """#967 — every test here starts with NO workspace scope set.
+
+    A scope leaked from an earlier test (a contextvar set and never reset) hides this file's
+    ``executor_tasks`` rows from the awaiter and the fake worker alike. Measured: 11 of 19
+    failed — each after a full 90 s timeout that blamed the product code. Here it is one red,
+    at once, with the cause in its name."""
+    from backend.data.scoping import current_workspace_id
+
+    leaked = current_workspace_id.get()
+    assert leaked is None, f"a workspace scope leaked in from an earlier test: {leaked}"
+
+
 #: Wall-clock budget for the simulated worker to see a dispatched task. Generous
 #: on purpose: it bounds a HANG, it is not a performance assertion, and a tight
 #: bound here only ever produces false failures.
@@ -660,6 +674,9 @@ async def test_a_full_budget_timeout_does_not_read_as_a_budget_overrun(
 
     match = timed_out_after_re.search(result.stderr)
     assert match is not None, f"no budget stated in {result.stderr!r}"
+    # #967 — the scope the reads ran under and what an unscoped read saw ride along, so a
+    # hidden row and a never-reported one do not print the same line.
+    assert "scope=" in result.stderr and "unscoped " in result.stderr, result.stderr
     stated_budget_s = float(match.group(1))
     assert stated_budget_s >= awaiter_budget_s, (
         f"the message says it timed out after {stated_budget_s}s but reports "
