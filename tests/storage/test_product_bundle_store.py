@@ -238,3 +238,29 @@ def test_s3_object_key_is_namespaced_per_product() -> None:
     )
     product_id = uuid.UUID("2cad16bd-1258-4ab9-8f7d-74d403847354")
     assert store._object_key(product_id) == "products/2cad16bd-1258-4ab9-8f7d-74d403847354.bundle"
+
+
+@pytest.mark.asyncio
+async def test_s3_version_is_the_objects_etag_and_none_when_absent(monkeypatch) -> None:
+    """#929 — the cheap "did another machine publish?" probe: a HEAD, never a download."""
+    import httpx
+
+    from backend.storage.product_bundle_store import S3BundleStore
+
+    store = S3BundleStore(
+        endpoint="https://acct.r2.example.com", bucket="b", access_key="AK", secret_key="SK"
+    )
+    seen: list[str] = []
+
+    async def _request(method: str, key: str, *, body: bytes | None = None) -> httpx.Response:
+        seen.append(method)
+        if key.endswith(f"{present}.bundle"):
+            return httpx.Response(200, headers={"ETag": '"abc123"'})
+        return httpx.Response(404)
+
+    present = uuid.uuid4()
+    monkeypatch.setattr(store, "_request", _request)
+
+    assert await store.version(present) == '"abc123"'
+    assert await store.version(uuid.uuid4()) is None
+    assert seen == ["HEAD", "HEAD"]

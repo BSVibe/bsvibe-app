@@ -76,6 +76,11 @@ class ProductBundleStore(Protocol):
     async def exists(self, product_id: uuid.UUID) -> bool:
         """``True`` iff the product has a bundle stored."""
 
+    async def version(self, product_id: uuid.UUID) -> str | None:
+        """An opaque token that changes whenever the bundle does — ``None`` when there is no
+        bundle. Cheap (no download): it is how a machine holding a copy learns, on every
+        materialise, whether another machine published since (#929)."""
+
     async def delete(self, product_id: uuid.UUID) -> None:
         """Remove the product's bundle. Idempotent — a missing object is a
         no-op, so the delete handler can retry freely."""
@@ -121,6 +126,16 @@ class LocalFilesystemBundleStore:
 
     async def exists(self, product_id: uuid.UUID) -> bool:
         return await asyncio.to_thread(self._path(product_id).is_file)
+
+    async def version(self, product_id: uuid.UUID) -> str | None:
+        def _stat() -> str | None:
+            path = self._path(product_id)
+            if not path.is_file():
+                return None
+            st = path.stat()
+            return f"{st.st_size}-{st.st_mtime_ns}"
+
+        return await asyncio.to_thread(_stat)
 
     async def delete(self, product_id: uuid.UUID) -> None:
         path = self._path(product_id)
@@ -257,6 +272,17 @@ class S3BundleStore:
                 f"bundle probe failed for product {product_id}: HTTP {response.status_code}"
             )
         return True
+
+    async def version(self, product_id: uuid.UUID) -> str | None:
+        response = await self._request("HEAD", self._object_key(product_id))
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 300:
+            raise BundleStoreError(
+                f"bundle probe failed for product {product_id}: HTTP {response.status_code}"
+            )
+        token = response.headers.get("etag") or response.headers.get("last-modified")
+        return str(token) if token else None
 
     async def delete(self, product_id: uuid.UUID) -> None:
         response = await self._request("DELETE", self._object_key(product_id))
