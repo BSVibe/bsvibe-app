@@ -517,6 +517,7 @@ class AgentWorker(BaseWorker):
             await self._checkpoint_before_release(session, run)
             run.claimed_at = None
             run.claimed_by = None
+            run.home_machine = None
             # The founder now owns this run; a resumed one starts its count over.
             _reset_drive_failures(run)
             await create_decision(
@@ -576,7 +577,12 @@ class AgentWorker(BaseWorker):
                     await session.execute(
                         update(ExecutionRun)
                         .where(ExecutionRun.id == run_id)
-                        .values(status=RunStatus.OPEN, claimed_at=None, claimed_by=None)
+                        .values(
+                            status=RunStatus.OPEN,
+                            claimed_at=None,
+                            claimed_by=None,
+                            home_machine=None,
+                        )
                     )
                 reaped.append(run_id)
             await session.commit()
@@ -648,6 +654,8 @@ class AgentWorker(BaseWorker):
                             status=RunStatus.RUNNING,
                             claimed_at=datetime.now(UTC),
                             claimed_by=self._worker_id,
+                            # #929 — which machine holds this run's tree while it is driven.
+                            home_machine=self._settings.machine_id or None,
                         )
                     )
                 claimed.append((run_id, workspace_id))
@@ -701,6 +709,7 @@ class AgentWorker(BaseWorker):
                 await self._checkpoint_before_release(session, run)
                 run.claimed_at = None
                 run.claimed_by = None
+                run.home_machine = None
                 _reset_drive_failures(run)
             await session.commit()
 
@@ -732,7 +741,7 @@ class AgentWorker(BaseWorker):
             await session.execute(
                 update(ExecutionRun)
                 .where(ExecutionRun.id == run_id)
-                .values(claimed_at=None, claimed_by=None)
+                .values(claimed_at=None, claimed_by=None, home_machine=None)
             )
             await session.commit()
 

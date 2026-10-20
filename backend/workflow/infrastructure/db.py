@@ -145,6 +145,10 @@ class ExecutionRun(ExecutionBase):
     # for RUNNING runs paused on a Decision.
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     claimed_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    #: #929 — the MACHINE (``BSVIBE_MACHINE_ID``) driving this run while it is claimed; NULL
+    #: when not claimed, or on a single-box deployment. ``claimed_by`` names a process; this
+    #: names where the run's worktree and sandbox are, so tool calls can find them.
+    home_machine: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # 게이트 1 — per-run LLM token meter (usage from ``ChatResponse``, accumulated
     # each turn by ``_drive_loop``). server_default 0 so past runs read as 0.
     usage_prompt_tokens: Mapped[int] = mapped_column(
