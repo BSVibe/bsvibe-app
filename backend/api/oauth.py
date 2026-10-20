@@ -32,6 +32,7 @@ auth). They use the ``v1_router`` exposed below, which is mounted under
 
 from __future__ import annotations
 
+import os
 import re
 import time
 import uuid
@@ -145,24 +146,60 @@ def _is_loopback_redirect_uri(uri: str) -> bool:
 # mints a fresh bucket, and naming someone else's address spends THEIR
 # budget.
 #
-# **The limitation, stated honestly**: these buckets are per-process and
-# in-memory. They reset on every deploy and they do not compose across
-# replicas — two backend containers would each grant the full budget. That
-# is acceptable today because prod runs a single backend container; it
-# becomes gate 4's problem when horizontal scaling lands, at which point
-# this class is the one seam to swap for a Redis-backed counter. Bucket keys
-# are also never evicted except by the lazy window prune, so a very large
-# spread of distinct source addresses grows the dict — bounded in practice
-# by the same single-origin ingress that makes the key trustworthy.
+# **Across replicas (#929, B).** With Redis configured, every limiter keeps its window in ONE
+# Redis sorted set shared by all backend replicas, checked and charged by one atomic Lua script
+# — two replicas cannot both take the last unit, and a deploy no longer resets the buckets.
+# Without Redis (or when it cannot be reached) the limiter degrades to the per-process counter
+# below rather than letting every request through; the degradation is logged.
+
+#: Atomically: drop entries older than the window, then (mode 1) charge one unit if under the
+#: cap and answer 1/0, (mode 0) answer whether the cap is reached, (mode 2) charge one unit
+#: capped at the max. KEYS[1] bucket; ARGV now, cutoff, max, ttl, member, mode.
+_RATE_LIMIT_LUA = """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[2])
+local count = redis.call('ZCARD', KEYS[1])
+local mode = tonumber(ARGV[6])
+if mode == 0 then
+  if count >= tonumber(ARGV[3]) then return 1 end
+  return 0
+end
+if count >= tonumber(ARGV[3]) then
+  if mode == 1 then return 0 end
+  return 1
+end
+redis.call('ZADD', KEYS[1], ARGV[1], ARGV[5])
+redis.call('EXPIRE', KEYS[1], ARGV[4])
+return 1
+"""
+
+_REDIS_UNSET: Any = object()
+_rate_limit_redis_client: Any = _REDIS_UNSET
+
+
+def _rate_limit_redis() -> Any:
+    """The shared Redis the limiters count in — ``None`` when there is none.
+
+    Lazy and process-wide. Under pytest it stays ``None`` unless a test injects one, the same
+    rule the live-event bus follows: a real client in a process-wide singleton leaks pool
+    futures across per-test event loops."""
+    global _rate_limit_redis_client  # noqa: PLW0603 — one lazy process-wide client
+    if _rate_limit_redis_client is _REDIS_UNSET:
+        url = get_settings().redis_url
+        if not url or os.environ.get("PYTEST_CURRENT_TEST"):
+            _rate_limit_redis_client = None
+        else:
+            import redis.asyncio as redis_aio  # noqa: PLC0415
+
+            _rate_limit_redis_client = redis_aio.from_url(url, decode_responses=True)
+    return _rate_limit_redis_client
 
 
 class _SlidingWindowLimiter:
-    """Per-key sliding-window counter. In-process, in-memory, thread-safe.
+    """Per-key sliding-window counter — shared through Redis, per-process without it.
 
-    Semantics are the ones the original ``_anon_dcr_rate_check`` shipped
-    with, factored out so five routes share one implementation instead of
-    five copies: buckets are pruned lazily on every call, and the bucket is
-    mutated on success only.
+    Semantics are the ones the original ``_anon_dcr_rate_check`` shipped with, factored out
+    so five routes share one implementation: the window is pruned on every call and the
+    bucket is mutated on success only.
 
     Two counting shapes are supported:
 
@@ -173,20 +210,49 @@ class _SlidingWindowLimiter:
       abuse. ``/token`` needs this shape: the device grant polls it every
       ``DEVICE_POLL_INTERVAL_S`` seconds while a human decides, so a request
       counter there would break ``bsvibe login``.
+
+    ⚠️ The methods are coroutines: an un-awaited call is a truthy coroutine object, which
+    would silently disarm the limit. The route tests turn red if one is missed.
     """
 
-    def __init__(self, *, window_secs: int, max_per_window: int) -> None:
+    def __init__(self, *, name: str, window_secs: int, max_per_window: int) -> None:
+        self._name = name
         self._window_secs = window_secs
         self._max_per_window = max_per_window
         self._lock = Lock()
         self._buckets: dict[str, list[float]] = {}
 
+    # -- shared (Redis) -------------------------------------------------------------------
+
+    async def _shared(self, key: str, mode: int) -> bool | None:
+        """Run the window script in Redis; ``None`` when Redis is absent or unreachable."""
+        redis = _rate_limit_redis()
+        if redis is None:
+            return None
+        now = time.time()
+        try:
+            answer = await redis.eval(
+                _RATE_LIMIT_LUA,
+                1,
+                f"bsvibe:ratelimit:{self._name}:{key}",
+                repr(now),
+                repr(now - self._window_secs),
+                self._max_per_window,
+                self._window_secs,
+                f"{now!r}:{uuid.uuid4().hex}",
+                mode,
+            )
+        except Exception:  # noqa: BLE001 — degrade to the per-process counter, never fail open
+            logger.warning("oauth_rate_limit_redis_unavailable", limiter=self._name, exc_info=True)
+            return None
+        return bool(int(answer))
+
+    # -- per-process fallback -------------------------------------------------------------
+
     def _pruned(self, key: str, cutoff: float) -> list[float]:
         return [ts for ts in self._buckets.get(key, ()) if ts > cutoff]
 
-    def check_and_record(self, key: str, *, now: float | None = None) -> bool:
-        """Return ``True`` if ``key`` may spend one more unit, and spend it."""
-        t = time.monotonic() if now is None else now
+    def _local_check_and_record(self, key: str, t: float) -> bool:
         with self._lock:
             bucket = self._pruned(key, t - self._window_secs)
             if len(bucket) >= self._max_per_window:
@@ -196,24 +262,53 @@ class _SlidingWindowLimiter:
             self._buckets[key] = bucket
             return True
 
-    def exhausted(self, key: str, *, now: float | None = None) -> bool:
-        """Read-only: has ``key`` already spent its whole budget?"""
-        t = time.monotonic() if now is None else now
+    def _local_exhausted(self, key: str, t: float) -> bool:
         with self._lock:
             return len(self._pruned(key, t - self._window_secs)) >= self._max_per_window
 
-    def record(self, key: str, *, now: float | None = None) -> None:
-        """Charge one unit to ``key``. Capped so a flood cannot grow the list."""
-        t = time.monotonic() if now is None else now
+    def _local_record(self, key: str, t: float) -> None:
         with self._lock:
             bucket = self._pruned(key, t - self._window_secs)
             if len(bucket) < self._max_per_window:
                 bucket.append(t)
             self._buckets[key] = bucket
 
+    # -- the API the routes use -----------------------------------------------------------
+
+    async def check_and_record(self, key: str, *, now: float | None = None) -> bool:
+        """Return ``True`` if ``key`` may spend one more unit, and spend it."""
+        if now is None:
+            shared = await self._shared(key, 1)
+            if shared is not None:
+                return shared
+        return self._local_check_and_record(key, time.monotonic() if now is None else now)
+
+    async def exhausted(self, key: str, *, now: float | None = None) -> bool:
+        """Read-only: has ``key`` already spent its whole budget?"""
+        if now is None:
+            shared = await self._shared(key, 0)
+            if shared is not None:
+                return shared
+        return self._local_exhausted(key, time.monotonic() if now is None else now)
+
+    async def record(self, key: str, *, now: float | None = None) -> None:
+        """Charge one unit to ``key``. Capped so a flood cannot grow the window."""
+        if now is None and await self._shared(key, 2) is not None:
+            return
+        self._local_record(key, time.monotonic() if now is None else now)
+
     def reset(self) -> None:
         with self._lock:
             self._buckets.clear()
+
+    async def areset(self) -> None:
+        """Clear this limiter's buckets everywhere — per-process and shared."""
+        self.reset()
+        redis = _rate_limit_redis()
+        if redis is None:
+            return
+        async for k in redis.scan_iter(match=f"bsvibe:ratelimit:{self._name}:*"):
+            await redis.delete(k)
 
 
 #: ``POST /register`` — anonymous DCR. One registration per real MCP client
@@ -247,19 +342,25 @@ _DEVICE_AUTHZ_WINDOW_SECS = 3600
 _DEVICE_AUTHZ_MAX_PER_WINDOW = 60
 
 _anon_dcr_limiter = _SlidingWindowLimiter(
-    window_secs=_ANON_DCR_WINDOW_SECS, max_per_window=_ANON_DCR_MAX_PER_WINDOW
+    name="anon_dcr", window_secs=_ANON_DCR_WINDOW_SECS, max_per_window=_ANON_DCR_MAX_PER_WINDOW
 )
 _token_failure_limiter = _SlidingWindowLimiter(
-    window_secs=_TOKEN_FAILURE_WINDOW_SECS, max_per_window=_TOKEN_FAILURE_MAX_PER_WINDOW
+    name="token_failure",
+    window_secs=_TOKEN_FAILURE_WINDOW_SECS,
+    max_per_window=_TOKEN_FAILURE_MAX_PER_WINDOW,
 )
 _introspect_limiter = _SlidingWindowLimiter(
-    window_secs=_INTROSPECT_WINDOW_SECS, max_per_window=_INTROSPECT_MAX_PER_WINDOW
+    name="introspect",
+    window_secs=_INTROSPECT_WINDOW_SECS,
+    max_per_window=_INTROSPECT_MAX_PER_WINDOW,
 )
 _revoke_limiter = _SlidingWindowLimiter(
-    window_secs=_REVOKE_WINDOW_SECS, max_per_window=_REVOKE_MAX_PER_WINDOW
+    name="revoke", window_secs=_REVOKE_WINDOW_SECS, max_per_window=_REVOKE_MAX_PER_WINDOW
 )
 _device_authz_limiter = _SlidingWindowLimiter(
-    window_secs=_DEVICE_AUTHZ_WINDOW_SECS, max_per_window=_DEVICE_AUTHZ_MAX_PER_WINDOW
+    name="device_authz",
+    window_secs=_DEVICE_AUTHZ_WINDOW_SECS,
+    max_per_window=_DEVICE_AUTHZ_MAX_PER_WINDOW,
 )
 
 #: The RFC 6749 §5.2 / RFC 8628 §3.5 error codes that mean "a credential was
@@ -321,12 +422,12 @@ def _too_many_requests(what: str) -> HTTPException:
     )
 
 
-def _token_error(
+async def _token_error(
     ip: str, status_code: int, error: str, description: str | None = None
 ) -> _OAuthError:
     """Answer ``/token``, charging the failure budget when the code says to."""
     if error in _TOKEN_COUNTED_ERRORS:
-        _token_failure_limiter.record(ip)
+        await _token_failure_limiter.record(ip)
     return _OAuthError(status_code, error, description)
 
 
@@ -827,7 +928,7 @@ async def token(  # noqa: PLR0911, PLR0912 — OAuth state machine × RFC answer
     protection anyway.
     """
     ip = resolve_client_ip(request, route="/api/oauth/token")
-    if _token_failure_limiter.exhausted(ip):
+    if await _token_failure_limiter.exhausted(ip):
         raise _too_many_requests("token endpoint")
     settings = get_settings()
     issuer = settings.oauth_issuer
@@ -850,7 +951,7 @@ async def token(  # noqa: PLR0911, PLR0912 — OAuth state machine × RFC answer
             )
         # RFC 8628 §3.5 — every non-success is a 400 whose `error` the device
         # branches on: pending/slow_down mean keep going, the rest mean stop.
-        return _token_error(ip, 400, device_outcome.value)
+        return await _token_error(ip, 400, device_outcome.value)
     if grant_type == "authorization_code":
         if not code:
             return _OAuthError(400, "invalid_request", "code is required")
@@ -860,7 +961,7 @@ async def token(  # noqa: PLR0911, PLR0912 — OAuth state machine × RFC answer
             return _OAuthError(400, "invalid_request", "code_verifier is required")
         client = await lookup_client_by_client_id(session, client_id)
         if client is None or client.revoked_at is not None:
-            return _token_error(ip, 401, "invalid_client", "unknown or revoked client")
+            return await _token_error(ip, 401, "invalid_client", "unknown or revoked client")
         outcome, claimed = await claim_authorization_code(
             session,
             code=code,
@@ -869,7 +970,7 @@ async def token(  # noqa: PLR0911, PLR0912 — OAuth state machine × RFC answer
             code_verifier=code_verifier,
         )
         if outcome is not CodeClaimOutcome.CLAIMED or claimed is None:
-            return _token_error(
+            return await _token_error(
                 ip,
                 400,
                 "invalid_grant",
@@ -901,7 +1002,7 @@ async def token(  # noqa: PLR0911, PLR0912 — OAuth state machine × RFC answer
             issuer=issuer,
         )
         if rotate_outcome is not RefreshRotateOutcome.ROTATED or rotated is None:
-            return _token_error(ip, 401, "invalid_grant", rotate_outcome.value)
+            return await _token_error(ip, 401, "invalid_grant", rotate_outcome.value)
         await session.commit()
         return TokenResponse(
             access_token=rotated.access_token,
@@ -933,7 +1034,7 @@ async def introspect(
     Per-IP REQUEST limit (nothing polls this endpoint), applied after
     FastAPI has validated the form so a malformed probe fills no bucket.
     """
-    if not _introspect_limiter.check_and_record(
+    if not await _introspect_limiter.check_and_record(
         resolve_client_ip(request, route="/api/oauth/introspect")
     ):
         raise _too_many_requests("introspection")
@@ -968,7 +1069,9 @@ async def revoke(
     Per-IP REQUEST limit (nothing polls this endpoint), applied after
     FastAPI has validated the form so a malformed probe fills no bucket.
     """
-    if not _revoke_limiter.check_and_record(resolve_client_ip(request, route="/api/oauth/revoke")):
+    if not await _revoke_limiter.check_and_record(
+        resolve_client_ip(request, route="/api/oauth/revoke")
+    ):
         raise _too_many_requests("revocation")
     settings = get_settings()
     hint = (
@@ -1069,7 +1172,7 @@ async def register_client_anonymous(  # noqa: PLR0912 — RFC 7591 §2 capabilit
         )
     # Rate limit AFTER input validation. ``check_and_record`` mutates the
     # bucket on success only.
-    if not _anon_dcr_limiter.check_and_record(ip):
+    if not await _anon_dcr_limiter.check_and_record(ip):
         raise _too_many_requests("anonymous DCR")
 
     row = await register_client(
@@ -1126,7 +1229,7 @@ async def device_authorization(
     for s in requested:
         if s not in ALLOWED_SCOPES:
             return _OAuthError(400, "invalid_scope", f"unknown scope: {s}")
-    if not _device_authz_limiter.check_and_record(
+    if not await _device_authz_limiter.check_and_record(
         resolve_client_ip(request, route="/api/oauth/device_authorization")
     ):
         raise _too_many_requests("device authorization")
