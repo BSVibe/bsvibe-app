@@ -160,16 +160,17 @@ class S3BundleStore:
         access_key: str,
         secret_key: str,
         timeout_s: float = 180.0,
+        key_prefix: str = _KEY_PREFIX,
     ) -> None:
+        self._key_prefix = key_prefix
         self._endpoint = endpoint.rstrip("/")
         self._bucket = bucket
         self._access_key = access_key
         self._secret_key = secret_key
         self._timeout_s = timeout_s
 
-    @staticmethod
-    def _object_key(product_id: uuid.UUID) -> str:
-        return f"{_KEY_PREFIX}{product_id}.bundle"
+    def _object_key(self, product_id: uuid.UUID) -> str:
+        return f"{self._key_prefix}{product_id}.bundle"
 
     def _sign(
         self,
@@ -298,7 +299,16 @@ class BundleStoreError(RuntimeError):
     document can echo request metadata, and this message reaches logs."""
 
 
-def build_bundle_store(settings: Settings | None = None) -> ProductBundleStore:
+def build_run_checkpoint_store(settings: Settings | None = None) -> ProductBundleStore:
+    """The store a run's worktree checkpoint goes to (#929) — the product store's backend and
+    credentials, under its own namespace (``runs/<run_id>.bundle``; ``<root>/runs`` locally)
+    so the two key spaces can never collide and a lifecycle rule can target either alone."""
+    return build_bundle_store(settings, namespace="runs")
+
+
+def build_bundle_store(
+    settings: Settings | None = None, *, namespace: str = "products"
+) -> ProductBundleStore:
     """Construct the configured store.
 
     Misconfigured ``s3`` fails LOUD at construction rather than falling back to
@@ -312,9 +322,8 @@ def build_bundle_store(settings: Settings | None = None) -> ProductBundleStore:
 
     backend = (getattr(settings, "product_bundle_backend", "local") or "local").lower()
     if backend == "local":
-        return LocalFilesystemBundleStore(
-            getattr(settings, "product_bundle_local_root", "var/bundles")
-        )
+        root = Path(getattr(settings, "product_bundle_local_root", "var/bundles"))
+        return LocalFilesystemBundleStore(root if namespace == "products" else root / namespace)
     if backend == "s3":
         endpoint = getattr(settings, "product_bundle_s3_endpoint", "")
         bucket = getattr(settings, "product_bundle_s3_bucket", "")
@@ -339,12 +348,14 @@ def build_bundle_store(settings: Settings | None = None) -> ProductBundleStore:
             bucket=bucket,
             access_key=access_key,
             secret_key=secret_key,
+            key_prefix=f"{namespace}/",
         )
     raise ValueError(f"unknown product_bundle_backend: {backend!r}")
 
 
 __all__ = [
     "BundleStoreError",
+    "build_run_checkpoint_store",
     "LocalFilesystemBundleStore",
     "ProductBundleStore",
     "S3BundleStore",

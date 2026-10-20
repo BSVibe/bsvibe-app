@@ -42,15 +42,22 @@ async def _product_workspace_provisioner(
     if run.product_id is None:
         return False
 
+    from backend.config import get_settings  # noqa: PLC0415 — lazy
     from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
-        add_run_worktree,
         ensure_or_init_product_workspace,
+    )
+    from backend.workflow.application.run_checkpoint import (  # noqa: PLC0415 — lazy
+        provision_run_worktree,
     )
 
     await ensure_or_init_product_workspace(run.product_id)
     if workspace_dir.exists() and not any(workspace_dir.iterdir()):  # noqa: ASYNC240
         workspace_dir.rmdir()  # noqa: ASYNC240
-    await add_run_worktree(run.product_id, run.id)
+    # #929 — keep the tree, restore it from its checkpoint, or start it from ``main``; never
+    # start fresh for a run whose work lives elsewhere.
+    await provision_run_worktree(
+        run, workspace_dir=workspace_dir, machine_id=get_settings().machine_id
+    )
     return True
 
 

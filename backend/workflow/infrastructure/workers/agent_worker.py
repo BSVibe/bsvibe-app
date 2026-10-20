@@ -83,6 +83,7 @@ from backend.workflow.application.stages.frame import (
 )
 from backend.workflow.channels import REQUESTS
 from backend.workflow.infrastructure.db import (
+    TERMINAL_RUN_STATUSES,
     Decision,
     DecisionStatus,
     ExecutionRun,
@@ -513,6 +514,7 @@ class AgentWorker(BaseWorker):
                     status=str(run.status),
                 )
                 return
+            await self._checkpoint_before_release(session, run)
             run.claimed_at = None
             run.claimed_by = None
             # The founder now owns this run; a resumed one starts its count over.
@@ -669,6 +671,19 @@ class AgentWorker(BaseWorker):
             await self._frame_and_drive(session, run, execution)
             await session.commit()
 
+    async def _checkpoint_before_release(self, session: AsyncSession, run: ExecutionRun) -> None:
+        """#929 — save a still-live run's worktree off this machine before its claim goes.
+
+        A finished run has nothing to continue, so it is skipped. See
+        :mod:`backend.workflow.application.run_checkpoint`."""
+        if run.status in TERMINAL_RUN_STATUSES:
+            return
+        from backend.workflow.application.run_checkpoint import (  # noqa: PLC0415 — cycle break
+            checkpoint_before_release,
+        )
+
+        await checkpoint_before_release(session, run, machine_id=self._settings.machine_id)
+
     async def _clear_claim(self, run_id: uuid.UUID) -> None:
         """Clear ``claimed_at`` / ``claimed_by`` — and the consecutive-failure
         count — without touching status.
@@ -683,6 +698,7 @@ class AgentWorker(BaseWorker):
         async with self._session_factory() as session:
             run = await session.get(ExecutionRun, run_id)
             if run is not None:
+                await self._checkpoint_before_release(session, run)
                 run.claimed_at = None
                 run.claimed_by = None
                 _reset_drive_failures(run)
@@ -704,6 +720,9 @@ class AgentWorker(BaseWorker):
         that (규율 137: code goes red when it is wrong, prose stays green)."""
         async with self._session_factory() as session:
             run = await session.get(ExecutionRun, run_id)
+            if run is not None:
+                # Saved BEFORE the run goes back to the queue: once OPEN, any machine may claim it.
+                await self._checkpoint_before_release(session, run)
             if run is not None and run.status is RunStatus.RUNNING:
                 await AgentRunner(session).transition(
                     run_id=run_id,
