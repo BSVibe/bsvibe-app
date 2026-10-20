@@ -13,7 +13,9 @@ The lifespan declared here:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import functools
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -23,8 +25,10 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.config import get_settings
-from backend.mcp.server import build_registry, build_server
+from backend.mcp.home_forwarding import build_home_routing, serve_home_calls
+from backend.mcp.server import build_registry, build_server, build_tool_executor
 from backend.mcp.streamable_http import build_streamable_http_app
+from backend.workers.emit import get_dispatch_redis_client
 
 logger = structlog.get_logger(__name__)
 
@@ -69,14 +73,21 @@ async def mcp_lifespan(
         record_deliverable=record_deliverable,
         record_progress=record_progress,
     )
+    # #929 (B) — with more than one machine, a run's work-tool calls are answered by the
+    # machine holding its worktree. None on a single box: everything runs in place.
+    home_routing = build_home_routing(settings, get_dispatch_redis_client(settings))
+    effects: dict[str, Any] = {
+        "delivery_dispatcher": delivery_dispatcher,
+        "client_sandbox": client_sandbox,
+        "declared_secrets": declared_secrets,
+        "retract_handler": retract_handler,
+        "narrative_generator": narrative_generator,
+    }
     server = build_server(
         session_factory=session_factory,
         registry=registry,
-        delivery_dispatcher=delivery_dispatcher,
-        client_sandbox=client_sandbox,
-        declared_secrets=declared_secrets,
-        retract_handler=retract_handler,
-        narrative_generator=narrative_generator,
+        home_routing=home_routing,
+        **effects,
     )
     manager = StreamableHTTPSessionManager(
         app=server,
@@ -91,11 +102,34 @@ async def mcp_lifespan(
     app.state.mcp_registry = registry
     app.state.mcp_asgi = asgi_app
     logger.info("mcp_lifespan_starting", tools=registry.names(), issuer=issuer)
+    stop_serving = asyncio.Event()
+    serving: asyncio.Task[None] | None = None
+    if home_routing is not None:
+        # This machine answers the calls other machines forward to it. They run here like
+        # any other call, except that they never bounce on (``forwarded=True``).
+        execute = build_tool_executor(
+            session_factory=session_factory,
+            registry=registry,
+            home_routing=home_routing,
+            **effects,
+        )
+        serving = asyncio.create_task(
+            serve_home_calls(
+                home_routing.redis,
+                machine=home_routing.machine,
+                execute=functools.partial(execute, forwarded=True),
+                stop=stop_serving,
+            )
+        )
     async with manager.run():
         try:
             yield
         finally:
             logger.info("mcp_lifespan_stopping")
+            stop_serving.set()
+            if serving is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(serving, timeout=5)
 
 
 __all__ = ["mcp_lifespan"]
