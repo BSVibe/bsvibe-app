@@ -48,4 +48,4 @@ of GitHub. Never commit secrets, tokens, `.env` contents or monitoring URLs.
 
 Sessions on the founder's machine get the user rules and skills from `~/.claude`. Cloud sessions
 get them from `.claude/hooks/install-skills.sh` (a SessionStart hook that installs the public
-`blas1n/claude-skills` repo and prints its rules into the session). See `docs/runbook/agent-context.md`.
+`blas1n/claude-skills` repo before Claude Code reads `~/.claude`). See `docs/runbook/agent-context.md`.

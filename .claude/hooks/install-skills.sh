@@ -33,13 +33,6 @@ for part in skills rules commands; do
   done
 done
 
-# Skills and rules are read when the session starts, possibly before this hook ran. The rules
-# are short and are the part that must not be missed, so they also go into this session's
-# context through the hook's output.
-if [ -d "$src/rules" ]; then
-  echo "User rules (from blas1n/claude-skills/rules — installed by .claude/hooks/install-skills.sh):"
-  for f in "$src/rules"/*.md; do
-    echo
-    cat "$f"
-  done
-fi
+# No need to print the rules: measured 2026-10-20, Claude Code reads ~/.claude/rules and
+# ~/.claude/skills AFTER this hook, so both arrive natively (printing them as well duplicated
+# them and was cut off at 10 KB).

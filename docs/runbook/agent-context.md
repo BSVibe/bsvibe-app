@@ -6,7 +6,7 @@ Measured on 2026-10-20 instead of assumed. Re-measure after a Claude Code upgrad
 |---|---|---|---|
 | Founder's Mac — terminal, desktop, or a **bridge** session (`environment_kind: bridge`) | ✅ from `~/.claude/rules` → symlink into `~/.claude/claude-skills` | ✅ `~/.claude/skills` → same | ✅ |
 | **Cloud** session (claude.ai/code, `environment_kind: anthropic_cloud`) — before #951 | ❌ none in context | ❌ only the built-in/Anthropic skills | ❌ the repo had none |
-| Cloud session — after #951 | ✅ installed and printed into context by the SessionStart hook | ✅ linked into `~/.claude/skills` by the hook | ✅ |
+| Cloud session — after #951 (measured on the branch) | ✅ `Contents of /root/.claude/claude-skills/rules/*.md` — read natively after the hook | ✅ `feature-workflow`, `retrospective` listed (~254 skills) | ✅ |
 | Devcontainer (`.devcontainer/`) | ❌ no `~/.claude` mount, no Claude CLI installed | ❌ | ✅ if a CLI is run inside it |
 
 ## How the cloud cell was measured
@@ -33,7 +33,7 @@ A read-only cloud session was created on this repo and asked to report its own c
 - It acts only when `CLAUDE_CODE_REMOTE=true`. Mac and bridge sessions are untouched.
 - It shallow-clones `blas1n/claude-skills` into `~/.claude/claude-skills`.
 - It links `skills/`, `rules/` and `commands/` entry by entry. It never replaces what the harness already put there, and never touches `settings.json` or `hooks/`, which the cloud harness owns.
-- It prints the rules into the session's context, because rules and skills may already have been read by the time the hook runs.
+- It prints nothing. Measured: Claude Code reads `~/.claude/rules` and `~/.claude/skills` after the hook, so both arrive natively. An earlier version also printed the rules; that duplicated them and was truncated at 10 KB.
 - Running it twice is safe. The `-L` check matters: one skill in the repo is a dangling symlink, and `-e` alone made the second run fail.
 
 **Not given to cloud sessions:**
