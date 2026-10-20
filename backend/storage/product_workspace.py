@@ -34,6 +34,7 @@ this module accepts them verbatim and trusts the type.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import tempfile
 import uuid
@@ -147,6 +148,7 @@ async def _git(
     *args: str,
     cwd: Path | None = None,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> _GitResult:
     """Run ``git <args>`` and return its captured output.
 
@@ -168,6 +170,7 @@ async def _git(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd) if cwd is not None else None,
+            env={**os.environ, **env} if env else None,
         )
     except FileNotFoundError as exc:
         raise ProductWorkspaceError(
@@ -710,6 +713,16 @@ async def remove_run_worktree(
                     run_id=str(run_id),
                     stderr=result.stderr,
                 )
+            # #929 — and the run's checkpoint: the local ref, and the off-box copy when this
+            # deployment keeps one. A finished run has nothing left to continue.
+            await _git("update-ref", "-d", _checkpoint_ref(run_id), cwd=product_path, check=False)
+            if get_settings().machine_id:
+                try:
+                    await delete_run_checkpoint(run_id)
+                except Exception:  # noqa: BLE001 — best-effort, like the rest of this reclaim
+                    logger.warning(
+                        "run_checkpoint_delete_failed", run_id=str(run_id), exc_info=True
+                    )
 
     # Universal backstop: reclaim the dir if anything is left — a github clone
     # (no product repo, git never touched it) OR a local worktree git could not
@@ -784,6 +797,135 @@ async def commit_worktree(
     await _git("commit", "-m", message, cwd=worktree)
     head = await _git("rev-parse", "HEAD", cwd=worktree)
     return head.stdout.strip()
+
+
+def _checkpoint_ref(run_id: uuid.UUID) -> str:
+    return f"refs/bsvibe/checkpoints/{run_id}"
+
+
+async def checkpoint_run_worktree(
+    product_id: uuid.UUID,
+    run_id: uuid.UUID,
+    *,
+    store: ProductBundleStore | None = None,
+) -> str | None:
+    """Save the run's worktree off this machine — branch AND uncommitted work (#929).
+
+    The working tree is snapshotted as a commit OBJECT under ``refs/bsvibe/checkpoints/<rid>``
+    (parent: the branch HEAD), built through a throwaway index: the branch, the real index and
+    the files on disk are untouched, so no "WIP" commit can reach ``main`` when the run ships.
+    Build byproducts are left out (the same pathspecs a real commit excludes). The branch and
+    the snapshot go up as one self-contained bundle — a thin bundle would need ``main`` to be
+    present on the machine that restores it, and that machine may never have had this one's.
+
+    Returns the snapshot sha, or ``None`` when this machine holds no worktree for the run.
+    """
+    worktree = run_worktree_path(run_id)
+    if not (worktree / ".git").exists():
+        return None
+    if store is None:
+        from backend.storage.product_bundle_store import (  # noqa: PLC0415
+            build_run_checkpoint_store,
+        )
+
+        store = build_run_checkpoint_store()
+    repo = product_workspace_path(product_id)
+    with tempfile.TemporaryDirectory(prefix="bsvibe-checkpoint-") as tmp:
+        index = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        await _git("read-tree", "HEAD", cwd=worktree, env=index)
+        await _git("add", "-A", cwd=worktree, env=index)
+        await _git(
+            "reset", "-q", "--", *_COMMIT_EXCLUDE_PATHSPECS, cwd=worktree, check=False, env=index
+        )
+        tree = (await _git("write-tree", cwd=worktree, env=index)).stdout.strip()
+        head = (await _git("rev-parse", "HEAD", cwd=worktree)).stdout.strip()
+        snapshot = (
+            await _git(
+                "commit-tree", tree, "-p", head, "-m", f"bsvibe checkpoint {run_id}", cwd=worktree
+            )
+        ).stdout.strip()
+        await _git("update-ref", _checkpoint_ref(run_id), snapshot, cwd=worktree)
+        bundle = Path(tmp) / f"{run_id}.bundle"
+        await _git(
+            "bundle",
+            "create",
+            "--quiet",
+            str(bundle),
+            f"refs/heads/{run_branch_name(run_id)}",
+            _checkpoint_ref(run_id),
+            cwd=repo,
+        )
+        await store.put(run_id, bundle)
+    logger.info("run_worktree_checkpointed", run_id=str(run_id), snapshot=snapshot[:12])
+    return snapshot
+
+
+async def restore_run_worktree(
+    product_id: uuid.UUID,
+    run_id: uuid.UUID,
+    *,
+    store: ProductBundleStore | None = None,
+) -> bool:
+    """Rebuild a run's worktree on THIS machine from its checkpoint (#929).
+
+    ``True`` when the worktree is here afterwards (already present, or restored); ``False``
+    when there is no checkpoint — the caller decides whether that is a new run (branch from
+    ``main``) or a run whose work cannot be found (refuse; never branch fresh). The branch comes
+    back as it was; the snapshot's differences come back as UNCOMMITTED changes — modified,
+    new (untracked) and deleted files alike — exactly as the agent left them.
+    """
+    worktree = run_worktree_path(run_id)
+    if (worktree / ".git").exists():
+        return True
+    if store is None:
+        from backend.storage.product_bundle_store import (  # noqa: PLC0415
+            build_run_checkpoint_store,
+        )
+
+        store = build_run_checkpoint_store()
+    repo = product_workspace_path(product_id)
+    branch = run_branch_name(run_id)
+    ref = _checkpoint_ref(run_id)
+    with tempfile.TemporaryDirectory(prefix="bsvibe-restore-run-") as tmp:
+        bundle = Path(tmp) / f"{run_id}.bundle"
+        if not await store.get(run_id, bundle):
+            return False
+        await _git(
+            "fetch",
+            "--quiet",
+            "--force",
+            str(bundle),
+            f"refs/heads/{branch}:refs/heads/{branch}",
+            f"{ref}:{ref}",
+            cwd=repo,
+        )
+    # A registration left by a worktree whose directory is gone would refuse the add.
+    await _git("worktree", "prune", cwd=repo)
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    await _git("worktree", "add", "--quiet", str(worktree), branch, cwd=repo)
+    # The snapshot's files into the tree, then the index back to HEAD: the work is uncommitted
+    # again, as it was. ``checkout <tree> -- .`` cannot remove a file, so deletions are applied
+    # by name.
+    await _git("checkout", ref, "--", ".", cwd=worktree)
+    deleted = await _git("diff", "--name-only", "--diff-filter=D", "HEAD", ref, cwd=worktree)
+    for name in (line for line in deleted.stdout.splitlines() if line.strip()):
+        (worktree / name).unlink(missing_ok=True)
+    await _git("reset", "-q", cwd=worktree)
+    logger.info("run_worktree_restored", run_id=str(run_id))
+    return True
+
+
+async def delete_run_checkpoint(
+    run_id: uuid.UUID, *, store: ProductBundleStore | None = None
+) -> None:
+    """Remove a finished run's checkpoint from the store. Idempotent."""
+    if store is None:
+        from backend.storage.product_bundle_store import (  # noqa: PLC0415
+            build_run_checkpoint_store,
+        )
+
+        store = build_run_checkpoint_store()
+    await store.delete(run_id)
 
 
 async def capture_run_diff(product_id: uuid.UUID, run_id: uuid.UUID) -> str | None:
