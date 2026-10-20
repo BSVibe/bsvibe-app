@@ -34,6 +34,9 @@ ALLOWED: dict[str, str] = {
     "backend/workflow/application/run_delivery_resolution.py": (
         "출력이 이미 나간 REVIEW_READY 런 스윕 — 후보만 전 테넌트에서 읽는다. 판정·쓰기는 그 워크스페이스 스코프 안"
     ),
+    "backend/workflow/application/run_cleanup.py": (
+        "체크포인트가 남은 종료 런 스윕(#929) — 후보만 전 테넌트에서 읽는다. 기록 삭제는 그 워크스페이스 스코프 안"
+    ),
     "backend/executors/dispatch.py": (
         "태스크 대기 타임아웃 진단(#967) — 그 행 하나의 상태만 스코프 없이 읽는다. 쓰기 없음"
     ),

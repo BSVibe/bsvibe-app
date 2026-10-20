@@ -42,7 +42,9 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.data.rls import cross_tenant_session_read, workspace_session_scope
 from backend.workflow.application.run_status import move_run_status
+from backend.workflow.domain.run_checkpoint import CHECKPOINT_KEY
 from backend.workflow.infrastructure.db import (
     TERMINAL_RUN_STATUSES,
     DecisionStatus,
@@ -184,6 +186,61 @@ async def reap_terminal_run_workspaces(
     if reaped:
         logger.info("reaped_terminal_run_workspaces", count=len(reaped))
     return reaped
+
+
+#: How many finished runs' checkpoints one sweep deletes — the rest wait for the next.
+_CHECKPOINT_SWEEP_LIMIT = 100
+
+
+async def reap_terminal_run_checkpoints(
+    session: AsyncSession,
+    *,
+    deleter: Callable[[uuid.UUID], Awaitable[None]] | None = None,
+    limit: int = _CHECKPOINT_SWEEP_LIMIT,
+) -> list[uuid.UUID]:
+    """Delete the off-machine checkpoint of every finished run that still records one (#929).
+
+    ``remove_run_worktree`` deletes a checkpoint on the machine holding the run's tree. A run
+    that finished with no tree anywhere — its machine died after a checkpoint, then the run was
+    cancelled — leaves ``runs/<rid>.bundle`` behind. The store cannot list, so the DB drives
+    this: delete, then drop the record. A failed delete keeps the record for the next sweep.
+    A terminal run is never checkpointed again, so nothing races the drop.
+
+    Manages its own scopes: the enumeration reads across tenants, each drop writes under its
+    run's tenant. The caller commits.
+    """
+    if deleter is None:
+        from backend.storage import product_workspace  # noqa: PLC0415
+
+        async def deleter(run_id: uuid.UUID) -> None:
+            await product_workspace.delete_run_checkpoint(run_id)
+
+    candidates = (
+        select(ExecutionRun.id, ExecutionRun.workspace_id)
+        .where(
+            ExecutionRun.status.in_(tuple(_TERMINAL)),
+            ExecutionRun.payload[CHECKPOINT_KEY].as_string().is_not(None),
+        )
+        .limit(limit)
+    )
+    async with cross_tenant_session_read(session):
+        found = (await session.execute(candidates)).all()
+    swept: list[uuid.UUID] = []
+    for run_id, workspace_id in found:
+        try:
+            await deleter(run_id)
+        except Exception:  # noqa: BLE001 — one failure must not stop the sweep
+            logger.warning("reap_run_checkpoint_failed", run_id=str(run_id), exc_info=True)
+            continue
+        async with workspace_session_scope(session, workspace_id):
+            run = await session.get(ExecutionRun, run_id)
+            if run is not None:
+                run.payload = {k: v for k, v in (run.payload or {}).items() if k != CHECKPOINT_KEY}
+                await session.flush()
+        swept.append(run_id)
+    if swept:
+        logger.info("reaped_terminal_run_checkpoints", count=len(swept))
+    return swept
 
 
 async def reap_orphan_product_workspaces(
