@@ -481,22 +481,25 @@ async def ensure_product_workspace(
     A **present repo always wins** — it is the working copy of record and may
     carry commits newer than the last published bundle (an in-flight run's
     branch, or a ship whose push failed). Clobbering it with an older bundle
-    would silently destroy that work, so a present repo short-circuits before
-    the store is even consulted.
+    would silently destroy that work. But it is brought FORWARD (#929): with
+    more than one machine, another box may have shipped on top of the bundle,
+    and this box would otherwise keep working from the ``main`` it materialised
+    days ago. See :func:`_follow_bundle` — fast-forward only, never overwrite.
 
     ``False`` means the product has no repo AND no bundle — it has never
     shipped. That is an ordinary state, not an error: the run provisioner
     responds by initialising an empty repo, a read surface by reporting empty.
     """
     repo = product_workspace_path(product_id)
-    if (repo / ".git").exists():
-        return True
     if store is None:
         from backend.storage.product_bundle_store import (  # noqa: PLC0415
             build_bundle_store,
         )
 
         store = build_bundle_store()
+    if (repo / ".git").exists():
+        await _follow_bundle(product_id, repo, store)
+        return True
 
     with tempfile.TemporaryDirectory(prefix="bsvibe-restore-") as tmp:
         bundle = Path(tmp) / f"{product_id}.bundle"
@@ -512,6 +515,63 @@ async def ensure_product_workspace(
         await asyncio.to_thread(shutil.move, str(staging), str(repo))
     logger.info("product_workspace_materialised", product_id=str(product_id))
     return True
+
+
+#: Where a repo remembers the bundle version it last reconciled with — inside ``.git`` so it
+#: never shows in a tree, a diff, or a bundle.
+_BUNDLE_VERSION_FILE = "bsvibe-bundle-version"
+
+
+async def _follow_bundle(product_id: uuid.UUID, repo: Path, store: ProductBundleStore) -> None:
+    """Fast-forward a present repo's ``main`` to the published bundle's — never overwrite.
+
+    * bundle version unchanged since the last look → nothing is downloaded;
+    * bundle ``main`` descends from local ``main`` → fast-forward (checkout moves with it);
+    * local ``main`` has commits the bundle lacks → left exactly as is, logged; publish's
+      merge-not-overwrite reconciles the two later;
+    * any failure → the local copy is used as before. Best-effort by design: a stale read is
+      what this function prevents, never something worth failing the caller for.
+    """
+    marker = repo / ".git" / _BUNDLE_VERSION_FILE
+    try:
+        version = await store.version(product_id)
+        if version is None:
+            return
+        seen = await asyncio.to_thread(lambda: marker.read_text() if marker.is_file() else "")
+        if seen == version:
+            return
+        with tempfile.TemporaryDirectory(prefix="bsvibe-follow-") as tmp:
+            bundle = Path(tmp) / f"{product_id}.bundle"
+            if not await store.get(product_id, bundle):
+                return
+            await _git("fetch", "--quiet", str(bundle), "main:refs/bsvibe/bundle-main", cwd=repo)
+        local = (await _git("rev-parse", "main", cwd=repo)).stdout.strip()
+        remote = (await _git("rev-parse", "refs/bsvibe/bundle-main", cwd=repo)).stdout.strip()
+        if local != remote:
+            behind = await _git("merge-base", "--is-ancestor", local, remote, cwd=repo, check=False)
+            if behind.returncode != 0:
+                logger.info(
+                    "product_repo_diverged_from_bundle",
+                    product_id=str(product_id),
+                    local=local[:12],
+                    bundle=remote[:12],
+                )
+            else:
+                head = (await _git("symbolic-ref", "--short", "HEAD", cwd=repo, check=False)).stdout
+                if head.strip() == "main":
+                    await _git("merge", "--ff-only", "--quiet", remote, cwd=repo)
+                else:
+                    await _git("update-ref", "refs/heads/main", remote, local, cwd=repo)
+                logger.info(
+                    "product_repo_fast_forwarded_to_bundle",
+                    product_id=str(product_id),
+                    to=remote[:12],
+                )
+        await asyncio.to_thread(marker.write_text, version)
+    except Exception:  # noqa: BLE001 — a present repo is still usable; never fail the caller
+        logger.warning(
+            "product_repo_follow_bundle_failed", product_id=str(product_id), exc_info=True
+        )
 
 
 async def _configure_repo_identity(repo: Path) -> None:
