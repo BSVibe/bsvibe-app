@@ -410,3 +410,25 @@ async def test_public_client_lookup_is_not_rate_limited(client: httpx.AsyncClien
     for _ in range(_ANON_DCR_MAX_PER_WINDOW * 3):
         r = await client.get("/api/oauth/clients/by-client-id/dcr-nope", headers=_cf(CF_PEER))
         assert r.status_code == 404, r.text
+
+
+async def test_an_endpoint_is_limited_through_redis_when_configured(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#929 (B) — the shared counter is the one the route consults: a budget spent on Redis
+    (as another replica would) leaves this process nothing to grant."""
+    import fakeredis.aioredis as fakeredis_aio
+
+    from backend.api import oauth
+
+    shared = fakeredis_aio.FakeRedis(decode_responses=True)
+    monkeypatch.setattr(oauth, "_rate_limit_redis", lambda: shared)
+    other_replica = oauth._SlidingWindowLimiter(
+        name="introspect", window_secs=3600, max_per_window=_INTROSPECT_MAX_PER_WINDOW
+    )
+    for _ in range(_INTROSPECT_MAX_PER_WINDOW):
+        assert await other_replica.check_and_record(CF_PEER)
+
+    r = await client.post("/api/oauth/introspect", data={"token": "nope"}, headers=_cf(CF_PEER))
+
+    assert r.status_code == 429, r.text
