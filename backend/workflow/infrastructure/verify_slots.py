@@ -69,10 +69,16 @@ DEFAULT_VERIFY_SLOTS: Final[int] = 1
 DEFAULT_VERIFY_SLOTS_TOTAL: Final[int] = 1
 
 
-def verify_slot_key(index: int) -> int:
-    """Stable signed-int64 advisory-lock key for verification slot ``index``."""
+def verify_slot_key(index: int, *, machine: str = "") -> int:
+    """Stable signed-int64 advisory-lock key for verification slot ``index`` on ``machine``.
+
+    #929 — the disk bound is a property of ONE machine's disk, so with several machines each
+    gets its own key space. An empty ``machine`` (the single-box default) hashes exactly as
+    before, so a running deployment keeps its keys.
+    """
+    scope = b"" if not machine else b"machine:" + machine.encode() + b"/"
     digest = hashlib.blake2b(
-        _VERIFY_SLOT_SALT + index.to_bytes(4, "big", signed=False), digest_size=8
+        _VERIFY_SLOT_SALT + scope + index.to_bytes(4, "big", signed=False), digest_size=8
     ).digest()
     unsigned = int.from_bytes(digest, byteorder="big", signed=False)
     return unsigned - 2**64 if unsigned >= 2**63 else unsigned
@@ -173,6 +179,7 @@ async def acquire_verify_slot(
     workspace_id: uuid.UUID,
     slots: int = DEFAULT_VERIFY_SLOTS,
     total_slots: int = DEFAULT_VERIFY_SLOTS_TOTAL,
+    machine: str = "",
 ) -> AsyncIterator[VerifySlot | None]:
     """Hold a free verification slot, or ``None`` when there is no capacity.
 
@@ -182,7 +189,8 @@ async def acquire_verify_slot(
        (:func:`verify_tenant_ticket_key`), so a workspace can never run more
        concurrent verifications than its plan buys.
     2. ``total_slots`` — the MACHINE's disk bound. Held as the global slot
-       (:func:`verify_slot_key`), which also names the compose project.
+       (:func:`verify_slot_key` on ``machine``), which also names the compose project. The
+       project name needs no machine axis: each machine's stacks live on its own docker.
 
     They were one number before, and that was the defect: ``slots`` was looped
     over the GLOBAL key space, so a workspace raising its own tier raised the
@@ -212,7 +220,7 @@ async def acquire_verify_slot(
 
     held: int | None = None
     for index in range(max(0, total_slots)):
-        if await _try_take(session, verify_slot_key(index)):
+        if await _try_take(session, verify_slot_key(index, machine=machine)):
             held = index
             break
     if held is None:
@@ -235,7 +243,7 @@ async def acquire_verify_slot(
     try:
         yield VerifySlot(index=held)
     finally:
-        await _give_back(session, verify_slot_key(held))
+        await _give_back(session, verify_slot_key(held, machine=machine))
         await _give_back(session, ticket)
         logger.debug("verify_slot_released", slot=held)
 
