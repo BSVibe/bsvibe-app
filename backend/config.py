@@ -396,6 +396,11 @@ class Settings(BaseSettings):
     # exactly (every prod workspace sits at 1); raise it only as far as the disk
     # genuinely allows.
     verify_stack_slots_total: int = 1
+    #: #929 — which machine this process runs on, for things bounded per machine (the
+    #: verification disk bound). Set the SAME value for every container on one box, and a
+    #: different one per box. Empty = single-box deployment, keys unchanged. Deliberately not
+    #: the hostname: containers on one box have different hostnames.
+    machine_id: str = ""
 
     # Capacity-aware dispatch (Lift E16). Backend must NOT dispatch onto a
     # worker stream when the worker is already at its in-flight cap — the

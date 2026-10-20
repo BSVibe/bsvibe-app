@@ -299,6 +299,7 @@ async def open_run_check_environment(
             workspace_id=run.workspace_id,
             slots=slots,
             total_slots=settings.verify_stack_slots_total,
+            machine=settings.machine_id,
         ) as slot,
     ):
         async with open_check_environment(
