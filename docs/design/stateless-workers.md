@@ -70,7 +70,7 @@ This is the trade the per-turn checkpoint buys down.
 
 ### 2.5 Cleanup
 
-`remove_run_worktree` and the run reaper also delete `runs/<rid>.bundle`. The reaper also sweeps checkpoints whose run is terminal.
+`remove_run_worktree` deletes `runs/<rid>.bundle` on the machine that holds the tree. A run that finished with no tree anywhere (its machine died after a checkpoint, then the run was cancelled) is reached by the worker's periodic sweep, `reap_terminal_run_checkpoints`. The store cannot list, so the DB drives it: a terminal run that still records a checkpoint has the bundle deleted, then the record dropped. A failed delete keeps the record, so the next sweep retries.
 
 ## 3. Out of scope here
 

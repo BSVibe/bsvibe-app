@@ -604,6 +604,7 @@ class AgentWorker(BaseWorker):
         from backend.workflow.application.run_cleanup import (  # noqa: PLC0415
             reap_idle_product_workspaces,
             reap_orphan_product_workspaces,
+            reap_terminal_run_checkpoints,
             reap_terminal_run_workspaces,
         )
 
@@ -616,10 +617,14 @@ class AgentWorker(BaseWorker):
                 reaped = await reap_terminal_run_workspaces(session)
                 reaped_products = await reap_orphan_product_workspaces(session)
                 reaped_products += await reap_idle_product_workspaces(session)
-            # removers are filesystem-only (no DB writes), but commit to release
-            # the short read txn promptly (parity with _reap_stale_claims).
+            # #929 — the off-machine checkpoints of finished runs, which no machine's
+            # worktree removal reaches. Scopes itself: it drops each run's record under
+            # that run's tenant.
+            reaped_checkpoints = await reap_terminal_run_checkpoints(session)
+            # Commits the dropped checkpoint records, and releases the short read txn
+            # promptly (parity with _reap_stale_claims).
             await session.commit()
-        return len(reaped) + len(reaped_products)
+        return len(reaped) + len(reaped_products) + len(reaped_checkpoints)
 
     async def _claim_runs_for_drive(self) -> list[tuple[uuid.UUID, uuid.UUID]]:
         """Atomically claim a batch of OPEN runs → RUNNING + stamp the claim.
