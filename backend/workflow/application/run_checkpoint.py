@@ -30,11 +30,9 @@ from backend.storage.product_workspace import (
     restore_run_worktree,
 )
 from backend.workflow.application.runtime.account_resolution import product_is_client_attach
+from backend.workflow.domain.run_checkpoint import CHECKPOINT_KEY
 
 logger = structlog.get_logger(__name__)
-
-#: ``run.payload`` key holding the last checkpoint: ``{"sha", "machine"[, "stale"]}``.
-CHECKPOINT_KEY = "checkpoint"
 
 
 class RunCheckpointMissing(RuntimeError):

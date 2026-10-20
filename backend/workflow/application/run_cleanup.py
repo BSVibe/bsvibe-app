@@ -43,8 +43,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data.rls import cross_tenant_session_read, workspace_session_scope
-from backend.workflow.application.run_checkpoint import CHECKPOINT_KEY
 from backend.workflow.application.run_status import move_run_status
+from backend.workflow.domain.run_checkpoint import CHECKPOINT_KEY
 from backend.workflow.infrastructure.db import (
     TERMINAL_RUN_STATUSES,
     DecisionStatus,
