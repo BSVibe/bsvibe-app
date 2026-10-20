@@ -33,7 +33,13 @@ With several backend replicas, the replica answering a tool call may not hold th
 
 - `execution_runs.home_machine` is set on claim from `BSVIBE_MACHINE_ID` (the same id #1189 introduced for verify slots). It is cleared on release.
 - **Tool calls go home.** An MCP work-tool call for a run whose home is another machine is forwarded there.
-- **The forwarding mechanism already exists.** A `client_attach` run's commands are dispatched to the founder's machine over Redis streams and awaited (`ClientWorkerSandboxManager` → `executors.dispatch`). The same substrate addresses a backend machine: a per-machine stream (`bsvibe:machine:<id>`) consumed by a small handler in each backend process that runs the work tool locally and replies.
+- **How a call goes home** (`backend/mcp/home_forwarding.py`). The `client_attach` substrate forwards shell commands to a worker that polls over HTTP. A backend machine can do better: it forwards the whole tool call, which runs through the same executor as a local one.
+  - The caller `XADD`s the call (tool, arguments, the principal it was authorised as, a deadline) to `bsvibe:machine:<home>` and `BLPOP`s `bsvibe:machine:reply:<request>`.
+  - Each API process serves its own machine's stream through one consumer group, so any replica on that machine can answer; they share its disk.
+  - A refusal at home comes back as the same refusal. A crash comes back as a generic failure.
+  - **At most once.** A request is acknowledged as it is read and never redelivered, because a write or a shell command is not idempotent. A request whose caller already gave up is dropped, not run late.
+  - A forwarded call runs at home with `forwarded=True` and never bounces on. The run-scope refusal is checked again there.
+  - A home that does not answer within the longest allowed command plus slack fails the call, naming the machine. The call never silently runs on a machine without the tree.
 - When the home is this machine, or unset on a single-box deployment, the call runs in place, exactly as today.
 
 ### 2.2 Checkpoint when a run leaves a machine
