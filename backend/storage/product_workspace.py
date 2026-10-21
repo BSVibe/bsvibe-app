@@ -991,6 +991,26 @@ async def read_run_checkpoint_file(
     return out if proc.returncode == 0 else None
 
 
+async def discard_local_run_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> None:
+    """Drop THIS machine's copy of a run's worktree — and nothing else.
+
+    For a run that comes back to a machine after continuing elsewhere: the leftover tree here
+    is older than the run's checkpoint. Unlike :func:`remove_run_worktree` it keeps the
+    off-machine checkpoint (it is the newest state), and it drops the local branch and
+    checkpoint ref only so the restore can bring both back as they are now.
+    """
+    worktree = run_worktree_path(run_id)
+    repo = product_workspace_path(product_id)
+    if repo.exists():
+        await _git("worktree", "remove", "--force", str(worktree), cwd=repo, check=False)
+        await _git("worktree", "prune", cwd=repo, check=False)
+        await _git("branch", "-D", run_branch_name(run_id), cwd=repo, check=False)
+        await _git("update-ref", "-d", _checkpoint_ref(run_id), cwd=repo, check=False)
+    if worktree.exists():
+        await asyncio.to_thread(shutil.rmtree, worktree, True)
+    logger.info("run_worktree_discarded_as_stale", run_id=str(run_id))
+
+
 async def delete_run_checkpoint(
     run_id: uuid.UUID, *, store: ProductBundleStore | None = None
 ) -> None:

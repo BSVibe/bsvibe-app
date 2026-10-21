@@ -79,3 +79,29 @@ async def test_a_released_machine_slot_can_be_taken_again() -> None:
             s2, workspace_id=uuid.uuid4(), slots=1, total_slots=1, machine="box-a"
         ) as again:
             assert again is not None
+
+
+def test_two_servers_never_share_a_compose_project() -> None:
+    """A client_attach run's stack runs on the founder's machine — the SAME docker for every
+    server driving that founder's runs. With ``verify-slot-0`` on both servers, the second
+    server's pre-clear ``down`` would tear down the first one's live stack (#929)."""
+    from backend.workflow.infrastructure.verify_slots import VerifySlot, verify_project_name
+
+    assert verify_project_name(0) == "verify-slot-0", "a single box is unchanged"
+    assert verify_project_name(0, machine="box-a") != verify_project_name(0, machine="box-b")
+    assert verify_project_name(0, machine="Box_A.local") == "verify-slot-box_a-local-0", (
+        "compose project names are lowercase letters, digits, - and _"
+    )
+    assert VerifySlot(index=1, machine="box-a").project == "verify-slot-box-a-1"
+
+
+async def test_the_held_slot_names_its_machines_project() -> None:
+    async with memory_session() as s1, memory_session() as s2:
+        async with acquire_verify_slot(
+            s1, workspace_id=uuid.uuid4(), slots=1, total_slots=1, machine="box-a"
+        ) as a:
+            async with acquire_verify_slot(
+                s2, workspace_id=uuid.uuid4(), slots=1, total_slots=1, machine="box-b"
+            ) as b:
+                assert a is not None and b is not None
+                assert (a.project, b.project) == ("verify-slot-box-a-0", "verify-slot-box-b-0")

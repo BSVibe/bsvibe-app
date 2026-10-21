@@ -69,4 +69,4 @@ A second machine needs all of these, and not before:
 - `postgres` here;
 - stage 1 live (`BSVIBE_MACHINE_ID` set, a different value per box);
 - the product bundle store on R2 (`BSVIBE_PRODUCT_BUNDLE_BACKEND=s3`);
-- stage 4 (global sandbox concurrency).
+- the stage 4 fixes (`docs/design/stateless-workers.md` §6).

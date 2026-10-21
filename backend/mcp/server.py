@@ -109,7 +109,15 @@ def build_tool_executor(
                 home = await home_routing.locate(session, principal.run_id)
             finally:
                 reset_current_workspace_id(ws_token)
-        return home if home and home != home_routing.machine else None
+        if not home:
+            # #929 — no machine is driving this run (paused on a Decision, released, or past
+            # its drive). On more than one machine there is no right place to run the call:
+            # any replica's tree for it may be stale or missing.
+            raise ToolError(
+                "this run is not running on any machine right now — "
+                "its work tools are available while a turn drives it"
+            )
+        return home if home != home_routing.machine else None
 
     async def _execute(
         principal: McpPrincipal,

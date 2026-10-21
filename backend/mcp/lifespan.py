@@ -29,6 +29,8 @@ from backend.mcp.home_forwarding import build_home_routing, serve_home_calls
 from backend.mcp.server import build_registry, build_server, build_tool_executor
 from backend.mcp.streamable_http import build_streamable_http_app
 from backend.workers.emit import get_dispatch_redis_client
+from backend.workflow.infrastructure.sandbox.reaper import sandbox_reaper_loop
+from backend.workflow.infrastructure.sandbox.resolver import get_sandbox_manager
 
 logger = structlog.get_logger(__name__)
 
@@ -102,6 +104,14 @@ async def mcp_lifespan(
     app.state.mcp_registry = registry
     app.state.mcp_asgi = asgi_app
     logger.info("mcp_lifespan_starting", tools=registry.names(), issuer=issuer)
+    # #929 — release the sandboxes this process made for runs' tool calls once they sit idle.
+    # Nothing else ever does once a run has moved to another machine.
+    sandbox_manager = get_sandbox_manager()
+    reaping = (
+        asyncio.create_task(sandbox_reaper_loop(sandbox_manager))
+        if sandbox_manager is not None
+        else None
+    )
     stop_serving = asyncio.Event()
     serving: asyncio.Task[None] | None = None
     if home_routing is not None:
@@ -127,6 +137,10 @@ async def mcp_lifespan(
         finally:
             logger.info("mcp_lifespan_stopping")
             stop_serving.set()
+            if reaping is not None:
+                reaping.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await reaping
             if serving is not None:
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(serving, timeout=5)

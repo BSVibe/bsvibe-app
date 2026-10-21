@@ -258,14 +258,26 @@ async def test_a_run_whose_home_is_elsewhere_is_answered_from_there(sf) -> None:
     assert routing.forwarded == [("box-a", "bsvibe_work_probe")]
 
 
-@pytest.mark.parametrize("home", ["box-b", None], ids=["home-here", "no-home"])
-async def test_a_run_at_home_here_or_nowhere_runs_in_place(sf, home) -> None:
-    routing = _FakeRouting(home=home)
+async def test_a_run_at_home_here_runs_in_place(sf) -> None:
+    routing = _FakeRouting(home="box-b")
     server = build_server(session_factory=sf, registry=_registry(), home_routing=routing)
 
     out = _text(await _call(server, _principal(run_id=uuid.uuid4()), "bsvibe_work_probe"))
 
     assert out == {"ran": "here"} and routing.forwarded == []
+
+
+async def test_a_run_no_machine_is_driving_is_refused_not_run_anywhere(sf) -> None:
+    """A run paused on a Decision, released, or just past its drive has no home. On more
+    than one machine a late call would read whatever (stale or missing) tree the answering
+    replica has, and leave a sandbox there nobody cleans up — so it is refused."""
+    routing = _FakeRouting(home=None)
+    server = build_server(session_factory=sf, registry=_registry(), home_routing=routing)
+
+    result = await _call(server, _principal(run_id=uuid.uuid4()), "bsvibe_work_probe")
+
+    assert result.isError and "not running" in result.content[0].text
+    assert routing.forwarded == []
 
 
 async def test_a_single_box_runs_everything_in_place(sf) -> None:
