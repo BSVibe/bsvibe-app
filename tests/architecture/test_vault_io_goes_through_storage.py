@@ -56,6 +56,7 @@ _FS_CALLS = {
 _ALLOWED: dict[str, str] = {
     "backend/knowledge/graph/storage.py": "the filesystem store itself",
     "backend/knowledge/vault_store.py": "creates the directory of a filesystem store",
+    "backend/knowledge/store.py": "the ops command that copies disk <-> rows",
     "backend/knowledge/graph/vault.py": (
         "on-disk only: ensure_dirs and the append fast path, both under FileSystemStorage"
     ),
@@ -84,7 +85,9 @@ def _fs_calls(tree: ast.AST) -> list[tuple[int, str]]:
         if not isinstance(node, ast.Call):
             continue
         fn = node.func
-        name = fn.attr if isinstance(fn, ast.Attribute) else fn.id if isinstance(fn, ast.Name) else ""
+        name = (
+            fn.attr if isinstance(fn, ast.Attribute) else fn.id if isinstance(fn, ast.Name) else ""
+        )
         if name in _FS_CALLS:
             hits.append((node.lineno, name))
     return hits
