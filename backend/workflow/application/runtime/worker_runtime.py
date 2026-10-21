@@ -165,19 +165,16 @@ async def check_executor_dispatch_health(
 async def _retraction_writer_for(workspace_id: uuid.UUID) -> Any:
     """Root a GardenWriter at one workspace's vault, for the retract sweep.
 
-    Mirrors the MCP call site exactly (``GardenWriter(vault=Vault(root))``) so a
+    Mirrors the MCP call site exactly (``GardenWriter(vault=workspace_vault(ws))``) so a
     tombstone written by the sweep is byte-identical to one written by a read.
     The region lookup is a DB read, which is why the factory is async. Imports
     are LOCAL: this module is the worker composition root and must not pull the
     knowledge vault stack at import time.
     """
-    from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
     from backend.knowledge.graph.writer import GardenWriter  # noqa: PLC0415
-    from backend.mcp.tools._helpers import vault_root_for  # noqa: PLC0415
+    from backend.knowledge.vault_store import workspace_vault  # noqa: PLC0415
 
-    root = vault_root_for(workspace_id=workspace_id)
-    root.mkdir(parents=True, exist_ok=True)
-    return GardenWriter(vault=Vault(root))
+    return GardenWriter(vault=workspace_vault(workspace_id))
 
 
 def build_worker_runtime(

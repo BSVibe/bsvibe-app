@@ -281,7 +281,6 @@ def build_note_embed_hook(
     settings = settings or get_settings()
 
     async def _hook(settlement: Settlement, node_ref: str) -> None:
-        from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
         from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
             resolve_knowledge_embedder,
         )
@@ -291,12 +290,13 @@ def build_note_embed_hook(
         from backend.knowledge.retrieval.vector_subscriber import (  # noqa: PLC0415
             embed_and_store_note,
         )
+        from backend.knowledge.vault_store import workspace_vault  # noqa: PLC0415
 
         embedder = resolve_knowledge_embedder(settings)
         if not embedder.enabled or embedder.model is None:
             return
         note_path = _relative_note_path(node_ref, settlement.workspace_id, settings=settings)
-        vault = Vault(workspace_vault_root(settlement.workspace_id, settings=settings))
+        vault = workspace_vault(settlement.workspace_id, settings=settings)
         async with session_factory() as session:
             backend = PgNoteVectorBackend(
                 session,
@@ -326,7 +326,6 @@ def build_reconcile_hook(
     settings = settings or get_settings()
 
     async def _hook(*, workspace_id: uuid.UUID) -> object:
-        from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
         from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
             resolve_knowledge_embedder,
         )
@@ -336,11 +335,12 @@ def build_reconcile_hook(
         from backend.knowledge.retrieval.storage.pg import (  # noqa: PLC0415
             PgNoteVectorBackend,
         )
+        from backend.knowledge.vault_store import workspace_vault  # noqa: PLC0415
 
         embedder = resolve_knowledge_embedder(settings)
         if not embedder.enabled or embedder.model is None:
             return None
-        vault = Vault(workspace_vault_root(workspace_id, settings=settings))
+        vault = workspace_vault(workspace_id, settings=settings)
         async with session_factory() as session:
             backend = PgNoteVectorBackend(
                 session,

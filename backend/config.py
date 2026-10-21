@@ -237,6 +237,10 @@ class Settings(BaseSettings):
     # Per-workspace vault lives at ``<knowledge_vault_root>/<region>/<workspace_id>/``.
     knowledge_vault_root: str = "var/vault"
     knowledge_default_region: str = "us-1"
+    # #929 stage 2 — where the vault and skills live: ``filesystem`` (the directories above) or
+    # ``postgres`` (``vault_documents`` rows, shared by every machine). One factory reads it:
+    # ``backend.knowledge.vault_store``. Flip only after ``python -m backend.knowledge.store import``.
+    knowledge_store_backend: str = "filesystem"
 
     # Knowledge semantic-search embedding (the pgvector index DERIVED from the
     # Markdown source-of-truth, proposal §5.4). This is a DEPLOYMENT-level model

@@ -39,8 +39,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.data.rls import cross_tenant_read
 from backend.data.session import make_engine
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
-from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.graph.vault_paths import workspace_vault_root
+from backend.knowledge.vault_store import vault_present, vault_storage_at
 from backend.products.application.bootstrap import register_bootstrap_anchors
 from backend.shared.core.logging import configure_logging
 
@@ -111,7 +111,7 @@ async def _retrofit_target(target: _Target, *, dry_run: bool) -> None:
     CLI would have logged ``anchor_backfill_done`` over it.
     """
     workspace_vault = workspace_vault_root(target.workspace_id)
-    if not workspace_vault.exists():
+    if not await vault_present(workspace_vault, target.workspace_id):
         logger.warning(
             "anchor_backfill_vault_missing",
             workspace_id=str(target.workspace_id),
@@ -128,7 +128,7 @@ async def _retrofit_target(target: _Target, *, dry_run: bool) -> None:
         )
         return
 
-    storage = FileSystemStorage(workspace_vault)
+    storage = vault_storage_at(workspace_vault, target.workspace_id)
     result = await register_bootstrap_anchors(storage)
     logger.info(
         "anchor_backfill_done",

@@ -25,8 +25,8 @@ from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.service import CanonicalizationService
 from backend.knowledge.canonicalization.store import NoteStore
-from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.graph.vault_paths import workspace_vault_root
+from backend.knowledge.vault_store import workspace_vault_storage
 
 
 def _vault_root(workspace_id: uuid.UUID) -> Path:
@@ -54,10 +54,8 @@ async def build_canonicalization_index(
     Overridable in tests via ``app.dependency_overrides`` to point at a
     fixture vault.
     """
-    vault_root = _vault_root(workspace_id)
-    vault_root.mkdir(parents=True, exist_ok=True)
     index = CanonicalizationIndex()
-    await index.initialize(FileSystemStorage(vault_root))
+    await index.initialize(workspace_vault_storage(workspace_id))
     return index
 
 
@@ -78,9 +76,7 @@ async def build_canonicalization_service(
     Overridable in tests via ``app.dependency_overrides`` to point at a
     fixture vault.
     """
-    vault_root = _vault_root(workspace_id)
-    vault_root.mkdir(parents=True, exist_ok=True)
-    storage = FileSystemStorage(vault_root)
+    storage = workspace_vault_storage(workspace_id)
     index = CanonicalizationIndex()
     await index.initialize(storage)
     return CanonicalizationService(

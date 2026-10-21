@@ -27,10 +27,9 @@ from backend.knowledge.domain.retraction import (
     UNDO_WINDOW_SECONDS,
     OntologyAction,
 )
-from backend.knowledge.graph.storage import FileSystemStorage
-from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.vault_paths import workspace_vault_root
 from backend.knowledge.graph.writer import GardenWriter
+from backend.knowledge.vault_store import workspace_vault, workspace_vault_storage
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 
 
@@ -61,9 +60,7 @@ def _build_service(ctx: ToolContext) -> RetractionService:
     cached = ctx.extras.get("retraction_service") if ctx.extras else None
     if cached is not None:
         return cached  # type: ignore[no-any-return]
-    root = _vault_root(ctx.principal.workspace_id)
-    root.mkdir(parents=True, exist_ok=True)
-    writer = GardenWriter(vault=Vault(root))
+    writer = GardenWriter(vault=workspace_vault(ctx.principal.workspace_id))
     return RetractionService(session=ctx.session, writer=writer)
 
 
@@ -74,9 +71,7 @@ async def _ensure_node_exists(workspace_id: uuid.UUID, node_ref: str) -> None:
     surface returns the same "not found" shape rather than persisting an
     orphan correction row. Path-traversal raises a distinct error.
     """
-    root = _vault_root(workspace_id)
-    root.mkdir(parents=True, exist_ok=True)
-    storage = FileSystemStorage(root)
+    storage = workspace_vault_storage(workspace_id)
     try:
         exists = await storage.exists(node_ref)
     except ValueError as exc:  # path traversal

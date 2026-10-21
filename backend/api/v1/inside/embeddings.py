@@ -19,7 +19,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
-from backend.api.v1.decisions import _vault_root
 from backend.config import get_settings
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.retrieval.embedder_adapter import GatewayEmbedder
@@ -27,6 +26,7 @@ from backend.knowledge.retrieval.embedder_resolution import resolve_knowledge_em
 from backend.knowledge.retrieval.reconcile import reconcile_embeddings
 from backend.knowledge.retrieval.storage.backend import NoteVectorBackend
 from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend
+from backend.knowledge.vault_store import workspace_vault
 
 from ._schemas import ReindexEmbeddingsResponse
 
@@ -41,7 +41,7 @@ def build_inside_vault(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
 ) -> Vault:
     """The caller's per-workspace vault (same root the trust ratchet writes)."""
-    return Vault(_vault_root(workspace_id))
+    return workspace_vault(workspace_id)
 
 
 def build_inside_embedder() -> GatewayEmbedder:

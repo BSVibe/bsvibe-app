@@ -24,10 +24,10 @@ from backend.api.deps import get_output_language, get_workspace_id
 # ``_vault_root`` is the same helper :mod:`backend.api.v1.decisions` defines —
 # importing it preserves the FS-as-SoT contract that every per-workspace
 # knowledge surface addresses ONE root.
-from backend.api.v1.decisions import _vault_root
 from backend.knowledge.canonicalization.concept_graph import build_concept_graph
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
-from backend.knowledge.graph.storage import FileSystemStorage, StorageBackend
+from backend.knowledge.graph.storage import StorageBackend
+from backend.knowledge.vault_store import workspace_vault_storage
 
 
 async def build_inside_storage(
@@ -44,9 +44,7 @@ async def build_inside_storage(
     Overridable in tests via ``app.dependency_overrides`` to point at a
     fixture vault.
     """
-    vault_root = _vault_root(workspace_id)
-    vault_root.mkdir(parents=True, exist_ok=True)
-    return FileSystemStorage(vault_root)
+    return workspace_vault_storage(workspace_id)
 
 
 async def build_inside_index(

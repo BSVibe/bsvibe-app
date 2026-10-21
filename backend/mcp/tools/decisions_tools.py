@@ -37,8 +37,8 @@ from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.service import CanonicalizationService
 from backend.knowledge.canonicalization.store import NoteStore
-from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.graph.vault_paths import workspace_vault_root
+from backend.knowledge.vault_store import workspace_vault_storage
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 
 
@@ -69,10 +69,8 @@ async def _build_index(ctx: ToolContext) -> CanonicalizationIndex:
     cached = ctx.extras.get("canon_index") if ctx.extras else None
     if cached is not None:
         return cached  # type: ignore[no-any-return]
-    root = _vault_root(ctx.principal.workspace_id)
-    root.mkdir(parents=True, exist_ok=True)
     index = CanonicalizationIndex()
-    await index.initialize(FileSystemStorage(root))
+    await index.initialize(workspace_vault_storage(ctx.principal.workspace_id))
     return index
 
 
@@ -80,9 +78,7 @@ async def _build_service(ctx: ToolContext) -> CanonicalizationService:
     cached = ctx.extras.get("canon_service") if ctx.extras else None
     if cached is not None:
         return cached  # type: ignore[no-any-return]
-    root = _vault_root(ctx.principal.workspace_id)
-    root.mkdir(parents=True, exist_ok=True)
-    storage = FileSystemStorage(root)
+    storage = workspace_vault_storage(ctx.principal.workspace_id)
     index = CanonicalizationIndex()
     await index.initialize(storage)
     return CanonicalizationService(

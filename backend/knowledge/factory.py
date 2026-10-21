@@ -89,10 +89,9 @@ class KnowledgeFactory:
     def vault(self) -> Vault:
         """Return (or construct) the workspace-scoped ``Vault``."""
         if self._vault is None:
-            from backend.knowledge.graph.vault import Vault as _Vault  # noqa: PLC0415
+            from backend.knowledge.vault_store import vault_at  # noqa: PLC0415
 
-            self._vault_root.mkdir(parents=True, exist_ok=True)
-            self._vault = _Vault(self._vault_root)
+            self._vault = vault_at(self._vault_root, self._context.workspace_id)
         return self._vault
 
     def writer(self) -> GardenWriter:
@@ -145,7 +144,6 @@ class KnowledgeFactory:
         composite never raises into the verify path. Construction is cheap (no
         deps forced) — each source builds its derived state lazily per call.
         """
-        from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
         from backend.knowledge.retrieval.canon_retriever import (  # noqa: PLC0415
             CanonConceptRetriever,
         )
@@ -159,7 +157,7 @@ class KnowledgeFactory:
             ResolvedDecisionsRetriever,
         )
 
-        storage = FileSystemStorage(self._vault_root)
+        storage = self.vault().storage
         return CompositeCanonRetriever(
             [
                 CanonConceptRetriever(storage),
