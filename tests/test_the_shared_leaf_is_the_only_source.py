@@ -62,13 +62,17 @@ def test_the_path_traversal_check_lives_in_exactly_one_place() -> None:
 
 
 def test_both_surfaces_use_the_same_slugify_object() -> None:
-    """특성화 — REST 와 MCP 가 **같은 함수 객체**를 쓴다 (미러가 아니라 공유)."""
+    """특성화 — REST 와 MCP 가 **같은 함수 객체**를 쓴다 (미러가 아니라 공유).
+
+    #929 이후 두 표면은 슬러그를 직접 만들지 않는다: 둘 다 스킬 저장소 한 모듈
+    (``backend.extensions.skill.store``)을 거치고, 그 모듈이 공유 leaf 를 쓴다."""
     from backend.api.v1 import skills as rest
     from backend.common.slug import slugify
+    from backend.extensions.skill import store
     from backend.mcp.tools import skills_tools as mcp
 
-    assert rest._slugify is slugify  # noqa: SLF001
-    assert mcp._slugify is slugify  # noqa: SLF001
+    assert store.slugify is slugify
+    assert not hasattr(rest, "_slugify") and not hasattr(mcp, "_slugify"), "사본이 다시 생겼다"
 
 
 @pytest.mark.parametrize(

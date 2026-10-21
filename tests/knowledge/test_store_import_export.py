@@ -38,7 +38,7 @@ def disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(s, "knowledge_vault_root", str(tmp_path / "vault"), raising=False)
     monkeypatch.setattr(s, "skills_root", str(tmp_path / "skills"), raising=False)
     ws_a, ws_b = uuid.uuid4(), uuid.uuid4()
-    region = s.knowledge_default_region
+    vault_base = tmp_path / "vault" / s.knowledge_default_region
     files = {
         (ws_a, "vault", "garden/seedling/a.md"): "---\ntitle: A\n---\n한국어 본문\n",
         (ws_a, "vault", "code_graph/graph.json"): '{"nodes": [], "edges": []}',
@@ -47,16 +47,12 @@ def disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         (ws_a, "skills", "review.md"): "---\nname: review\nversion: 1\ndescription: d\n---\n",
     }
     for (ws, tree, rel), content in files.items():
-        root = (
-            tmp_path / "vault" / region / str(ws)
-            if tree == "vault"
-            else tmp_path / "skills" / str(ws)
-        )
+        root = vault_base / str(ws) if tree == "vault" else tmp_path / "skills" / str(ws)
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(content, encoding="utf-8")
     # Not a workspace: ignored, never imported under a made-up id.
-    (tmp_path / "vault" / region / "not-a-uuid").mkdir(parents=True)
-    (tmp_path / "vault" / region / "not-a-uuid" / "x.md").write_text("x")
+    (vault_base / "not-a-uuid").mkdir(parents=True)
+    (vault_base / "not-a-uuid" / "x.md").write_text("x")
     return {"files": files, "root": tmp_path}
 
 
@@ -96,9 +92,9 @@ async def test_export_writes_the_same_tree_back_out(sf, disk, tmp_path: Path) ->
     count = await store.export_to_disk(sf, out)
 
     assert count == len(disk["files"])
-    region = get_settings().knowledge_default_region
+    vault_out = out / "vault" / get_settings().knowledge_default_region
     for (ws, tree, rel), content in disk["files"].items():
-        base = out / "vault" / region / str(ws) if tree == "vault" else out / "skills" / str(ws)
+        base = vault_out / str(ws) if tree == "vault" else out / "skills" / str(ws)
         assert (base / rel).read_text(encoding="utf-8") == content
 
 

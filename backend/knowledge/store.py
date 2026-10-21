@@ -92,7 +92,7 @@ async def import_from_disk(session_factory: Any, *, dry_run: bool = False) -> Im
 
 async def export_to_disk(session_factory: Any, out: Path) -> int:
     """Write every row back out as ``<out>/vault/<region>/<ws>/…`` and ``<out>/skills/<ws>/…``."""
-    region = get_settings().knowledge_default_region
+    vault_out = out / "vault" / get_settings().knowledge_default_region
     # ``vault_documents`` is a layer-2 table (no RLS, like ``note_embeddings``): an unscoped
     # session sees every workspace's rows, which is what an export of all of them needs.
     async with session_factory() as session:
@@ -104,7 +104,7 @@ async def export_to_disk(session_factory: Any, out: Path) -> int:
     count = 0
     for ws, tree in sorted(trees, key=lambda t: (str(t[0]), t[1])):
         rows = PgDocumentStorage(session_factory, workspace_id=ws, tree=tree)
-        base = out / "vault" / region / str(ws) if tree == "vault" else out / tree / str(ws)
+        base = vault_out / str(ws) if tree == "vault" else out / tree / str(ws)
         disk = FileSystemStorage(base)
         documents = await rows.read_many(await rows.list_files("", "*"))
         for rel, content in documents.items():
