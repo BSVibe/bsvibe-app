@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-19
+# BSVibe session handoff — 2026-10-21
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,9 +21,30 @@
 
 ---
 
-## §0 — One line: **keys rotate, product secrets reach the server box, a delivered run ships whatever the order, and the settings screens read**
+## §0 — One line: **a run can move between machines without losing its work; codex is on the MCP surface; cloud sessions see the rules**
 
-10-16 → 10-19 (this session). Every GitHub write went pause → act → CI green → merge → deploy checked →
+10-19 → 10-21 (this session). Every GitHub write went pause → act → CI green → merge → no new run → restore (§Ⅳ).
+
+| PR | Issue | What | Prod check |
+|---|---|---|---|
+| #1183 | #1000 | codex agent runs act only through the BSVibe MCP surface (`view_image` allowed, models pinned to ones without `apply_patch`); opencode measured | ✅ deployed · ⏳ **형님:** one live codex run |
+| #1184 | #967 | an executor wait timeout says what it read in scope and what the row says unscoped — starvation vs an invisible row | ✅ deployed |
+| #1185 | #961 | the PWA can schedule a product's autonomous check (`product_tick`); deleting a product removes its schedules | ✅ deployed |
+| #1186 | #951 | cloud sessions get the rules: repo `CLAUDE.md` + a SessionStart hook (`.claude/hooks/install-skills.sh`) that installs `blas1n/claude-skills` — `docs/runbook/agent-context.md` | ✅ merged |
+| #1187 | #929 | the OAuth rate limit is shared across backend replicas (Redis sliding window, Lua) | ✅ deployed |
+| #1188 | #929 | a machine's product repo follows the bundle another machine shipped (fast-forward only) | ✅ deployed |
+| #1189 | #929 | verify disk slots are per machine — **`BSVIBE_MACHINE_ID`** (empty = single box) | ✅ deployed |
+| #1190 | #929 | a run's worktree (branch + uncommitted edits) is checkpointed to R2 before every claim release and restored on another machine; a run that cannot be restored is **refused**, never re-branched from `main` | ✅ deployed (inert: no machine id) |
+| #1191 | #929 | `execution_runs.home_machine` — stamped on claim, cleared on every release | ✅ migration `run_home_machine` ran |
+| #1192 | #929 | an MCP work-tool call for a run whose home is another machine is forwarded there (`bsvibe:machine:<id>` stream, at most once, deadline, refusal round-trips) | ✅ deployed, `mcp_lifespan_starting` clean (inert) |
+| #1193 | #929 | a finished run's R2 checkpoint is swept (DB-driven: the store cannot list) | ✅ deployed, host worker restarted 10-20 |
+
+Closed: **#1000**, **#967**, **#961**, **#951**. **#929** stage 1 of 4 done (`docs/design/stateless-workers.md`).
+Everything #929 is gated on `BSVIBE_MACHINE_ID`; prod leaves it empty, so the single box behaves as before.
+
+## §0-b — previous session (10-16 → 10-19): keys rotate, product secrets reach the server box, a delivered run ships whatever the order
+
+10-16 → 10-19. Every GitHub write went pause → act → CI green → merge → deploy checked →
 no new run → restore (§Ⅳ).
 
 | PR | Issue | What | Prod check |
@@ -46,26 +67,7 @@ Closed: **#957**, **#691**, **#1145**, **#949** (all four), **#1042** (with #118
 run. → #1180, which also shipped that run. Re-walk on **10-26 09:30 KST**: it should end `shipped` with one
 Telegram message and no human step.
 
-## §0-b — previous session (10-15 → 10-16): the meter sees every token, a tenant cannot aim the server inward, free beta
-
-Every PR went pause → open → `filter_rejected` → CI green → merge → deploy
-checked → restore (§Ⅳ).
-
-| PR | Issue | What | Prod check |
-|---|---|---|---|
-| #1161 | #1158 | a cancelled / worker-deadline executor session reports what it spent (Claude Code in-session tally → `failed` report; the #928 late-usage path takes it) | ✅ deployed · host worker restarted 10-15 18:31 KST · ⏳ `task_cancelled_usage_reported` on a real mid-turn cancel |
-| #1162 | #930 | the workspace budget sums `execution_runs` **+ `unattributed_llm_usage`**; a late executor report also books a ledger row (`site=executor_late_report`) — the #954 ledger had no reader | ✅ deployed · ⏳ 형님 DB read: this month's ledger sum vs the 50M budget |
-| #1163 | (found) | **model endpoints must be public**: `LlmClient.chat` checks the MERGED kwargs (`extra_params.base_url` was a way around `api_base`) — private/loopback/link-local refused, `ollama/…` must name one; save-time 422 / ToolError; executor accounts exempt; `BSVIBE_LLM_EGRESS_ALLOWED_HOSTS` | ✅ prod MCP create with `169.254.169.254` → refused, nothing saved |
-| #1164 | #928 | billing step 1 — `workspaces.plan` + `apply_plan` (Free 3/1/50M · Pro 10/2/50M · Operator ∞) | ✅ migration `workspace_plan` ran · 형님's Settings → Plan: **무료 · 0 / 3** — correct: only `admin@bsvibe.dev`'s workspace was ever taken off the run cap (`workspace_run_cap`); 형님's own (`qazasa123@…`) has always been capped at 3. `admin@bsvibe.dev` screen: **운영자 · 0 / 무제한 · 0 / 무제한 · 1 stack** (the label moved no lever, as designed) |
-| #1165 | #928 | billing step 2 — Paddle subscription webhook (signature · idempotent · out-of-order · bound subscription) | ✅ deployed, answers 404 (no secret) — **dormant** |
-| #1166 | #928 | billing step 4 — `GET /api/v1/workspace/plan` = MCP `bsvibe_workspace_plan` = Settings → Plan | ✅ 형님 screen 10-16: plan · runs 0/3 · tokens 1,247,237 / 50M · 1 stack · "유료 플랜 안내" |
-| #1167 | (CI flake) | PWA tests on Node 26 (Node's Web Storage shadowed jsdom) · knowledge-panel race forced deterministic | ✅ 845 local, CI green |
-| #1168 | #928 | billing **paused** — Plan tab links "About paid plans", never "Upgrade" | ✅ |
-| #1169 | #935 | runbook §2b: retire an unused worker instead of rotating; 8700 is the prod backend, not an ssh tunnel | ✅ `admin-test-exec` retired, old token heartbeat **401** |
-
-Closed: **#959** (all four items done; fail-closed was #1095), **#935** (runbook · 2 DB passwords · worker token retired).
-
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21)
 
 | | |
 |---|---|
@@ -79,6 +81,8 @@ Closed: **#959** (all four items done; fail-closed was #1095), **#935** (runbook
 | **Ship is the approval** (10-06) | "승인하고 출시" does not raise a second Safe Mode card |
 | **One sandbox per run** (10-06) | `sandbox_max_concurrent=2` now counts runs; a third server_sandbox run waits for a slot |
 | **codex and opencode go onto the MCP surface too** (10-19) | Same as claude_code, no exception kept (#1000). Re-measure both CLIs' current versions against the issue's two gates before wiring |
+| **#929 = B: state lives in R2, any machine can take over** (10-20) | Not "pin a run to its machine". Stage 1 (run worktrees, tool calls) is done; **no second machine before stages 1–4 are live**, each machine with its own `BSVIBE_MACHINE_ID` |
+| **The vault and skills move into Postgres rows, Markdown unchanged** (10-21) | #929 stage 2: one `vault_documents` table behind `StorageBackend`, import/export to a directory. Not R2 objects, not a shared mount — `docs/design/stateless-workers.md` §5 |
 | **Live UI checks sign in on the disposable stack** (10-19) | `admin@bsvibe.dev` + `~/.bsvibe/e2e-live.password` into `BSVIBE_E2E_PASSWORD` only, never printed, never prod. Export just the 4 public IdP keys from `.env.prod` |
 
 ## §Ⅱ — What this session found that the issues had wrong
@@ -133,16 +137,30 @@ Closed: **#959** (all four items done; fail-closed was #1095), **#935** (runbook
 * **jsdom cannot see layout.** Both settings screens and the tab gap were green in vitest and wrong on screen;
   `apps/pwa/e2e-live/` now has `settings-layout` and `product-detail-and-fab` specs.
 
+## §Ⅱ-e — What 10-19/21 found
+
+* **The worktree was the only thing tying a run to a machine** — and it was worse than "local": before the first
+  verify every edit is uncommitted, and `add_run_worktree` silently re-branched from `main` when the path was
+  missing. A second machine would have lost the work without an error.
+* **MCP work tools run in the API process, not the worker.** With replicas, whichever API answers the call must
+  reach the run's tree — hence forwarding, not a shared disk.
+* **fakeredis ignores `block` on XREADGROUP** and does not even yield: a consumer loop starves the event loop and
+  the test hangs. Sleep on an empty read (#1192).
+* **An import contract breaks on the importer's side.** `run_cleanup` importing one constant from `run_checkpoint`
+  pulled router/api into the MCP context, which imports `run_cleanup` (#1193, fixed with a domain leaf). Never
+  chain `lint-imports | tail -1` in `&&` — the pipe's exit code is `tail`'s.
+* **Tests must call worker functions under `workspace_scope(ws)` like prod does** — fail-closed RLS turns a
+  missing scope into "no rows", which reads as a logic bug.
+
 ## §Ⅲ — Next
 
 0. **10-26 (Mon) 00:30 UTC weekly run** — must end `shipped` with one Telegram message, no human step (#1180).
-1. **#1000** — codex/opencode onto the MCP surface (decided 10-19): re-measure, then wire.
-2. **#967** — client_worker_manager tests flake under CI load; the error cannot tell starvation from an
-   invisible row.
-3. ⏳ walks: #1173 rewrap dry-run (형님), #1174 server-sandbox secrets checklist, #1176/#1177 on the next runs.
-4. Decision pending: **#961** (product_tick from the PWA). Later: #929, #930, #951. Outside the repo: #937
-   (cold-boot test, Supabase SMTP).
-5. Carry-overs in GitHub issues.
+1. **#929 stage 2** — the vault and skills into Postgres: six PRs in `docs/design/stateless-workers.md` §5.5.
+   Then stage 4 (global sandbox concurrency).
+2. **#930** — workspace token budget follow-ups (⏳ 형님's ledger-sum SQL first).
+3. ⏳ 형님's batch: codex live run (#1183) · `python -m backend.router.accounts.rewrap` dry-run (#1173) ·
+   10-26 weekly report · #930 SQL. Walks: #1174 server-sandbox secrets checklist, #1176/#1177 on the next runs.
+4. Outside the repo: #937 (cold-boot test, Supabase SMTP). Carry-overs in GitHub issues.
 
 ## §Ⅳ — Discipline that paid off
 
