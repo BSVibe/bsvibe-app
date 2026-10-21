@@ -317,3 +317,36 @@ async def test_bootstrap_does_not_scaffold_when_repo_has_a_gate(
     # no scaffold commit was added.
     assert (repo_path / ".github" / "workflows" / "ci.yml").read_text() == existing_ci
     assert len(_git_out(repo_path, "log", "--oneline").strip().splitlines()) == 1
+
+
+async def test_the_product_repo_is_cloned_with_its_whole_history(
+    session_factory, tmp_path, monkeypatch
+):
+    """#929 — the product repo is the product's durable home: a ``--depth=1`` clone cannot be
+    bundled for the store, so a second machine could never restore it."""
+    from backend.config import get_settings  # noqa: PLC0415
+
+    object.__setattr__(get_settings(), "product_workspace_root", str(tmp_path))
+    workspace_id, product_id = uuid.uuid4(), uuid.uuid4()
+    await _seed_product(session_factory, workspace_id, product_id)
+    depths: list[int] = []
+    stub = _clone_stub({"pyproject.toml": "[project]\nname='x'\n"})
+
+    async def _clone(repo_url, dest, *, token, depth=1):  # noqa: ANN001
+        depths.append(depth)
+        await stub(repo_url, dest, token=token, depth=depth)
+
+    git = GitOps()
+    git.clone = _clone  # type: ignore[method-assign]
+    monkeypatch.setattr(bootstrap_runtime, "build_bootstrap_knowledge", lambda **_: None)
+
+    with workspace_scope(workspace_id):
+        await run_product_bootstrap_job(
+            product_id=product_id,
+            workspace_id=workspace_id,
+            repo_url="https://x/y",
+            session_factory=session_factory,
+            git_ops=git,
+        )
+
+    assert depths == [0], "full history, not a shallow clone"

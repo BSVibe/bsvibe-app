@@ -751,7 +751,9 @@ async def run_product_bootstrap_job(  # noqa: PLR0911, PLR0915 — linear guarde
     try:
         if repo_path.exists():
             await _remove_dir(repo_path)
-        await git_ops.clone(repo_url, repo_path, token=clone_token, depth=1)
+        # Full history: this repo is the product's durable home, and a shallow clone
+        # cannot be bundled for the store a second machine restores from (#929).
+        await git_ops.clone(repo_url, repo_path, token=clone_token, depth=0)
     except (GitError, ProductWorkspaceError, OSError) as exc:
         msg = _short_error(exc)
         if clone_token is None:
