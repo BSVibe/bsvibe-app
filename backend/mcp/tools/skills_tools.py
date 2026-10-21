@@ -2,10 +2,9 @@
 
 Wraps the per-workspace skills registry the PWA's
 :mod:`apps/pwa/components/skills/{SkillsLibrary,SkillViewer,SkillEditor}`
-view drives via ``/api/v1/skills``. Handlers re-use
-:class:`SkillLoader` (the same loader the REST endpoints call) so the
-MCP and PWA paths see the same on-disk registry under
-``<skills_root>/<workspace_id>/``.
+view drives via ``/api/v1/skills``. Both go through
+:mod:`backend.extensions.skill.store`, so the MCP and PWA paths see the same
+skills in the workspace's store (files or rows, #929).
 
 PWA exposes list / get / create / update — there is no "run" button, so
 this lift ships only those four. ``invoke_skill`` is the agent loop's
@@ -17,16 +16,19 @@ Scopes follow the existing convention: ``mcp:read`` for list / get,
 
 from __future__ import annotations
 
-import json
-import uuid
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from backend.common.slug import slugify as _slugify
-from backend.config import get_settings
 from backend.extensions.skill import SkillLoader, SkillMeta
+from backend.extensions.skill.store import (
+    SkillConflict,
+    SkillInvalid,
+    SkillNotFound,
+    create_workspace_skill,
+    update_workspace_skill,
+    workspace_skill_loader,
+)
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 
 
@@ -34,45 +36,12 @@ class _Envelope(RootModel[Any]):
     """Permissive output envelope — preserves the natural JSON shape."""
 
 
-def _skill_markdown(
-    *, name: str, description: str, system_prompt: str, version: str = "1.0.0"
-) -> str:
-    """Render a skill ``.md`` matching the loader's on-disk format.
-
-    Mirrors :func:`backend.api.v1.skills._skill_markdown` 1:1 so a created
-    or updated skill round-trips through the loader identically to the
-    REST surface.
-    """
-    desc_scalar = json.dumps(description)
-    return (
-        "---\n"
-        f"name: {name}\n"
-        f"version: {version}\n"
-        f"description: {desc_scalar}\n"
-        "---\n"
-        f"{system_prompt.strip()}\n"
-    )
-
-
-def _loader_for(workspace_id: uuid.UUID) -> SkillLoader:
-    """Per-workspace :class:`SkillLoader`.
-
-    Tests inject a pre-built loader via ``ctx.extras["skill_loader"]`` so a
-    unit run never touches the on-disk skills dir. In production the loader
-    reads ``<skills_root>/<workspace_id>/*.md``.
-    """
-    settings = get_settings()
-    skill_dir = Path(settings.skills_root) / str(workspace_id)
-    loader = SkillLoader(skill_dir)
-    loader.load_all()
-    return loader
-
-
-def _loader_for_ctx(ctx: ToolContext) -> SkillLoader:
+async def _loader_for_ctx(ctx: ToolContext) -> SkillLoader:
+    """Per-workspace loader. Tests inject one via ``ctx.extras["skill_loader"]``."""
     cached = ctx.extras.get("skill_loader") if ctx.extras else None
     if cached is not None:
         return cached  # type: ignore[no-any-return]
-    return _loader_for(ctx.principal.workspace_id)
+    return await workspace_skill_loader(ctx.principal.workspace_id)
 
 
 def _meta_to_dict(meta: SkillMeta) -> dict[str, Any]:
@@ -88,11 +57,6 @@ def _meta_to_dict(meta: SkillMeta) -> dict[str, Any]:
     }
 
 
-def _skill_dir(workspace_id: uuid.UUID) -> Path:
-    settings = get_settings()
-    return (Path(settings.skills_root) / str(workspace_id)).resolve()
-
-
 # ---------------------------------------------------------------------------
 # bsvibe_skills_list
 # ---------------------------------------------------------------------------
@@ -101,7 +65,7 @@ class SkillsListInput(BaseModel):
 
 
 async def _h_list(_args: SkillsListInput, ctx: ToolContext) -> Any:
-    loader = _loader_for_ctx(ctx)
+    loader = await _loader_for_ctx(ctx)
     return _Envelope([_meta_to_dict(m) for m in loader.registry.values()])
 
 
@@ -114,7 +78,7 @@ class SkillsGetInput(BaseModel):
 
 
 async def _h_get(args: SkillsGetInput, ctx: ToolContext) -> Any:
-    loader = _loader_for_ctx(ctx)
+    loader = await _loader_for_ctx(ctx)
     if args.name not in loader.registry:
         raise ToolError(f"skill not found: {args.name}")
     return _Envelope(_meta_to_dict(loader.get(args.name)))
@@ -140,31 +104,16 @@ class SkillsCreateInput(BaseModel):
 
 
 async def _h_create(args: SkillsCreateInput, ctx: ToolContext) -> Any:
-    slug = _slugify(args.name)
-    if slug is None:
-        raise ToolError("name must yield a slug matching ^[a-z][a-z0-9-]*$")
-    if not args.summary.strip():
-        raise ToolError("summary must not be blank")
-
-    skill_dir = _skill_dir(ctx.principal.workspace_id)
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    md_path = (skill_dir / f"{slug}.md").resolve()
-    if md_path.parent != skill_dir:
-        raise ToolError("invalid skill name")
-    if md_path.exists():
-        raise ToolError(f"skill already exists: {slug}")
-
-    md_path.write_text(
-        _skill_markdown(
-            name=slug, description=args.summary.strip(), system_prompt=args.system_prompt
-        ),
-        encoding="utf-8",
-    )
-
-    loader = _loader_for(ctx.principal.workspace_id)
-    if slug not in loader.registry:  # pragma: no cover — written file must parse
-        raise ToolError("created skill did not load")
-    return _Envelope(_meta_to_dict(loader.get(slug)))
+    try:
+        meta = await create_workspace_skill(
+            ctx.principal.workspace_id,
+            name=args.name,
+            summary=args.summary,
+            system_prompt=args.system_prompt,
+        )
+    except (SkillInvalid, SkillConflict) as exc:
+        raise ToolError(str(exc)) from exc
+    return _Envelope(_meta_to_dict(meta))
 
 
 # ---------------------------------------------------------------------------
@@ -186,32 +135,18 @@ class SkillsUpdateInput(BaseModel):
 
 
 async def _h_update(args: SkillsUpdateInput, ctx: ToolContext) -> Any:
-    loader = _loader_for(ctx.principal.workspace_id)
-    if args.name not in loader.registry:
-        raise ToolError(f"skill not found: {args.name}")
-    if not args.summary.strip():
-        raise ToolError("summary must not be blank")
-
-    existing = loader.get(args.name)
-    skill_dir = _skill_dir(ctx.principal.workspace_id)
-    md_path = (skill_dir / f"{args.name}.md").resolve()
-    if md_path.parent != skill_dir or not md_path.is_file():
-        raise ToolError(f"skill not found: {args.name}")
-
-    md_path.write_text(
-        _skill_markdown(
-            name=existing.name,
-            description=args.summary.strip(),
+    try:
+        meta = await update_workspace_skill(
+            ctx.principal.workspace_id,
+            name=args.name,
+            summary=args.summary,
             system_prompt=args.system_prompt,
-            version=existing.version,
-        ),
-        encoding="utf-8",
-    )
-
-    loader = _loader_for(ctx.principal.workspace_id)
-    if args.name not in loader.registry:  # pragma: no cover — rewritten file must parse
-        raise ToolError("updated skill did not load")
-    return _Envelope(_meta_to_dict(loader.get(args.name)))
+        )
+    except SkillNotFound as exc:
+        raise ToolError(f"skill not found: {args.name}") from exc
+    except SkillInvalid as exc:
+        raise ToolError(str(exc)) from exc
+    return _Envelope(_meta_to_dict(meta))
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +183,9 @@ def register_skills_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_skills_create",
             description=(
-                "Create a skill — writes <skills_root>/<workspace_id>/<slug>.md "
+                "Create a skill — writes the workspace's <slug>.md skill "
                 "with the manifest + Markdown body, slugifying `name` to a safe "
-                "^[a-z][a-z0-9-]*$ filename. ToolError on collision (existing "
+                "^[a-z][a-z0-9-]*$ name. ToolError on collision (existing "
                 "slug) or unsafe name. Mirrors the PWA SkillEditor 'Create' form."
             ),
             input_schema=SkillsCreateInput,

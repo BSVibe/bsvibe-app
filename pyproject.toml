@@ -331,6 +331,8 @@ ignore_imports = [
     # chain (no second copy of the skill loader, no second slug rule, no
     # second markdown renderer).
     "backend.mcp.tools.skills_tools -> backend.extensions.skill",
+    # #929 stage 2 — the one skill store (load / create / update) both surfaces call.
+    "backend.mcp.tools.skills_tools -> backend.extensions.skill.store",
     # Transitive chain through plugin.audit — RetractionService emits via
     # plugin.audit.service, which pulls in plugin.audit.subscriber (which
     # imports backend.api.v1.live_events for SSE relay) + backend.extensions.eventbus

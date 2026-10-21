@@ -1,6 +1,6 @@
 """/api/v1/skills — list + get + create skills for the current workspace.
 
-Skills are markdown manifests on disk under ``<skills_root>/<workspace_id>/``
+Skills are markdown manifests in the workspace's skills store (files or rows, #929)
 (per Workflow §6 #5 [locked]): a YAML frontmatter block (``name`` / ``version``
 / ``description`` + optional ``author`` / ``allowed_tools`` / ``model``) followed
 by the Markdown system-prompt body. ``SkillLoader`` discovers + parses them.
@@ -15,16 +15,21 @@ slug is immutable on update (a rename would mean a file rename — deferred).
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.deps import get_workspace_id
-from backend.common.slug import slugify as _slugify
-from backend.config import get_settings
-from backend.extensions.skill import SkillLoader, SkillMeta
+from backend.extensions.skill import SkillMeta
+from backend.extensions.skill.store import (
+    SkillConflict,
+    SkillInvalid,
+    SkillNotFound,
+    create_workspace_skill,
+    update_workspace_skill,
+    workspace_skill_loader,
+)
 
 router = APIRouter()
 
@@ -88,44 +93,12 @@ class SkillUpdate(BaseModel):
     system_prompt: str = Field(min_length=1, max_length=100_000)
 
 
-def _skill_markdown(
-    *, name: str, description: str, system_prompt: str, version: str = "1.0.0"
-) -> str:
-    """Render a skill ``.md`` matching the loader's on-disk format.
-
-    Frontmatter fence (``---``…``---``) with the required fields, then the body.
-    ``description`` is YAML-escaped via a JSON-style double-quoted scalar so a
-    summary with colons / quotes round-trips through ``yaml.safe_load``. On
-    create the default ``version`` is used; an update passes the skill's existing
-    version so it is preserved.
-    """
-    import json  # noqa: PLC0415 — local: only this renderer needs it
-
-    desc_scalar = json.dumps(description)  # valid YAML double-quoted scalar
-    return (
-        "---\n"
-        f"name: {name}\n"
-        f"version: {version}\n"
-        f"description: {desc_scalar}\n"
-        "---\n"
-        f"{system_prompt.strip()}\n"
-    )
-
-
-def _loader_for(workspace_id: uuid.UUID) -> SkillLoader:
-    settings = get_settings()
-    skill_dir = Path(settings.skills_root) / str(workspace_id)
-    loader = SkillLoader(skill_dir)
-    loader.load_all()
-    return loader
-
-
 @router.get("")
 async def list_skills(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
 ) -> list[SkillResponse]:
     """List all skills currently loaded for the workspace."""
-    loader = _loader_for(workspace_id)
+    loader = await workspace_skill_loader(workspace_id)
     return [SkillResponse.from_meta(m) for m in loader.registry.values()]
 
 
@@ -134,56 +107,24 @@ async def create_skill(
     body: SkillCreate,
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
 ) -> SkillResponse:
-    """Create a skill: write ``<skills_root>/<workspace_id>/<slug>.md``.
+    """Create a skill ``<slug>.md`` in the workspace's skills store.
 
-    The name is slugified to a safe ``^[a-z][a-z0-9-]*$`` filename (422 when it
-    can't yield one, incl. any path-traversal attempt). 409 when a skill with
-    that slug already exists. The written manifest round-trips through
-    ``SkillLoader`` — the 201 carries the parsed ``SkillResponse``.
+    The name is slugified to a safe ``^[a-z][a-z0-9-]*$`` name (422 when it can't yield one,
+    incl. any path-traversal attempt). 409 when a skill with that slug already exists — the
+    create is atomic, so two concurrent creates cannot overwrite each other. The 201 carries
+    the manifest as the loader parsed it.
     """
-    slug = _slugify(body.name)
-    if slug is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="name must yield a slug matching ^[a-z][a-z0-9-]*$",
+    try:
+        meta = await create_workspace_skill(
+            workspace_id, name=body.name, summary=body.summary, system_prompt=body.system_prompt
         )
-    if not body.summary.strip():
+    except SkillInvalid as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="summary must not be blank",
-        )
-
-    settings = get_settings()
-    skill_dir = (Path(settings.skills_root) / str(workspace_id)).resolve()
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    md_path = (skill_dir / f"{slug}.md").resolve()
-
-    # Path-safety: the resolved write target MUST stay inside the workspace dir.
-    if md_path.parent != skill_dir:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="invalid skill name",
-        )
-    if md_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Skill '{slug}' already exists",
-        )
-
-    md_path.write_text(
-        _skill_markdown(
-            name=slug, description=body.summary.strip(), system_prompt=body.system_prompt
-        ),
-        encoding="utf-8",
-    )
-
-    loader = _loader_for(workspace_id)
-    if slug not in loader.registry:  # pragma: no cover — written file must parse
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="created skill did not load",
-        )
-    return SkillResponse.from_meta(loader.get(slug))
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    except SkillConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return SkillResponse.from_meta(meta)
 
 
 @router.get("/{name}")
@@ -192,7 +133,7 @@ async def get_skill(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
 ) -> SkillResponse:
     """Return one skill's manifest by name."""
-    loader = _loader_for(workspace_id)
+    loader = await workspace_skill_loader(workspace_id)
     if name not in loader.registry:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill '{name}' not found"
@@ -208,50 +149,18 @@ async def update_skill(
 ) -> SkillResponse:
     """Update an existing skill's ``summary`` + ``system_prompt`` in place.
 
-    Rewrites ``<skills_root>/<workspace_id>/<name>.md`` with the new description
-    + body, preserving the existing ``name`` / ``version`` (the slug is immutable
-    — no rename). 404 when no skill with that name is loaded; 422 when ``summary``
-    is blank (it is the LLM invocation match signal). The rewritten manifest
-    round-trips through ``SkillLoader`` — the 200 carries the parsed manifest.
+    The ``name`` / ``version`` stay (the slug is immutable — no rename). 404 when no skill
+    with that name exists; 422 when ``summary`` is blank (it is the LLM invocation match
+    signal). The 200 carries the manifest as the loader parsed it.
     """
-    loader = _loader_for(workspace_id)
-    if name not in loader.registry:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill '{name}' not found"
+    try:
+        meta = await update_workspace_skill(
+            workspace_id, name=name, summary=body.summary, system_prompt=body.system_prompt
         )
-    if not body.summary.strip():
+    except SkillNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except SkillInvalid as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="summary must not be blank",
-        )
-
-    existing = loader.get(name)
-    settings = get_settings()
-    skill_dir = (Path(settings.skills_root) / str(workspace_id)).resolve()
-    md_path = (skill_dir / f"{name}.md").resolve()
-
-    # Path-safety: the resolved write target MUST stay inside the workspace dir.
-    # ``name`` is a registry key (a slug the loader accepted), but resolve-then-
-    # check guards against any unexpected traversal in the route segment.
-    if md_path.parent != skill_dir or not md_path.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill '{name}' not found"
-        )
-
-    md_path.write_text(
-        _skill_markdown(
-            name=existing.name,
-            description=body.summary.strip(),
-            system_prompt=body.system_prompt,
-            version=existing.version,
-        ),
-        encoding="utf-8",
-    )
-
-    loader = _loader_for(workspace_id)
-    if name not in loader.registry:  # pragma: no cover — rewritten file must parse
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="updated skill did not load",
-        )
-    return SkillResponse.from_meta(loader.get(name))
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    return SkillResponse.from_meta(meta)
