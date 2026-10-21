@@ -17,7 +17,6 @@ Lift L1 decomposition tests enforce.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -42,7 +41,6 @@ class _WriterTombstoneMixin:
     _vault: Vault
     _event_bus: EventBus | None
     _audit_outbox: AiosqliteAuditOutbox | None
-    _garden_lock: asyncio.Lock
 
     async def _emit_vault_modified(  # pragma: no cover - in GardenWriter
         self,
@@ -75,7 +73,7 @@ class _WriterTombstoneMixin:
         design (§1.3) and Workflow Backend §3 require.
 
         Reuses :meth:`_set_frontmatter_field` so the existing atomic
-        single-field mutation (lock + write under ``_garden_lock``) carries
+        single-field mutation (lock + write under the vault's ``"garden"`` lock) carries
         the retraction — every other writer that calls into the vault is
         already serialized with us.
 
@@ -140,7 +138,7 @@ class _WriterTombstoneMixin:
 
     async def _clear_frontmatter_field(self, path: Path, key: str) -> None:
         """Remove a single frontmatter field if present; no-op when absent."""
-        async with self._garden_lock:
+        async with self._vault.lock("garden"):
             text = await self._vault.read(path)
             if not text.startswith("---\n"):
                 return

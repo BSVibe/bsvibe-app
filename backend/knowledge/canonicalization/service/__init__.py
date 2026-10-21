@@ -42,7 +42,7 @@ from backend.knowledge._internal.events import EventBus
 from backend.knowledge.canonicalization import models, paths
 from backend.knowledge.canonicalization.decisions import DecisionMemory
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
-from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
+from backend.knowledge.canonicalization.lock import MutationLock
 from backend.knowledge.canonicalization.policies import PolicyResolver
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.scoring import CanonicalizationScorer
@@ -102,7 +102,7 @@ class CanonicalizationService(
     def __init__(
         self,
         store: NoteStore,
-        lock: AsyncIOMutationLock,
+        lock: MutationLock,
         *,
         index: CanonicalizationIndex | None = None,
         resolver: TagResolver | None = None,

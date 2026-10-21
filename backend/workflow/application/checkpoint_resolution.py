@@ -44,6 +44,7 @@ from backend.workflow.application._checkpoint_shared import (
     _question_text,
 )
 from backend.workflow.application.audit_events import DecisionResolved
+from backend.workflow.application.product_repo_credential import product_repo_credential
 from backend.workflow.domain.model_account_decision import (
     ACCOUNT_CHOICES_KEY,
     DECISION_AMBIGUOUS_MODEL_ACCOUNT,
@@ -675,7 +676,10 @@ async def _ship_decision_run(
                     # still moves ``main``, so the durable off-box record must
                     # follow it or the product's remote copy silently goes stale.
                     try:
-                        await publish_product_bundle(run.product_id)
+                        await publish_product_bundle(
+                            run.product_id,
+                            credential=product_repo_credential(session, run.workspace_id),
+                        )
                     except Exception:  # noqa: BLE001 — durability must not fail the ship
                         logger.warning(
                             "ship_anyway_bundle_push_failed",

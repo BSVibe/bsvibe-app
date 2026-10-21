@@ -40,7 +40,7 @@ from __future__ import annotations
 import structlog
 
 from backend.knowledge.canonicalization.index import CanonicalizationIndex
-from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
+from backend.knowledge.canonicalization.lock import StorageMutationLock
 from backend.knowledge.canonicalization.promotion import (
     GardenObservationPromoter,
     PromotionResult,
@@ -77,7 +77,7 @@ async def register_bootstrap_anchors(
     await index.initialize(storage)
     service = CanonicalizationService(
         store=NoteStore(storage),
-        lock=AsyncIOMutationLock(),
+        lock=StorageMutationLock(storage),
         index=index,
         resolver=TagResolver(index=index),
         # safe_mode defaults to ``lambda: False`` → permissive auto-apply, so

@@ -491,9 +491,15 @@ class AgentRunner:
         from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
             publish_product_bundle,
         )
+        from backend.workflow.application.product_repo_credential import (  # noqa: PLC0415
+            product_repo_credential,
+        )
 
         try:
-            outcome = await publish_product_bundle(product_id)
+            outcome = await publish_product_bundle(
+                product_id,
+                credential=product_repo_credential(self._session, run.workspace_id),
+            )
         except Exception:  # noqa: BLE001 — durability must not fail the ship
             logger.warning(
                 "auto_ship_bundle_push_failed",

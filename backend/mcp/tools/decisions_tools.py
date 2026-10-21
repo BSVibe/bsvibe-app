@@ -33,7 +33,7 @@ from backend.knowledge.canonicalization.index import (
     CanonicalizationIndex,
     _is_canon_proposal_path,
 )
-from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
+from backend.knowledge.canonicalization.lock import StorageMutationLock
 from backend.knowledge.canonicalization.resolver import TagResolver
 from backend.knowledge.canonicalization.service import CanonicalizationService
 from backend.knowledge.canonicalization.store import NoteStore
@@ -83,7 +83,7 @@ async def _build_service(ctx: ToolContext) -> CanonicalizationService:
     await index.initialize(storage)
     return CanonicalizationService(
         store=NoteStore(storage),
-        lock=AsyncIOMutationLock(),
+        lock=StorageMutationLock(storage),
         index=index,
         resolver=TagResolver(index=index),
     )

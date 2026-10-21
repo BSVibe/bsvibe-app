@@ -2,7 +2,7 @@
 
 Extracted from the original ``writer_core.py`` during Lift L1
 (v8 §17.3). These helpers are intentionally pure functions (no class state)
-so the IO mixin can call them under its existing ``_garden_lock``.
+so the IO mixin can call them under the vault's ``"garden"`` lock.
 
 Keep this file pure-helpers — anything that needs vault/sync/event_bus state
 belongs in ``_io.py`` or ``_mutation.py``.

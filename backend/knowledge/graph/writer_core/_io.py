@@ -7,7 +7,6 @@ the file boundary changed.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,8 +41,7 @@ logger = structlog.get_logger(__name__)
 class _WriterIOMixin:
     """Primitive ingest writes: seeds, garden notes, and append-only logs.
 
-    Implementations rely on the attributes (``_vault``, ``_seed_lock``,
-    ``_garden_lock``, ``_log_lock``, ``_event_bus``, ``_ontology``) initialised
+    Implementations rely on the attributes (``_vault`` (whose ``lock`` serializes writers), ``_event_bus``, ``_ontology``) initialised
     by :class:`GardenWriter`.
     """
 
@@ -53,9 +51,6 @@ class _WriterIOMixin:
     _ontology: OntologyRegistry | None
     _audit_outbox: AiosqliteAuditOutbox | None
     _default_tenant_id: str | None
-    _log_lock: asyncio.Lock
-    _garden_lock: asyncio.Lock
-    _seed_lock: asyncio.Lock
 
     # --- helpers expected to be provided by GardenWriter -------------------
 
@@ -140,7 +135,7 @@ class _WriterIOMixin:
             body = yaml.dump(dumped, default_flow_style=False, allow_unicode=True)
         content = f"{frontmatter}\n{body}\n"
 
-        async with self._seed_lock:
+        async with self._vault.lock("seed"):
             filename = now.strftime("%Y-%m-%d_%H%M%S") + ".md"
             file_path = source_dir / filename
             if await self._vault.exists(file_path):
@@ -170,7 +165,7 @@ class _WriterIOMixin:
         if isinstance(note, dict):
             note = GardenNote(**note)
 
-        async with self._garden_lock:
+        async with self._vault.lock("garden"):
             now = datetime.now(tz=UTC)
             date_str = now.strftime("%Y-%m-%d")
             slug = slugify(note.title)
@@ -243,7 +238,7 @@ class _WriterIOMixin:
             raise ValueError("ensure_entity_stub requires a non-empty name")
         slug = slugify(clean)
 
-        async with self._garden_lock:
+        async with self._vault.lock("garden"):
             entities_dir = self._vault.resolve_path("garden/entities")
             file_path = entities_dir / f"{slug}.md"
 
@@ -278,7 +273,7 @@ class _WriterIOMixin:
         log_path = actions_dir / f"{date_str}.md"
         entry = f"- **{time_str}** | `{skill_name}` | {truncated}\n"
 
-        async with self._log_lock:
+        async with self._vault.lock("log"):
             await self._vault.append(log_path, entry, header=f"# Actions — {date_str}\n\n")
         logger.info("action_logged", skill_name=skill_name, path=str(log_path))
         await emit_event(
@@ -297,7 +292,7 @@ class _WriterIOMixin:
         truncated = raw_text[:500] if len(raw_text) > 500 else raw_text
         entry = f"- **{time_str}** | `{source}` | {truncated}\n"
 
-        async with self._log_lock:
+        async with self._vault.lock("log"):
             await self._vault.append(log_path, entry, header=f"# Input Log — {date_str}\n\n")
         logger.debug("input_log_written", source=source, path=str(log_path))
 

@@ -242,3 +242,42 @@ async def test_removing_a_finished_runs_tree_removes_its_checkpoint(
         await remove_run_worktree(pid, rid)
 
     assert await world["runs"].exists(rid) is False
+
+
+# --- reading one file from a checkpoint (no worktree) -------------------------------------------
+
+
+async def test_a_file_reads_straight_from_the_checkpoint(world: dict[str, Any]) -> None:
+    """Another machine serving the run's artifact (the Files viewer, MCP) reads it from the
+    checkpoint — committed or not — without restoring a worktree."""
+    from backend.storage.product_workspace import read_run_checkpoint_file
+
+    pid, rid, _ = await _run_with_work(world)
+    with world["a"]:
+        await checkpoint_run_worktree(pid, rid, store=world["runs"])
+
+    with world["b"]:
+        assert await read_run_checkpoint_file(rid, "edit.py", store=world["runs"]) == (
+            b"edit.py v2 (uncommitted)\n"
+        )
+        assert await read_run_checkpoint_file(rid, "committed.py", store=world["runs"]) == (
+            b"verified work\n"
+        )
+        assert await read_run_checkpoint_file(rid, "gone.py", store=world["runs"]) is None
+        assert await read_run_checkpoint_file(rid, ".venv/big.bin", store=world["runs"]) is None
+        assert not run_worktree_path(rid).exists(), "no worktree was made to read it"
+
+
+async def test_no_checkpoint_reads_nothing(world: dict[str, Any]) -> None:
+    from backend.storage.product_workspace import read_run_checkpoint_file
+
+    with world["b"]:
+        assert await read_run_checkpoint_file(uuid.uuid4(), "a.py", store=world["runs"]) is None
+
+
+@pytest.mark.parametrize("bad", ["../escape.py", "/etc/passwd", "a/../../b.py"])
+async def test_a_checkpoint_read_cannot_leave_the_tree(world: dict[str, Any], bad: str) -> None:
+    from backend.storage.product_workspace import read_run_checkpoint_file
+
+    with pytest.raises(ValueError):
+        await read_run_checkpoint_file(uuid.uuid4(), bad, store=world["runs"])

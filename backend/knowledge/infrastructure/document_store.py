@@ -16,10 +16,12 @@ import fnmatch
 import hashlib
 import posixpath
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from sqlalchemy import DateTime, String, Text, delete, select
+from sqlalchemy import DateTime, String, Text, delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -27,7 +29,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.data import Base
 from backend.data.rls import workspace_session_scope
-from backend.knowledge.graph.storage import StorageBackend
+from backend.knowledge.graph.storage import _PROCESS_LOCKS, StorageBackend
 
 #: Which tree a document belongs to: the knowledge vault, or the workspace's skills.
 DocumentTree = Literal["vault", "skills"]
@@ -81,6 +83,33 @@ class PgDocumentStorage(StorageBackend):
         self._sf = session_factory
         self._ws = workspace_id
         self._tree = tree
+
+    def _lock_scope(self) -> str:
+        return f"rows:{self._ws}:{self._tree}"
+
+    @asynccontextmanager
+    async def lock(self, name: str) -> AsyncIterator[None]:
+        """Within the process, then on every machine: a Postgres advisory lock keyed by
+        (workspace, tree, name).
+
+        Held on a connection of its own, with its transaction committed straight after the
+        lock is taken — a session-level advisory lock outlives the transaction, and an open
+        one would trip the engine's idle-in-transaction timeout and drop the lock silently."""
+        async with _PROCESS_LOCKS.get(self._lock_scope(), name):
+            engine = self._sf.kw.get("bind")
+            if engine is None or engine.dialect.name != "postgresql":
+                yield
+                return
+            digest = hashlib.sha256(f"vault:{self._lock_scope()}:{name}".encode()).digest()
+            key = int.from_bytes(digest[:8], "big", signed=True)
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": key})
+                await conn.commit()
+                try:
+                    yield
+                finally:
+                    await conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+                    await conn.commit()
 
     def _here(self) -> Any:
         """This store's rows: its workspace and its tree."""

@@ -35,10 +35,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import posixpath
 import shutil
 import tempfile
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -350,11 +351,38 @@ async def _is_shallow(repo: Path) -> bool:
     return result.stdout.strip() == "true"
 
 
-async def _try_unshallow(repo: Path) -> bool:
-    """Best-effort ``git fetch --unshallow``; ``True`` if the repo now has full
-    history. Fails harmlessly when there is no reachable remote (offline, or a
-    product whose upstream is gone) — the caller then refuses to publish."""
+#: Supplies the product's git credential, asked only when it is needed.
+Credential = Callable[[], Awaitable[str | None]]
+
+
+def _authed_fetch_url(url: str, token: str) -> str:
+    """``url`` with ``token`` as HTTPS basic-auth (github's ``x-access-token`` form).
+
+    Used for ONE fetch and never written to ``.git/config`` — the clone scrubbed the token
+    out of ``origin`` on purpose. Non-HTTPS URLs are returned as they are."""
+    if not url.startswith("https://"):
+        return url
+    rest = url[len("https://") :].split("@", 1)[-1]
+    return f"https://x-access-token:{token}@{rest}"
+
+
+async def _try_unshallow(repo: Path, credential: Credential | None = None) -> bool:
+    """Best-effort ``git fetch --unshallow``; ``True`` if the repo now has full history.
+
+    First anonymously (a public or local upstream). A private upstream needs the product's
+    credential, which the clone deliberately did not keep — so when that fails and a
+    ``credential`` is given, it is asked for and used for one authenticated fetch. Fails
+    harmlessly when there is no reachable remote; the caller then refuses to publish."""
     await _git("fetch", "--unshallow", cwd=repo, check=False)
+    if not await _is_shallow(repo) or credential is None:
+        return not await _is_shallow(repo)
+    token = await credential()
+    if not token:
+        return False
+    origin = await _git("remote", "get-url", "origin", cwd=repo, check=False)
+    url = _authed_fetch_url(origin.stdout.strip(), token)
+    if url != origin.stdout.strip():
+        await _git("fetch", "--unshallow", url, cwd=repo, check=False)
     return not await _is_shallow(repo)
 
 
@@ -362,6 +390,7 @@ async def publish_product_bundle(
     product_id: uuid.UUID,
     *,
     store: ProductBundleStore | None = None,
+    credential: Credential | None = None,
 ) -> PublishOutcome:
     """Publish the product's repo by MERGING ONTO whatever the store currently
     holds — never by overwriting it.
@@ -386,6 +415,9 @@ async def publish_product_bundle(
 
     Callers MUST hold :func:`product_workspace_lock` so two ships on this
     deployment cannot interleave their fetch/merge/publish sequences.
+
+    ``credential`` (optional) repairs a shallow clone of a PRIVATE repository: see
+    :func:`_try_unshallow`. It is asked only when the repo is still shallow.
     """
     repo = product_workspace_path(product_id)
     if not (repo / ".git").exists():
@@ -403,7 +435,7 @@ async def publish_product_bundle(
     # publish) authorise deleting the only good copy. Found the hard way in
     # production: a product was reclaimed on the strength of exactly such a
     # publish. Refusing keeps the reclaim gate shut, so the repo stays.
-    if await _is_shallow(repo) and not await _try_unshallow(repo):
+    if await _is_shallow(repo) and not await _try_unshallow(repo, credential):
         logger.warning(
             "product_bundle_publish_skipped_shallow",
             product_id=str(product_id),
@@ -913,6 +945,50 @@ async def restore_run_worktree(
     await _git("reset", "-q", cwd=worktree)
     logger.info("run_worktree_restored", run_id=str(run_id))
     return True
+
+
+async def read_run_checkpoint_file(
+    run_id: uuid.UUID, ref: str, *, store: ProductBundleStore | None = None
+) -> bytes | None:
+    """One file of the run's checkpointed tree, without a worktree — or ``None``.
+
+    For a machine that serves a run's artifact (the Files viewer, MCP) while the run lives on
+    another machine: the checkpoint bundle is fetched into a throwaway repository and the blob
+    read from the snapshot commit. ``None`` when there is no checkpoint or no such file there;
+    :class:`ValueError` for a path that leaves the tree (never read as "missing").
+    """
+    rel = posixpath.normpath(ref)
+    if ref.startswith("/") or rel == ".." or rel.startswith("../") or rel == ".":
+        raise ValueError(f"artifact ref escapes the run tree: {ref}")
+    if store is None:
+        from backend.storage.product_bundle_store import (  # noqa: PLC0415
+            build_run_checkpoint_store,
+        )
+
+        store = build_run_checkpoint_store()
+    with tempfile.TemporaryDirectory(prefix="bsvibe-read-checkpoint-") as tmp:
+        bundle = Path(tmp) / f"{run_id}.bundle"
+        if not await store.get(run_id, bundle):
+            return None
+        repo = Path(tmp) / "repo"
+        await _git("init", "--quiet", "--bare", str(repo), cwd=Path(tmp))
+        ref_name = _checkpoint_ref(run_id)
+        fetched = await _git(
+            "fetch", "--quiet", str(bundle), f"{ref_name}:{ref_name}", cwd=repo, check=False
+        )
+        if fetched.returncode != 0:
+            return None
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "cat-file",
+            "blob",
+            f"{ref_name}:{rel}",
+            cwd=str(repo),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+    return out if proc.returncode == 0 else None
 
 
 async def delete_run_checkpoint(
