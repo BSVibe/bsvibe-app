@@ -114,7 +114,7 @@ def build_agent_execution_deps(
 
     async def _skill_loader_for(workspace_id: uuid.UUID) -> SkillLoader:
         # From the workspace's skills store — files or rows (#929).
-        return await workspace_skill_loader(workspace_id)
+        return await workspace_skill_loader(workspace_id, settings=settings)
 
     async def _retriever_for(
         session: AsyncSession,

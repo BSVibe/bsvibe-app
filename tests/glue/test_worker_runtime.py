@@ -499,8 +499,7 @@ async def test_skill_loader_for_resolves_per_workspace_roots(
 
     Seed a skill in workspace A's dir, none in B's — A's loader sees the skill,
     B's loader sees an empty registry. Proves skill loading is per-workspace,
-    not a single shared root-level set. (``async`` only to satisfy the module's
-    ``pytestmark = pytest.mark.asyncio``; the body is synchronous.)
+    not a single shared root-level set.
     """
     skills_root = tmp_path / "skills"
     ws_a = uuid.uuid4()
@@ -512,14 +511,11 @@ async def test_skill_loader_for_resolves_per_workspace_roots(
         settings=settings, sandbox_manager=NoopSandboxManager()
     )
 
-    loader_a = deps.skill_loader_for(ws_a)
-    loader_b = deps.skill_loader_for(ws_b)
+    # Production loads from the workspace's skills store — async since #929.
+    loader_a = await deps.skill_loader_for(ws_a)
+    loader_b = await deps.skill_loader_for(ws_b)
 
-    # Distinct roots, scoped by workspace_id.
-    assert loader_a._skill_dir == skills_root / str(ws_a)
-    assert loader_b._skill_dir == skills_root / str(ws_b)
-    assert loader_a._skill_dir != loader_b._skill_dir
-    # A sees its seeded skill; B (no dir seeded) sees nothing.
+    # A sees its seeded skill; B (nothing seeded) sees nothing.
     assert set(loader_a.registry) == {"weekly-digest"}
     assert loader_b.registry == {}
 

@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import TYPE_CHECKING
 
 from backend.common.slug import slugify
 from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.meta import SkillMeta
 from backend.knowledge.vault_store import workspace_skills_storage
+
+if TYPE_CHECKING:
+    from backend.config import Settings
 
 
 class SkillInvalid(ValueError):
@@ -43,9 +47,11 @@ def skill_markdown(
     )
 
 
-async def workspace_skill_loader(workspace_id: uuid.UUID) -> SkillLoader:
+async def workspace_skill_loader(
+    workspace_id: uuid.UUID, *, settings: Settings | None = None
+) -> SkillLoader:
     """``workspace_id``'s skills, loaded from whichever store is configured."""
-    loader = SkillLoader(workspace_skills_storage(workspace_id))
+    loader = SkillLoader(workspace_skills_storage(workspace_id, settings=settings))
     await loader.load()
     return loader
 
