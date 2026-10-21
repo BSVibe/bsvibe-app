@@ -8,6 +8,7 @@ files on disk by default, or ``vault_documents`` rows, where ``root`` is only a 
 from __future__ import annotations
 
 import asyncio
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
 import structlog
@@ -73,10 +74,10 @@ class Vault:
         """Create seeds/, garden/, actions/ subdirectories if they don't exist.
 
         Rows have no directories: there it does nothing."""
-        if not self._on_disk:
+        if not isinstance(self._storage, FileSystemStorage):
             return
         for subdir in VAULT_SUBDIRS:
-            path = self._root / subdir
+            path = self._storage.root / subdir
             path.mkdir(parents=True, exist_ok=True)
             logger.debug("vault_dir_ensured", path=str(path))
 
@@ -110,6 +111,11 @@ class Vault:
             raise VaultPathError(f"Path traversal detected: '{path}' resolves outside the vault")
         return resolved.relative_to(self._root).as_posix()
 
+    def lock(self, name: str) -> AbstractAsyncContextManager[None]:
+        """Exclude every other writer of this vault holding ``name`` — in this process, on
+        this box, and (on rows) on every machine. See :meth:`StorageBackend.lock`."""
+        return self._storage.lock(name)
+
     async def read(self, path: Path | str) -> str:
         return await self._storage.read(self.rel(path))
 
@@ -119,8 +125,8 @@ class Vault:
     async def append(self, path: Path | str, text: str, *, header: str = "") -> None:
         """Append ``text``; a note that does not exist yet starts with ``header``."""
         rel = self.rel(path)
-        if self._on_disk:
-            target = self._root / rel
+        if isinstance(self._storage, FileSystemStorage):
+            target = self._storage.root / rel
 
             def _append() -> None:
                 target.parent.mkdir(parents=True, exist_ok=True)

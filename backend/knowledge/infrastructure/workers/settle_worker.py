@@ -837,7 +837,7 @@ class _LazyGardenPromoter:
         from backend.knowledge.canonicalization.index import (  # noqa: PLC0415
             CanonicalizationIndex,
         )
-        from backend.knowledge.canonicalization.lock import AsyncIOMutationLock  # noqa: PLC0415
+        from backend.knowledge.canonicalization.lock import StorageMutationLock  # noqa: PLC0415
         from backend.knowledge.canonicalization.policies import PolicyResolver  # noqa: PLC0415
         from backend.knowledge.canonicalization.promotion import (  # noqa: PLC0415
             GardenObservationPromoter,
@@ -870,7 +870,7 @@ class _LazyGardenPromoter:
         safe_mode = self._safe_mode
         service = CanonicalizationService(
             store=store,
-            lock=AsyncIOMutationLock(),
+            lock=StorageMutationLock(storage),
             index=index,
             resolver=TagResolver(index=index),
             decisions=decisions,

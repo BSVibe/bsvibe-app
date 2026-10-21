@@ -7,7 +7,6 @@ the file boundary changed.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -39,7 +38,6 @@ class _WriterMutationMixin:
     _audit_outbox: AiosqliteAuditOutbox | None
     _default_tenant_id: str | None
     # Provided by _WriterIOMixin once composed into GardenWriter.
-    _garden_lock: asyncio.Lock
 
     async def _find_dedup_path(
         self, directory: Path, slug: str
@@ -173,7 +171,7 @@ class _WriterMutationMixin:
 
     async def _set_frontmatter_field(self, path: Path, key: str, value: Any) -> None:
         """Set a single frontmatter field, preserving body and other fields."""
-        async with self._garden_lock:
+        async with self._vault.lock("garden"):
             text = await self._vault.read(path)
             if not text.startswith("---\n"):
                 fm = {key: value}

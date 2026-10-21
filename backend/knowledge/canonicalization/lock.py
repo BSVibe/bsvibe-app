@@ -1,5 +1,10 @@
 """MutationLock — single-writer per action_path (Handoff §0.11, Class_Diagram §4).
 
+:class:`StorageMutationLock` is the one production uses (#929): it holds across instances,
+processes and — on ``vault_documents`` rows — machines, through the vault store's lock.
+``AsyncIOMutationLock`` (below) excludes only within one instance; a service made per request
+gets a new one, so it never excluded two requests from each other.
+
 Slice 1 ships the in-process ``AsyncIOMutationLock`` only. SaaS multi-worker
 ``RedisMutationLock`` is deferred to v1.x.
 
@@ -15,9 +20,13 @@ from __future__ import annotations
 import asyncio
 import secrets
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from backend.knowledge.graph.storage import StorageBackend
 
 
 @dataclass(frozen=True)
@@ -34,6 +43,12 @@ class _Holder:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     current_token: str | None = None
     waiters: int = 0
+
+
+class MutationLock(Protocol):
+    """What the canonicalization service needs: an exclusive section per action path."""
+
+    def guard(self, action_path: str) -> AbstractAsyncContextManager[AcquiredLock]: ...
 
 
 class AsyncIOMutationLock:
@@ -97,3 +112,19 @@ class AsyncIOMutationLock:
             yield token
         finally:
             await self.release(token)
+
+
+class StorageMutationLock:
+    """Per-action-path lock through the vault's store (see :meth:`StorageBackend.lock`)."""
+
+    def __init__(self, storage: StorageBackend) -> None:
+        self._storage = storage
+
+    @asynccontextmanager
+    async def guard(self, action_path: str) -> AsyncIterator[AcquiredLock]:
+        async with self._storage.lock(f"mutation:{action_path}"):
+            yield AcquiredLock(
+                action_path=action_path,
+                token=secrets.token_hex(8),
+                acquired_at=datetime.now(),
+            )

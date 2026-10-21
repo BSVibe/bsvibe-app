@@ -25,7 +25,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from backend.knowledge._internal.events import EventBus
     from backend.knowledge.canonicalization.decisions import DecisionMemory
     from backend.knowledge.canonicalization.index import CanonicalizationIndex
-    from backend.knowledge.canonicalization.lock import AsyncIOMutationLock
+    from backend.knowledge.canonicalization.lock import MutationLock
     from backend.knowledge.canonicalization.policies import PolicyResolver
     from backend.knowledge.canonicalization.resolver import TagResolver
     from backend.knowledge.canonicalization.scoring import CanonicalizationScorer
@@ -45,7 +45,7 @@ class _ServiceBase:
 
     # ---- attributes (set by CanonicalizationService.__init__) ----
     _store: NoteStore
-    _lock: AsyncIOMutationLock
+    _lock: MutationLock
     _index: CanonicalizationIndex | None
     _resolver: TagResolver | None
     _decisions: DecisionMemory | None

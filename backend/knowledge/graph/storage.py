@@ -8,10 +8,34 @@ several machines can share one vault. Both hold the same Markdown at the same re
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import shutil
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import IO, Final
+
+
+class _ProcessLocks:
+    """One ``asyncio.Lock`` per (event loop, key) for the whole process.
+
+    A lock created per writer instance — the old shape — excludes nothing: an instance is
+    made per request. Keyed by the loop too, because an ``asyncio.Lock`` belongs to one."""
+
+    def __init__(self) -> None:
+        self._locks: dict[tuple[int, str, str], asyncio.Lock] = {}
+
+    def get(self, scope: str, name: str) -> asyncio.Lock:
+        key = (id(asyncio.get_running_loop()), scope, name)
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = self._locks[key] = asyncio.Lock()
+        return lock
+
+
+_PROCESS_LOCKS: Final[_ProcessLocks] = _ProcessLocks()
 
 
 class StorageBackend(ABC):
@@ -59,6 +83,19 @@ class StorageBackend(ABC):
     async def delete_prefix(self, subdir: str) -> None:
         """Delete every file under a subdirectory (``""`` = the whole tree)."""
 
+    @asynccontextmanager
+    async def lock(self, name: str) -> AsyncIterator[None]:
+        """Exclude every other holder of ``name`` on this tree while the block runs.
+
+        For read-modify-write sections (an append, a frontmatter edit). The default holds
+        within this process; the stores extend it across processes (files) and machines
+        (rows). Not reentrant: never take the same name twice in one task."""
+        async with _PROCESS_LOCKS.get(self._lock_scope(), name):
+            yield
+
+    def _lock_scope(self) -> str:
+        return f"{type(self).__name__}:{id(self)}"
+
 
 class FileSystemStorage(StorageBackend):
     """Local filesystem storage backend."""
@@ -69,6 +106,33 @@ class FileSystemStorage(StorageBackend):
     @property
     def root(self) -> Path:
         return self._root
+
+    def _lock_scope(self) -> str:
+        return f"files:{self._root}"
+
+    @asynccontextmanager
+    async def lock(self, name: str) -> AsyncIterator[None]:
+        """Within the process, then across processes on this box (``flock`` on a file next to
+        the tree — never inside it, so it is never mistaken for a document)."""
+        async with _PROCESS_LOCKS.get(self._lock_scope(), name):
+            lock_dir = self._root.parent / ".locks"
+            safe = hashlib.sha256(f"{self._root.name}:{name}".encode()).hexdigest()[:32]
+
+            def _acquire() -> IO[str]:
+                lock_dir.mkdir(parents=True, exist_ok=True)
+                handle = (lock_dir / f"{safe}.lock").open("a+")
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                return handle
+
+            def _release(handle: IO[str]) -> None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                handle.close()
+
+            handle = await asyncio.to_thread(_acquire)
+            try:
+                yield
+            finally:
+                await asyncio.to_thread(_release, handle)
 
     def _resolve(self, rel_path: str) -> Path:
         """Resolve and validate a vault-relative path (prevent traversal)."""

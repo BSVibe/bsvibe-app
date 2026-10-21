@@ -8,7 +8,6 @@ Lift L1 (v8 §17.3).
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -64,9 +63,6 @@ class GardenWriter(
         # ``sage.vault.file_modified`` events after every successful vault
         # write. ``None`` keeps test fixtures simple (no audit infra needed).
         self._audit_outbox = audit_outbox
-        self._log_lock = asyncio.Lock()
-        self._garden_lock = asyncio.Lock()
-        self._seed_lock = asyncio.Lock()
 
     async def _emit_vault_modified(
         self,

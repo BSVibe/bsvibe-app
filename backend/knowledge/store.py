@@ -42,6 +42,8 @@ def _workspace_dirs(base: Path) -> list[tuple[uuid.UUID, Path]]:
         return []
     found = []
     for child in sorted(base.iterdir()):
+        if child.name.startswith("."):
+            continue  # the stores' own bookkeeping (``.locks``), never a workspace
         try:
             ws = uuid.UUID(child.name)
         except ValueError:

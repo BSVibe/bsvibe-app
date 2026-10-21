@@ -24,7 +24,7 @@ fires from a sweep, a follow-up request, or the next worker tick.
 Vault writes go through the existing
 :class:`~backend.knowledge.graph.writer_core._mutation._WriterMutationMixin.tombstone_note`
 method on :class:`GardenWriter`, which reuses the per-workspace
-``_garden_lock`` — so a retraction never interleaves with a concurrent
+vault ``"garden"`` lock — so a retraction never interleaves with a concurrent
 canon-merge or settle write.
 
 The retract action lands tombstones on garden notes; canonical-concept

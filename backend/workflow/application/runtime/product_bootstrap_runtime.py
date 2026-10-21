@@ -412,7 +412,7 @@ def _build_bootstrap_knowledge_inner(
     from backend.knowledge.canonicalization.index import (  # noqa: PLC0415
         CanonicalizationIndex,
     )
-    from backend.knowledge.canonicalization.lock import AsyncIOMutationLock  # noqa: PLC0415
+    from backend.knowledge.canonicalization.lock import StorageMutationLock  # noqa: PLC0415
     from backend.knowledge.canonicalization.resolver import TagResolver  # noqa: PLC0415
     from backend.knowledge.canonicalization.service import (  # noqa: PLC0415
         CanonicalizationService,
@@ -439,7 +439,7 @@ def _build_bootstrap_knowledge_inner(
         await index.initialize(storage)
         return CanonicalizationService(
             store=NoteStore(storage),
-            lock=AsyncIOMutationLock(),
+            lock=StorageMutationLock(storage),
             index=index,
             resolver=TagResolver(index=index),
         )
