@@ -1,13 +1,15 @@
 """StorageBackend — abstraction for markdown file storage.
 
-Supports local filesystem (FileSystemStorage) with future backends
-for S3, GCS, etc. in SaaS deployments.
+Two backends: the local filesystem (:class:`FileSystemStorage`) and Postgres rows
+(:class:`backend.knowledge.infrastructure.document_store.PgDocumentStorage`, #929 stage 2), so
+several machines can share one vault. Both hold the same Markdown at the same relative paths.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -38,6 +40,20 @@ class StorageBackend(ABC):
     @abstractmethod
     async def content_hash(self, rel_path: str) -> str:
         """Return SHA256 hash of file content + relative path."""
+
+    async def read_many(self, rel_paths: list[str]) -> dict[str, str]:
+        """Read several files at once; a missing one is left out of the result."""
+        found: dict[str, str] = {}
+        for rel_path in rel_paths:
+            try:
+                found[rel_path] = await self.read(rel_path)
+            except FileNotFoundError:
+                continue
+        return found
+
+    @abstractmethod
+    async def delete_prefix(self, subdir: str) -> None:
+        """Delete every file under a subdirectory (``""`` = the whole tree)."""
 
 
 class FileSystemStorage(StorageBackend):
@@ -86,6 +102,21 @@ class FileSystemStorage(StorageBackend):
             )
 
         return await asyncio.to_thread(_scan)
+
+    async def delete_prefix(self, subdir: str) -> None:
+        base = self._resolve(subdir)
+        if base == self._root:
+
+            def _clear() -> None:
+                for child in self._root.iterdir():
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        child.unlink(missing_ok=True)
+
+            await asyncio.to_thread(_clear)
+            return
+        await asyncio.to_thread(shutil.rmtree, base, True)
 
     async def content_hash(self, rel_path: str) -> str:
         content = await self.read(rel_path)
