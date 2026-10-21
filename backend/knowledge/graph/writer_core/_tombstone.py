@@ -89,7 +89,7 @@ class _WriterTombstoneMixin:
         rather than 500s.
         """
         resolved = self._vault.resolve_path(path)
-        if not resolved.exists():
+        if not await self._vault.exists(resolved):
             raise FileNotFoundError(f"Note not found: {path}")
         await self._set_frontmatter_field(resolved, "retracted_at", retracted_at)
         await self._set_frontmatter_field(resolved, "retracted_by", retracted_by)
@@ -120,7 +120,7 @@ class _WriterTombstoneMixin:
         Raises ``FileNotFoundError`` for an unknown path.
         """
         resolved = self._vault.resolve_path(path)
-        if not resolved.exists():
+        if not await self._vault.exists(resolved):
             raise FileNotFoundError(f"Note not found: {path}")
         for key in ("retracted_at", "retracted_by", "retraction_reason"):
             await self._clear_frontmatter_field(resolved, key)
@@ -141,7 +141,7 @@ class _WriterTombstoneMixin:
     async def _clear_frontmatter_field(self, path: Path, key: str) -> None:
         """Remove a single frontmatter field if present; no-op when absent."""
         async with self._garden_lock:
-            text = await asyncio.to_thread(path.read_text, "utf-8")
+            text = await self._vault.read(path)
             if not text.startswith("---\n"):
                 return
             closing = text.find("\n---\n", 4)
@@ -155,7 +155,7 @@ class _WriterTombstoneMixin:
                 return
             fm.pop(key, None)
             new_text = build_frontmatter(fm) + text[closing + 5 :]
-            await asyncio.to_thread(path.write_text, new_text, encoding="utf-8")
+            await self._vault.write(path, new_text)
 
 
 __all__ = ["_WriterTombstoneMixin"]

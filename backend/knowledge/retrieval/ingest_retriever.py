@@ -47,10 +47,6 @@ def build_ingest_retriever(
     silence. The same guard (``embedder.enabled``) already gates the sibling
     ``reconcile_embeddings`` hooks in both runtimes.
     """
-    from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
-    from backend.knowledge.graph.vault_paths import (  # noqa: PLC0415
-        workspace_vault_root,
-    )
     from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
         resolve_knowledge_embedder,
     )
@@ -58,6 +54,7 @@ def build_ingest_retriever(
     from backend.knowledge.retrieval.storage.pg import (  # noqa: PLC0415
         SessionScopedNoteVectorBackend,
     )
+    from backend.knowledge.vault_store import workspace_vault  # noqa: PLC0415
 
     if session_factory is None:
         # No DB handle reached here, so there is nothing to search. Silence is
@@ -67,7 +64,7 @@ def build_ingest_retriever(
     if not embedder.enabled or embedder.model is None:
         return None
     return VaultRetriever(
-        Vault(workspace_vault_root(workspace_id)),
+        workspace_vault(workspace_id),
         # Session-SCOPED on purpose: the compiler searches from CONCURRENT chunk
         # tasks and one AsyncSession is not safe for concurrent use — the same
         # E18/E19 reasoning both runtimes already carry for their LLM adapters.

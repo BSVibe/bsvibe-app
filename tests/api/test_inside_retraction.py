@@ -121,12 +121,9 @@ async def client(
         ws_root.mkdir(parents=True, exist_ok=True)
         return GardenWriter(vault=Vault(ws_root))
 
-    # Override the inside._ensure_node_exists path's vault_root resolver so
-    # the existence check sees our tmp vault instead of the prod settings root.
-    monkeypatch.setattr(
-        "backend.api.v1.inside.retraction._vault_root",
-        lambda ws_id: vault_root / _REGION / str(ws_id),
-    )
+    # The existence check resolves the vault through the store factory, which reads
+    # the configured root: point it at our tmp vault instead of the prod location.
+    monkeypatch.setattr(get_settings(), "knowledge_vault_root", str(vault_root), raising=False)
 
     app.dependency_overrides[get_current_user] = fake_current_user()
     app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)

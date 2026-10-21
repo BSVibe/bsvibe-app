@@ -59,6 +59,7 @@ from backend.knowledge.facade import (
 )
 from backend.knowledge.graph.vault_paths import workspace_vault_root
 from backend.knowledge.retrieval.ingest_retriever import build_ingest_retriever
+from backend.knowledge.vault_store import vault_present, vault_storage_at
 from backend.products.application.bootstrap import (
     BootstrapProgress,
     BootstrapRepository,
@@ -418,11 +419,11 @@ def _build_bootstrap_knowledge_inner(
     )
     from backend.knowledge.canonicalization.store import NoteStore  # noqa: PLC0415
     from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
-    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
     from backend.knowledge.ingest.ingest_compiler import (  # noqa: PLC0415
         BatchItem,
         IngestCompiler,
     )
+    from backend.knowledge.vault_store import workspace_vault_storage  # noqa: PLC0415
 
     async def _build_canonicalization_service(ws_id: uuid.UUID) -> CanonicalizationService:
         """Build a vault-scoped service so ingest-time tags auto-create concepts.
@@ -433,9 +434,7 @@ def _build_bootstrap_knowledge_inner(
         Default permissive policy (Safe Mode off) lets the resolver auto-apply
         a ``create-concept`` action per new tag at write time.
         """
-        vault_root = workspace_vault_root(ws_id)
-        vault_root.mkdir(parents=True, exist_ok=True)
-        storage = FileSystemStorage(vault_root)
+        storage = workspace_vault_storage(ws_id)
         index = CanonicalizationIndex()
         await index.initialize(storage)
         return CanonicalizationService(
@@ -598,18 +597,18 @@ async def _reconcile_embeddings_soft(
     failed embedder never reverts the completed bootstrap; no-op when no
     embedding model is configured."""
 
-    from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
     from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
         resolve_knowledge_embedder,
     )
     from backend.knowledge.retrieval.reconcile import reconcile_embeddings  # noqa: PLC0415
     from backend.knowledge.retrieval.storage.pg import PgNoteVectorBackend  # noqa: PLC0415
+    from backend.knowledge.vault_store import workspace_vault  # noqa: PLC0415
 
     try:
         embedder = resolve_knowledge_embedder(settings)
         if not embedder.enabled or embedder.model is None:
             return
-        vault = Vault(workspace_vault_root(workspace_id))
+        vault = workspace_vault(workspace_id)
         async with session_factory() as session:
             backend = PgNoteVectorBackend(
                 session, workspace_id=workspace_id, embedding_model=embedder.model
@@ -1057,17 +1056,15 @@ async def _register_anchors_soft(
     successful ingest into ``failed:ingest``.
     """
     vault_root = workspace_vault_root(workspace_id)
-    if not vault_root.exists():
+    if not await vault_present(vault_root, workspace_id):
         logger.info(
             "bootstrap_anchor_registration_vault_missing",
             workspace_id=str(workspace_id),
         )
         return
 
-    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
-
     try:
-        result = await register_bootstrap_anchors(FileSystemStorage(vault_root))
+        result = await register_bootstrap_anchors(vault_storage_at(vault_root, workspace_id))
     except Exception as exc:  # noqa: BLE001 — soft-fail per docstring
         logger.warning(
             "bootstrap_anchor_registration_failed",

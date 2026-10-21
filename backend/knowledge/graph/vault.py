@@ -1,4 +1,9 @@
-"""Vault — secure path management and file access for the 2nd Brain."""
+"""Vault — secure path management and file access for the 2nd Brain.
+
+A note is named by an absolute ``Path`` under :attr:`Vault.root`; that does not change with the
+store. Every read and write goes through the vault's :class:`StorageBackend` (#929 stage 2):
+files on disk by default, or ``vault_documents`` rows, where ``root`` is only a name.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ from pathlib import Path
 import structlog
 
 from backend.knowledge._internal.exceptions import VaultPathError
+from backend.knowledge.graph.storage import FileSystemStorage, StorageBackend
 
 logger = structlog.get_logger(__name__)
 
@@ -45,16 +51,30 @@ class Vault:
     System metadata lives in ``.bsage/``.
     """
 
-    def __init__(self, vault_path: Path) -> None:
+    def __init__(self, vault_path: Path, *, storage: StorageBackend | None = None) -> None:
         self._root = vault_path.resolve()
+        self._storage = storage if storage is not None else FileSystemStorage(self._root)
 
     @property
     def root(self) -> Path:
         """Return the resolved vault root path."""
         return self._root
 
+    @property
+    def storage(self) -> StorageBackend:
+        """Where the notes actually live."""
+        return self._storage
+
+    @property
+    def _on_disk(self) -> bool:
+        return isinstance(self._storage, FileSystemStorage)
+
     def ensure_dirs(self) -> None:
-        """Create seeds/, garden/, actions/ subdirectories if they don't exist."""
+        """Create seeds/, garden/, actions/ subdirectories if they don't exist.
+
+        Rows have no directories: there it does nothing."""
+        if not self._on_disk:
+            return
         for subdir in VAULT_SUBDIRS:
             path = self._root / subdir
             path.mkdir(parents=True, exist_ok=True)
@@ -82,63 +102,87 @@ class Vault:
             raise VaultPathError(f"Path traversal detected: '{subpath}' resolves outside the vault")
         return resolved
 
+    def rel(self, path: Path | str) -> str:
+        """The vault-relative POSIX path of ``path`` (absolute under the root, or relative)."""
+        resolved = self.resolve_path(str(path)) if not Path(path).is_absolute() else Path(path)
+        resolved = resolved.resolve() if self._on_disk else resolved
+        if not resolved.is_relative_to(self._root):
+            raise VaultPathError(f"Path traversal detected: '{path}' resolves outside the vault")
+        return resolved.relative_to(self._root).as_posix()
+
+    async def read(self, path: Path | str) -> str:
+        return await self._storage.read(self.rel(path))
+
+    async def write(self, path: Path | str, content: str) -> None:
+        await self._storage.write(self.rel(path), content)
+
+    async def append(self, path: Path | str, text: str, *, header: str = "") -> None:
+        """Append ``text``; a note that does not exist yet starts with ``header``."""
+        rel = self.rel(path)
+        if self._on_disk:
+            target = self._root / rel
+
+            def _append() -> None:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    with target.open("a", encoding="utf-8") as f:
+                        f.write(text)
+                else:
+                    target.write_text(header + text, encoding="utf-8")
+
+            await asyncio.to_thread(_append)
+            return
+        try:
+            current = await self._storage.read(rel)
+        except FileNotFoundError:
+            current = header
+        await self._storage.write(rel, current + text)
+
+    async def exists(self, path: Path | str) -> bool:
+        return await self._storage.exists(self.rel(path))
+
+    async def delete(self, path: Path | str) -> None:
+        await self._storage.delete(self.rel(path))
+
+    async def delete_tree(self, subdir: str) -> None:
+        await self._storage.delete_prefix(self.rel(subdir) if subdir else "")
+
+    async def move(self, src: Path | str, dst: Path | str) -> None:
+        content = await self.read(src)
+        await self.write(dst, content)
+        await self.delete(src)
+
     async def read_notes(self, subdir: str, *, recursive: bool = False) -> list[Path]:
         """Return sorted list of .md files in a vault subdirectory.
 
         Args:
             subdir: Relative directory path within the vault (e.g. "garden/ideas").
                 An empty string means the vault root.
-            recursive: When True, walk the entire subtree rooted at ``subdir``
-                (uses ``rglob`` under the hood). When False (the historical
-                default), only direct children of ``subdir`` are returned.
-                Keep False here for legacy callers — the MCP knowledge tools
-                opt into True at their boundary so the founder sees the whole
-                ingest output (Lift E10).
+            recursive: When True, walk the entire subtree rooted at ``subdir``.
+                When False (the historical default), only direct children of
+                ``subdir`` are returned. The MCP knowledge tools opt into True at
+                their boundary so the founder sees the whole ingest output (Lift E10).
 
         Returns:
-            List of Path objects for .md files, sorted by filename.
-            Returns an empty list if the directory doesn't exist.
+            Absolute note paths under :attr:`root` — sorted by vault-relative path
+            when recursive, by filename otherwise. Empty if nothing is there.
         """
-        target = self.resolve_path(subdir)
-
-        def _read() -> tuple[list[Path], bool]:
-            if not target.is_dir():
-                return [], False
-            if recursive:
-                # rglob may include broken symlinks / dirs — gate on .is_file().
-                # Sort by full vault-relative posix path so subtree order is
-                # stable & founder-readable.
-                files = [p for p in target.rglob("*.md") if p.is_file()]
-                return sorted(files, key=lambda p: p.as_posix()), True
-            # Legacy single-level walk — sort by name to match callers that
-            # relied on glob's name-only ordering.
-            return sorted(target.glob("*.md"), key=lambda p: p.name), True
-
-        md_files, dir_exists = await asyncio.to_thread(_read)
-        if md_files:
-            logger.debug("vault_read_notes", subdir=subdir, count=len(md_files))
-        elif dir_exists:
-            logger.debug("vault_read_notes_empty", subdir=subdir)
+        base = self.rel(subdir) if subdir else ""
+        rels = await self._storage.list_files(base, "*.md")
+        prefix_depth = len(base.split("/")) if base else 0
+        if not recursive:
+            rels = [r for r in rels if len(r.split("/")) == prefix_depth + 1]
+            paths = sorted((self._root / r for r in rels), key=lambda p: p.name)
         else:
-            logger.debug("vault_read_notes_no_dir", subdir=subdir)
-        return md_files
+            paths = sorted((self._root / r for r in rels), key=lambda p: p.as_posix())
+        logger.debug("vault_read_notes", subdir=subdir, count=len(paths))
+        return paths
 
     async def read_note_content(self, path: Path) -> str:
-        """Read the text content of a note file asynchronously.
-
-        The path must be within the vault boundary.
-
-        Args:
-            path: Absolute path to the note file.
-
-        Returns:
-            The text content of the note.
+        """Read the text content of a note.
 
         Raises:
             VaultPathError: If the path is outside the vault boundary.
-            OSError: If the file cannot be read.
+            FileNotFoundError: If there is no such note.
         """
-        resolved = path.resolve()
-        if not resolved.is_relative_to(self._root):
-            raise VaultPathError(f"Path traversal detected: '{path}' resolves outside the vault")
-        return await asyncio.to_thread(resolved.read_text, encoding="utf-8")
+        return await self.read(path)

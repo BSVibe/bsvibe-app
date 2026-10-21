@@ -24,8 +24,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from backend.knowledge.vault_store import workspace_vault
 from backend.mcp.api import Tool, ToolContext, ToolRegistry
-from backend.mcp.tools._helpers import vault_root_for
 
 #: Notes embedded per HTTP-shaped pass. Measured on prod 2026-08-28: ~0.43s per
 #: note, and Cloudflare cuts an idle client at ~100s. 100 keeps one pass well
@@ -57,7 +57,6 @@ async def _h_reindex(_args: ReindexEmbeddingsInput, ctx: ToolContext) -> Any:
     # Imported lazily to keep the MCP tool-import graph off the embedding stack
     # (same shape as the settle hook's reconcile import).
     from backend.config import get_settings  # noqa: PLC0415
-    from backend.knowledge.graph.vault import Vault  # noqa: PLC0415
     from backend.knowledge.retrieval.embedder_resolution import (  # noqa: PLC0415
         resolve_knowledge_embedder,
     )
@@ -72,7 +71,7 @@ async def _h_reindex(_args: ReindexEmbeddingsInput, ctx: ToolContext) -> Any:
             scanned=0, embedded=0, already=0, disabled=True, remaining=0, removed=0
         )
 
-    vault = Vault(vault_root_for(workspace_id=workspace_id))
+    vault = workspace_vault(workspace_id)
     backend = PgNoteVectorBackend(
         ctx.session, workspace_id=workspace_id, embedding_model=embedder.model
     )

@@ -44,10 +44,9 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.v1._workflow_deps import get_decision_repository
-from backend.api.v1.decisions import _vault_root
 from backend.identity.db import UserRow
-from backend.knowledge.graph.storage import FileSystemStorage
 from backend.knowledge.retrieval.resolved_decisions_retriever import ResolvedDecisionsRetriever
+from backend.knowledge.vault_store import workspace_vault_storage
 from backend.workflow.application._checkpoint_shared import (
     DecisionAction,
     _decision_actions,
@@ -156,9 +155,7 @@ def build_decisions_retriever(
     checkpoint can surface the founder's relevant prior answers. A FastAPI
     dependency so tests can inject a tmp-vault-backed retriever (mirrors
     :func:`backend.api.v1.inside.build_inside_storage`)."""
-    root = _vault_root(workspace_id)
-    root.mkdir(parents=True, exist_ok=True)
-    return ResolvedDecisionsRetriever(FileSystemStorage(root))
+    return ResolvedDecisionsRetriever(workspace_vault_storage(workspace_id))
 
 
 @router.get("")

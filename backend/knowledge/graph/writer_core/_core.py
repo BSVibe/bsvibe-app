@@ -85,8 +85,7 @@ class GardenWriter(
         # TODO(bundle-k-integration): rewire to plugin.audit.safe_emit.
         del path, operation, source, note_type, tenant_id  # noqa: ERA001
 
-    @staticmethod
-    def _find_dedup_path(directory: Path, slug: str) -> Path:
+    async def _find_dedup_path(self, directory: Path, slug: str) -> Path:
         """Find the next available deduplicated filename.
 
         Searches for slug_001.md, slug_002.md, etc. until a free name is found.
@@ -95,7 +94,7 @@ class GardenWriter(
         max_attempts = 9999
         while counter <= max_attempts:
             candidate = directory / f"{slug}_{counter:03d}.md"
-            if not candidate.exists():
+            if not await self._vault.exists(candidate):
                 return candidate
             counter += 1
         # Fallback: use timestamp-based name to guarantee uniqueness

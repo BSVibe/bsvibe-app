@@ -37,7 +37,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session, get_workspace_id
-from backend.api.v1.decisions import _vault_root
 from backend.identity.db import UserRow
 from backend.knowledge.application.retraction_service import (
     IssueOutcome,
@@ -49,9 +48,8 @@ from backend.knowledge.domain.retraction import (
     OntologyAction,
     RetractionSignal,
 )
-from backend.knowledge.graph.storage import FileSystemStorage
-from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer import GardenWriter
+from backend.knowledge.vault_store import workspace_vault, workspace_vault_storage
 
 router = APIRouter()
 
@@ -118,9 +116,7 @@ async def build_retraction_writer(
     """Per-workspace :class:`GardenWriter` rooted at the same vault path the
     retriever + inspector read from (FS-as-SoT). Overridable in tests via
     ``app.dependency_overrides``."""
-    vault_root = _vault_root(workspace_id)
-    vault_root.mkdir(parents=True, exist_ok=True)
-    return GardenWriter(vault=Vault(vault_root))
+    return GardenWriter(vault=workspace_vault(workspace_id))
 
 
 async def build_retraction_service(
@@ -141,8 +137,7 @@ async def _ensure_node_exists(workspace_id: uuid.UUID, node_ref: str) -> None:
     rather than persisting an orphan correction row. Path-traversal is
     blocked by :class:`FileSystemStorage._resolve`.
     """
-    vault_root = _vault_root(workspace_id)
-    storage = FileSystemStorage(vault_root)
+    storage = workspace_vault_storage(workspace_id)
     try:
         exists = await storage.exists(node_ref)
     except ValueError as exc:  # path traversal

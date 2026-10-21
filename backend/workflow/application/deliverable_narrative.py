@@ -43,7 +43,6 @@ async def _decision_note_paths(workspace_id: uuid.UUID) -> dict[str, str]:
     from pathlib import Path  # noqa: PLC0415 — lazy, keep import cost off the hot path
 
     from backend.knowledge.factory import KnowledgeFactory  # noqa: PLC0415
-    from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
     from backend.knowledge.retrieval.decision_note_locator import (  # noqa: PLC0415
         DecisionNoteLocator,
     )
@@ -53,7 +52,9 @@ async def _decision_note_paths(workspace_id: uuid.UUID) -> dict[str, str]:
         workspace_id=str(workspace_id),
         vault_root=Path(settings.knowledge_vault_root),
     ).vault_path
-    return await DecisionNoteLocator(FileSystemStorage(vault_root)).statement_paths()
+    from backend.knowledge.vault_store import vault_storage_at  # noqa: PLC0415
+
+    return await DecisionNoteLocator(vault_storage_at(vault_root, workspace_id)).statement_paths()
 
 
 async def held_delivery_item_for(

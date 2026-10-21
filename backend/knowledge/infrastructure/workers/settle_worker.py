@@ -847,13 +847,12 @@ class _LazyGardenPromoter:
             CanonicalizationService,
         )
         from backend.knowledge.canonicalization.store import NoteStore  # noqa: PLC0415
-        from backend.knowledge.graph.storage import FileSystemStorage  # noqa: PLC0415
+        from backend.knowledge.vault_store import vault_storage_at  # noqa: PLC0415
 
         ws_root = (
             self._vault_root / get_settings().knowledge_default_region / str(self._workspace_id)
         )
-        ws_root.mkdir(parents=True, exist_ok=True)
-        storage = FileSystemStorage(ws_root)
+        storage = vault_storage_at(ws_root, self._workspace_id)
 
         index = CanonicalizationIndex()
         await index.initialize(storage)
