@@ -35,36 +35,20 @@ import networkx as nx
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.knowledge.code_graph.graph import load_graph
-from backend.knowledge.code_graph.pipeline import (
-    code_graph_vault_path,
-    community_labels_vault_path,
-)
+from backend.knowledge.code_graph.pipeline import load_code_graph, load_community_labels
+from backend.knowledge.vault_store import workspace_vault
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
-from backend.mcp.tools._helpers import vault_root_for
 
 logger = structlog.get_logger(__name__)
 
 
 async def _community_labels_for_call(ctx: ToolContext) -> dict[int, dict[str, Any]]:
-    """Async sibling of :func:`_graph_for_call` for the labels sidecar."""
-    import json as _json  # noqa: PLC0415
-
-    vault_root = vault_root_for(workspace_id=ctx.principal.workspace_id)
-    path = community_labels_vault_path(vault_root=vault_root)
-    if not path.is_file():
-        return {}
+    """The labels sidecar (``code_graph/communities.json``), or ``{}``."""
     try:
-        raw = _json.loads(path.read_text(encoding="utf-8"))
+        return await load_community_labels(workspace_vault(ctx.principal.workspace_id))
     except (OSError, ValueError, KeyError) as exc:
-        logger.warning("mcp_community_labels_load_failed", path=str(path), error=str(exc))
+        logger.warning("mcp_community_labels_load_failed", error=str(exc))
         return {}
-    out: dict[int, dict[str, Any]] = {}
-    for entry in raw.get("communities") or []:
-        cid = entry.get("community_id")
-        if isinstance(cid, int):
-            out[cid] = entry
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -72,15 +56,11 @@ async def _community_labels_for_call(ctx: ToolContext) -> dict[int, dict[str, An
 # bootstrapped yet — handlers turn that into a precise ToolError.
 # ---------------------------------------------------------------------------
 async def _graph_for_call(ctx: ToolContext) -> nx.DiGraph | None:
-    vault_root = vault_root_for(workspace_id=ctx.principal.workspace_id)
-    path = code_graph_vault_path(vault_root=vault_root)
-    if not path.is_file():
-        return None
     try:
-        return load_graph(path)
+        return await load_code_graph(workspace_vault(ctx.principal.workspace_id))
     except (OSError, ValueError, KeyError) as exc:
-        logger.warning("mcp_graph_load_failed", path=str(path), error=str(exc))
-        raise ToolError(f"code_graph load failed: {path}") from exc
+        logger.warning("mcp_graph_load_failed", error=str(exc))
+        raise ToolError("code_graph load failed") from exc
 
 
 def _require_graph(graph: nx.DiGraph | None) -> nx.DiGraph:

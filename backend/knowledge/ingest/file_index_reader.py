@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -109,7 +108,7 @@ class FileIndexReader:
     def _index_dir(self) -> Path:
         return self._vault.root / _INDEX_DIR
 
-    def _resolve_categories(self) -> list[str]:
+    async def _resolve_categories(self) -> list[str]:
         """Categories the index reader scans.
 
         Walks the maturity tree (``garden/seedling``, ``garden/budding``,
@@ -129,12 +128,10 @@ class FileIndexReader:
         # legacy layouts (ideas/, insights/, etc.). Order is preserved so
         # the maturity-based primary scan happens first.
         skip = {"seeds", "actions", "tmp", "node_modules", "garden", ".bsage"}
-        for child in sorted(self._vault.root.iterdir()):
-            if not child.is_dir() or child.name.startswith((".", "_")):
+        for name in await self._vault.list_dirs(""):
+            if name.startswith((".", "_")) or name in skip:
                 continue
-            if child.name in skip:
-                continue
-            cats.append(child.name)
+            cats.append(name)
         return cats
 
     async def _ensure_loaded(self) -> None:
@@ -154,7 +151,7 @@ class FileIndexReader:
         Reads note files directly rather than parsing index markdown,
         since the table format does not preserve all fields (e.g. path).
         """
-        categories = self._resolve_categories()
+        categories = await self._resolve_categories()
         for cat in categories:
             try:
                 await self._scan_category(cat)
@@ -183,14 +180,7 @@ class FileIndexReader:
         #
         # (The earlier example here, ``seeds/telegram-input/``, was never a path:
         # ``telegram-input`` is a ``seed_source`` VALUE, not a directory.)
-        base = self._vault.resolve_path(category)
-
-        def _list_subdirs() -> list[str]:
-            if not base.is_dir():
-                return []
-            return [child.name for child in sorted(base.iterdir()) if child.is_dir()]
-
-        subdirs = await asyncio.to_thread(_list_subdirs)
+        subdirs = await self._vault.list_dirs(category)
         for name in subdirs:
             child_sub = f"{category}/{name}"
             try:
@@ -258,12 +248,7 @@ class FileIndexReader:
         content = _render_index_markdown(category, summaries)
         filename = _category_to_filename(category)
 
-        def _write() -> None:
-            idx_dir = self._index_dir
-            idx_dir.mkdir(parents=True, exist_ok=True)
-            (idx_dir / filename).write_text(content, encoding="utf-8")
-
-        await asyncio.to_thread(_write)
+        await self._vault.write(self._index_dir / filename, content)
         logger.debug("index_file_written", category=category, filename=filename)
 
     async def _write_overview(self) -> None:
@@ -288,12 +273,7 @@ class FileIndexReader:
 
         content = "\n".join(lines)
 
-        def _write() -> None:
-            idx_dir = self._index_dir
-            idx_dir.mkdir(parents=True, exist_ok=True)
-            (idx_dir / "overview.md").write_text(content, encoding="utf-8")
-
-        await asyncio.to_thread(_write)
+        await self._vault.write(self._index_dir / "overview.md", content)
 
     @staticmethod
     def _path_to_category(note_path: str) -> str:
@@ -348,5 +328,5 @@ class FileIndexReader:
 
         content = "\n".join(lines)
         catalog_path = self._vault.root / "index.md"
-        await asyncio.to_thread(catalog_path.write_text, content, encoding="utf-8")
+        await self._vault.write(catalog_path, content)
         logger.info("catalog_written", notes=len(summaries))

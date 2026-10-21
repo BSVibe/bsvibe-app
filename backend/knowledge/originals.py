@@ -37,7 +37,6 @@ region 축이 남긴 교훈이 그대로 재발한다. 호출자는
 
 from __future__ import annotations
 
-import asyncio
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -128,26 +127,15 @@ async def record_original(
     document = f"{build_frontmatter(metadata)}\n{content}\n"
 
     try:
-        return await asyncio.to_thread(_write_once, path, document)
+        created = await vault.create(path, document)
     except OSError:
         # 디렉터리 자리를 파일이 차지하고 있거나, 디스크가 꽉 찼거나, 권한이
         # 없는 경우. 전부 런과 무관한 사고이므로 삼키고 센다.
         logger.warning("original_write_failed", kind=kind, key=key, exc_info=True)
         return None
-
-
-def _write_once(path: Path, document: str) -> Path | None:
-    """이미 없을 때만 쓴다 — 원자적으로.
-
-    ``exists()`` 로 먼저 보고 쓰면 두 워커가 같은 키를 동시에 기록할 때 뒤엣
-    것이 앞엣 것을 덮는다. ``O_EXCL`` 은 그 창을 커널이 닫아 준다: 파일이 이미
-    있으면 ``FileExistsError``, 곧 "과거가 이겼다".
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with path.open("x", encoding="utf-8") as handle:
-            handle.write(document)
-    except FileExistsError:
+    # Atomic create-if-absent (``O_EXCL`` on files, ``ON CONFLICT DO NOTHING`` on rows): two
+    # workers recording the same key cannot overwrite each other — the past wins.
+    if not created:
         logger.debug("original_already_recorded", path=str(path))
         return None
     logger.info("original_recorded", path=str(path))
