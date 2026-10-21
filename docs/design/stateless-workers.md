@@ -11,7 +11,8 @@ Measured in code, 2026-10-20.
 | Run row, messages, decisions, work-tool state | Postgres | ✅ — resume rebuilds the conversation from the DB (`_loop_context.py`) |
 | Product repo (`var/products/<pid>`) | local disk, published to R2 as a git bundle **at ship** | ✅ since #1188 (a present repo follows the bundle) |
 | **Run worktree** (`var/runs/<rid>`, branch `bsvibe/run/<rid>`) | **local disk only** | ❌ |
-| Run artifacts (`var/artifacts`), knowledge vault, skills | local disk only | ❌ (stages 2–3) |
+| Run artifacts | the run worktree (`var/runs/<rid>`) — there is no separate artifact store | ✅ with stage 1, except reads from another machine (§5.4) |
+| Knowledge vault (`var/vault`), skills (`var/skills`) | local disk only | ❌ (stage 2, §5) |
 | Sandbox container | the machine's DinD, keyed by run | per machine by design |
 
 The run worktree is the blocker:
@@ -80,7 +81,7 @@ This is the trade the per-turn checkpoint buys down.
 
 ## 3. Out of scope here
 
-- **Run artifacts, the knowledge vault, skills** (stage 2–3). The vault holds Markdown as the source of truth, and needs its own design.
+- **The knowledge vault and skills** — stage 2, §5.
 - **`client_attach` runs.** Their tree is on the founder's machine and their tool calls already go there.
 - **Global sandbox concurrency** (stage 4). Each machine bounds its own DinD.
 
@@ -95,3 +96,67 @@ This is the trade the per-turn checkpoint buys down.
 PRs 1–3 make a pause/resume across machines safe. PR 4 makes concurrent replicas safe while a turn runs.
 
 **A second machine must not be added before 1–4 are live.**
+
+## 5. Stage 2 — the vault and skills live in Postgres
+
+Decided 2026-10-21 (founder): **Postgres rows, Markdown unchanged.** The alternatives were R2 objects (no LIST in our client, a full LIST + GET on every index rebuild, concurrency by conditional PUT) and a shared filesystem mount over R2 (one more component to run, file locking unlike a local disk).
+
+### 5.1 What is there today
+
+Measured 2026-10-21.
+
+- **The vault is files, and the files are the source of truth.**
+  - Layout: `var/vault/<region>/<workspace_id>/…` holds Markdown with YAML frontmatter, plus `code_graph/*.json` and `.bsage/ontology.yaml`.
+  - Postgres holds only derived or queue state: `note_embeddings` (vectors keyed by vault path), `ontology_corrections` (retractions) and `settle_drains`. Prod has about 1,400 notes, a few MB per workspace.
+- **Two processes write it concurrently.** The API process writes product bootstrap, MCP note creation, decision resolution and connector imports. The worker process writes settle, intake originals and the retraction sweep. The only locks are `asyncio.Lock`s inside one process (`writer_core/_io.py` `_garden_lock`, `canonicalization/lock.py`). That this has not bitten yet is luck, not design.
+- **A seam exists but is bypassed.**
+  - `knowledge/graph/storage.py` defines `StorageBackend` (`read`, `write`, `delete`, `exists`, `list_files`, `content_hash`). Its only implementation is `FileSystemStorage`.
+  - About 50 call sites in 19 files go around it with `Path` I/O. Examples: `writer_core/_io.py`, `_mutation.py`, `originals.py`, `ingest/file_index_reader.py`, `code_graph/graph.py`, `retrieval/ontology.py`, the MCP knowledge, skills and graph tools, and `/api/v1/inside`.
+- **Search rebuilds from the files.** `CanonicalizationIndex.initialize` scans every file on each construction. Semantic search returns vault paths from pgvector, then reads the files.
+- **Skills are files too.**
+  - Layout: `var/skills/<workspace_id>/<slug>.md`.
+  - The API process writes them (REST and MCP). The worker reads them for framing and `invoke_skill`, and they are never materialised into a worktree.
+
+### 5.2 Design
+
+- **One table, `vault_documents`.**
+  - Columns: `workspace_id`, `tree` (`vault` | `skills`), `path` (tree-relative, exactly today's relative file path), `content` (text: the Markdown or JSON as it would be on disk), `content_hash`, `created_at`, `updated_at`.
+  - Primary key `(workspace_id, tree, path)`. Row-level security by `workspace_id`, like every tenant table.
+- **`PgDocumentStorage(StorageBackend)`** is the second implementation of the existing seam.
+  - Writes are upserts.
+  - `list_files(subdir, pattern)` becomes a prefix + glob query.
+  - A batch `read_many` lets the index rebuild be one `SELECT` instead of N reads.
+  - It passes the same contract tests as `FileSystemStorage`.
+- **Every vault and skills access goes through the seam.** The ~50 bypass sites move onto `StorageBackend` (with `delete_prefix` for the bootstrap-retry `rmtree`). An AST guard keeps new `Path` I/O out of the knowledge and skills code, the way the cross-tenant allowlist guards `'*'` reads.
+- **Locks become cross-process.** Each `asyncio.Lock` that guards a read-modify-write becomes a transaction-scoped Postgres advisory lock keyed by `(workspace, lock name)`. That fixes the two-writer race on one box as well.
+- **Derived state does not change.** `note_embeddings` keeps its `(workspace_id, note_path)` key, and reconcile reads `content_hash` from the row instead of hashing the file.
+- **The switch is one setting.**
+  - `knowledge_store_backend = filesystem | postgres` (default `filesystem`).
+  - `python -m backend.knowledge.store import` loads `var/vault` and `var/skills` into the table. It is idempotent by `content_hash`.
+  - `… export <dir>` writes the same tree back out, so Markdown on disk is always one command away.
+  - Cut-over: deploy, import, flip the setting, keep the old directory read-only as a backup until a week of clean runs.
+
+### 5.3 What does not change
+
+- The Markdown, the frontmatter, the path layout, and every caller's idea of "a note at a path".
+- `note_embeddings`, `ontology_corrections` and `settle_drains`.
+- A single box. It gets the same table and loses nothing but the race.
+
+### 5.4 Artifact reads from another machine
+
+`GET /api/v1/deliverables/{id}/artifacts/{ref}` and the step handoff read `var/runs/<rid>/<ref>`. With replicas, the API that answers may not hold the tree. Resolution order:
+
+1. The local run tree, if present.
+2. **The run's checkpoint** (§2.2): fetch `refs/bsvibe/checkpoints/<rid>` from the bundle into the product repo, then run `git show <ref>:<path>`. This needs no worktree.
+3. The product's main (today's fallback, already R2-aware).
+
+### 5.5 Order of PRs
+
+1. `vault_documents` + RLS + `PgDocumentStorage`, behind the `StorageBackend` contract tests.
+2. Move the bypass sites onto the seam, area by area, plus the AST guard. No behaviour change on `filesystem`.
+3. Skills through the same seam.
+4. Advisory locks in place of the in-process locks.
+5. Import/export command, the `knowledge_store_backend` switch, and the cut-over runbook.
+6. Artifact reads fall back to the checkpoint (§5.4).
+
+Stage 3 (artifacts beyond the worktree) turned out not to exist. Stage 4 is global sandbox concurrency.

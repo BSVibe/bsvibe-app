@@ -67,7 +67,7 @@ Closed: **#957**, **#691**, **#1145**, **#949** (all four), **#1042** (with #118
 run. → #1180, which also shipped that run. Re-walk on **10-26 09:30 KST**: it should end `shipped` with one
 Telegram message and no human step.
 
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21)
 
 | | |
 |---|---|
@@ -82,6 +82,7 @@ Telegram message and no human step.
 | **One sandbox per run** (10-06) | `sandbox_max_concurrent=2` now counts runs; a third server_sandbox run waits for a slot |
 | **codex and opencode go onto the MCP surface too** (10-19) | Same as claude_code, no exception kept (#1000). Re-measure both CLIs' current versions against the issue's two gates before wiring |
 | **#929 = B: state lives in R2, any machine can take over** (10-20) | Not "pin a run to its machine". Stage 1 (run worktrees, tool calls) is done; **no second machine before stages 1–4 are live**, each machine with its own `BSVIBE_MACHINE_ID` |
+| **The vault and skills move into Postgres rows, Markdown unchanged** (10-21) | #929 stage 2: one `vault_documents` table behind `StorageBackend`, import/export to a directory. Not R2 objects, not a shared mount — `docs/design/stateless-workers.md` §5 |
 | **Live UI checks sign in on the disposable stack** (10-19) | `admin@bsvibe.dev` + `~/.bsvibe/e2e-live.password` into `BSVIBE_E2E_PASSWORD` only, never printed, never prod. Export just the 4 public IdP keys from `.env.prod` |
 
 ## §Ⅱ — What this session found that the issues had wrong
@@ -154,8 +155,8 @@ Telegram message and no human step.
 ## §Ⅲ — Next
 
 0. **10-26 (Mon) 00:30 UTC weekly run** — must end `shipped` with one Telegram message, no human step (#1180).
-1. **#929 stage 2** — run artifacts, knowledge vault, skills off local disk. The vault keeps Markdown as the source
-   of truth: design first, in `docs/design/stateless-workers.md`. Then stage 3–4 (sandbox concurrency).
+1. **#929 stage 2** — the vault and skills into Postgres: six PRs in `docs/design/stateless-workers.md` §5.5.
+   Then stage 4 (global sandbox concurrency).
 2. **#930** — workspace token budget follow-ups (⏳ 형님's ledger-sum SQL first).
 3. ⏳ 형님's batch: codex live run (#1183) · `python -m backend.router.accounts.rewrap` dry-run (#1173) ·
    10-26 weekly report · #930 SQL. Walks: #1174 server-sandbox secrets checklist, #1176/#1177 on the next runs.
