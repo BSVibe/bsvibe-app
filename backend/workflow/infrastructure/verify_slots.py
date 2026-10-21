@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -101,15 +102,22 @@ def verify_tenant_ticket_key(workspace_id: uuid.UUID, index: int) -> int:
     return unsigned - 2**64 if unsigned >= 2**63 else unsigned
 
 
-def verify_project_name(index: int) -> str:
-    """The compose project name for slot ``index``.
+def verify_project_name(index: int, *, machine: str = "") -> str:
+    """The compose project name for slot ``index`` (of server ``machine``).
 
     Named after the SLOT and never the run: a run-scoped name would make every
     orphaned stack a distinct project that nobody ever revisits, so the disk
     fills with debris no one is looking for. A slot-scoped name guarantees the
     next acquirer meets — and cleans up — exactly one predecessor.
+
+    ``machine`` (#929): a client_attach stack runs on the founder's machine — one docker for
+    every server driving that founder's runs — so two servers' slot 0 must not be one project,
+    or one server's pre-clear tears down the other's live stack. Empty on a single box.
     """
-    return f"verify-slot-{index}"
+    if not machine:
+        return f"verify-slot-{index}"
+    safe = re.sub(r"[^a-z0-9_-]+", "-", machine.lower()).strip("-")
+    return f"verify-slot-{safe}-{index}"
 
 
 @dataclass(frozen=True)
@@ -117,11 +125,12 @@ class VerifySlot:
     """A held verification slot."""
 
     index: int
+    machine: str = ""
 
     @property
     def project(self) -> str:
         """The compose project name this slot owns."""
-        return verify_project_name(self.index)
+        return verify_project_name(self.index, machine=self.machine)
 
 
 class _FallbackSlots:
@@ -237,11 +246,11 @@ async def acquire_verify_slot(
     logger.info(
         "verify_slot_acquired",
         slot=held,
-        project=verify_project_name(held),
+        project=verify_project_name(held, machine=machine),
         workspace_id=str(workspace_id),
     )
     try:
-        yield VerifySlot(index=held)
+        yield VerifySlot(index=held, machine=machine)
     finally:
         await _give_back(session, verify_slot_key(held, machine=machine))
         await _give_back(session, ticket)

@@ -191,3 +191,38 @@ def test_the_product_provisioner_goes_through_the_restore() -> None:
     src = inspect.getsource(workspace_provisioning._product_workspace_provisioner)
     assert "provision_run_worktree(" in src
     assert "add_run_worktree(" not in src, "a direct add would branch fresh from main"
+
+
+# --- a run that comes back ---------------------------------------------------------------------
+
+
+async def test_a_tree_older_than_the_checkpoint_is_replaced_not_kept(
+    calls, tmp_path: Path, monkeypatch
+) -> None:
+    """A→B→A: A still holds its tree from before the move, but B saved newer work since."""
+    discarded: list[uuid.UUID] = []
+
+    async def _discard(pid: uuid.UUID, rid: uuid.UUID) -> None:
+        discarded.append(rid)
+
+    monkeypatch.setattr(run_checkpoint, "discard_local_run_worktree", _discard)
+    present = tmp_path / "wt"
+    (present / ".git").mkdir(parents=True)
+    run = _run(**{CHECKPOINT_KEY: {"sha": "newer", "machine": "box-b"}})
+
+    await provision_run_worktree(run, workspace_dir=present, machine_id="box-a")
+
+    assert discarded == [run.id] and calls["restore"] == [run.id] and calls["add"] == [run.id]
+
+
+async def test_a_stale_checkpoint_elsewhere_refuses_even_with_an_old_tree_here(
+    calls, tmp_path: Path
+) -> None:
+    present = tmp_path / "wt"
+    (present / ".git").mkdir(parents=True)
+    run = _run(**{CHECKPOINT_KEY: {"sha": "x", "machine": "box-b", "stale": True}})
+
+    with pytest.raises(RunCheckpointMissing, match="box-b"):
+        await provision_run_worktree(run, workspace_dir=present, machine_id="box-a")
+
+    assert calls["add"] == [], "continuing on the older tree would drop box-b's work"

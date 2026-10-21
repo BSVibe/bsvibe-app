@@ -164,4 +164,28 @@ Measured 2026-10-21.
 5. Import/export command, the `knowledge_store_backend` switch, and the cut-over runbook.
 6. Artifact reads fall back to the checkpoint (§5.4).
 
-Stage 3 (artifacts beyond the worktree) turned out not to exist. Stage 4 is global sandbox concurrency.
+Stage 3 (artifacts beyond the worktree) turned out not to exist.
+
+## 6. Stage 4 — what a second machine still broke
+
+Measured 2026-10-21 (sandbox state, concurrency caps, reapers, other per-process state).
+
+**Fixed:**
+
+- **A run that comes back lost the other machine's work.** A→B→A: A kept its leftover tree because a `.git` was present, and never compared it with the newer checkpoint B saved. Now a tree is kept only when this machine saved the latest checkpoint. Otherwise this machine's copy is discarded and the checkpoint restored. A stale record from another machine is refused even when an older tree is here.
+- **Work-tool calls for a run nobody drives ran wherever they landed.** A paused, released or just-finished run has no `home_machine`, so a late call read whatever stale or missing tree the answering replica had, and created a sandbox there. With routing on, such a call is now refused.
+- **The sandbox reaper was never started.** `sandbox_reaper_loop` existed and its docstring said it started from the API lifespan; nothing started it. On one box that was masked: the worker re-adopted the box when the run resumed. After a move, a box the API process made for a run stayed up forever, holding a `sandbox_max_concurrent` slot. It now runs in the API process, which is the one that makes boxes for tool calls. It does not run in the worker, where a long LLM turn would lose its box.
+- **Verification stacks of two servers shared a compose project.** A client_attach stack runs on the founder's machine, which is one docker for every server. `verify-slot-0` from two servers was one project, so one server's pre-clear tore down the other's live stack. The project now carries the server's machine id. It is unchanged on a single box.
+
+**Checked, unchanged:**
+
+- **Stale-claim lease.** A healthy drive refreshes its claim at every turn boundary, and the lease is twice the turn cap. Two machines drive one run only if one hangs past the lease while still alive.
+- **Caps.** Run cap, token budget and per-workspace verify tickets are Postgres counts or locks, so they are global. `sandbox_max_concurrent` and the verify disk bound are per machine (per process for the former), which is right for a per-machine resource.
+
+**Known, not blocking:**
+
+- **Bootstrap cancel** reaches only the replica running the bootstrap task.
+- **The OAuth limiter** falls back to per-process buckets when Redis is down.
+- **Live events** need Redis to cross replicas.
+
+Prod has Redis.

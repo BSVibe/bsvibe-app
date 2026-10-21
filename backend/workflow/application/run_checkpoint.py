@@ -27,6 +27,7 @@ import structlog
 from backend.storage.product_workspace import (
     add_run_worktree,
     checkpoint_run_worktree,
+    discard_local_run_worktree,
     restore_run_worktree,
 )
 from backend.workflow.application.runtime.account_resolution import product_is_client_attach
@@ -68,9 +69,20 @@ async def checkpoint_before_release(session: Any, run: Any, *, machine_id: str) 
 
 
 async def provision_run_worktree(run: Any, *, workspace_dir: Path, machine_id: str) -> Path:
-    """Make the run's worktree present on THIS machine: keep, restore, or start it."""
+    """Make the run's worktree present on THIS machine: keep, restore, or start it.
+
+    A tree already here is kept only when THIS machine saved the latest checkpoint. When
+    another machine did, the tree here is left over from before the run moved away — older
+    than the checkpoint — so it is dropped and the checkpoint restored (A→B→A must not
+    continue from A's old tree).
+    """
     checkpoint = (run.payload or {}).get(CHECKPOINT_KEY) or {}
-    if machine_id and checkpoint and not (workspace_dir / ".git").exists():
+    saved_elsewhere = bool(checkpoint) and checkpoint.get("machine") != machine_id
+    present = (workspace_dir / ".git").exists()
+    if machine_id and checkpoint and present and saved_elsewhere and not checkpoint.get("stale"):
+        await discard_local_run_worktree(run.product_id, run.id)
+        present = False
+    if machine_id and checkpoint and (not present or saved_elsewhere):
         if checkpoint.get("stale"):
             raise RunCheckpointMissing(
                 f"run {run.id}: its latest work was not saved off {checkpoint.get('machine')}; "

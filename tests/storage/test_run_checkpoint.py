@@ -281,3 +281,37 @@ async def test_a_checkpoint_read_cannot_leave_the_tree(world: dict[str, Any], ba
 
     with pytest.raises(ValueError):
         await read_run_checkpoint_file(uuid.uuid4(), bad, store=world["runs"])
+
+
+async def test_a_run_that_comes_back_continues_from_the_newest_work(
+    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A→B→A with real git: A's leftover tree is older than what B saved, so A must not keep it."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application import run_checkpoint
+
+    s = get_settings()
+    monkeypatch.setattr(s, "product_bundle_backend", "local", raising=False)
+    monkeypatch.setattr(s, "product_bundle_local_root", str(tmp_path / "bundles"), raising=False)
+
+    async def _not_client_attach(session: Any, pid: uuid.UUID) -> bool:
+        return False
+
+    monkeypatch.setattr(run_checkpoint, "product_is_client_attach", _not_client_attach)
+    pid, rid, _ = await _run_with_work(world)
+    run = SimpleNamespace(id=rid, product_id=pid, payload={})
+    with world["a"]:
+        await run_checkpoint.checkpoint_before_release(object(), run, machine_id="box-a")
+    with world["b"]:
+        await ensure_product_workspace(pid, store=world["products"])
+        wt = run_worktree_path(rid)
+        await run_checkpoint.provision_run_worktree(run, workspace_dir=wt, machine_id="box-b")
+        (wt / "edit.py").write_text("edit.py v3 — done on box-b\n")
+        await run_checkpoint.checkpoint_before_release(object(), run, machine_id="box-b")
+
+    with world["a"]:
+        wt = run_worktree_path(rid)
+        assert (wt / "edit.py").read_text() == "edit.py v2 (uncommitted)\n", "A's leftover tree"
+        await run_checkpoint.provision_run_worktree(run, workspace_dir=wt, machine_id="box-a")
+        assert (wt / "edit.py").read_text() == "edit.py v3 — done on box-b\n"
