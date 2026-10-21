@@ -197,3 +197,9 @@ def test_the_migration_creates_the_table_the_model_maps() -> None:
     mig = importlib.import_module("backend.data.migrations.versions.20261021_vault_documents")
     assert mig.revision == "vault_documents"
     assert VaultDocumentRow.__tablename__ == "vault_documents"
+
+
+async def test_create_only_writes_a_missing_document(storage) -> None:
+    assert await storage.create("seeds/k.md", "first") is True
+    assert await storage.create("seeds/k.md", "second") is False
+    assert await storage.read("seeds/k.md") == "first"

@@ -32,8 +32,7 @@ import structlog
 
 from backend.knowledge.code_graph.pipeline import (
     build_code_graph_artifacts,
-    code_graph_vault_path,
-    persist_graph,
+    save_code_graph,
 )
 from backend.knowledge.facade import IngestRequest, IngestResult, Knowledge
 from backend.products.application.bootstrap.extractors import file_tree, manifests
@@ -120,42 +119,25 @@ async def run_repo_bootstrap(
         )
         raise
 
-    # Persist the graph so the MCP query surface can serve it back.
+    # Persist the graph so the MCP query surface can serve it back — with its Lift E25
+    # community-label sidecar, so ``bsvibe_graph_community`` can answer "why are these grouped".
+    # Through the vault's store (#929): files, or the workspace's rows. Soft-fails: a graph
+    # that cannot be saved does not fail an otherwise good bootstrap.
     if vault_root is not None:
-        try:
-            persist_graph(
-                code_graph_result.graph,
-                code_graph_vault_path(vault_root=vault_root),
-            )
-        except OSError:
-            logger.warning(
-                "product_bootstrap_graph_persist_failed",
-                workspace_id=str(workspace_id),
-                exc_info=True,
-            )
-        # Lift E25 — derive + persist community labels so the MCP
-        # ``bsvibe_graph_community`` tool can answer "why are these grouped"
-        # with a deterministic label (common path prefix), top symbols, and
-        # file count. Soft-fails: the graph itself is still queryable even
-        # if the label sidecar can't be written.
-        try:
-            from backend.knowledge.code_graph.pipeline import (  # noqa: PLC0415
-                community_labels_vault_path,
-                persist_community_labels,
-            )
+        from backend.knowledge.vault_store import vault_at  # noqa: PLC0415
 
-            labeled = persist_community_labels(
-                code_graph_result.graph,
-                community_labels_vault_path(vault_root=vault_root),
+        try:
+            labeled = await save_code_graph(
+                vault_at(vault_root, workspace_id), code_graph_result.graph
             )
             logger.info(
                 "product_bootstrap_community_labels_persisted",
                 workspace_id=str(workspace_id),
                 labeled=labeled,
             )
-        except OSError:
+        except Exception:  # noqa: BLE001 — soft-fail, see above
             logger.warning(
-                "product_bootstrap_community_labels_persist_failed",
+                "product_bootstrap_graph_persist_failed",
                 workspace_id=str(workspace_id),
                 exc_info=True,
             )

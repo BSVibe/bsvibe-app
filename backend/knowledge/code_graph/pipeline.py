@@ -42,7 +42,13 @@ import networkx as nx
 import structlog
 
 from backend.knowledge.code_graph.community import annotate_communities
-from backend.knowledge.code_graph.graph import annotate_pagerank, build_graph, save_graph
+from backend.knowledge.code_graph.graph import (
+    annotate_pagerank,
+    build_graph,
+    dump_graph,
+    parse_graph,
+    save_graph,
+)
 from backend.knowledge.code_graph.parser import detect_language, parse_source
 from backend.knowledge.code_graph.types import NodeKind
 
@@ -53,6 +59,7 @@ from backend.knowledge.code_graph.types import NodeKind
 # top-level import here would load the orchestrator BEFORE this
 # module's symbols are defined.
 if TYPE_CHECKING:
+    from backend.knowledge.graph.vault import Vault
     from backend.products.application.bootstrap.walker import WalkedFile
 
 logger = structlog.get_logger(__name__)
@@ -338,6 +345,48 @@ def persist_community_labels(graph: nx.DiGraph, path: Path) -> int:
         tmp_path = tmp.name
     os.replace(tmp_path, path)
     return len(labels)
+
+
+def dump_community_labels(graph: nx.DiGraph) -> tuple[str, int]:
+    """``communities.json`` text for ``graph``, and how many communities got a label."""
+    from backend.knowledge.code_graph.community import (  # noqa: PLC0415
+        derive_community_labels,
+    )
+
+    labels = derive_community_labels(graph)
+    payload = {"version": 1, "communities": [labels[cid] for cid in sorted(labels)]}
+    return json.dumps(payload, ensure_ascii=False), len(labels)
+
+
+async def save_code_graph(vault: Vault, graph: nx.DiGraph) -> int:
+    """Persist ``graph.json`` and its ``communities.json`` sidecar through the vault's store.
+
+    Returns how many communities received a label."""
+    await vault.write(code_graph_vault_path(vault_root=vault.root), dump_graph(graph))
+    text, labeled = dump_community_labels(graph)
+    await vault.write(community_labels_vault_path(vault_root=vault.root), text)
+    return labeled
+
+
+async def load_code_graph(vault: Vault) -> nx.DiGraph | None:
+    """The workspace's code graph, or ``None`` before its first bootstrap."""
+    path = code_graph_vault_path(vault_root=vault.root)
+    if not await vault.exists(path):
+        return None
+    return parse_graph(await vault.read(path))
+
+
+async def load_community_labels(vault: Vault) -> dict[int, dict[str, Any]]:
+    """Community labels keyed by community id (empty when none were written)."""
+    path = community_labels_vault_path(vault_root=vault.root)
+    if not await vault.exists(path):
+        return {}
+    raw = json.loads(await vault.read(path))
+    return {
+        entry["community_id"]: entry
+        for entry in raw.get("communities") or []
+        if isinstance(entry.get("community_id"), int)
+    }
 
 
 def code_graph_vault_path(*, vault_root: Path) -> Path:

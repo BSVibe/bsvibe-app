@@ -138,6 +138,21 @@ class Vault:
             current = header
         await self._storage.write(rel, current + text)
 
+    async def create(self, path: Path | str, content: str) -> bool:
+        """Write only if absent, atomically — ``False`` when it already existed."""
+        return await self._storage.create(self.rel(path), content)
+
+    async def list_dirs(self, subdir: str) -> list[str]:
+        """Names of the directories directly under ``subdir`` that hold any file."""
+        base = self.rel(subdir) if subdir else ""
+        depth = len(base.split("/")) if base else 0
+        names = {
+            r.split("/")[depth]
+            for r in await self._storage.list_files(base, "*")
+            if len(r.split("/")) > depth + 1
+        }
+        return sorted(names)
+
     async def exists(self, path: Path | str) -> bool:
         return await self._storage.exists(self.rel(path))
 

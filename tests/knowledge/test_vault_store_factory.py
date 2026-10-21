@@ -111,6 +111,8 @@ _ALLOWED = {
     "backend/knowledge/graph/vault.py",
     "backend/knowledge/graph/storage.py",
     "backend/knowledge/vault_store.py",
+    # The ops command that copies disk ↔ rows: it is about the disk on purpose.
+    "backend/knowledge/store.py",
 }
 
 

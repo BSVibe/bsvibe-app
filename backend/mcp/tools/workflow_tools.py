@@ -288,31 +288,16 @@ _RESETTABLE_VAULT_SUBDIRS: tuple[str, ...] = (
 async def _wipe_workspace_vault_subtrees(ctx: ToolContext) -> None:
     """Best-effort delete the resettable subtrees for ``ctx.principal.workspace_id``.
 
-    The vault root is resolved via the helper that already powers the
-    knowledge tools, so any layout change there flows through. Failures
-    on a single subdir are logged but never propagated — the retry
-    proceeds; the new bootstrap will simply re-create whatever was
-    expected to be present.
+    Through the workspace's vault store (files or rows, #929). Failures on a single subdir
+    are logged but never propagated — the retry proceeds; the new bootstrap will simply
+    re-create whatever was expected to be present.
     """
-    import asyncio  # noqa: PLC0415 — only on the wipe path
-    import shutil  # noqa: PLC0415 — only on the wipe path
-    from pathlib import Path  # noqa: PLC0415 — only on the wipe path
+    from backend.knowledge.vault_store import workspace_vault  # noqa: PLC0415
 
-    from backend.mcp.tools._helpers import (  # noqa: PLC0415
-        vault_root_for,
-    )
-
-    vault_root = vault_root_for(workspace_id=ctx.principal.workspace_id)
+    vault = workspace_vault(ctx.principal.workspace_id)
     for subdir in _RESETTABLE_VAULT_SUBDIRS:
-        target = vault_root / subdir
-        if not target.exists():
-            continue
-
-        def _do_remove(path: Path = target) -> None:
-            shutil.rmtree(path, ignore_errors=True)
-
         try:
-            await asyncio.to_thread(_do_remove)
+            await vault.delete_tree(subdir)
         except Exception:  # noqa: BLE001 — soft-fail per docstring
             logger.warning(
                 "products_bootstrap_retry_vault_wipe_failed",

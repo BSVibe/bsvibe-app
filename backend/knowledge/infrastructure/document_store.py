@@ -143,6 +143,29 @@ class PgDocumentStorage(StorageBackend):
             )
             await session.commit()
 
+    async def create(self, rel_path: str, content: str) -> bool:
+        path = _normalize(rel_path)
+        if not path:
+            raise ValueError(f"not a document path: {rel_path!r}")
+        now = datetime.now(tz=UTC)
+        async with self._sf() as session, workspace_session_scope(session, self._ws):
+            insert = pg_insert if session.bind.dialect.name == "postgresql" else sqlite_insert
+            result = await session.execute(
+                insert(VaultDocumentRow)
+                .values(
+                    workspace_id=self._ws,
+                    tree=self._tree,
+                    path=path,
+                    content=content,
+                    content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                    created_at=now,
+                    updated_at=now,
+                )
+                .on_conflict_do_nothing(index_elements=["workspace_id", "tree", "path"])
+            )
+            await session.commit()
+        return bool(result.rowcount)
+
     async def delete(self, rel_path: str) -> None:
         path = _normalize(rel_path)
         async with self._sf() as session, workspace_session_scope(session, self._ws):

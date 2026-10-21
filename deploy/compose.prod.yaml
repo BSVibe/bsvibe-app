@@ -92,6 +92,11 @@ services:
       BSVIBE_KNOWLEDGE_EMBEDDING_MODEL: ${BSVIBE_KNOWLEDGE_EMBEDDING_MODEL:-}
       BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE: ${BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE:-}
       BSVIBE_SKILLS_ROOT: ${BSVIBE_SKILLS_ROOT:-/app/var/skills}
+      # #929 — this box's id (verify slots, home_machine, run checkpoints, tool-call
+      # forwarding) and where the vault + skills live (filesystem | postgres). Empty /
+      # filesystem = a single box, exactly as before. docs/design/stateless-workers.md.
+      BSVIBE_MACHINE_ID: ${BSVIBE_MACHINE_ID:-}
+      BSVIBE_KNOWLEDGE_STORE_BACKEND: ${BSVIBE_KNOWLEDGE_STORE_BACKEND:-filesystem}
       BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
       # Product bundle store — a product's durable home OFF this box. Defaults
       # to `local`, which keeps bundles on the SAME disk the design exists to
@@ -184,6 +189,11 @@ services:
       BSVIBE_KNOWLEDGE_EMBEDDING_MODEL: ${BSVIBE_KNOWLEDGE_EMBEDDING_MODEL:-}
       BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE: ${BSVIBE_KNOWLEDGE_EMBEDDING_API_BASE:-}
       BSVIBE_SKILLS_ROOT: ${BSVIBE_SKILLS_ROOT:-/app/var/skills}
+      # #929 — this box's id (verify slots, home_machine, run checkpoints, tool-call
+      # forwarding) and where the vault + skills live (filesystem | postgres). Empty /
+      # filesystem = a single box, exactly as before. docs/design/stateless-workers.md.
+      BSVIBE_MACHINE_ID: ${BSVIBE_MACHINE_ID:-}
+      BSVIBE_KNOWLEDGE_STORE_BACKEND: ${BSVIBE_KNOWLEDGE_STORE_BACKEND:-filesystem}
       BSVIBE_RUN_WORKSPACE_ROOT: ${BSVIBE_RUN_WORKSPACE_ROOT:-/app/var/runs}
       # Product bundle store — a product's durable home OFF this box. Defaults
       # to `local`, which keeps bundles on the SAME disk the design exists to

@@ -200,7 +200,7 @@ async def _h_get_note(args: GetNoteInput, ctx: ToolContext) -> Any:
         target = vault.resolve_path(args.path)
     except Exception as exc:  # noqa: BLE001 — boundary
         raise ToolError(f"invalid vault path: {args.path}") from exc
-    if not target.is_file():
+    if not await vault.exists(target):
         raise ToolError(f"note not found: {args.path}")
     content = await vault.read_note_content(target)
     # A tombstoned note is hidden from the read surface (mirrors the retriever
@@ -338,14 +338,7 @@ def _slugify(title: str) -> str:
 async def _h_create_note(args: CreateNoteInput, ctx: ToolContext) -> Any:
     vault = await _vault_for_call(ctx)
     seeds_dir = vault.resolve_path("seeds/mcp")
-    seeds_dir.mkdir(parents=True, exist_ok=True)
     slug = _slugify(args.title)
-    target = seeds_dir / f"{slug}.md"
-    # Don't overwrite an existing seed — append a numeric suffix.
-    counter = 1
-    while target.exists():
-        target = seeds_dir / f"{slug}-{counter}.md"
-        counter += 1
     tag_line = " ".join(f"#{t}" for t in args.tags if t)
     parts = [f"# {args.title}", ""]
     if tag_line:
@@ -353,7 +346,13 @@ async def _h_create_note(args: CreateNoteInput, ctx: ToolContext) -> Any:
         parts.append("")
     parts.append(args.content.rstrip())
     body = "\n".join(parts).rstrip() + "\n"
-    target.write_text(body, encoding="utf-8")
+    # Don't overwrite an existing seed — take the next numeric suffix. ``create`` is atomic,
+    # so two concurrent creates of the same title cannot land on one name.
+    target = seeds_dir / f"{slug}.md"
+    counter = 0
+    while not await vault.create(target, body):
+        counter += 1
+        target = seeds_dir / f"{slug}-{counter}.md"
     return CreateNoteOutput(
         seed_path=_path_relative_to_vault(vault, target),
         bytes_written=len(body.encode("utf-8")),

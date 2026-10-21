@@ -37,6 +37,7 @@ from backend.dispatch.caller_registry import (
 )
 from backend.extensions.plugin.base import PluginMeta
 from backend.extensions.skill.loader import SkillLoader
+from backend.extensions.skill.store import workspace_skill_loader
 from backend.router.accounts.crypto import (
     cipher_from_settings,
 )
@@ -110,12 +111,10 @@ def build_agent_execution_deps(
     """
     settings = settings or get_settings()
     box: SandboxManager = resolve_sandbox_manager(sandbox_manager, settings)
-    skills_root = Path(settings.skills_root)
 
-    def _skill_loader_for(workspace_id: uuid.UUID) -> SkillLoader:
-        loader = SkillLoader(skills_root / str(workspace_id))
-        loader.load_all()
-        return loader
+    async def _skill_loader_for(workspace_id: uuid.UUID) -> SkillLoader:
+        # From the workspace's skills store — files or rows (#929).
+        return await workspace_skill_loader(workspace_id, settings=settings)
 
     async def _retriever_for(
         session: AsyncSession,
@@ -292,11 +291,13 @@ def build_agent_execution_deps(
             )
 
         retriever = await _retriever_for(session, run.workspace_id)
-        suggested_skill, suggested_skill_description = _frame_skill_hint(run, _skill_loader_for)
+        skill_loader = await _skill_loader_for(run.workspace_id)
+        suggested_skill, suggested_skill_description = _frame_skill_hint(
+            run, lambda _ws: skill_loader
+        )
 
         llm = ResolverLoopLlm(adapter=resolved.adapter)
 
-        skill_loader = _skill_loader_for(run.workspace_id)
         connector_actions = (
             ConnectorActionResolver(
                 session=session,

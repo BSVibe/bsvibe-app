@@ -26,6 +26,10 @@ class StorageBackend(ABC):
         """Write content to a vault-relative path. Creates parent dirs."""
 
     @abstractmethod
+    async def create(self, rel_path: str, content: str) -> bool:
+        """Write only if absent, atomically. ``False`` when it already existed (untouched)."""
+
+    @abstractmethod
     async def delete(self, rel_path: str) -> None:
         """Delete a file by vault-relative path."""
 
@@ -82,6 +86,20 @@ class FileSystemStorage(StorageBackend):
         path = self._resolve(rel_path)
         await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(path.write_text, content, encoding="utf-8")
+
+    async def create(self, rel_path: str, content: str) -> bool:
+        path = self._resolve(rel_path)
+
+        def _create() -> bool:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with path.open("x", encoding="utf-8") as handle:
+                    handle.write(content)
+            except FileExistsError:
+                return False
+            return True
+
+        return await asyncio.to_thread(_create)
 
     async def delete(self, rel_path: str) -> None:
         path = self._resolve(rel_path)

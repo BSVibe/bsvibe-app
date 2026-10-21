@@ -148,6 +148,18 @@ class AgentWorkerConfig:
     poll_interval_s: float = 5.0
 
 
+async def _resolve_skill_loader(
+    factory: Callable[[uuid.UUID], SkillLoader | Awaitable[SkillLoader]],
+    workspace_id: uuid.UUID,
+) -> SkillLoader:
+    """The run's workspace skills. Production loads them from the store (async, #929);
+    a sync factory still works."""
+    loader = factory(workspace_id)
+    if inspect.isawaitable(loader):
+        return await loader
+    return loader
+
+
 @dataclass(slots=True)
 class AgentExecutionDeps:
     """The execution backend :meth:`AgentWorker.drive_once` needs.
@@ -188,7 +200,7 @@ class AgentExecutionDeps:
     * ``default_artifact_type`` — frame hint when no skill matches.
     """
 
-    skill_loader_for: Callable[[uuid.UUID], SkillLoader]
+    skill_loader_for: Callable[[uuid.UUID], SkillLoader | Awaitable[SkillLoader]]
     orchestrator_factory: Callable[
         [AsyncSession, ExecutionRun], RunCompute | Awaitable[RunCompute | None]
     ]
@@ -775,7 +787,9 @@ class AgentWorker(BaseWorker):
                 # Per-workspace skill scoping: frame against the loader rooted
                 # at THIS run's ``<skills_root>/<workspace_id>/`` (Workflow §6 #5),
                 # not a single shared root-level set.
-                skill_loader = execution.skill_loader_for(run.workspace_id)
+                skill_loader = await _resolve_skill_loader(
+                    execution.skill_loader_for, run.workspace_id
+                )
                 # 종합 — the founder's routing rules ARE the definition of what
                 # stages this workspace distinguishes. No rules → no vocabulary
                 # → the framer is never asked to split (and never invents a

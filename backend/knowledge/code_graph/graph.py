@@ -128,6 +128,29 @@ def top_nodes_by_pagerank(graph: nx.DiGraph, *, limit: int) -> list[tuple[str, f
     return ranked[:limit]
 
 
+def dump_graph(graph: nx.DiGraph) -> str:
+    """The graph as ``graph.json`` text (``nodes`` + ``edges`` lists)."""
+    payload: dict[str, Any] = {
+        "nodes": [{"id": nid, **_serialize_attrs(graph.nodes[nid])} for nid in graph.nodes],
+        "edges": [{"src_id": u, "dst_id": v, **dict(d)} for u, v, d in graph.edges(data=True)],
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def parse_graph(text: str) -> nx.DiGraph:
+    """``graph.json`` text back into a ``DiGraph``."""
+    raw = json.loads(text)
+    g: nx.DiGraph = nx.DiGraph()
+    for node in raw.get("nodes", []):
+        nid = node["id"]
+        attrs = {k: v for k, v in node.items() if k != "id"}
+        g.add_node(nid, id=nid, **attrs)
+    for edge in raw.get("edges", []):
+        attrs = {k: v for k, v in edge.items() if k not in ("src_id", "dst_id")}
+        g.add_edge(edge["src_id"], edge["dst_id"], **attrs)
+    return g
+
+
 def save_graph(graph: nx.DiGraph, path: Path) -> None:
     """Write the graph as JSON (``nodes``+``edges`` lists) to ``path``.
 
@@ -137,14 +160,10 @@ def save_graph(graph: nx.DiGraph, path: Path) -> None:
     yet at first bootstrap).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, Any] = {
-        "nodes": [{"id": nid, **_serialize_attrs(graph.nodes[nid])} for nid in graph.nodes],
-        "edges": [{"src_id": u, "dst_id": v, **dict(d)} for u, v, d in graph.edges(data=True)],
-    }
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=str(path.parent), delete=False
     ) as tmp:
-        json.dump(payload, tmp, ensure_ascii=False)
+        tmp.write(dump_graph(graph))
         tmp_path = tmp.name
     os.replace(tmp_path, path)
 
@@ -160,22 +179,15 @@ def _serialize_attrs(raw: dict[str, Any]) -> dict[str, Any]:
 
 def load_graph(path: Path) -> nx.DiGraph:
     """Read a previously-saved ``graph.json`` back into a ``DiGraph``."""
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    g: nx.DiGraph = nx.DiGraph()
-    for node in raw.get("nodes", []):
-        nid = node["id"]
-        attrs = {k: v for k, v in node.items() if k != "id"}
-        g.add_node(nid, id=nid, **attrs)
-    for edge in raw.get("edges", []):
-        attrs = {k: v for k, v in edge.items() if k not in ("src_id", "dst_id")}
-        g.add_edge(edge["src_id"], edge["dst_id"], **attrs)
-    return g
+    return parse_graph(path.read_text(encoding="utf-8"))
 
 
 __all__ = [
     "annotate_pagerank",
     "build_graph",
+    "dump_graph",
     "load_graph",
+    "parse_graph",
     "save_graph",
     "top_nodes_by_pagerank",
 ]

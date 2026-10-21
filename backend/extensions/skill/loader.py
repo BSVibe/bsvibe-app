@@ -1,8 +1,14 @@
-"""SkillLoader — discover + parse ``skills/<workspace_id>/*.md`` per Workflow §6 #5."""
+"""SkillLoader — discover + parse ``skills/<workspace_id>/*.md`` per Workflow §6 #5.
+
+A loader reads either a directory (``load_all``, sync) or a :class:`StorageBackend` — files or
+``vault_documents`` rows, #929 stage 2 — (``load``, async). Production builds them through
+:func:`backend.extensions.skill.store.workspace_skill_loader`.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 import yaml
@@ -14,6 +20,9 @@ from backend.extensions.skill.meta import (
     REQUIRED_FRONTMATTER_FIELDS,
     SkillMeta,
 )
+
+if TYPE_CHECKING:
+    from backend.knowledge.graph.storage import StorageBackend
 
 logger = structlog.get_logger(__name__)
 
@@ -36,9 +45,15 @@ class SkillLoader:
     one loader per workspace with ``skill_dir = skills/<workspace_id>/``.
     """
 
-    def __init__(self, skill_dir: Path) -> None:
-        self._skill_dir = skill_dir
+    def __init__(self, source: Path | StorageBackend) -> None:
+        self._source = source
         self._registry: dict[str, SkillMeta] = {}
+
+    @property
+    def _skill_dir(self) -> Path:
+        if not isinstance(self._source, Path):
+            raise TypeError("a store-backed SkillLoader loads with `await load()`")
+        return self._source
 
     @property
     def registry(self) -> dict[str, SkillMeta]:
@@ -62,14 +77,35 @@ class SkillLoader:
             logger.info("skill_loaded", name=meta.name, version=meta.version)
         return dict(self._registry)
 
+    async def load(self) -> dict[str, SkillMeta]:
+        """Reload every top-level ``*.md`` from the store (or directory). Replaces the registry."""
+        if isinstance(self._source, Path):
+            return self.load_all()
+        self._registry.clear()
+        storage = self._source
+        names = [p for p in await storage.list_files("", "*.md") if "/" not in p]
+        for name, text in sorted((await storage.read_many(names)).items()):
+            try:
+                meta = self._parse_text(text, where=name)
+            except SkillLoadError as exc:
+                logger.warning("skill_load_failed", path=name, error=str(exc))
+                continue
+            self._registry[meta.name] = meta
+            logger.info("skill_loaded", name=meta.name, version=meta.version)
+        return dict(self._registry)
+
     def get(self, name: str) -> SkillMeta:
         if name not in self._registry:
             raise SkillLoadError(f"Skill '{name}' not in registry.")
         return self._registry[name]
 
+    @classmethod
+    def _parse(cls, path: Path) -> SkillMeta:
+        return cls._parse_text(path.read_text(encoding="utf-8"), where=str(path))
+
     @staticmethod
-    def _parse(path: Path) -> SkillMeta:
-        text = path.read_text(encoding="utf-8")
+    def _parse_text(text: str, *, where: str) -> SkillMeta:
+        path = where
         frontmatter_str, body = _split_frontmatter(text)
         if not frontmatter_str:
             raise SkillLoadError(f"No YAML frontmatter in {path}")
