@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import posixpath
 import shutil
 import tempfile
 import uuid
@@ -944,6 +945,50 @@ async def restore_run_worktree(
     await _git("reset", "-q", cwd=worktree)
     logger.info("run_worktree_restored", run_id=str(run_id))
     return True
+
+
+async def read_run_checkpoint_file(
+    run_id: uuid.UUID, ref: str, *, store: ProductBundleStore | None = None
+) -> bytes | None:
+    """One file of the run's checkpointed tree, without a worktree — or ``None``.
+
+    For a machine that serves a run's artifact (the Files viewer, MCP) while the run lives on
+    another machine: the checkpoint bundle is fetched into a throwaway repository and the blob
+    read from the snapshot commit. ``None`` when there is no checkpoint or no such file there;
+    :class:`ValueError` for a path that leaves the tree (never read as "missing").
+    """
+    rel = posixpath.normpath(ref)
+    if ref.startswith("/") or rel == ".." or rel.startswith("../") or rel == ".":
+        raise ValueError(f"artifact ref escapes the run tree: {ref}")
+    if store is None:
+        from backend.storage.product_bundle_store import (  # noqa: PLC0415
+            build_run_checkpoint_store,
+        )
+
+        store = build_run_checkpoint_store()
+    with tempfile.TemporaryDirectory(prefix="bsvibe-read-checkpoint-") as tmp:
+        bundle = Path(tmp) / f"{run_id}.bundle"
+        if not await store.get(run_id, bundle):
+            return None
+        repo = Path(tmp) / "repo"
+        await _git("init", "--quiet", "--bare", str(repo), cwd=Path(tmp))
+        ref_name = _checkpoint_ref(run_id)
+        fetched = await _git(
+            "fetch", "--quiet", str(bundle), f"{ref_name}:{ref_name}", cwd=repo, check=False
+        )
+        if fetched.returncode != 0:
+            return None
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "cat-file",
+            "blob",
+            f"{ref_name}:{rel}",
+            cwd=str(repo),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+    return out if proc.returncode == 0 else None
 
 
 async def delete_run_checkpoint(

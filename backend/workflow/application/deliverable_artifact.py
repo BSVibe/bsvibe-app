@@ -21,6 +21,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.storage.artifact_store import ArtifactStore, LocalFilesystemArtifactStore
+from backend.storage.product_workspace import read_run_checkpoint_file
 from backend.workflow.domain.repositories import DeliverableRepository
 from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.serialization.deliverable_views import (
@@ -132,7 +133,13 @@ async def read_deliverable_artifact(  # noqa: PLR0911 — each return is a disti
         # there before declaring the content gone (else the Files viewer can
         # never open a shipped product run's files). Non-product runs (no main to
         # fall back to) keep the calm 404.
-        fallback = await _read_from_product_main(session, row.run_id, ref)
+        #
+        # #929 — with more than one machine, the run may simply live elsewhere: its latest
+        # state is its checkpoint, so that comes before the product main (which a run that
+        # has not shipped is not in yet).
+        fallback = await read_run_checkpoint_file(row.run_id, ref)
+        if fallback is None:
+            fallback = await _read_from_product_main(session, row.run_id, ref)
         if fallback is None:
             return None
         raw = fallback
