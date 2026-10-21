@@ -94,7 +94,13 @@ def _constructions(tree: ast.AST) -> list[int]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             fn = node.func
-            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+            name = (
+                fn.id
+                if isinstance(fn, ast.Name)
+                else fn.attr
+                if isinstance(fn, ast.Attribute)
+                else ""
+            )
             if name in {"Vault", "_Vault", "FileSystemStorage"}:
                 hits.append(node.lineno)
     return hits
@@ -117,4 +123,6 @@ def test_no_caller_builds_its_own_vault_store() -> None:
         lines = _constructions(ast.parse(path.read_text(encoding="utf-8")))
         offenders += [f"{rel}:{n}" for n in lines]
 
-    assert offenders == [], "build it through backend.knowledge.vault_store:\n" + "\n".join(offenders)
+    assert offenders == [], "build it through backend.knowledge.vault_store:\n" + "\n".join(
+        offenders
+    )
