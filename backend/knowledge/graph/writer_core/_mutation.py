@@ -41,8 +41,9 @@ class _WriterMutationMixin:
     # Provided by _WriterIOMixin once composed into GardenWriter.
     _garden_lock: asyncio.Lock
 
-    @staticmethod
-    def _find_dedup_path(directory: Path, slug: str) -> Path:  # pragma: no cover - in GardenWriter
+    async def _find_dedup_path(
+        self, directory: Path, slug: str
+    ) -> Path:  # pragma: no cover - implemented in GardenWriter
         raise NotImplementedError
 
     async def _emit_vault_modified(  # pragma: no cover - in GardenWriter
@@ -61,11 +62,11 @@ class _WriterMutationMixin:
 
     async def update_frontmatter_status(self, note_path: Path, new_status: str) -> None:
         """Update the ``status`` field in a note's YAML frontmatter in-place."""
-        content = await asyncio.to_thread(note_path.read_text, "utf-8")
+        content = await self._vault.read(note_path)
         updated = self._STATUS_RE.sub(rf"\g<1>{new_status}", content, count=1)
         if updated == content:
             return
-        await asyncio.to_thread(note_path.write_text, updated, encoding="utf-8")
+        await self._vault.write(note_path, updated)
         rel_path = str(note_path.relative_to(self._vault.root))
         await emit_event(
             self._event_bus,
@@ -94,40 +95,24 @@ class _WriterMutationMixin:
         # Scan garden/seedling+budding+evergreen plus non-system top-level dirs.
         legacy_skip = {"seeds", "actions", "tmp", "node_modules", "garden", ".bsage"}
 
-        def _collect_md() -> list[Path]:
-            files: list[Path] = []
-            seen: set[Path] = set()
+        def _eligible(note: Path) -> bool:
+            parts = note.relative_to(self._vault.root).parts
+            if len(parts) < 2 or parts[0].startswith((".", "_")):
+                return False
+            if parts[0] == "garden":
+                # garden/<maturity>/… — not a file directly in garden/.
+                return len(parts) >= 3 and not parts[1].startswith((".", "_"))
+            return parts[0] not in legacy_skip
 
-            def _add(base: Path) -> None:
-                resolved = base.resolve()
-                if resolved in seen:
-                    return
-                seen.add(resolved)
-                if base.is_dir():
-                    files.extend(base.rglob("*.md"))
-
-            garden_root = self._vault.root / "garden"
-            if garden_root.is_dir():
-                for child in garden_root.iterdir():
-                    if child.is_dir() and not child.name.startswith((".", "_")):
-                        _add(child)
-
-            for child in sorted(self._vault.root.iterdir()):
-                if not child.is_dir() or child.name.startswith((".", "_")):
-                    continue
-                if child.name in legacy_skip:
-                    continue
-                _add(child)
-
-            return sorted(files)
-
-        md_files = await asyncio.to_thread(_collect_md)
+        md_files = sorted(
+            n for n in await self._vault.read_notes("", recursive=True) if _eligible(n)
+        )
         promoted = 0
         details: list[dict[str, str]] = []
 
         for md_file in md_files:
             rel_path = str(md_file.relative_to(self._vault.root))
-            content = await asyncio.to_thread(md_file.read_text, "utf-8")
+            content = await self._vault.read(md_file)
             fm = extract_frontmatter(content)
             current_status = fm.get("status", "seed")
             current_maturity = fm.get("maturity") or _maturity_from_status(current_status)
@@ -178,23 +163,22 @@ class _WriterMutationMixin:
             return md_file
 
         target_dir = self._vault.resolve_path(f"garden/{target_maturity}")
-        target_dir.mkdir(parents=True, exist_ok=True)
         new_path = target_dir / md_file.name
         if new_path == md_file:
             return md_file
-        if new_path.exists():
-            new_path = self._find_dedup_path(target_dir, md_file.stem)
-        await asyncio.to_thread(md_file.rename, new_path)
+        if await self._vault.exists(new_path):
+            new_path = await self._find_dedup_path(target_dir, md_file.stem)
+        await self._vault.move(md_file, new_path)
         return new_path
 
     async def _set_frontmatter_field(self, path: Path, key: str, value: Any) -> None:
         """Set a single frontmatter field, preserving body and other fields."""
         async with self._garden_lock:
-            text = await asyncio.to_thread(path.read_text, "utf-8")
+            text = await self._vault.read(path)
             if not text.startswith("---\n"):
                 fm = {key: value}
                 new_text = build_frontmatter(fm) + text
-                await asyncio.to_thread(path.write_text, new_text, encoding="utf-8")
+                await self._vault.write(path, new_text)
                 return
             closing = text.find("\n---\n", 4)
             if closing == -1:
@@ -216,14 +200,14 @@ class _WriterMutationMixin:
                 raise ValueError(msg)
             fm[key] = value
             new_text = build_frontmatter(fm) + text[closing + 5 :]
-            await asyncio.to_thread(path.write_text, new_text, encoding="utf-8")
+            await self._vault.write(path, new_text)
 
     async def update_note(
         self, path: str, content: str, *, preserve_frontmatter: bool = True
     ) -> Path:
         """Replace the content of an existing vault note."""
         resolved = self._vault.resolve_path(path)
-        if not resolved.exists():
+        if not await self._vault.exists(resolved):
             raise FileNotFoundError(f"Note not found: {path}")
 
         if preserve_frontmatter:
@@ -240,7 +224,7 @@ class _WriterMutationMixin:
                 frontmatter = existing[: end_idx + 5]
                 content = frontmatter + "\n" + content
 
-        await asyncio.to_thread(resolved.write_text, content, encoding="utf-8")
+        await self._vault.write(resolved, content)
         logger.info("note_updated", path=str(resolved))
         await emit_event(self._event_bus, "NOTE_UPDATED", {"path": str(resolved)})
         await self._emit_vault_modified(
@@ -257,7 +241,7 @@ class _WriterMutationMixin:
             if not abs_path.resolve().is_relative_to(self._vault.root.resolve()):
                 logger.warning("path_traversal_blocked", note_path=note_path)
                 raise ValueError(f"Path traversal blocked: {note_path}")
-            if not abs_path.exists():
+            if not await self._vault.exists(abs_path):
                 return
             content = await self._vault.read_note_content(abs_path)
         except (FileNotFoundError, OSError, UnicodeDecodeError):
@@ -290,21 +274,17 @@ class _WriterMutationMixin:
         metadata["related"] = merged
         new_fm = build_frontmatter(metadata)
         new_content = f"{new_fm}\n{body}"
-        await asyncio.to_thread(abs_path.write_text, new_content, encoding="utf-8")
+        await self._vault.write(abs_path, new_content)
         logger.debug("note_related_updated", note_path=note_path, links=len(merged))
         await emit_event(self._event_bus, "NOTE_UPDATED", {"path": note_path})
 
     async def append_to_note(self, path: str, text: str) -> Path:
         """Append text to an existing vault note."""
         resolved = self._vault.resolve_path(path)
-        if not resolved.exists():
+        if not await self._vault.exists(resolved):
             raise FileNotFoundError(f"Note not found: {path}")
 
-        def _append() -> None:
-            with resolved.open("a", encoding="utf-8") as f:
-                f.write(text)
-
-        await asyncio.to_thread(_append)
+        await self._vault.append(resolved, text)
         logger.info("note_appended", path=str(resolved))
         await emit_event(self._event_bus, "NOTE_UPDATED", {"path": str(resolved)})
         await self._emit_vault_modified(
@@ -323,10 +303,10 @@ class _WriterMutationMixin:
         if path.startswith("actions/"):
             raise ValueError("Cannot delete action logs")
         resolved = self._vault.resolve_path(path)
-        if not resolved.exists():
+        if not await self._vault.exists(resolved):
             raise FileNotFoundError(f"Note not found: {path}")
 
-        await asyncio.to_thread(resolved.unlink)
+        await self._vault.delete(resolved)
         logger.info("note_deleted", path=str(resolved))
         await emit_event(self._event_bus, "NOTE_DELETED", {"path": str(resolved)})
         await self._emit_vault_modified(

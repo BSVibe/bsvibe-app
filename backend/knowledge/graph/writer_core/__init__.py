@@ -26,11 +26,11 @@ from __future__ import annotations
 from backend.knowledge.graph.note import GardenNote
 from backend.knowledge.graph.writer_core._core import GardenWriter
 from backend.knowledge.graph.writer_core._entity_stub import (
-    _create_entity_stub,
+    _entity_stub_with_mention,
     _maturity_from_status,
+    _new_entity_stub,
     _rewrite_mentioned_in_section,
     _split_frontmatter,
-    _update_entity_stub_mentions,
 )
 from backend.knowledge.graph.writer_core._io import _WriterIOMixin
 from backend.knowledge.graph.writer_core._mutation import _WriterMutationMixin
@@ -44,9 +44,9 @@ __all__ = [
     "_WriterMutationMixin",
     "_WriterTombstoneMixin",
     "_WriterToolHandlersMixin",
-    "_create_entity_stub",
+    "_entity_stub_with_mention",
     "_maturity_from_status",
     "_rewrite_mentioned_in_section",
     "_split_frontmatter",
-    "_update_entity_stub_mentions",
+    "_new_entity_stub",
 ]

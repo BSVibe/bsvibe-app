@@ -111,7 +111,7 @@ Measured 2026-10-21.
 - **Two processes write it concurrently.** The API process writes product bootstrap, MCP note creation, decision resolution and connector imports. The worker process writes settle, intake originals and the retraction sweep. The only locks are `asyncio.Lock`s inside one process (`writer_core/_io.py` `_garden_lock`, `canonicalization/lock.py`). That this has not bitten yet is luck, not design.
 - **A seam exists but is bypassed.**
   - `knowledge/graph/storage.py` defines `StorageBackend` (`read`, `write`, `delete`, `exists`, `list_files`, `content_hash`). Its only implementation is `FileSystemStorage`.
-  - About 50 call sites in 19 files go around it with `Path` I/O. Examples: `writer_core/_io.py`, `_mutation.py`, `originals.py`, `ingest/file_index_reader.py`, `code_graph/graph.py`, `retrieval/ontology.py`, the MCP knowledge, skills and graph tools, and `/api/v1/inside`.
+  - Measured again while moving them: about 95 file operations in 27 knowledge files, plus the MCP, `/inside` and runtime callers, go around it with `Path` I/O. Examples: `writer_core/_io.py`, `_mutation.py`, `originals.py`, `ingest/file_index_reader.py`, `code_graph/graph.py`, `retrieval/ontology.py`, the MCP knowledge, skills and graph tools, and `/api/v1/inside`.
 - **Search rebuilds from the files.** `CanonicalizationIndex.initialize` scans every file on each construction. Semantic search returns vault paths from pgvector, then reads the files.
 - **Skills are files too.**
   - Layout: `var/skills/<workspace_id>/<slug>.md`.
@@ -127,7 +127,7 @@ Measured 2026-10-21.
   - `list_files(subdir, pattern)` becomes a prefix + glob query.
   - A batch `read_many` lets the index rebuild be one `SELECT` instead of N reads.
   - It passes the same contract tests as `FileSystemStorage`.
-- **Every vault and skills access goes through the seam.** The ~50 bypass sites move onto `StorageBackend` (with `delete_prefix` for the bootstrap-retry `rmtree`). An AST guard keeps new `Path` I/O out of the knowledge and skills code, the way the cross-tenant allowlist guards `'*'` reads.
+- **Every vault and skills access goes through the seam.** A note keeps its identity, an absolute `Path` under `vault.root`, so the ~214 `relative_to(root)` / `resolve_path` sites do not change. On rows, the root is only a name. Only the I/O moves: `Vault` gains `read`, `write`, `append`, `exists`, `delete`, `delete_tree`, `move` and a store-backed `read_notes`, and the bypass sites call those (with `delete_prefix` for the bootstrap-retry `rmtree`). An AST guard keeps new `Path` I/O out of the knowledge and skills code, the way the cross-tenant allowlist guards `'*'` reads.
 - **Locks become cross-process.** Each `asyncio.Lock` that guards a read-modify-write becomes a transaction-scoped Postgres advisory lock keyed by `(workspace, lock name)`. That fixes the two-writer race on one box as well.
 - **Derived state does not change.** `note_embeddings` keeps its `(workspace_id, note_path)` key, and reconcile reads `content_hash` from the row instead of hashing the file.
 - **The switch is one setting.**
@@ -153,7 +153,12 @@ Measured 2026-10-21.
 ### 5.5 Order of PRs
 
 1. `vault_documents` + RLS + `PgDocumentStorage`, behind the `StorageBackend` contract tests.
-2. Move the bypass sites onto the seam, area by area, plus the AST guard. No behaviour change on `filesystem`.
+2. Move the bypass sites onto the seam, one area per PR, with no behaviour change on `filesystem`:
+   - 2a: `Vault` I/O and the garden writer;
+   - 2b: one store factory (`backend.knowledge.vault_store`) and the `knowledge_store_backend` setting, with every hand-built store moved onto it;
+   - 2c: originals, ingest indexes, the code graph and the ontology;
+   - 2d: retrieval, MCP tools, `/inside` and skills;
+   - 2e: the AST guard on direct file I/O.
 3. Skills through the same seam.
 4. Advisory locks in place of the in-process locks.
 5. Import/export command, the `knowledge_store_backend` switch, and the cut-over runbook.

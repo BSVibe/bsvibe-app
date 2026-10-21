@@ -38,8 +38,8 @@ def _maturity_from_status(status: str) -> str:
     return mapping.get(status.strip().lower(), "seedling")
 
 
-def _create_entity_stub(file_path: Path, name: str, first_mention: str) -> None:
-    """Write a brand-new auto-stub file for ``[[name]]``."""
+def _new_entity_stub(name: str, first_mention: str) -> str:
+    """The text of a brand-new auto-stub for ``[[name]]``."""
     now_iso = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
     metadata = {
         "title": name,
@@ -55,21 +55,20 @@ def _create_entity_stub(file_path: Path, name: str, first_mention: str) -> None:
         "## Mentioned in\n\n"
         f"- [[{Path(first_mention).stem}]]\n"
     )
-    file_path.write_text(build_frontmatter(metadata) + body, encoding="utf-8")
+    return build_frontmatter(metadata) + body
 
 
-def _update_entity_stub_mentions(file_path: Path, mention: str) -> None:
-    """Append ``mention`` to an existing entity stub idempotently.
+def _entity_stub_with_mention(raw: str, mention: str) -> str | None:
+    """``raw`` with ``mention`` added idempotently — ``None`` when it is already there.
 
     Touches frontmatter ``mentions:`` always; rewrites the ``## Mentioned in``
     section only when the stub is still an auto-stub (the user hasn't taken
     it over yet).
     """
-    raw = file_path.read_text(encoding="utf-8")
     fm, body = _split_frontmatter(raw)
     mentions = list(fm.get("mentions") or [])
     if mention in mentions:
-        return
+        return None
     mentions.append(mention)
     fm["mentions"] = mentions
 
@@ -77,7 +76,7 @@ def _update_entity_stub_mentions(file_path: Path, mention: str) -> None:
     if is_auto_stub:
         body = _rewrite_mentioned_in_section(body, mentions)
 
-    file_path.write_text(build_frontmatter(fm) + body, encoding="utf-8")
+    return build_frontmatter(fm) + body
 
 
 def _split_frontmatter(raw: str) -> tuple[dict[str, Any], str]:

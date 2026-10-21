@@ -24,8 +24,8 @@ from backend.knowledge.graph.note import (
 )
 from backend.knowledge.graph.vault import Vault
 from backend.knowledge.graph.writer_core._entity_stub import (
-    _create_entity_stub,
-    _update_entity_stub_mentions,
+    _entity_stub_with_mention,
+    _new_entity_stub,
 )
 from backend.knowledge.graph.writer_core._seed_frontmatter import merge_seed_frontmatter
 
@@ -70,9 +70,8 @@ class _WriterIOMixin:
     ) -> None:  # pragma: no cover - implemented in GardenWriter
         ...
 
-    @staticmethod
-    def _find_dedup_path(
-        directory: Path, slug: str
+    async def _find_dedup_path(
+        self, directory: Path, slug: str
     ) -> Path:  # pragma: no cover - implemented in GardenWriter
         raise NotImplementedError
 
@@ -119,7 +118,6 @@ class _WriterIOMixin:
         date_str = now.strftime("%Y-%m-%d")
 
         source_dir = self._vault.resolve_path(f"seeds/{source}")
-        source_dir.mkdir(parents=True, exist_ok=True)
 
         metadata: dict[str, Any] = {
             "type": "seed",
@@ -145,10 +143,10 @@ class _WriterIOMixin:
         async with self._seed_lock:
             filename = now.strftime("%Y-%m-%d_%H%M%S") + ".md"
             file_path = source_dir / filename
-            if file_path.exists():
+            if await self._vault.exists(file_path):
                 slug = now.strftime("%Y-%m-%d_%H%M%S")
-                file_path = self._find_dedup_path(source_dir, slug)
-            await asyncio.to_thread(file_path.write_text, content, encoding="utf-8")
+                file_path = await self._find_dedup_path(source_dir, slug)
+            await self._vault.write(file_path, content)
 
         logger.info("seed_written", source=source, path=str(file_path))
         await emit_event(
@@ -180,11 +178,10 @@ class _WriterIOMixin:
             # Maturity-based layout: garden/seedling, /budding, /evergreen.
             folder = self._resolve_folder(note)
             type_dir = self._vault.resolve_path(folder)
-            type_dir.mkdir(parents=True, exist_ok=True)
 
             file_path = type_dir / f"{slug}.md"
-            if file_path.exists():
-                file_path = self._find_dedup_path(type_dir, slug)
+            if await self._vault.exists(file_path):
+                file_path = await self._find_dedup_path(type_dir, slug)
 
             related_links = [f"[[{r}]]" for r in note.related]
 
@@ -219,7 +216,7 @@ class _WriterIOMixin:
             frontmatter = build_frontmatter(metadata)
             content = f"{frontmatter}\n# {note.title}\n\n{note.content}\n"
 
-            await asyncio.to_thread(file_path.write_text, content, encoding="utf-8")
+            await self._vault.write(file_path, content)
 
         logger.info(
             "garden_note_written",
@@ -248,7 +245,6 @@ class _WriterIOMixin:
 
         async with self._garden_lock:
             entities_dir = self._vault.resolve_path("garden/entities")
-            entities_dir.mkdir(parents=True, exist_ok=True)
             file_path = entities_dir / f"{slug}.md"
 
             try:
@@ -257,10 +253,12 @@ class _WriterIOMixin:
             except ValueError:
                 rel_str = str(mentioned_in)
 
-            if file_path.exists():
-                _update_entity_stub_mentions(file_path, rel_str)
+            if await self._vault.exists(file_path):
+                updated = _entity_stub_with_mention(await self._vault.read(file_path), rel_str)
+                if updated is not None:
+                    await self._vault.write(file_path, updated)
             else:
-                _create_entity_stub(file_path, clean, rel_str)
+                await self._vault.write(file_path, _new_entity_stub(clean, rel_str))
 
         logger.debug("entity_stub_ensured", name=clean, path=str(file_path))
         return file_path
@@ -272,7 +270,6 @@ class _WriterIOMixin:
         time_str = now.strftime("%H:%M:%S")
 
         actions_dir = self._vault.resolve_path("actions")
-        actions_dir.mkdir(parents=True, exist_ok=True)
 
         if len(summary) > _MAX_ACTION_SUMMARY:
             truncated = summary[:_MAX_ACTION_SUMMARY] + "…"
@@ -281,15 +278,8 @@ class _WriterIOMixin:
         log_path = actions_dir / f"{date_str}.md"
         entry = f"- **{time_str}** | `{skill_name}` | {truncated}\n"
 
-        def _write() -> None:
-            if log_path.exists():
-                with log_path.open("a", encoding="utf-8") as f:
-                    f.write(entry)
-            else:
-                log_path.write_text(f"# Actions — {date_str}\n\n" + entry, encoding="utf-8")
-
         async with self._log_lock:
-            await asyncio.to_thread(_write)
+            await self._vault.append(log_path, entry, header=f"# Actions — {date_str}\n\n")
         logger.info("action_logged", skill_name=skill_name, path=str(log_path))
         await emit_event(
             self._event_bus, "ACTION_LOGGED", {"path": str(log_path), "source": skill_name}
@@ -302,21 +292,13 @@ class _WriterIOMixin:
         time_str = now.strftime("%H:%M:%S")
 
         log_dir = self._vault.resolve_path("actions/input-log")
-        await asyncio.to_thread(log_dir.mkdir, parents=True, exist_ok=True)
 
         log_path = log_dir / f"{date_str}.md"
         truncated = raw_text[:500] if len(raw_text) > 500 else raw_text
         entry = f"- **{time_str}** | `{source}` | {truncated}\n"
 
-        def _write() -> None:
-            if log_path.exists():
-                with log_path.open("a", encoding="utf-8") as f:
-                    f.write(entry)
-            else:
-                log_path.write_text(f"# Input Log — {date_str}\n\n" + entry, encoding="utf-8")
-
         async with self._log_lock:
-            await asyncio.to_thread(_write)
+            await self._vault.append(log_path, entry, header=f"# Input Log — {date_str}\n\n")
         logger.debug("input_log_written", source=source, path=str(log_path))
 
     async def read_notes(self, subdir: str) -> list[Path]:
