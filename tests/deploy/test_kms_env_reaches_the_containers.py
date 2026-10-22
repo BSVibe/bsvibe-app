@@ -47,6 +47,20 @@ def test_the_kms_variable_reaches_the_service(service: str, name: str) -> None:
     assert name in _env(service), f"{name} never reaches the {service} container"
 
 
+def test_runbook_rewrap_runs_in_the_app_venv_against_the_prod_context() -> None:
+    runbook = (_REPO / "docs" / "runbook" / "secret-rotation.md").read_text(encoding="utf-8")
+    pattern = (
+        r"docker( --context \S+)? exec -w /app \S+ "
+        r"/app/\.venv/bin/python -m backend\.router\.accounts\.rewrap"
+    )
+
+    commands = re.findall(rf"^{pattern}.*$", runbook, flags=re.MULTILINE)
+
+    assert len(commands) == 2
+    # The server's default docker context is not prod: every prod command names its context.
+    assert all(c == " --context colima" for c in commands)
+
+
 @pytest.mark.parametrize("service", ["backend", "worker"])
 def test_previous_keys_are_optional(service: str) -> None:
     value = _env(service)["BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64"]
