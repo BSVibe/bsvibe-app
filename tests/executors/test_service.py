@@ -224,6 +224,32 @@ async def test_register_worker_executor_accounts_are_idempotent() -> None:
         assert {r.id for r in after} == {r.id for r in before}
 
 
+async def test_register_same_name_while_old_worker_active_conflicts() -> None:
+    async with memory_session() as s:
+        old, _ = await _register(s, name="mac", capabilities=["claude_code", "opencode"])
+        with pytest.raises(service.WorkerNameConflictError):
+            await _register(
+                s,
+                workspace_id=old.workspace_id,
+                name="mac",
+                capabilities=["claude_code", "opencode"],
+            )
+
+
+async def test_register_same_name_after_revoke_succeeds() -> None:
+    async with memory_session() as s:
+        old, _ = await _register(s, name="mac", capabilities=["claude_code", "opencode"])
+        await service.revoke_worker(s, workspace_id=old.workspace_id, worker_id=old.id)
+        new, _ = await _register(
+            s,
+            workspace_id=old.workspace_id,
+            name="mac",
+            capabilities=["claude_code", "opencode"],
+        )
+        assert new.id != old.id
+        assert len(await _executor_accounts(s, old.workspace_id)) == 2
+
+
 async def test_revoke_worker_removes_executor_model_accounts() -> None:
     async with memory_session() as s:
         worker, _ = await _register(s, name="laptop-1", capabilities=["claude_code", "codex"])

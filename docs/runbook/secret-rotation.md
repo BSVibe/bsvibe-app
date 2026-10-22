@@ -154,8 +154,10 @@ docker exec -i bsvibe-prod-postgres-1 psql -U bsvibe -d bsvibe \
 
 ## 2b. `BSVIBE_WORKER_TOKEN` — launchd 워커 (2026-09-23 추가)
 
-`.env.prod` 가 아니라 **launchd plist 의 `EnvironmentVariables`** 에 산다.
-`~/Library/LaunchAgents/com.bsvibe.worker-<name>.plist`.
+워커 토큰은 `.env.prod` 가 아니라 **호스트의 `~/.bsvibe/worker.token`** (0600) 에 산다.
+`bsvibe-worker register` 가 이 파일을 쓰고, launchd 워커가 이 파일을 읽는다.
+plist(`~/Library/LaunchAgents/com.bsvibe.worker-<name>.plist`) 의 `EnvironmentVariables` 에는
+토큰이 없다.
 
 > 🚨 **이 절이 생긴 이유.** 2026-09-23 에 에이전트가 plist 인자를 훑다가 그 토큰을
 > **자기 도구 출력에 평문으로 찍었다.** #935 가 기록한 2026-09-10 사고와 **같은 모양**이다
@@ -164,25 +166,31 @@ docker exec -i bsvibe-prod-postgres-1 psql -U bsvibe -d bsvibe \
 
 ### 절차
 
-```bash
-# 0. 지금 등록된 워커를 확인한다 (id 가 필요하다)
-#    MCP: bsvibe_workers_list   /   PWA: 설정 → Workers
+같은 이름으로 재등록하면 옛 워커가 활성인 동안은 서버가 **409** 로 거부한다
+(`uq_model_account_label`). 그래서 **옛 워커를 먼저 폐기**한다.
 
-# 1. 새 토큰을 발급한다 — 이 호스트에서
-bsvibe-worker register --name <name>
+```bash
+# 1. 옛 워커를 폐기한다 (옛 토큰이 즉시 죽는다)
+#    PWA: 설정 → Workers → revoke   /   MCP: bsvibe_workers_revoke(worker_id=<옛 id>)
+#    수동으로 만든 모델 계정(opus/sonnet 등)은 남고, 같은 이름으로 재등록하면 새 worker_id 로 이관된다
+
+# 2. 로그인 (모바일에서 승인하려면 --device)
+bsvibe login --device
+
+# 3. 새 토큰을 발급한다 — 이 호스트에서
+#    ⚠️ BSVIBE_WORKER_SERVER_URL 이 없으면 기본값 http://localhost:8400 에 붙어 ConnectError 가 난다.
+#    (`bsvibe login` 은 issuer 를 따로 알아서 성공하므로 헷갈리기 쉽다)
+BSVIBE_WORKER_SERVER_URL=https://api.bsvibe.dev \
+  bsvibe-worker register --name <name> --capabilities claude_code,opencode
 #    토큰은 한 번만 보인다. token_urlsafe(32) 이고 서버에는 sha256 만 저장된다
 #    (backend/executors/service.py: _hash_token / register_worker_for_workspace)
+#    ~/.bsvibe/worker.token 과 ~/.bsvibe/config.json 이 갱신된다
 
-# 2. plist 의 EnvironmentVariables.BSVIBE_WORKER_TOKEN 을 새 값으로 바꾼다
-#    ⚠️ 권한도 같이 좁혀라 — 기본이 -rw-r--r-- 라 로컬 누구나 읽는다
-chmod 600 ~/Library/LaunchAgents/com.bsvibe.worker-<name>.plist
-
-# 3. ⚠️ plist 를 고쳤으면 kickstart 로는 안 먹는다
+# 4. 토큰 파일 권한을 좁히고 launchd 워커를 재시작한다
+chmod 600 ~/.bsvibe/worker.token
 launchctl bootout   gui/501/com.bsvibe.worker-<name>
+sleep 3   # ⚠️ 바로 bootstrap 하면 `5: Input/output error`
 launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.bsvibe.worker-<name>.plist
-
-# 4. 옛 워커 행을 폐기한다
-#    MCP: bsvibe_workers_revoke(worker_id=<옛 id>)
 ```
 
 ### 검증 — 양성과 음성을 **둘 다**
