@@ -43,7 +43,7 @@ import structlog
 
 from backend.executors.worker.claude_auth import default_oauth_path as default_claude_oauth_path
 from backend.executors.worker.claude_login import ClaudeLoginError, run_claude_login
-from backend.executors.worker.config import get_worker_settings
+from backend.executors.worker.config import WorkerSettings, get_worker_settings
 from backend.executors.worker.credentials import (
     CredentialsNotFound,
     HostCredentials,
@@ -697,7 +697,14 @@ async def _register_once(args: argparse.Namespace) -> int:
         return 1
     bearer = creds.access_token
 
-    async with httpx.AsyncClient(base_url=settings.server_url, timeout=30.0) as client:
+    # ``bsvibe login`` already knows the server (its issuer IS the API). Only an
+    # unset ``BSVIBE_WORKER_SERVER_URL`` falls back to it — an explicit value wins,
+    # and the localhost default must not shadow the host the user just signed in to.
+    server_url = settings.server_url
+    if server_url == WorkerSettings.model_fields["server_url"].default and creds.issuer:
+        server_url = creds.issuer.rstrip("/")
+
+    async with httpx.AsyncClient(base_url=server_url, timeout=30.0) as client:
         try:
             token = await register(
                 client,
@@ -712,6 +719,14 @@ async def _register_once(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+        except httpx.ConnectError as exc:
+            print(
+                f"register failed: cannot reach {server_url} ({exc}).\n"
+                "Hint: set BSVIBE_WORKER_SERVER_URL to the API server "
+                "(e.g. https://api.bsvibe.dev).",
+                file=sys.stderr,
+            )
+            return 1
 
     saved = save_worker_token(token)
     # Lift E12 — persist register-time config to ``~/.bsvibe/config.json`` so
@@ -722,7 +737,7 @@ async def _register_once(args: argparse.Namespace) -> int:
         name=args.name,
         capabilities=capabilities,
         labels=labels,
-        server_url=settings.server_url,
+        server_url=server_url,
         saved_at=int(time.time()),
     )
     config_path = save_worker_config(config)
