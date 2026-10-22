@@ -389,7 +389,10 @@ async def ship_if_delivered(session: AsyncSession, run: ExecutionRun) -> bool:
         SafeModeStatus,
     )
 
-    if not _should_ship_review_ready_without_local_auto_ship(run):
+    # Already waiting for its PR to merge: the merge watch's conclusion moves it on. Touching it
+    # again rewrote the payload (bumping ``updated_at``) on every sweep tick.
+    awaiting_merge = isinstance(run.payload, dict) and AWAITING_MERGE_KEY in run.payload
+    if awaiting_merge or not _should_ship_review_ready_without_local_auto_ship(run):
         return False
 
     async def _exists(stmt: Any) -> bool:
@@ -422,10 +425,10 @@ async def ship_if_delivered(session: AsyncSession, run: ExecutionRun) -> bool:
     if still_out:
         return False
     reason = "auto-resolved: its output was already delivered (no local auto-ship path)"
-    if not (
-        await _await_merge_if_watched(session, run)
-        or await move_run_status(session, run, RunStatus.SHIPPED, reason=reason)
-    ):
+    if await _await_merge_if_watched(session, run):
+        # Marked, not shipped: ``run_awaiting_merge`` is the only log, and it is not a ship.
+        return False
+    if not await move_run_status(session, run, RunStatus.SHIPPED, reason=reason):
         return False
     logger.info("run_shipped_after_earlier_delivery", run_id=str(run.id))
     return True
