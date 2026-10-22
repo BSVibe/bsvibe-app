@@ -24,10 +24,13 @@
 
 ## B. 배포 후 (prod)
 
-- [ ] `alembic_version` = `telegram_approval_allowlist`
-- [ ] **무중단 확인**: prod 텔레그램 계정의 `delivery_config` 에
+- [x] `alembic_version` = `telegram_approval_allowlist` — 직접 읽지 않았다(에이전트는 prod DB 금지).
+      아래 행이 그 마이그레이션만 쓸 수 있는 값이라 그것으로 판정 (2026-10-22)
+- [x] **무중단 확인**: prod 텔레그램 계정의 `delivery_config` 에
       `authorized_user_ids: ["8242700007"]` 가 생겼고 `chat_id` 는 그대로다.
       ⚠️ 배포 전 값(`chat_id` 만 있음)을 같이 적어라
+      → 2026-10-22 MCP `bsvibe_connectors_list`: 전(#1046 본문 기준) `{"chat_id": "8242700007"}` ·
+      후 `{"chat_id": "8242700007", "authorized_user_ids": ["8242700007"]}`
 - [ ] **1:1 승인이 여전히 된다** — 딜리버러블 하나를 1:1 에서 승인. 이게 무중단의 증명이다
 - [ ] **그룹방 승인이 새로 된다** — 그룹에 바인딩을 걸고 카드를 받아 탭.
       ⚠️ 형님 손이 필요하다(그룹방 생성 + 바인딩)
