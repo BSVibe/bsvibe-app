@@ -27,6 +27,7 @@ from backend.workflow.application._loop_context import (
     system_prompt_for,
 )
 from backend.workflow.application._loop_turn import failed_round_messages, take_turn
+from backend.workflow.application._remote_work import remote_work_state, sync_remote_tool_state
 from backend.workflow.application.audit_events import (
     DecisionPending,
     LlmTurn,
@@ -36,6 +37,7 @@ from backend.workflow.application.audit_events import (
 )
 from backend.workflow.application.inplace_gate import (
     capture_inplace_baseline,
+    capture_run_baseline,
     reconcile_written_paths,
 )
 from backend.workflow.application.round_budget import (
@@ -58,6 +60,7 @@ from backend.workflow.application.tool_registry import (
 from backend.workflow.application.undeclared_verification import (
     settle_undeclared_verification,
 )
+from backend.workflow.application.verify_stall import settle_stalled_verification, stall_question
 from backend.workflow.domain import request_review as _review
 from backend.workflow.domain.emit_deliverable import (
     EMIT_DELIVERABLE_NAME,
@@ -98,42 +101,6 @@ async def _pending_question(session: Any, run: ExecutionRun) -> Decision | None:
         )
     )
     return rows.scalars().first()  # type: ignore[no-any-return]
-
-
-async def _remote_work_state(orch: RunOrchestrator, run: ExecutionRun) -> dict[str, Any] | None:
-    """The work-tool state the MCP transport committed for this run — read FRESH.
-
-    The MCP handlers run in the API process and commit there, so the loop's own ORM copy of the
-    run never learns about it. Select the column rather than refreshing the instance: the loop
-    mutates ``run`` itself, and a refresh would clobber its pending changes.
-    """
-    from sqlalchemy import select  # noqa: PLC0415
-
-    rows = await orch._session.execute(
-        select(ExecutionRun.payload).where(ExecutionRun.id == run.id)
-    )
-    payload = rows.scalar_one_or_none() or {}
-    state = payload.get(WORK_TOOL_STATE_KEY)
-    return state if isinstance(state, dict) else None
-
-
-async def _sync_remote_tool_state(
-    registry: Any, written_paths: list[str], *, state: dict[str, Any] | None
-) -> None:
-    """Teach the loop's registry what the agent did through the MCP work tools.
-
-    Restores the same per-run latches the MCP transport persists — the declared contract, the
-    grounding, the declared knowledge — and merges the paths the agent WROTE into the loop's
-    accumulator, which becomes the verified Deliverable's ``artifact_refs``.
-
-    Idempotent: it runs every turn, and both the registry and ``written_paths`` dedupe.
-    """
-    if not state:
-        return
-    registry.restore_state(state)
-    for path in registry.written_paths:
-        if path not in written_paths:
-            written_paths.append(path)
 
 
 async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle body
@@ -214,6 +181,8 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     final_text = ""
     no_work_nudges = 0
     fail_streak = 0
+    last_failure: str | None = None
+    repeats = 0
     # #692 — a client_attach run works in the founder's own directory on the worker
     # (through BSVibe's tools, backed by ``ClientWorkerSandboxSession``), so the
     # server holds no copy of the source and settles on the in-place gate rather
@@ -230,8 +199,11 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     # the #632/#686/#680 outage shape (proven by test_session_release.py's
     # 1-connection parking test).
     await orch._session.commit()
-    run_baseline = await capture_inplace_baseline(box)
-    inplace_baseline = run_baseline if getattr(box, "runs_in_place", False) else None
+    # client_attach: the founder's own checkout, HEAD is its start. Otherwise the branch point
+    # from main, so a REOPENED run keeps its own earlier commits (``capture_run_baseline``).
+    in_place = getattr(box, "runs_in_place", False)
+    run_baseline = await (capture_inplace_baseline(box) if in_place else capture_run_baseline(box))
+    inplace_baseline = run_baseline if in_place else None
 
     # ``round_budget_cap`` is re-evaluated every iteration (see ``round_budget.py``):
     # the agent's declared round_budget can change MID-RUN, so a plain
@@ -272,10 +244,10 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         #
         # The registry already exports that state and the MCP transport already persists it on
         # the run. The loop simply never read it back. A LiteLLM run persists none: no-op.
-        await _sync_remote_tool_state(
+        await sync_remote_tool_state(
             registry,
             written_paths,
-            state=await _remote_work_state(orch, run),
+            state=await remote_work_state(orch, run),
         )
         await tracker.sync(orch, run, attempt, registry)
         await orch._record(
@@ -541,11 +513,26 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         # entirely its own passing commands. It read "FAILED: [everything
         # passed]" and repeated the identical failure 16 times.
         vresult = verdict.result if isinstance(verdict.result, dict) else {}
+        failure = render_verification_failure(vresult)
+        # A verdict the agent cannot move is the founder's to settle (see ``verify_stall``).
+        if (stalled := stall_question(failure, repeats=repeats)) is not None:
+            return await settle_stalled_verification(
+                orch,
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                stalled=stalled,
+                written_paths=written_paths,
+                final_text=final_text,
+                stats=round_budget_stats(orch, registry, _cycle),
+            )
+        repeats = repeats + 1 if failure == last_failure else 0
+        last_failure = failure
         hint = _review.stuck_review_hint(count=(fail_streak := fail_streak + 1), run=run)
         messages.extend(
             failed_round_messages(
                 report=turn.content,
-                failure=render_verification_failure(vresult),
+                failure=failure,
                 written_paths=written_paths,
                 hint=hint,
             )

@@ -54,6 +54,17 @@ DERIVER_FAILED = (
 )
 
 
+#: The gate was EXPECTED (a toolchain manifest is present) yet the deriver produced zero commands.
+#: ``verification_service`` fails this closed, and every check the agent declared can pass while it
+#: does — so without this line the agent is told nothing happened and goes round again (f7c5b4d1).
+GATE_DERIVED_EMPTY = (
+    "The repo has a toolchain manifest, so a verification gate was expected, but the harness "
+    "derived ZERO gate commands from it. Your declared checks passed; that does not count in "
+    "place of a gate. This is a failure of the verification system, NOT of your work — do not "
+    "change code to compensate; say so in your summary so the founder can look at the harness."
+)
+
+
 def _clip(text: str, limit: int) -> str:
     """Keep both ends of *text* and state what was dropped.
 
@@ -127,6 +138,8 @@ def _sections(result: Mapping[str, Any]) -> list[str]:
     if isinstance(gate, Mapping):
         for cmd in _failed(gate.get("commands") or []):
             sections.append(_command_block(cmd, label="GATE COMMAND FAILED"))
+        if result.get("gate_expected") and not gate.get("commands"):
+            sections.append(GATE_DERIVED_EMPTY)
     else:
         # 1b. The gate did not merely fail — it could not be BUILT. Same
         #     authority slot, because it is the same verdict source, and it is
