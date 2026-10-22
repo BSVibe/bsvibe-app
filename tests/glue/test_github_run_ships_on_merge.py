@@ -319,3 +319,62 @@ async def test_a_free_text_reply_on_a_stalled_run_does_not_re_drive_it(sf) -> No
         await s.commit()
 
     assert (await _run(sf, workspace_id, run_id)).status is RunStatus.REVIEW_READY
+
+
+# ── the sweep leaves a run that is already awaiting merge alone ──────────────
+
+
+async def _mark_delivered(sf_: Any, workspace_id: uuid.UUID, deliverable_id: uuid.UUID) -> None:
+    async with sf_() as s, workspace_session_scope(s, workspace_id):
+        deliverable = await s.get(Deliverable, deliverable_id)
+        assert deliverable is not None
+        deliverable.delivered_at = datetime.now(tz=UTC)
+        await s.commit()
+
+
+async def test_the_sweep_marks_a_watched_run_once_and_then_leaves_it_alone(sf) -> None:
+    from structlog.testing import capture_logs
+
+    from backend.workflow.application.run_delivery_resolution import (
+        ship_delivered_review_ready_runs,
+    )
+
+    workspace_id, run_id, deliverable_id = await _seed(sf)
+    await _mark_delivered(sf, workspace_id, deliverable_id)
+
+    with capture_logs() as first_logs:
+        async with sf() as s:
+            first = await ship_delivered_review_ready_runs(s)
+    marked = await _run(sf, workspace_id, run_id)
+
+    assert first == 0  # marking is not shipping
+    assert marked.status is RunStatus.REVIEW_READY
+    assert marked.payload[AWAITING_MERGE_KEY] == {"repo": "acme/site", "pr_number": 9}
+    events = [log["event"] for log in first_logs]
+    assert events.count("run_awaiting_merge") == 1
+    assert "run_shipped_after_earlier_delivery" not in events
+
+    with capture_logs() as second_logs:
+        async with sf() as s:
+            second = await ship_delivered_review_ready_runs(s)
+    again = await _run(sf, workspace_id, run_id)
+
+    assert second == 0
+    assert second_logs == []
+    assert again.updated_at == marked.updated_at
+    assert again.payload == marked.payload
+
+
+async def test_the_sweep_still_ships_an_unwatched_run(sf) -> None:
+    from backend.workflow.application.run_delivery_resolution import (
+        ship_delivered_review_ready_runs,
+    )
+
+    workspace_id, run_id, deliverable_id = await _seed(sf, watch=None)
+    await _mark_delivered(sf, workspace_id, deliverable_id)
+
+    async with sf() as s:
+        shipped = await ship_delivered_review_ready_runs(s)
+
+    assert shipped == 1
+    assert (await _run(sf, workspace_id, run_id)).status is RunStatus.SHIPPED
