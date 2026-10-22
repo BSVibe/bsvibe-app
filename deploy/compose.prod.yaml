@@ -64,6 +64,8 @@ services:
       BSVIBE_WORKER_MODE: ${BSVIBE_WORKER_MODE:-db_polling}
       BSVIBE_GIT_SHA: ${GIT_SHA:-prod}
       BSVIBE_GATEWAY_KMS_KEY_B64: ${BSVIBE_GATEWAY_KMS_KEY_B64:?set BSVIBE_GATEWAY_KMS_KEY_B64}
+      # Retired keys, decrypt-only. Empty outside a rotation window (runbook §3).
+      BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64: ${BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64:-}
       BSVIBE_SUPABASE_URL: ${BSVIBE_SUPABASE_URL:?set BSVIBE_SUPABASE_URL}
       BSVIBE_SUPABASE_PUBLISHABLE_KEY: ${BSVIBE_SUPABASE_PUBLISHABLE_KEY:?set BSVIBE_SUPABASE_PUBLISHABLE_KEY}
       # Browser PWA (app.bsvibe.dev) calls the backend cross-origin; this list is
@@ -166,6 +168,8 @@ services:
       BSVIBE_WORKER_MODE: ${BSVIBE_WORKER_MODE:-db_polling}
       BSVIBE_GIT_SHA: ${GIT_SHA:-prod}
       BSVIBE_GATEWAY_KMS_KEY_B64: ${BSVIBE_GATEWAY_KMS_KEY_B64:?set BSVIBE_GATEWAY_KMS_KEY_B64}
+      # Retired keys, decrypt-only. Empty outside a rotation window (runbook §3).
+      BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64: ${BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64:-}
       BSVIBE_SUPABASE_URL: ${BSVIBE_SUPABASE_URL:?set BSVIBE_SUPABASE_URL}
       BSVIBE_SUPABASE_PUBLISHABLE_KEY: ${BSVIBE_SUPABASE_PUBLISHABLE_KEY:?set BSVIBE_SUPABASE_PUBLISHABLE_KEY}
       # The AuthDependencyWorker probes the user-JWT key source from HERE, so it

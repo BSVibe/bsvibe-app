@@ -86,7 +86,7 @@ docker exec bsvibe-prod-postgres-1 sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES
 | `BSVIBE_REDIS_PASSWORD` | ✅ | 워커 디스패치·스트림 | **시끄럽다** |
 | `BSVIBE_OAUTH_PRIVATE_KEY_PEM` | ⚠️ 미검증 | 발급된 액세스 토큰 전부 무효화 | 시끄럽다(401) |
 | `BSVIBE_PRODUCT_BUNDLE_S3_*` | ✅ | 번들 저장/조회 | 시끄럽다 |
-| **`BSVIBE_GATEWAY_KMS_KEY_B64`** | ❌ **절차로 불가** | 아래 §3 | ❌ **조용하다** |
+| **`BSVIBE_GATEWAY_KMS_KEY_B64`** | ✅ #957 이후 가능 (PREVIOUS 키 + rewrap) | 아래 §3 | ⚠️ 절차를 건너뛰면 조용하다 (`UnknownCredentialKey`) |
 | `BSVIBE_WORKER_TOKEN` (launchd plist) | ✅ 아래 §2b | 그 워커 한 대 | **시끄럽다** — 401 |
 
 ---
@@ -267,8 +267,8 @@ BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64=<old>
 # 3. recreate backend + worker (both decrypt). Everything still reads; new writes use <new>.
 
 # 4. dry run, then apply — as the OWNER role, inside the backend container
-docker --context colima exec bsvibe-prod-backend-1 python -m backend.router.accounts.rewrap
-docker --context colima exec bsvibe-prod-backend-1 python -m backend.router.accounts.rewrap --apply
+docker --context colima exec -w /app bsvibe-prod-backend-1 /app/.venv/bin/python -m backend.router.accounts.rewrap
+docker --context colima exec -w /app bsvibe-prod-backend-1 /app/.venv/bin/python -m backend.router.accounts.rewrap --apply
 #    → "current N · rewrapped M · undecryptable 0", exit 0
 
 # 5. ONLY when step 4 exited 0: remove the old key and recreate again
