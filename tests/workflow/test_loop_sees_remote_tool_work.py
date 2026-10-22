@@ -26,7 +26,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.workflow.application._drive_loop import _sync_remote_tool_state
+from backend.workflow.application._remote_work import (
+    sync_remote_tool_state as _sync_remote_tool_state,
+)
 from backend.workflow.application.tool_registry import WORK_TOOL_STATE_KEY
 from backend.workflow.infrastructure.tools import ToolRegistry
 

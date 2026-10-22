@@ -70,6 +70,27 @@ async def capture_inplace_baseline(box: SandboxSession) -> str | None:
     return head[0].strip() if head and head[0].strip() else None
 
 
+async def capture_run_baseline(box: SandboxSession) -> str | None:
+    """Where the run's branch left main (``main...HEAD``'s merge-base), else ``HEAD``.
+
+    ``HEAD`` is only the right baseline for a run that has not committed yet. A run REOPENED
+    after a rejection starts with its own first attempt already on the branch, and reading
+    ``HEAD`` then makes ``baseline..HEAD`` erase that attempt from the changed-file list
+    (``f7c5b4d1``: a ``.py`` committed the first time vanished once only the docs were fixed).
+    The merge-base keeps the run's own commits, and — after a rebase onto a moved main — leaves
+    main's other commits out. No ``main`` ref to measure from falls back to ``HEAD``.
+    """
+    for ref in ("main", "origin/main"):
+        try:
+            res = await box.exec(f"git merge-base HEAD {ref}", timeout_s=_GIT_TIMEOUT_S, shell=True)
+        except Exception:  # noqa: BLE001 — an unreachable machine simply has no baseline
+            break
+        lines = res.stdout.strip().splitlines()
+        if not res.timed_out and res.exit_code == 0 and lines and lines[0].strip():
+            return lines[0].strip()
+    return await capture_inplace_baseline(box)
+
+
 def _porcelain_paths(stdout: str) -> set[str]:
     """Paths out of ``git status --porcelain`` (renames at their NEW name)."""
     paths: set[str] = set()
@@ -498,6 +519,7 @@ async def _persist(
 
 __all__ = [
     "capture_inplace_baseline",
+    "capture_run_baseline",
     "changed_paths",
     "gate_failure_is_actionable",
     "run_inplace_gate",

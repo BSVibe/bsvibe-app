@@ -40,6 +40,7 @@ from backend.workflow.application.sandbox_provisioning import ensure_sandbox_rea
 from backend.workflow.domain.gate_derivation import (
     DerivedGate,
     derivation_planner_messages,
+    founder_decisions_from_payload,
     parse_derived_gate,
     surface_exercised,
 )
@@ -1107,6 +1108,9 @@ class VerificationService:
                         intent=intent,
                         baseline=baseline,
                         ci_declarations=ci_declarations,
+                        # The gate is re-derived on EVERY verification, so a founder's answer
+                        # that is not passed here binds only the agent (f7c5b4d1).
+                        founder_decisions=founder_decisions_from_payload(run.payload),
                     ),
                 ),
                 timeout=_VERIFY_LLM_TIMEOUT_S,

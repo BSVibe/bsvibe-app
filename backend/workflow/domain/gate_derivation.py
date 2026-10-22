@@ -178,9 +178,31 @@ _DERIVATION_SYSTEM_PROMPT = (
     'to run: "produced no output" is not the same as "has nothing to prove", and '
     "whether the constraint held is exactly what is left to prove. An intent carrying "
     "one is therefore applicable.\n"
+    "FOUNDER DECISIONS, when given, are the founder's own answers to questions this run asked "
+    "(or the reason they denied its result). They OVERRIDE the task intent wherever the two "
+    "disagree: the intent only implied a check, the founder has since ruled on it. If a decision "
+    "rejects, relaxes or replaces a check the intent suggests, NEVER emit that check — emit what "
+    "the founder chose instead, or nothing if they chose nothing.\\n"
     'Output ONLY a JSON object: {"applicable": bool, "commands": [ {"command": '
     'str, "kind": "quality"|"test"|"surface", "rationale": str} ]}. No prose.'
 )
+
+
+def founder_decisions_from_payload(payload: Any) -> list[dict[str, str]]:
+    """The founder's answers a run has accumulated, as the deriver should read them.
+
+    ``payload["resolved_decisions"]`` is where both a Decision answer and a denial reason land
+    (``checkpoint_resolution`` / ``safe_mode_queue``). An entry without an answer says nothing
+    and is dropped.
+    """
+    resolved = payload.get("resolved_decisions") if isinstance(payload, Mapping) else None
+    if not isinstance(resolved, list):
+        return []
+    return [
+        {"question": str(e.get("question") or ""), "answer": str(e["answer"])}
+        for e in resolved
+        if isinstance(e, Mapping) and e.get("answer")
+    ]
 
 
 def derivation_planner_messages(
@@ -190,6 +212,7 @@ def derivation_planner_messages(
     intent: str,
     baseline: str | None = None,
     ci_declarations: dict[str, str] | None = None,
+    founder_decisions: Sequence[Mapping[str, str]] | None = None,
 ) -> list[dict[str, str]]:
     """Build the (system, user) message pair grounding the deriver in the repo.
 
@@ -229,8 +252,18 @@ def derivation_planner_messages(
         if baseline
         else ""
     )
+    decisions_block = (
+        "Founder decisions on this run (they override the task intent above):\n"
+        + "\n".join(
+            f"- Q: {d.get('question', '')}\n  A: {d.get('answer', '')}" for d in founder_decisions
+        )
+        + "\n\n"
+        if founder_decisions
+        else ""
+    )
     user = (
         f"Task intent:\n{intent}\n\n"
+        f"{decisions_block}"
         f"{baseline_block}"
         f"Files changed by this work step:\n{changed_block}\n\n"
         f"The repository's own declarations:\n{manifest_block}"
@@ -247,6 +280,7 @@ __all__ = [
     "DerivedCommand",
     "DerivedGate",
     "derivation_planner_messages",
+    "founder_decisions_from_payload",
     "parse_derived_gate",
     "surface_exercised",
 ]
