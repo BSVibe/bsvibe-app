@@ -162,6 +162,10 @@ Everything #929 is gated on `BSVIBE_MACHINE_ID`; prod leaves it empty, so the si
 ## §Ⅲ — Next
 
 0. **10-26 (Mon) 00:30 UTC weekly run** — must end `shipped` with one Telegram message, no human step (#1180).
+   Also: BStockReport (`6c19a033`) was bootstrapped shallow before #1198, so the reclaim sweep logs
+   `product_bundle_publish_skipped_shallow` every 5 min (it publishes without a credential, and correctly keeps the repo).
+   The ship passes the GitHub credential and should unshallow it — after 10-26 that warning should stop. If it does
+   not, the repo cannot reach the bundle store and blocks a second machine for that product.
 1. **#929 turn-on (형님, prod exec)** — in this order, each checked before the next:
    1. vault cut-over: `docs/runbook/vault-to-postgres.md` (import `--dry-run` → stop backend + worker →
       import → `BSVIBE_KNOWLEDGE_STORE_BACKEND=postgres` → start; old directories kept untouched for a week);
