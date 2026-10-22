@@ -267,8 +267,8 @@ BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64=<old>
 # 3. recreate backend + worker (both decrypt). Everything still reads; new writes use <new>.
 
 # 4. dry run, then apply — as the OWNER role, inside the backend container
-docker --context colima exec bsvibe-prod-backend-1 python -m backend.router.accounts.rewrap
-docker --context colima exec bsvibe-prod-backend-1 python -m backend.router.accounts.rewrap --apply
+docker --context colima exec bsvibe-prod-backend-1 /app/.venv/bin/python -m backend.router.accounts.rewrap
+docker --context colima exec bsvibe-prod-backend-1 /app/.venv/bin/python -m backend.router.accounts.rewrap --apply
 #    → "current N · rewrapped M · undecryptable 0", exit 0
 
 # 5. ONLY when step 4 exited 0: remove the old key and recreate again
