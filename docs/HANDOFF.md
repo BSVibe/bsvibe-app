@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-21
+# BSVibe session handoff — 2026-10-22
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,9 +21,29 @@
 
 ---
 
-## §0 — One line: **a run can move between machines without losing its work; codex is on the MCP surface; cloud sessions see the rules**
+## §0 — One line: **#929's code is done — the vault and skills can live in Postgres, and a second machine no longer loses work; turning it on is 형님's step**
 
-10-19 → 10-21 (this session). Every GitHub write went pause → act → CI green → merge → no new run → restore (§Ⅳ).
+10-21 → 10-22. All five deployed (`bsvibe-app.deployed` = `0e03c308`), host worker restarted 10-21 16:25 KST.
+
+| PR | What | Prod check |
+|---|---|---|
+| #1195 | `vault_documents` (RLS) + `PgDocumentStorage`, the second `StorageBackend`, behind shared contract tests | ✅ backend booted on `alembic upgrade head` 10-21 07:27Z · inert (`filesystem`) |
+| #1196 | `Vault` I/O and the garden writer go through the store; one factory `backend.knowledge.vault_store` + `BSVIBE_KNOWLEDGE_STORE_BACKEND` | ✅ inert |
+| #1197 | originals, indexes, code graph, MCP, `/inside` and skills through the store; AST guard on direct file I/O; `python -m backend.knowledge.store import [--dry-run] \| export <dir>`; compose passes `BSVIBE_MACHINE_ID` + the store backend (they were never reaching a container) | ✅ inert · runbook `docs/runbook/vault-to-postgres.md` |
+| #1198 | bootstrap clones full history (a shallow repo cannot be bundled); a deliverable's file is read from the run's checkpoint when the tree is on another machine; vault locks are real (`StorageBackend.lock`: advisory lock on rows, `flock` on files) | ✅ |
+| #1199 | stage 4: A→B→A restores the newer checkpoint · a tool call for a run nobody drives is refused when routing is on · the sandbox reaper actually runs (API process) · verification compose projects carry the machine id | ✅ design doc §6 |
+
+**#929 stages 1, 2 and 4 are merged; stage 3 did not exist.** Everything is inert in prod: no
+`BSVIBE_MACHINE_ID`, store = `filesystem`. What is left is operational and is 형님's (agents are
+refused prod exec) — §Ⅲ.
+
+**#1046 was already implemented** by #1047 (09-23). Checked 10-22 over MCP: the prod Telegram account
+carries `authorized_user_ids: ["8242700007"]` with `chat_id` unchanged, so the migration ran and seeded the
+allowlist. The live taps remain (1:1, group, a refused tapper) (`docs/e2e/telegram-approval-allowlist-checklist.md` §B).
+
+## §0-b — previous session (10-19 → 10-21): **a run can move between machines without losing its work; codex is on the MCP surface; cloud sessions see the rules**
+
+10-19 → 10-21. Every GitHub write went pause → act → CI green → merge → no new run → restore (§Ⅳ).
 
 | PR | Issue | What | Prod check |
 |---|---|---|---|
@@ -41,31 +61,6 @@
 
 Closed: **#1000**, **#967**, **#961**, **#951**. **#929** stage 1 of 4 done (`docs/design/stateless-workers.md`).
 Everything #929 is gated on `BSVIBE_MACHINE_ID`; prod leaves it empty, so the single box behaves as before.
-
-## §0-b — previous session (10-16 → 10-19): keys rotate, product secrets reach the server box, a delivered run ships whatever the order
-
-10-16 → 10-19. Every GitHub write went pause → act → CI green → merge → deploy checked →
-no new run → restore (§Ⅳ).
-
-| PR | Issue | What | Prod check |
-|---|---|---|---|
-| #1172 | #949 (1) | `/api/v1/chat/completions` deleted — no consumer | ✅ |
-| #1173 | #957 | credential ciphertext names its key (`kms1.<kid>.…`), `BSVIBE_GATEWAY_KMS_PREVIOUS_KEYS_B64` still decrypts, `python -m backend.router.accounts.rewrap [--apply]` re-encrypts; one factory (AST guard) | ✅ deployed, 0 decrypt errors in logs · ⏳ **형님:** rewrap dry-run in the backend container (agents are refused prod exec) |
-| #1174 | #691 | a `server_sandbox` product's commands get its `verify_secrets` (`docker exec -e NAME`, value only in the CLI's env) — loop and MCP paths | ⏳ `docs/e2e/server-sandbox-secrets-checklist.md` |
-| #1175 | #949 (2) | an agentic Claude Code turn's output is the CLI's final `result` text, not the joined narration | ✅ deployed, host worker restarted |
-| #1176 | #1145 | `written_paths` re-read from the tree when the agent says done (tracked changes from git + still-existing write-tool files); MCP `file_edit` states its rules | ⏳ next agent run that edits through the shell |
-| #1177 | #949 (4) | verification grades on the judge route (`workflow.judge`, unbound to the run), act LLM as fallback | ⏳ next verified executor run |
-| #1178 | #1042 | activity: same-minute batches fold into one row, untitled runs say so · danger zone spaced | ✅ live stack (#1181) |
-| #1179 | (형님 screenshots) | settings 알림/예약: standalone hints left-aligned full width, events list unbulleted, schedule form stacked, long instruction clamped | ✅ live stack red → green, screenshots |
-| #1180 | (10-19 incident) | **`deliverables.delivered_at`** + `ship_if_delivered` at the REVIEW_READY transition and on every delivery-worker tick — a run whose output went out before REVIEW_READY ships | ✅ stranded weekly run `4f5e9bfb` shipped 03:20Z by the sweep, 0 re-sends |
-| #1181 | #1042 §4 | settings tab no longer starts 34px lower than activity; floating button verified not to cover the last line | ✅ live stack 6/6 · merged |
-
-Closed: **#957**, **#691**, **#1145**, **#949** (all four), **#1042** (with #1181).
-
-**10-19 weekly report (BStockReport):** published once (one deliverable, verbatim block intact, no re-send loop
-— #1160 held), but sat at REVIEW_READY: it was delivered while RUNNING, and delivery only ships a REVIEW_READY
-run. → #1180, which also shipped that run. Re-walk on **10-26 09:30 KST**: it should end `shipped` with one
-Telegram message and no human step.
 
 ## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21)
 
@@ -152,14 +147,30 @@ Telegram message and no human step.
 * **Tests must call worker functions under `workspace_scope(ws)` like prod does** — fail-closed RLS turns a
   missing scope into "no rows", which reads as a logic bug.
 
+## §Ⅱ-f — What 10-21/22 found
+
+* **A lock made per instance locks nothing.** The garden writer and canonicalization each built an
+  `asyncio.Lock` per instance, and instances are made per request — two requests, or the API and the worker,
+  never excluded each other. On rows an append is a read plus a write, so it would have been a lost update (#1198).
+* **A background loop documented as started can be started nowhere.** `sandbox_reaper_loop`'s docstring said
+  the API lifespan started it; nothing did. One box masked it (the worker re-adopted the box on resume) (#1199).
+* **A setting the compose file does not pass is a setting prod never sees.** `BSVIBE_MACHINE_ID` had been
+  missing from `compose.prod.yaml` since #1189 — stage 1 would have stayed off on every box (#1197, deploy test pins it).
+* **A `--depth=1` clone cannot be bundled**, so a product bootstrapped shallow could not be restored on another
+  machine (#1198).
+
 ## §Ⅲ — Next
 
 0. **10-26 (Mon) 00:30 UTC weekly run** — must end `shipped` with one Telegram message, no human step (#1180).
-1. **#929 stage 2** — the vault and skills into Postgres: six PRs in `docs/design/stateless-workers.md` §5.5.
-   Then stage 4 (global sandbox concurrency).
+1. **#929 turn-on (형님, prod exec)** — in this order, each checked before the next:
+   1. vault cut-over: `docs/runbook/vault-to-postgres.md` (import `--dry-run` → stop backend + worker →
+      import → `BSVIBE_KNOWLEDGE_STORE_BACKEND=postgres` → start; old directories kept untouched for a week);
+   2. a `BSVIBE_MACHINE_ID` per box (the single box first, alone) and `BSVIBE_PRODUCT_BUNDLE_BACKEND=s3`;
+   3. only then a second machine (runbook §"A second box"). Known, not blocking: `docs/design/stateless-workers.md` §6.
 2. **#930** — workspace token budget follow-ups (⏳ 형님's ledger-sum SQL first).
 3. ⏳ 형님's batch: codex live run (#1183) · `python -m backend.router.accounts.rewrap` dry-run (#1173) ·
-   10-26 weekly report · #930 SQL. Walks: #1174 server-sandbox secrets checklist, #1176/#1177 on the next runs.
+   #1046 live taps (1:1, then a group binding and a second person) · #930 SQL.
+   Walks: #1174 server-sandbox secrets checklist, #1176/#1177 on the next runs.
 4. Outside the repo: #937 (cold-boot test, Supabase SMTP). Carry-overs in GitHub issues.
 
 ## §Ⅳ — Discipline that paid off
