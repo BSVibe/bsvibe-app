@@ -267,13 +267,16 @@ async def register_worker(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid bearer token",
         ) from exc
-    worker, token = await service.register_worker_for_workspace(
-        session,
-        workspace_id=principal.workspace_id,
-        name=body.name,
-        labels=body.labels,
-        capabilities=body.capabilities,
-    )
+    try:
+        worker, token = await service.register_worker_for_workspace(
+            session,
+            workspace_id=principal.workspace_id,
+            name=body.name,
+            labels=body.labels,
+            capabilities=body.capabilities,
+        )
+    except service.WorkerNameConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     await session.commit()
     return WorkerRegisterResponse(id=worker.id, token=token)
 

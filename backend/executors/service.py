@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.executors.db import WorkerRow
 from backend.router.accounts.account_service import ensure_personal_account
+from backend.router.accounts.models import ModelAccount
 from backend.router.accounts.predicates import EXECUTOR_PROVIDER
 from backend.router.infrastructure.repositories import SqlAlchemyModelAccountRepository
 
@@ -173,6 +174,49 @@ async def _adopt_predecessor_accounts(
     await session.flush()
 
 
+class WorkerNameConflictError(Exception):
+    """An active worker already owns the model-account label this registration needs."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(
+            f"worker name {name!r} is already registered by an active worker; "
+            "revoke the old worker first (PWA Settings → Workers) and register again"
+        )
+
+
+async def _raise_on_label_conflict(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    account_id: uuid.UUID,
+    name: str,
+    capabilities: list[str],
+) -> None:
+    """Raise :class:`WorkerNameConflictError` if an active same-name worker holds a label.
+
+    ``uq_model_account_label`` is ``(workspace_id, account_id, label)``. A revoked
+    worker's registration rows are deleted, so a clash can only come from a live one.
+    """
+    single = len(capabilities) == 1
+    labels = [_executor_label(name, c, single=single) for c in capabilities]
+    if not labels:
+        return
+    clash = (
+        await session.execute(
+            select(ModelAccount.id)
+            .where(
+                ModelAccount.workspace_id == workspace_id,
+                ModelAccount.account_id == account_id,
+                ModelAccount.label.in_(labels),
+            )
+            .limit(1)
+        )
+    ).first()
+    if clash is not None:
+        raise WorkerNameConflictError(name)
+
+
 # ── Worker registration ───────────────────────────────────────────────────────
 
 
@@ -191,6 +235,17 @@ async def register_worker_for_workspace(
     fresh per-worker token's plaintext is returned once; only its hash is
     persisted.
     """
+    # Resolve the partition and refuse a label clash BEFORE inserting the worker row,
+    # so the caller gets a typed error instead of an IntegrityError (500) on flush.
+    account = await ensure_personal_account(session, workspace_id=workspace_id)
+    await _raise_on_label_conflict(
+        session,
+        workspace_id=workspace_id,
+        account_id=account.id,
+        name=name,
+        capabilities=list(capabilities),
+    )
+
     token = _generate_token()
     worker = WorkerRow(
         workspace_id=workspace_id,
@@ -206,7 +261,6 @@ async def register_worker_for_workspace(
 
     # Make each capability a routable provider='executor' model account
     # (Lift 5a). The personal account is the partition the rows hang off.
-    account = await ensure_personal_account(session, workspace_id=workspace_id)
     await _upsert_executor_model_accounts(
         session,
         workspace_id=workspace_id,
@@ -391,6 +445,7 @@ async def revoke_worker(
 
 
 __all__ = [
+    "WorkerNameConflictError",
     "authenticate_worker",
     "list_workers",
     "record_heartbeat",
