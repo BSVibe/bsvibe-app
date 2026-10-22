@@ -24,18 +24,17 @@
 ## §0 — One line: **#929's code is done — the vault and skills can live in Postgres, and a second machine no longer loses work; turning it on is 형님's step**
 
 10-21 → 10-22. All five deployed (`bsvibe-app.deployed` = `0e03c308`), host worker restarted 10-21 16:25 KST.
+**The vault and skills now live in Postgres** (cut-over 10-22 03:29Z — §Ⅲ 1).
 
 | PR | What | Prod check |
 |---|---|---|
-| #1195 | `vault_documents` (RLS) + `PgDocumentStorage`, the second `StorageBackend`, behind shared contract tests | ✅ backend booted on `alembic upgrade head` 10-21 07:27Z · inert (`filesystem`) |
-| #1196 | `Vault` I/O and the garden writer go through the store; one factory `backend.knowledge.vault_store` + `BSVIBE_KNOWLEDGE_STORE_BACKEND` | ✅ inert |
-| #1197 | originals, indexes, code graph, MCP, `/inside` and skills through the store; AST guard on direct file I/O; `python -m backend.knowledge.store import [--dry-run] \| export <dir>`; compose passes `BSVIBE_MACHINE_ID` + the store backend (they were never reaching a container) | ✅ inert · runbook `docs/runbook/vault-to-postgres.md` |
+| #1195 | `vault_documents` (RLS) + `PgDocumentStorage`, the second `StorageBackend`, behind shared contract tests | ✅ backend booted on `alembic upgrade head` 10-21 07:27Z · live since the 10-22 cut-over |
+| #1196 | `Vault` I/O and the garden writer go through the store; one factory `backend.knowledge.vault_store` + `BSVIBE_KNOWLEDGE_STORE_BACKEND` | ✅ live since 10-22 |
+| #1197 | originals, indexes, code graph, MCP, `/inside` and skills through the store; AST guard on direct file I/O; `python -m backend.knowledge.store import [--dry-run] \| export <dir>`; compose passes `BSVIBE_MACHINE_ID` + the store backend (they were never reaching a container) | ✅ store live 10-22, machine id unset · runbook `docs/runbook/vault-to-postgres.md` |
 | #1198 | bootstrap clones full history (a shallow repo cannot be bundled); a deliverable's file is read from the run's checkpoint when the tree is on another machine; vault locks are real (`StorageBackend.lock`: advisory lock on rows, `flock` on files) | ✅ |
 | #1199 | stage 4: A→B→A restores the newer checkpoint · a tool call for a run nobody drives is refused when routing is on · the sandbox reaper actually runs (API process) · verification compose projects carry the machine id | ✅ design doc §6 |
 
-**#929 stages 1, 2 and 4 are merged; stage 3 did not exist.** Everything is inert in prod: no
-`BSVIBE_MACHINE_ID`, store = `filesystem`. What is left is operational and is 형님's (agents are
-refused prod exec) — §Ⅲ.
+**#929 stages 1, 2 and 4 are merged; stage 3 did not exist.** Stage 1 is still inert (no `BSVIBE_MACHINE_ID`). — §Ⅲ.
 
 **#1046 was already implemented** by #1047 (09-23). Checked 10-22 over MCP: the prod Telegram account
 carries `authorized_user_ids: ["8242700007"]` with `chat_id` unchanged, so the migration ran and seeded the
@@ -156,6 +155,13 @@ Everything #929 is gated on `BSVIBE_MACHINE_ID`; prod leaves it empty, so the si
   the API lifespan started it; nothing did. One box masked it (the worker re-adopted the box on resume) (#1199).
 * **A setting the compose file does not pass is a setting prod never sees.** `BSVIBE_MACHINE_ID` had been
   missing from `compose.prod.yaml` since #1189 — stage 1 would have stayed off on every box (#1197, deploy test pins it).
+* **The runbooks' `python -m …` never worked in the image** — its Python is `/app/.venv/bin/python`; a bare
+  `python` has no dependencies. And `docker compose -p bsvibe-prod run` needs the project files (fixed 10-22).
+* **A pause window with no webhook proves nothing.** Check that deliveries actually arrive before reading
+  "no verdict" as "rejected".
+* **A token connector cannot rotate its token** — replacing the connector strands its bindings and empties
+  its `delivery_config` (10-22: Telegram moved to `a5fb238c`; chat_id + allowlist re-set, both bindings
+  re-created, webhook re-registered). Issue filed the same day.
 * **A `--depth=1` clone cannot be bundled**, so a product bootstrapped shallow could not be restored on another
   machine (#1198).
 
@@ -166,14 +172,25 @@ Everything #929 is gated on `BSVIBE_MACHINE_ID`; prod leaves it empty, so the si
    `product_bundle_publish_skipped_shallow` every 5 min (it publishes without a credential, and correctly keeps the repo).
    The ship passes the GitHub credential and should unshallow it — after 10-26 that warning should stop. If it does
    not, the repo cannot reach the bundle store and blocks a second machine for that product.
-1. **#929 turn-on (형님, prod exec)** — in this order, each checked before the next:
-   1. vault cut-over: `docs/runbook/vault-to-postgres.md` (import `--dry-run` → stop backend + worker →
-      import → `BSVIBE_KNOWLEDGE_STORE_BACKEND=postgres` → start; old directories kept untouched for a week);
-   2. a `BSVIBE_MACHINE_ID` per box (the single box first, alone) and `BSVIBE_PRODUCT_BUNDLE_BACKEND=s3`;
+1. **#929 turn-on** — in this order, each checked before the next:
+   1. ✅ **vault cut-over done 2026-10-22 03:29Z** (founder-approved, run by the agent in manual mode):
+      dry-run `would write 4230 · skipped 0` → backend + worker stopped → import `wrote 4230`, re-run
+      `unchanged 4230` → `BSVIBE_KNOWLEDGE_STORE_BACKEND=postgres` in `.env.prod` → recreated (both containers
+      print `postgres`). Rows: vault 4,227 (`5fa3494c` 4,184 · `6515bfc2` 43), skills 3 (all `6515bfc2`).
+      Tags, recent notes and skills over MCP identical before/after; no error in either log. Backup just
+      before: `bsvibe_2026-10-22_1226.sql.gz` + vault tgz, both off-box.
+      ⏳ **Positive proof still missing:** nothing has written to the vault since. The next write (at the latest
+      the 10-26 run's `seeds/request/<id>.md`) must appear as a `vault_documents` row and **not** as a file
+      under `/app/var/vault`. Keep `/app/var/vault` and `/app/var/skills` untouched until 10-29.
+   2. a `BSVIBE_MACHINE_ID` per box (the single box first, alone) — after (1) has its positive proof, so two
+      new paths do not go live at once. `BSVIBE_PRODUCT_BUNDLE_BACKEND=s3` is already set;
    3. only then a second machine (runbook §"A second box"). Known, not blocking: `docs/design/stateless-workers.md` §6.
-2. **#930** — workspace token budget follow-ups (⏳ 형님's ledger-sum SQL first).
-3. ⏳ 형님's batch: codex live run (#1183) · `python -m backend.router.accounts.rewrap` dry-run (#1173) ·
-   #1046 live taps (1:1, then a group binding and a second person) · #930 SQL.
+2. **#930** — 2M tuning still cannot be done. 10-22: this month the founder workspace spent 1.42M of 50M
+   (runs 1,276,847 + ledger 139,612); since 10-01 only **2 shipped runs** (p50 27k, max 403k) — not a sample.
+3. ⏳ 형님's batch: codex live run (#1183, needs `codex login`) · #1046 live taps (1:1, then a group binding
+   and a second person).
+   #1173 rewrap dry-run done 10-22: `current 5 · would rewrap 20 · undecryptable 0` — `--apply` not run
+   (it rewrites secrets; only needed before a key rotation, harmless to leave).
    Walks: #1174 server-sandbox secrets checklist, #1176/#1177 on the next runs.
 4. Outside the repo: #937 (cold-boot test, Supabase SMTP). Carry-overs in GitHub issues.
 

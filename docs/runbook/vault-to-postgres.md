@@ -6,11 +6,21 @@ This is a founder step. Agents do not exec into production containers.
 
 ## Before
 
+Run everything from the deployed checkout. The default docker context on the server is not prod, and `docker compose run` needs the project's files:
+
+```sh
+export DOCKER_CONTEXT=colima
+cd ~/Works/bsvibe-app/main
+DC="docker compose -p bsvibe-prod -f deploy/compose.yaml -f deploy/compose.prod.yaml --env-file deploy/.env.prod"
+```
+
+The image's Python is `/app/.venv/bin/python`. A bare `python` has none of the dependencies.
+
 - The deployed `main` includes the `vault_documents` migration and `backend.knowledge.store`.
 - Sizing (read-only), in the backend container:
 
   ```sh
-  docker exec bsvibe-prod-backend-1 python -m backend.knowledge.store import --dry-run
+  docker exec bsvibe-prod-backend-1 /app/.venv/bin/python -m backend.knowledge.store import --dry-run
   ```
 
   It prints `would write N · unchanged 0 · skipped 0`. A non-zero `skipped` lists files that are not UTF-8; look at them before going on.
@@ -22,13 +32,13 @@ The vault is a few MB, so the import takes seconds. Stop the writers first, so t
 1. Stop the writers:
 
    ```sh
-   docker compose -p bsvibe-prod stop backend worker
+   $DC stop backend worker
    ```
 
 2. Import, with the stopped backend's image and volume:
 
    ```sh
-   docker compose -p bsvibe-prod run --rm backend python -m backend.knowledge.store import
+   $DC run --rm backend /app/.venv/bin/python -m backend.knowledge.store import
    ```
 
    It should print `wrote N · unchanged 0 · skipped 0`, and a second run should print `wrote 0 · unchanged N`.
@@ -38,7 +48,7 @@ The vault is a few MB, so the import takes seconds. Stop the writers first, so t
 4. Start again:
 
    ```sh
-   docker compose -p bsvibe-prod up -d backend worker
+   $DC up -d backend worker
    ```
 
 5. Check:
@@ -53,7 +63,7 @@ Keep `/app/var/vault` and `/app/var/skills` untouched as the backup until a week
 Writes made after the cut-over exist only in the rows, so export them first:
 
 ```sh
-docker compose -p bsvibe-prod run --rm backend python -m backend.knowledge.store export /app/var/vault-export
+$DC run --rm backend /app/.venv/bin/python -m backend.knowledge.store export /app/var/vault-export
 ```
 
 Then:
