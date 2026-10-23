@@ -180,6 +180,9 @@ def _snap(*, deadline_at: datetime) -> Any:
         conflict_attempts=0,
         conflict_dispatched_at=None,
         ci_red_head_sha=None,
+        # The head the watch already recorded: a moved head restarts the deadline,
+        # and these tests are about a head that has not moved.
+        head_sha="deadbeef",
     )
 
 
@@ -202,6 +205,9 @@ class _Repo:
 
     async def mark_status(self, row_id: Any, status: Any, **kwargs: Any) -> None:
         self.marked.append((row_id, status, kwargs))
+
+    async def record_head(self, row_id: Any, **kwargs: Any) -> None:
+        return None
 
 
 class _Client:
@@ -294,7 +300,7 @@ def _worker(
         client_resolver=_returns(client),
     )
     worker._client = client  # type: ignore[attr-defined] — the tests flip its answers
-    worker._gave_up = lambda snap, reason: _escalate(snap.run_id, reason=reason)  # type: ignore[assignment]
+    worker._gave_up = lambda snap, reason, failed_checks=None: _escalate(snap.run_id, reason=reason)  # type: ignore[assignment]
     worker._run_cancelled = _returns(False)  # type: ignore[method-assign]
     mod.GithubMergeWatchRepository = lambda _s: repo  # type: ignore[assignment]
     return worker, repo, escalations

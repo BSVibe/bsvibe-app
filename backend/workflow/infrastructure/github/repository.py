@@ -10,11 +10,11 @@ a thin :class:`GithubMergeWatchRepository` (``add`` / ``claim_due`` /
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import structlog
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.infrastructure.github.db import (
@@ -27,6 +27,12 @@ logger = structlog.get_logger(__name__)
 # The statuses a poll pass may claim: a PR still waiting on CI, or one flagged
 # for conflict resolution (re-claimed so the poller can re-dispatch the run).
 _CLAIMABLE_STATUSES = (MergeWatchStatus.PENDING_CI, MergeWatchStatus.NEEDS_RESOLUTION)
+
+#: A ``failed`` watch is not done: its PR is still open, and a human may fix and
+#: merge it (runs ``7709a7a2`` / ``6fa72ec1`` stayed at ``review_ready`` that way).
+#: It is claimed too — only to see whether the PR merged or closed — until its
+#: deadline is this far behind it, so a forgotten PR is not polled for ever.
+FAILED_WATCH_HORIZON = timedelta(days=7)
 
 
 def build_merge_watch_claim_stmt(
@@ -43,7 +49,13 @@ def build_merge_watch_claim_stmt(
     return (
         select(GithubMergeWatchRow)
         .where(
-            GithubMergeWatchRow.status.in_(_CLAIMABLE_STATUSES),
+            or_(
+                GithubMergeWatchRow.status.in_(_CLAIMABLE_STATUSES),
+                and_(
+                    GithubMergeWatchRow.status == MergeWatchStatus.FAILED,
+                    GithubMergeWatchRow.deadline_at > now - FAILED_WATCH_HORIZON,
+                ),
+            ),
             GithubMergeWatchRow.next_poll_at <= now,
         )
         .order_by(GithubMergeWatchRow.next_poll_at.asc())
@@ -113,6 +125,10 @@ class GithubMergeWatchRepository:
         conflict_head_sha: str | None = None,
         conflict_attempts: int | None = None,
         conflict_dispatched_at: datetime | None = None,
+        deadline_at: datetime | None = None,
+        head_sha: str | None = None,
+        ci_fix_attempts: int | None = None,
+        ci_fix_head_sha: str | None = None,
     ) -> None:
         """Transition one row's status (+ optional backoff / attempt / flags).
 
@@ -140,8 +156,26 @@ class GithubMergeWatchRepository:
             values["conflict_attempts"] = conflict_attempts
         if conflict_dispatched_at is not None:
             values["conflict_dispatched_at"] = conflict_dispatched_at
+        if deadline_at is not None:
+            values["deadline_at"] = deadline_at
+        if head_sha is not None:
+            values["head_sha"] = head_sha
+        if ci_fix_attempts is not None:
+            values["ci_fix_attempts"] = ci_fix_attempts
+        if ci_fix_head_sha is not None:
+            values["ci_fix_head_sha"] = ci_fix_head_sha
         if increment_attempt:
             values["attempts"] = GithubMergeWatchRow.attempts + 1
+        await self._update(row_id, values)
+
+    async def record_head(self, row_id: uuid.UUID, *, head_sha: str, deadline_at: datetime) -> None:
+        """The PR head moved: remember it and restart the CI deadline from now.
+
+        Touches no status — it runs ahead of the state machine's own transition.
+        """
+        await self._update(row_id, {"head_sha": head_sha, "deadline_at": deadline_at})
+
+    async def _update(self, row_id: uuid.UUID, values: dict[str, Any]) -> None:
         stmt = update(GithubMergeWatchRow).where(GithubMergeWatchRow.id == row_id).values(**values)
         await self._session.execute(stmt)
         await self._session.flush()

@@ -254,7 +254,7 @@ async def _make_picked_account_the_default(
     )
 
 
-async def resolve_checkpoint(
+async def resolve_checkpoint(  # noqa: PLR0912, PLR0915 — one branch per resolution action
     session: AsyncSession,
     *,
     workspace_id: uuid.UUID,
@@ -400,6 +400,9 @@ async def resolve_checkpoint(
         # "Send again": the work is done, only its delivery failed. Put the
         # deliverable's delivery event back — the run is NOT re-driven.
         await _redeliver(session, deliverables, run=run, decision=decision)
+    elif action_key == ACTION_RETRY and decision.decision == "merge_watch_stalled":
+        # "Fix it again": send the failed checks back to the run that opened the PR.
+        await _send_stalled_pr_back(session, run=run, decision=decision)
     elif action_key == ACTION_ACKNOWLEDGE:
         # A report, not a fork in the work (``merge_watch_stalled``): the founder
         # has seen it. The Decision is RESOLVED above; the run is deliberately
@@ -767,6 +770,39 @@ def _emit_founder_approved_delivery(
             },
         ),
         producer_id="workflow:checkpoint_ship",
+    )
+
+
+async def _send_stalled_pr_back(
+    session: AsyncSession, *, run: ExecutionRun, decision: Decision
+) -> None:
+    """``merge_watch_stalled`` → ``retry``: the watch gave up on the PR; the founder says fix it.
+
+    Same hand-back the watch itself does for red CI, pressed by hand — and the watch is
+    revived so it merges the fix when it lands.
+    """
+    from backend.config import get_settings  # noqa: PLC0415
+    from backend.workflow.application.intake.ci_failure import (  # noqa: PLC0415
+        revive_merge_watch,
+        send_ci_failure_to_run,
+    )
+
+    recorded = decision.payload if isinstance(decision.payload, dict) else {}
+    pr_number = recorded.get("pr_number")
+    if not isinstance(pr_number, int):
+        raise InvalidAction(f"Decision {decision.id} names no pull request to send back")
+    checks = recorded.get("failed_checks")
+    failed_checks = [c for c in checks if isinstance(c, dict)] if isinstance(checks, list) else []
+    sent = await send_ci_failure_to_run(
+        session, run, failed_checks=failed_checks, pr_number=pr_number, head_sha=None
+    )
+    if not sent:
+        raise InvalidAction(f"Run {run.id} is {run.status.value} and cannot take the PR back")
+    await revive_merge_watch(
+        session,
+        run,
+        pr_number=pr_number,
+        ci_deadline_s=get_settings().github_auto_merge_ci_deadline_s,
     )
 
 

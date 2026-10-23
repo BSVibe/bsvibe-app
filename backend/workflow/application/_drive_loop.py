@@ -41,6 +41,7 @@ from backend.workflow.application.inplace_gate import (
     current_run_baseline,
     reconcile_written_paths,
 )
+from backend.workflow.application.intake.ci_failure import ci_failure_messages, consume_ci_failure
 from backend.workflow.application.intake.pr_comment import (
     consume_pr_comments,
     pr_comment_messages,
@@ -186,6 +187,9 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     if review_comments := pr_comment_messages(run):
         messages.extend(review_comments)
         consume_pr_comments(run)
+    if ci_messages := ci_failure_messages(run):  # red CI on this run's PR (intake.ci_failure)
+        messages.extend(ci_messages)
+        consume_ci_failure(run)
     attempt.phase = RunAttemptPhase.WORKING
     await orch._session.flush()
 
