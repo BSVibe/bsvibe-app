@@ -40,6 +40,7 @@ from backend.workflow.application.delivery.connector_dispatch._resolver import (
 from backend.workflow.application.runtime.merge_watch_freshen import build_branch_freshener
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.workers.merge_watch_worker import (
+    CiRedispatch,
     ConflictEscalate,
     ConflictRedispatch,
     MergeClientResolver,
@@ -160,6 +161,46 @@ def build_merge_watch_conflict_redispatch(
     return _redispatch
 
 
+def build_merge_watch_ci_redispatch(
+    *, session_factory: async_sessionmaker[AsyncSession]
+) -> CiRedispatch:
+    """Build the red-CI hand-back for the MergeWatchWorker (the conflict redispatch's twin).
+
+    Writes the failed checks on the run that opened the PR and re-opens it, so the agent
+    fixes the SAME branch. Opens its own short transaction; a missing or finished run is a
+    no-op (the worker then simply watches on, and asks the founder when its patience ends).
+    """
+
+    async def _redispatch(
+        run_id: uuid.UUID,
+        *,
+        failed_checks: list[dict[str, str]],
+        pr_number: int,
+        head_sha: str,
+    ) -> None:
+        from backend.workflow.application.intake.ci_failure import (  # noqa: PLC0415
+            send_ci_failure_to_run,
+        )
+
+        async with session_factory() as session:
+            run = await session.get(ExecutionRun, run_id)
+            if run is None:
+                logger.warning("merge_watch_ci_redispatch_run_missing", run_id=str(run_id))
+                return
+            await send_ci_failure_to_run(
+                session, run, failed_checks=failed_checks, pr_number=pr_number, head_sha=head_sha
+            )
+            await session.commit()
+        logger.info(
+            "merge_watch_ci_redispatched",
+            run_id=str(run_id),
+            pr_number=pr_number,
+            failed_checks=[c.get("name") for c in failed_checks],
+        )
+
+    return _redispatch
+
+
 def build_merge_watch_conflict_escalate(
     *, session_factory: async_sessionmaker[AsyncSession]
 ) -> ConflictEscalate:
@@ -265,6 +306,7 @@ def build_merge_watch_stall_escalate(
         reason: str,
         repo: str,
         pr_number: int,
+        failed_checks: list[dict[str, str]] | None = None,
     ) -> None:
         from backend.workflow.application.run_persistence import create_decision  # noqa: PLC0415
 
@@ -273,12 +315,16 @@ def build_merge_watch_stall_escalate(
             if run is None:
                 logger.warning("merge_watch_stall_run_missing", run_id=str(run_id))
                 return
+            payload: dict[str, Any] = {"reason": reason, "repo": repo, "pr_number": pr_number}
+            if failed_checks:
+                # What "send it back to be fixed" will carry to the run.
+                payload["failed_checks"] = failed_checks
             await create_decision(
                 session,
                 run,
                 None,  # work_step is unused by the Decision row
                 kind="merge_watch_stalled",
-                payload={"reason": reason, "repo": repo, "pr_number": pr_number},
+                payload=payload,
                 rationale=f"merge watch gave up on {repo}#{pr_number}: {reason}",
             )
             await session.commit()
@@ -370,8 +416,11 @@ def build_merge_watch_workers(
             escalate_conflict=build_merge_watch_conflict_escalate(session_factory=session_factory),
             escalate_stall=build_merge_watch_stall_escalate(session_factory=session_factory),
             pr_concluded=build_merge_watch_pr_concluded(session_factory=session_factory),
+            redispatch_ci=build_merge_watch_ci_redispatch(session_factory=session_factory),
             config=MergeWatchWorkerConfig(
                 poll_interval_s=settings.github_auto_merge_poll_interval_s,
+                ci_deadline_s=settings.github_auto_merge_ci_deadline_s,
+                ci_fix_max_redispatch=settings.github_ci_fix_max_redispatch,
                 conflict_resolution_deadline_s=settings.github_conflict_resolution_deadline_s,
                 conflict_max_redispatch=settings.github_conflict_max_redispatch,
             ),
@@ -381,6 +430,7 @@ def build_merge_watch_workers(
 
 __all__ = [
     "build_branch_freshener",
+    "build_merge_watch_ci_redispatch",
     "build_merge_watch_client_resolver",
     "build_merge_watch_conflict_escalate",
     "build_merge_watch_conflict_redispatch",

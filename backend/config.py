@@ -328,6 +328,11 @@ class Settings(BaseSettings):
     github_conflict_resolution_deadline_s: float = 900.0
     github_conflict_max_redispatch: int = 2
 
+    # Red CI on a watched PR is sent back to the run that opened it (same shape as the
+    # conflict hand-back). ``ci_fix_max_redispatch`` caps how many times before the
+    # founder gets a ``merge_watch_stalled`` Decision instead.
+    github_ci_fix_max_redispatch: int = 2
+
     # Audit relay sink (backend.workers.relays) — the RelayWorker drains
     # ``audit_outbox`` into this HTTP endpoint when set. Empty (the default)
     # selects the no-sink ``LoggingRelay`` (drain + ack, no remote delivery).

@@ -274,13 +274,14 @@ def test_the_stalled_decision_can_discard_the_run() -> None:
     from backend.workflow.application._checkpoint_shared import (
         ACTION_ACKNOWLEDGE,
         ACTION_DISCARD,
+        ACTION_RETRY,
         _decision_actions,
     )
 
     decision = Decision(decision="merge_watch_stalled", payload={"reason": "ci_failed"})
     actions = _decision_actions(decision)
     assert actions is not None
-    assert {a.key for a in actions} == {ACTION_ACKNOWLEDGE, ACTION_DISCARD}
+    assert {a.key for a in actions} == {ACTION_ACKNOWLEDGE, ACTION_RETRY, ACTION_DISCARD}
 
 
 async def test_discarding_a_stalled_run_cancels_it(sf) -> None:
@@ -300,6 +301,34 @@ async def test_discarding_a_stalled_run_cancels_it(sf) -> None:
         await s.commit()
 
     assert (await _run(sf, workspace_id, run_id)).status is RunStatus.CANCELLED
+
+
+async def test_fix_it_again_sends_the_failed_checks_back_to_the_run(sf) -> None:
+    """\"다시 고치게 하기\": the stalled PR goes back to the run that opened it."""
+    from backend.workflow.application._checkpoint_shared import ACTION_RETRY
+    from backend.workflow.application.checkpoint_resolution import resolve_checkpoint
+
+    workspace_id, run_id, decision_id = await _stalled(sf)
+    checks = [{"name": "lint-and-test", "conclusion": "failure", "summary": "boom"}]
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        decision = await s.get(Decision, decision_id)
+        assert decision is not None
+        decision.payload = {**(decision.payload or {}), "pr_number": 1, "failed_checks": checks}
+        await s.commit()
+
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        await resolve_checkpoint(
+            s,
+            workspace_id=workspace_id,
+            checkpoint_id=decision_id,
+            action_key=ACTION_RETRY,
+            actor_id=uuid.uuid4(),
+        )
+        await s.commit()
+
+    run = await _run(sf, workspace_id, run_id)
+    assert run.status is RunStatus.OPEN
+    assert run.payload["ci_failure"]["failed_checks"] == checks
 
 
 async def test_a_free_text_reply_on_a_stalled_run_does_not_re_drive_it(sf) -> None:

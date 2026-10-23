@@ -76,9 +76,10 @@ def test_recorded_question_still_rides_through_verbatim() -> None:
 # --- 브리핑: 누를 수 있는 버튼 ----------------------------------------------
 
 
-def test_stalled_offers_acknowledge_or_discard() -> None:
+def test_stalled_offers_acknowledge_fix_again_or_discard() -> None:
     """에이전트의 작업은 끝났고 남은 것은 머지되지 않은 PR 이다. ``ship`` 할 것도(머지 안 됨)
-    ``retry`` 로 다시 몰 런도 없다.
+    멈춘 PR 을 원래 런에 "다시 고치게 하기"(``retry``) 는 가능하다 — 감시가 스스로 보내는
+    재전송과 같은 길을 사람이 직접 누르는 것이다.
 
     #1109(형님 2026-10-04) 이후 GitHub 런은 PR 이 머지될 때까지 ``review_ready`` 에서
     기다리므로, '확인했다'고 접는 것 말고 **놓아주는 것**(``discard`` → cancelled)도 정직한
@@ -86,9 +87,8 @@ def test_stalled_offers_acknowledge_or_discard() -> None:
     작업을 취소로 부정하는 일은 여전히 없다."""
     actions = _EXECUTOR_DECISION_ACTIONS["merge_watch_stalled"]
     keys = {a.key for a in actions}
-    assert keys == {ACTION_ACKNOWLEDGE, ACTION_DISCARD}
+    assert keys == {ACTION_ACKNOWLEDGE, ACTION_RETRY, ACTION_DISCARD}
     assert ACTION_SHIP not in keys
-    assert ACTION_RETRY not in keys
     for a in actions:
         assert a.label_en and a.label_ko
     assert _decision_actions(_stalled("ci_deadline_exceeded")) is not None
