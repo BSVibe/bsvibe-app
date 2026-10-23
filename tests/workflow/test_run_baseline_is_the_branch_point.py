@@ -135,3 +135,36 @@ async def test_when_no_branch_point_exists_the_start_baseline_is_kept(tmp_path: 
     box = await NoopSandboxManager().acquire(uuid.uuid4(), str(tmp_path))
 
     assert await current_run_baseline(box, "abc123") == "abc123"
+
+
+async def test_a_run_rebased_onto_a_newer_origin_main_does_not_inherit_its_commits(
+    repo: Path,
+) -> None:
+    # The reused clone's local ``main`` lags; ``origin/main`` is what the run climbed onto.
+    box = await NoopSandboxManager().acquire(uuid.uuid4(), str(repo))
+    start = await capture_run_baseline(box)
+    _commit(repo, "engine.py")  # the run's first attempt
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "elsewhere.py")  # merged work the lagging local main never saw
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "reset", "-q", "--hard", "HEAD~1")  # local main falls behind origin/main
+    _git(repo, "checkout", "-q", "run/5f677182")
+    _git(repo, "rebase", "-q", "origin/main")
+
+    for baseline in (await current_run_baseline(box, start), await capture_run_baseline(box)):
+        assert await changed_paths(box, baseline) == ["engine.py"]
+        assert await reconcile_written_paths(box, baseline, ["engine.py"]) == ["engine.py"]
+
+
+async def test_a_lagging_origin_main_does_not_win_over_a_newer_local_main(repo: Path) -> None:
+    _git(repo, "update-ref", "refs/remotes/origin/main", "main")  # origin/main stays behind
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "elsewhere.py")
+    _git(repo, "checkout", "-q", "run/5f677182")
+    _git(repo, "rebase", "-q", "main")
+    _commit(repo, "engine.py")
+    box = await NoopSandboxManager().acquire(uuid.uuid4(), str(repo))
+
+    baseline = await current_run_baseline(box, None)
+
+    assert await changed_paths(box, baseline) == ["engine.py"]
