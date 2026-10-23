@@ -40,7 +40,7 @@ reviewed here, approved in Safe Mode, and merged by its own merge watch — exce
 | #1223 | #1220 | a write-access reviewer's comment on a BSVibe PR goes to the run that opened it; everyone else's is a new request | ✅ merged by hand after a 600-LOC split |
 | #1225 | — | **hotfix:** a nested `workspace_session_scope` restores the outer tenant (intake outage 09:21–09:22Z) | ✅ written here |
 | #1226 | #1207 | KMS `PREVIOUS_KEYS` reaches the containers; rewrap runbook command | ✅ |
-| #1227 | #1224 | merge watch: per-head CI deadline, red CI sent back to the run (×2), "fix it again", watches a given-up PR until it merges/closes | ⏳ auto-merge |
+| #1227 | #1224 | merge watch: per-head CI deadline, red CI sent back to the run (×2), "fix it again", watches a given-up PR until it merges/closes | ✅ merged by hand; its 400-LOC fix came through a PR comment routed to the same run (#1223) and was force-with-lease pushed to the same PR (#1218) |
 
 Also: #1204 (token connectors cannot rotate their token — open), #1205 (vault cut-over record, by hand).
 
@@ -52,8 +52,8 @@ Also: #1204 (token connectors cannot rotate their token — open), #1205 (vault 
 - **GitHub App `bsvibe` now has Issues: write** — granted on BOTH installations (`blas1n` and the `BSVibe` org; each
   installation approves separately). Probe: an empty-body `POST …/issues/<n>/comments` → 422.
 - **Credentials:** `rewrap` dry-run `current 26 · would rewrap 0 · undecryptable 0`.
-- Runs `7709a7a2`, `6fa72ec1`, `e2756fcd` sit at `review_ready` though their PRs merged (the watch had given up) —
-  #1227 makes a given-up watch notice the merge; until it ships they are cosmetic.
+- Runs `7709a7a2`, `6fa72ec1`, `e2756fcd` had sat at `review_ready` after their PRs merged (the watch had given up);
+  they moved to `shipped` at 11:46Z, right after #1227 deployed (migration `merge_watch_ci_fix` ran).
 
 ## §0-b — previous session (10-21 → 10-22): **#929's code is done — the vault and skills can live in Postgres, and a second machine no longer loses work; turning it on is 형님's step**
 
@@ -206,14 +206,13 @@ allowlist. The live taps remain (1:1, group, a refused tapper) (`docs/e2e/telegr
    first send through the new Telegram connector `a5fb238c`. After it, BStockReport's
    `product_bundle_publish_skipped_shallow` warning (every 5 min) should stop — if not, that product cannot reach the
    bundle store.
-1. **#1227** — when it lands, check the three stranded `review_ready` runs (§0) move to `shipped`.
-2. **#929 turn-on** — the vault cut-over is done and proven (§0). Next: a `BSVIBE_MACHINE_ID` on this box alone, then
+1. **#929 turn-on** — the vault cut-over is done and proven (§0). Next: a `BSVIBE_MACHINE_ID` on this box alone, then
    a second machine (`docs/runbook/vault-to-postgres.md` §"A second box"). Keep `/app/var/vault` until 10-29.
-3. **Open follow-ups:** #1204 (token connectors cannot rotate a token in place) · the `merge_watch` CI hand-back sends the
+2. **Open follow-ups:** #1204 (token connectors cannot rotate a token in place) · the `merge_watch` CI hand-back sends the
    check's name but GitHub Actions' `output.summary` is usually empty (the run re-runs the tests itself) · #1221 only
    logs a missing App permission — tell 형님 instead.
-4. **#930** — 2M tuning still has no sample (2 shipped runs since 10-01).
-5. ⏳ 형님's batch: codex live run (#1183) · #1046 live taps · #937 outside the repo.
+3. **#930** — 2M tuning still has no sample (2 shipped runs since 10-01).
+4. ⏳ 형님's batch: codex live run (#1183) · #1046 live taps · #937 outside the repo.
 
 ## §Ⅳ — Discipline that paid off
 
