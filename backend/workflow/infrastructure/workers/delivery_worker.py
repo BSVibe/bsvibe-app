@@ -71,7 +71,7 @@ from backend.workers.base import BaseWorker
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.channels import DELIVERY_EVENTS
 from backend.workflow.domain.delivery import FOUNDER_APPROVED_KEY, ActionResult, DeliveryResult
-from backend.workflow.infrastructure.db import Deliverable
+from backend.workflow.infrastructure.db import Decision, DecisionStatus, Deliverable
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 
 logger = structlog.get_logger(__name__)
@@ -298,11 +298,78 @@ async def _mark_delivered(session: AsyncSession, deliverable_id: uuid.UUID) -> N
     await session.commit()
 
 
+#: ``create_decision``, injected by the application runtime at startup
+#: (:func:`set_decision_factory`) -- this infrastructure worker must not import it.
+_create_decision: Any = None
+
+
+def set_decision_factory(factory: Any) -> None:
+    global _create_decision  # noqa: PLW0603
+    _create_decision = factory
+
+
 def _delivery_succeeded(result: DeliveryResult) -> bool:
-    """True when the dispatch actually DELIVERED — no top-level error and at
-    least one outbound action succeeded. A wholly-failed dispatch (nothing
-    shipped) must NOT auto-resolve+ship the run."""
-    return result.error is None and any(action.succeeded for action in result.actions)
+    """True when the dispatch actually DELIVERED — no top-level error, at least one
+    outbound action succeeded, and NONE failed. A failed action (above all the github one,
+    which carries the code) makes the deliverable undelivered however many other connectors
+    went out: it must NOT auto-resolve+ship the run."""
+    return (
+        result.error is None
+        and any(action.succeeded for action in result.actions)
+        and all(action.succeeded for action in result.actions)
+    )
+
+
+async def _escalate_failed_delivery(
+    session: AsyncSession, deliverable_id: uuid.UUID, result: DeliveryResult
+) -> None:
+    """Raise ONE ``delivery_failed`` Decision for a deliverable whose dispatch had a failed
+    action. The run stays where it is (``review_ready``) and the deliverable stays undelivered."""
+    from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+
+    deliverable = await session.get(Deliverable, deliverable_id)
+    if deliverable is None or deliverable.run_id is None:
+        return
+    run = await session.get(ExecutionRun, deliverable.run_id)
+    if run is None:
+        return
+    failures = [
+        {"action": action.action, "error": action.error}
+        for action in result.actions
+        if not action.succeeded
+    ]
+    if not failures:
+        if result.error is None:
+            return  # nothing was attempted (no delivery target) -- not a failure
+        failures = [{"action": "delivery", "error": result.error}]
+    reason = "; ".join(f"{f['action']}: {f['error']}" for f in failures)
+    # One question per incident: the worker retries a failed event and re-dispatches each
+    # time, so an OPEN ``delivery_failed`` for this deliverable already asks the founder.
+    open_rows = await session.execute(
+        select(Decision).where(
+            Decision.run_id == run.id,
+            Decision.decision == "delivery_failed",
+            Decision.status == DecisionStatus.PENDING,
+        )
+    )
+    if any(
+        (row.payload or {}).get("deliverable_id") == str(deliverable_id)
+        for row in open_rows.scalars()
+    ):
+        logger.info("delivery_failure_decision_already_open", deliverable_id=str(deliverable_id))
+        return
+    if _create_decision is None:
+        logger.error("delivery_failure_decision_unwired", deliverable_id=str(deliverable_id))
+        return
+    await _create_decision(
+        session,
+        run,
+        None,
+        kind="delivery_failed",
+        payload={"deliverable_id": str(deliverable_id), "failures": failures},
+        rationale=f"delivery failed, nothing was shipped: {reason}",
+    )
+    await session.commit()
 
 
 async def dispatch_delivery(
@@ -359,6 +426,20 @@ async def dispatch_delivery(
                 await persist_compensation_handles(
                     owned, deliverable_id=deliverable_id, result=result
                 )
+        # The founder approved this and it did not land: tell them, with the reason.
+        # Never raises -- the failed result is what the caller acts on.
+        try:
+            if session_factory is not None:
+                async with session_factory() as owned:
+                    await _escalate_failed_delivery(owned, deliverable_id, result)
+            elif session is not None:
+                await _escalate_failed_delivery(session, deliverable_id, result)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "delivery_failure_decision_failed",
+                deliverable_id=str(deliverable_id),
+                workspace_id=str(workspace_id),
+            )
         return result
 
     # Lazy import keeps the heavy AgentRunner graph (reached transitively by the
@@ -445,6 +526,7 @@ class DeliveryWorker(BaseWorker):
         #: Consecutive failures per event id. In-process: a restart resets it,
         #: which only buys a row another ``max_attempts`` — still bounded.
         self._failures: dict[uuid.UUID, int] = {}
+        self._audited_shipped_awaiting_merge = False
 
     async def _tick(self) -> int:
         processed = await self.drain_once()
@@ -456,10 +538,16 @@ class DeliveryWorker(BaseWorker):
         "delivered" and "REVIEW_READY", or a race between their sessions, must not strand one.
         Never fails the tick: the drain above is this worker's job."""
         from backend.workflow.application.run_delivery_resolution import (  # noqa: PLC0415
+            find_shipped_runs_with_awaiting_merge,
             ship_delivered_review_ready_runs,
         )
 
         try:
+            if not self._audited_shipped_awaiting_merge:
+                # Once per process: surface runs a failed delivery shipped by mistake.
+                self._audited_shipped_awaiting_merge = True
+                async with self._session_factory() as session:
+                    await find_shipped_runs_with_awaiting_merge(session)
             async with self._session_factory() as session:
                 return await ship_delivered_review_ready_runs(session)
         except Exception:  # noqa: BLE001 — a sweep fault must not stop deliveries
@@ -599,4 +687,5 @@ __all__ = [
     "build_delivery_claim_stmt",
     "dispatch_delivery",
     "resolve_output_mode_gate",
+    "set_decision_factory",
 ]
