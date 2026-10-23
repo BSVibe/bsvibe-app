@@ -41,6 +41,10 @@ from backend.workflow.application.inplace_gate import (
     current_run_baseline,
     reconcile_written_paths,
 )
+from backend.workflow.application.intake.pr_comment import (
+    consume_pr_comments,
+    pr_comment_messages,
+)
 from backend.workflow.application.round_budget import (
     RoundBudgetTracker,
     finalize_round_cap_decision,
@@ -178,6 +182,10 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     if conflict_directive is not None:
         messages.append(conflict_directive)
         _consume_merge_conflict(run)
+    # A trusted reviewer's comment on this run's PR (intake.pr_comment): read it once, then clear it.
+    if review_comments := pr_comment_messages(run):
+        messages.extend(review_comments)
+        consume_pr_comments(run)
     attempt.phase = RunAttemptPhase.WORKING
     await orch._session.flush()
 
