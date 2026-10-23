@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from backend.workflow.application.audit_events import DecisionPending, LoopTerminal
 from backend.workflow.application.round_budget import finalize_round_cap_decision
-from backend.workflow.domain.verification_feedback import NO_FAILURE_FOUND
+from backend.workflow.domain.verification_feedback import NO_FAILURE_FOUND, failure_signature
 
 if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult, RunOrchestrator
@@ -38,7 +38,7 @@ def stall_question(failure: str, *, repeats: int) -> dict[str, str] | None:
     """The Decision payload for a verification the agent cannot move, or ``None``.
 
     ``failure`` is the rendered feedback of THIS round, ``repeats`` how many rounds running it has
-    already come back byte-identical (0 on first sight).
+    already come back the same failure (``failure_signature``; 0 on first sight).
     """
     if failure == NO_FAILURE_FOUND:
         return {
@@ -117,6 +117,7 @@ __all__ = [
     "NO_FAILURE",
     "REPEATED_FAILURE",
     "REPEAT_LIMIT",
+    "failure_signature",
     "settle_stalled_verification",
     "stall_question",
 ]
