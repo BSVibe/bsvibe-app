@@ -66,7 +66,9 @@ async def test_on_postgres_the_guc_survives_a_nested_scope() -> None:
 
             async def _guc(s: AsyncSession) -> str:
                 row = (
-                    await s.execute(text("SELECT current_setting('app.current_workspace_id', true)"))
+                    await s.execute(
+                        text("SELECT current_setting('app.current_workspace_id', true)")
+                    )
                 ).first()
                 return row[0] if row else ""
 
