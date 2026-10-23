@@ -185,6 +185,10 @@ _KINDS: dict[str, dict[str, Any]] = {
     "no_model_account": {},
     "ambiguous_model_account": {"options": ["opus", "sonnet"]},
     "product_bundle_conflict": {"reason": "product_bundle_publish_conflict"},
+    "delivery_failed": {
+        "reason": "delivery_failed",
+        "failures": [{"action": "github:outbound:code", "error": "push rejected"}],
+    },
 }
 
 
@@ -364,3 +368,93 @@ async def test_a_bundle_publish_conflict_is_a_report_on_a_shipped_run(sf) -> Non
     actions = _decision_actions(decision)
     assert actions is not None and {a.key for a in actions} == {ACTION_ACKNOWLEDGE}
     assert decision.decision in _REPORT_DECISION_KINDS
+
+
+class TestDeliveryFailed:
+    async def _seed_failed_delivery(self, sf) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
+        from backend.workflow.infrastructure.db import Deliverable, DeliverableType
+
+        workspace_id, run_id, _ = await _seed(sf, labels=[])
+        deliverable_id, decision_id = uuid.uuid4(), uuid.uuid4()
+        async with sf() as s, workspace_session_scope(s, workspace_id):
+            s.add(
+                Deliverable(
+                    id=deliverable_id,
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    deliverable_type=DeliverableType.CODE,
+                    payload={"artifact_refs": ["a.py"]},
+                )
+            )
+            await s.flush()
+            s.add(
+                Decision(
+                    id=decision_id,
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    decision="delivery_failed",
+                    payload={
+                        "reason": "delivery_failed",
+                        "deliverable_id": str(deliverable_id),
+                        "failures": [{"action": "github:outbound:code", "error": "push rejected"}],
+                    },
+                )
+            )
+            await s.commit()
+        return workspace_id, run_id, deliverable_id, decision_id
+
+    def test_the_question_names_what_failed_and_why(self) -> None:
+        decision = Decision(decision="delivery_failed", payload=_KINDS["delivery_failed"])
+        for language in ("ko", "en"):
+            text = _question_text(decision, language)
+            assert "github:outbound:code" in text
+            assert "push rejected" in text
+
+    async def test_send_again_puts_the_delivery_event_back_without_redriving(self, sf) -> None:
+        from backend.workflow.application.checkpoint_resolution import resolve_checkpoint
+        from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+
+        workspace_id, run_id, deliverable_id, decision_id = await self._seed_failed_delivery(sf)
+
+        async with sf() as s, workspace_session_scope(s, workspace_id):
+            outcome = await resolve_checkpoint(
+                s,
+                workspace_id=workspace_id,
+                checkpoint_id=decision_id,
+                action_key="retry",
+                actor_id=uuid.uuid4(),
+            )
+            await s.commit()
+        assert outcome.run_status is RunStatus.RUNNING  # not resumed / transitioned
+
+        async with sf() as s, workspace_session_scope(s, workspace_id):
+            events = (
+                (await s.execute(select(DeliveryEventRow).where(DeliveryEventRow.run_id == run_id)))
+                .scalars()
+                .all()
+            )
+        assert [e.deliverable_id for e in events] == [deliverable_id]
+        assert events[0].payload["artifact_refs"] == ["a.py"]
+
+    async def test_discard_cancels_and_sends_nothing(self, sf) -> None:
+        from backend.workflow.application.checkpoint_resolution import resolve_checkpoint
+        from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+
+        workspace_id, run_id, _, decision_id = await self._seed_failed_delivery(sf)
+
+        async with sf() as s, workspace_session_scope(s, workspace_id):
+            outcome = await resolve_checkpoint(
+                s,
+                workspace_id=workspace_id,
+                checkpoint_id=decision_id,
+                action_key="discard",
+                actor_id=uuid.uuid4(),
+            )
+            await s.commit()
+        assert outcome.run_status is RunStatus.CANCELLED
+
+        async with sf() as s, workspace_session_scope(s, workspace_id):
+            rows = await s.execute(
+                select(DeliveryEventRow).where(DeliveryEventRow.run_id == run_id)
+            )
+            assert rows.first() is None
