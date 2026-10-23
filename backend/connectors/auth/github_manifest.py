@@ -22,13 +22,16 @@ _CONVERSIONS_URL = "https://api.github.com/app-manifests/{code}/conversions"
 _HTTP_TIMEOUT = 10.0
 
 # Least-privilege defaults for what bsvibe does today: open PRs against the
-# bound repo (contents + pull_requests write, metadata read), and read the
-# issues whose events start runs (``issues`` / ``issue_comment`` are delivered
-# only to an App holding the issues permission).
+# bound repo (contents + pull_requests write, metadata read), and write to the
+# issues whose events start runs — delivery comments the PR link back on the
+# originating issue (``POST /issues/{n}/comments`` needs ``issues: write``), and
+# ``issues`` / ``issue_comment`` events are delivered only to an App holding the
+# issues permission. An already-created App keeps its old permissions: the owner
+# must raise Issues in the App settings (docs/runbook/github-app-permissions.md).
 _DEFAULT_PERMISSIONS = {
     "contents": "write",
     "pull_requests": "write",
-    "issues": "read",
+    "issues": "write",
     "metadata": "read",
 }
 _DEFAULT_EVENTS = ["push", "pull_request", "issues", "issue_comment"]
