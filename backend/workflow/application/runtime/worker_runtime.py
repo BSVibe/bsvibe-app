@@ -44,6 +44,7 @@ from backend.schedule.infrastructure.workers.schedule_worker import (
 )
 from backend.workers.base import BaseWorker
 from backend.workers.relays import build_relay
+from backend.workflow.application.run_persistence import create_decision
 from backend.workflow.application.runtime.merge_watch_runtime import build_merge_watch_workers
 from backend.workflow.application.runtime.settle_runtime import (
     build_concept_framer,
@@ -69,6 +70,7 @@ from backend.workflow.infrastructure.workers.daily_brief_worker import DailyBrie
 from backend.workflow.infrastructure.workers.delivery_worker import (
     DeliveryWorker,
     PluginDispatchAdapter,
+    set_decision_factory,
 )
 from backend.workflow.infrastructure.workers.intake_worker import IntakeWorker
 from backend.workflow.infrastructure.workers.notify_worker import NotifySender, NotifyWorker
@@ -194,6 +196,7 @@ def build_worker_runtime(
     DB-polling behaviour (emission is gated + soft-fail). ``notify_sender`` is
     the Notifier-N2 push port the NotifyWorker drains the outbox through."""
     settings = settings or get_settings()
+    set_decision_factory(create_decision)
     workers: list[BaseWorker] = [
         IntakeWorker(
             session_factory=session_factory,

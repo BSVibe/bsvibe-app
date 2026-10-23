@@ -298,6 +298,16 @@ async def _mark_delivered(session: AsyncSession, deliverable_id: uuid.UUID) -> N
     await session.commit()
 
 
+#: ``create_decision``, injected by the application runtime at startup
+#: (:func:`set_decision_factory`) -- this infrastructure worker must not import it.
+_create_decision: Any = None
+
+
+def set_decision_factory(factory: Any) -> None:
+    global _create_decision  # noqa: PLW0603
+    _create_decision = factory
+
+
 def _delivery_succeeded(result: DeliveryResult) -> bool:
     """True when the dispatch actually DELIVERED — no top-level error, at least one
     outbound action succeeded, and NONE failed. A failed action (above all the github one,
@@ -315,7 +325,6 @@ async def _escalate_failed_delivery(
 ) -> None:
     """Raise ONE ``delivery_failed`` Decision for a deliverable whose dispatch had a failed
     action. The run stays where it is (``review_ready``) and the deliverable stays undelivered."""
-    from backend.workflow.application.run_persistence import create_decision  # noqa: PLC0415
     from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
 
     deliverable = await session.get(Deliverable, deliverable_id)
@@ -334,7 +343,10 @@ async def _escalate_failed_delivery(
             return  # nothing was attempted (no delivery target) -- not a failure
         failures = [{"action": "delivery", "error": result.error}]
     reason = "; ".join(f"{f['action']}: {f['error']}" for f in failures)
-    await create_decision(
+    if _create_decision is None:
+        logger.error("delivery_failure_decision_unwired", deliverable_id=str(deliverable_id))
+        return
+    await _create_decision(
         session,
         run,
         None,
@@ -660,4 +672,5 @@ __all__ = [
     "build_delivery_claim_stmt",
     "dispatch_delivery",
     "resolve_output_mode_gate",
+    "set_decision_factory",
 ]
