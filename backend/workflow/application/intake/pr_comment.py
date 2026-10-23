@@ -141,4 +141,50 @@ async def route_pr_comment_to_run(
     return run.id
 
 
-__all__ = ["pr_comment_of", "route_pr_comment_to_run"]
+# ── the reading side: the drive loop turns the queued comments into turn context ──
+
+
+def pr_comment_messages(run: ExecutionRun) -> list[dict[str, Any]]:
+    """Review comments left on this run's PR, as turn-context messages.
+
+    ``run.payload["pr_comments"]`` is a list of ``{pr_number, body, author}``
+    intake appends (:func:`route_pr_comment_to_run`). Each becomes a user message telling the
+    agent to fix the SAME branch/PR — never to open a new one."""
+    payload = run.payload if isinstance(run.payload, dict) else {}
+    comments = payload.get("pr_comments")
+    if not isinstance(comments, list):
+        return []
+    messages: list[dict[str, Any]] = []
+    for entry in comments:
+        if not isinstance(entry, dict) or not str(entry.get("body") or "").strip():
+            continue
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"{entry.get('author') or 'A reviewer'} left a review comment on "
+                    f"your pull request #{entry.get('pr_number')}:\n\n{entry['body']}\n\n"
+                    "Address it on the SAME branch so the result is pushed to the "
+                    "same pull request. Do not open a new pull request."
+                ),
+            }
+        )
+    return messages
+
+
+def consume_pr_comments(run: ExecutionRun) -> None:
+    """Clear the one-shot ``pr_comments`` key once injected (re-assigns the payload
+    so SQLAlchemy sees the JSON change)."""
+    payload = dict(run.payload or {})
+    if "pr_comments" not in payload:
+        return
+    payload.pop("pr_comments", None)
+    run.payload = payload
+
+
+__all__ = [
+    "consume_pr_comments",
+    "pr_comment_messages",
+    "pr_comment_of",
+    "route_pr_comment_to_run",
+]

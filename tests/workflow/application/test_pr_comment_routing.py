@@ -20,8 +20,11 @@ from backend.data import Base
 from backend.data.rls import workspace_session_scope
 from backend.identity.infrastructure.repositories import SqlAlchemyResourceBindingRepository
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
-from backend.workflow.application._loop_context import _consume_pr_comments, _pr_comment_messages
-from backend.workflow.application.intake.pr_comment import route_pr_comment_to_run
+from backend.workflow.application.intake.pr_comment import (
+    consume_pr_comments,
+    pr_comment_messages,
+    route_pr_comment_to_run,
+)
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow, TriggerKind
@@ -173,11 +176,11 @@ async def test_drive_loop_reads_comment_once() -> None:
         status=RunStatus.OPEN,
         payload={"pr_comments": [{"pr_number": 3, "body": "rename it", "author": "blasin"}]},
     )
-    (message,) = _pr_comment_messages(run)
+    (message,) = pr_comment_messages(run)
     assert "rename it" in message["content"] and "#3" in message["content"]
     assert "blasin" in message["content"] and "founder" not in message["content"]
-    _consume_pr_comments(run)
-    assert _pr_comment_messages(run) == []
+    consume_pr_comments(run)
+    assert pr_comment_messages(run) == []
 
 
 def _delivery(text: str, *, sender: str = "User") -> bytes:
