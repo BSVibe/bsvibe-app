@@ -683,8 +683,14 @@ async def sync_main_with_origin(  # noqa: PLR0911 — one early return per repor
         if head.strip() == "main":
             moved = await _git("merge", "--ff-only", "--quiet", remote, cwd=repo, check=False)
         else:
+            # Fetching into a local ref is fast-forward-only unless the refspec has a ``+``.
             moved = await _git(
-                "update-ref", "refs/heads/main", remote, local, cwd=repo, check=False
+                "fetch",
+                "--quiet",
+                ".",
+                "refs/remotes/origin/main:refs/heads/main",
+                cwd=repo,
+                check=False,
             )
         if moved.returncode != 0:
             logger.warning("product_main_ff_failed", product_id=pid, stderr=moved.stderr[:300])
