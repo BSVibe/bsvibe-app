@@ -93,6 +93,7 @@ DELIVERY_EVENTS: Channel[DeliveryEventRow] = Channel(
         "workflow:partial_deliverable",
         "workflow:answer_deliverable",
         "workflow:checkpoint_ship",
+        "workflow:checkpoint_redeliver",
     ),
     consumers=("worker:delivery_worker",),
     human_origin=False,
