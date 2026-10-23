@@ -84,7 +84,7 @@ docker exec bsvibe-prod-postgres-1 sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES
 | `BSVIBE_APP_DB_PASSWORD` | ⚠️ **수동 `ALTER ROLE` 필요**(§0.1①) | 백엔드·워커의 모든 DB 연결 | **시끄럽다** — 연결 거부 |
 | `BSVIBE_DB_PASSWORD` (owner) | ⚠️ **수동 `ALTER ROLE` 필요** | 마이그레이션·부트 | **시끄럽다** — 부트 실패 |
 | `BSVIBE_REDIS_PASSWORD` | ✅ | 워커 디스패치·스트림 | **시끄럽다** |
-| `BSVIBE_OAUTH_PRIVATE_KEY_PEM` | ⚠️ 미검증 | 발급된 액세스 토큰 전부 무효화 | 시끄럽다(401) |
+| `BSVIBE_OAUTH_PRIVATE_KEY_PEM` | ✅ §2c (키 교체 + 액세스 토큰 일괄 폐기, 둘 다 해야 한다) | 발급된 액세스 토큰 전부 무효화 | 시끄럽다(401) |
 | `BSVIBE_PRODUCT_BUNDLE_S3_*` | ✅ | 번들 저장/조회 | 시끄럽다 |
 | **`BSVIBE_GATEWAY_KMS_KEY_B64`** | ❌ **절차로 불가** | 아래 §3 | ❌ **조용하다** |
 | `BSVIBE_WORKER_TOKEN` (launchd plist) | ✅ 아래 §2b | 그 워커 한 대 | **시끄럽다** — 401 |
@@ -249,6 +249,44 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ---
 
+## 2c. `BSVIBE_OAUTH_PRIVATE_KEY_PEM` — OAuth 서명 키 (✅ 실측)
+
+**키 교체만으로는 부족하다.** 리프레시 토큰은 DB 에 해시로만 있지만 클라이언트
+(`~/.config/bsvibe/credentials.json` 등)에 원문이 있고, 리프레시는 **새 키로 서명된** 토큰을
+돌려준다. 옛 리프레시 토큰을 가진 쪽은 키 교체 뒤에도 새 토큰을 받는다. 부모 액세스 토큰을
+전부 폐기해야 리프레시가 `PARENT_REVOKED` 로 막힌다.
+
+**영향**: MCP 커넥터, CLI(`bsvibe login --device` 로 재로그인), 진행 중 run 의 task 토큰.
+**진행 중 run 이 없을 때** 한다.
+
+```bash
+# 1. 백업
+cp deploy/.env.prod deploy/.env.prod.bak
+
+# 2. 새 키 — 기존 값과 같은 형식(따옴표 + \n 이스케이프)의 PKCS#8 PEM 으로 교체
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256
+
+# 3. 재생성. GIT_SHA 를 주면 §0.1 덤의 git_sha "prod" 라벨 변경도 피한다
+GIT_SHA=<현재 sha> docker compose -f deploy/compose.yaml -f deploy/compose.prod.yaml \
+  --env-file deploy/.env.prod -p bsvibe-prod up -d --force-recreate backend worker
+
+# 4. 액세스 토큰 일괄 폐기 — 드라이런 다음 적용 (owner 역할, 백엔드 컨테이너 안)
+docker --context colima exec bsvibe-prod-backend-1 /app/.venv/bin/python -m backend.identity.revoke_access_tokens
+docker --context colima exec bsvibe-prod-backend-1 /app/.venv/bin/python -m backend.identity.revoke_access_tokens --apply
+#    → "revoked N live access token(s)". 재실행해도 0 (이미 폐기된 행은 건드리지 않는다)
+```
+
+### 검증
+* `/.well-known/jwks.json` 의 `kid` 가 바뀌었다
+* `/api/health` ok
+* 미폐기 액세스 토큰 0 (4번을 다시 드라이런하면 `would revoke 0`)
+* **음성**: 옛 리프레시 토큰으로 갱신 → 401 `invalid_grant`
+
+⚠️ 컨테이너 안의 파이썬은 `/app/.venv/bin/python` 이다. bare `python` 에는 의존성이 없어
+`ModuleNotFoundError` 가 난다. 에이전트는 prod `docker exec` 가 거부된다 — 4번은 형님의 몫이다.
+
+---
+
 ## 3. `BSVIBE_GATEWAY_KMS_KEY_B64` — rotatable since #957 (2026-10-16)
 
 Until #957 this section was a warning, not a procedure: ciphertext was `base64(nonce ‖ ct)`
@@ -354,7 +392,6 @@ backend container. Agents are refused prod `docker exec`; this step is 형님's.
 
 * ~~위 §1·§2 절차는 한 번도 걸어본 적이 없다~~ → **2026-09-23 에 걸었다**(§0.1).
   걸 때는 유지보수 창에서, `.env.prod` 백업을 손에 쥔 채로 하라 — 이번에도 두 번 떴다
-* `BSVIBE_OAUTH_PRIVATE_KEY_PEM` 로테이션의 영향 범위(발급된 토큰 전부 무효화)는
-  코드로 확인했지만 절차는 쓰지 않았다 — 걸어본 뒤에 적는 것이 맞다
+* ~~`BSVIBE_OAUTH_PRIVATE_KEY_PEM` 로테이션 절차는 쓰지 않았다~~ → 걸어보고 §2c 에 적었다
 * 백업/복원과의 상호작용: 옛 백업을 복원하면 **그 시점의 키로 암호화된 데이터**가 돌아온다.
   KMS 키를 돌린 뒤 그 전 백업을 복원하면 §3 의 조용한 실패가 그대로 재현된다
