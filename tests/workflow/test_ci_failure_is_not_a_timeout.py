@@ -180,6 +180,9 @@ def _snap(*, deadline_at: datetime) -> Any:
         conflict_attempts=0,
         conflict_dispatched_at=None,
         ci_red_head_sha=None,
+        # The head the watch already recorded: a moved head restarts the deadline,
+        # and these tests are about a head that has not moved.
+        head_sha="deadbeef",
     )
 
 
