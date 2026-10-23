@@ -185,7 +185,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     final_text = ""
     no_work_nudges = 0
     fail_streak = 0
-    last_failure: tuple | None = None
+    last_failure: tuple[object, ...] | None = None
     repeats = 0
     # #692 — a client_attach run works in the founder's own directory on the worker
     # (through BSVibe's tools, backed by ``ClientWorkerSandboxSession``), so the
@@ -429,7 +429,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         # #1145 — the list is a log of write-tool calls; the tree is the truth. A deleted scratch
         # script leaves it, a file edited through the shell joins it, before anything reads it.
         # The branch point is re-read each time: a mid-drive rebase onto main moves it, and the
-        # value taken at the top would drag main's new commits into the list. client_attach
+        # value taken at the top would drag main's new commits into the list. An in-place run
         # keeps its start-of-drive HEAD.
         round_baseline = run_baseline if in_place else await current_run_baseline(box, run_baseline)
         written_paths[:] = await reconcile_written_paths(box, round_baseline, written_paths)

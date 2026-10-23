@@ -56,7 +56,7 @@ DERIVER_FAILED = (
 
 #: The gate was EXPECTED (a toolchain manifest is present) yet the deriver produced zero commands.
 #: ``verification_service`` fails this closed, and every check the agent declared can pass while it
-#: does — so without this line the agent is told nothing happened and goes round again (f7c5b4d1).
+#: does — so without this line the agent is told nothing happened and goes round again.
 GATE_DERIVED_EMPTY = (
     "The repo has a toolchain manifest, so a verification gate was expected, but the harness "
     "derived ZERO gate commands from it. Your declared checks passed; that does not count in "

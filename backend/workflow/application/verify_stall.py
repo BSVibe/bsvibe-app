@@ -7,7 +7,7 @@ Two shapes, both of which used to be handed straight back to the agent:
 * the SAME failure three times running — the agent has seen it, been offered the stuck-review hint
   (which fires on the second sighting), and the round after that did not move it either.
 
-Either way the loop owes the founder a question rather than another turn (f7c5b4d1 spent its rounds
+Either way the loop owes the founder a question rather than another turn (a run once spent its rounds
 on a gate its own request had implied and its founder had already overruled).
 """
 
