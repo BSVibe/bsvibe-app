@@ -1,4 +1,9 @@
-"""Route a founder's comment on a BSVibe-opened PR back to the run that opened it.
+"""Route a trusted comment on a BSVibe-opened PR back to the run that opened it.
+
+This runs in the intake worker, AFTER Receive's binding filter and the workspace
+budget/run-cap gate: every path that puts an instruction on a run passes the same
+doors (filter, budget, author). The repo is public, so only an OWNER / MEMBER /
+COLLABORATOR comment is an instruction; anyone else's is logged and not routed.
 
 A review comment ("fix this") on a PR the merge watch is tracking is an
 instruction for THAT run — same branch, same PR (pushed force-with-lease). Landing
@@ -39,6 +44,10 @@ _LIVE_WATCH = (
 _APPEND_ONLY = (RunStatus.OPEN, RunStatus.RUNNING)
 _REOPEN = (RunStatus.REVIEW_READY, RunStatus.FAILED)
 
+#: ``comment.author_association`` values that may instruct a run. Anything else
+#: (NONE, CONTRIBUTOR, FIRST_TIMER, ...) is a stranger on a public repo.
+_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
 
 def pr_comment_of(payload: dict[str, Any]) -> tuple[str, int, str] | None:
     """``(repo, pr_number, text)`` when this github payload is a comment on a pull
@@ -58,6 +67,14 @@ def pr_comment_of(payload: dict[str, Any]) -> tuple[str, int, str] | None:
     return str(repo), number, text
 
 
+def _comment_author(payload: dict[str, Any]) -> tuple[str, str]:
+    """``(login, author_association)`` of the comment, upper-cased association."""
+    body = payload.get("body")
+    comment = (body.get("comment") if isinstance(body, dict) else None) or {}
+    login = str((comment.get("user") or {}).get("login") or "unknown")
+    return login, str(comment.get("author_association") or "").upper()
+
+
 async def route_pr_comment_to_run(
     session: AsyncSession,
     *,
@@ -66,8 +83,8 @@ async def route_pr_comment_to_run(
 ) -> uuid.UUID | None:
     """Hand a PR comment to the run that opened the PR; its id, or ``None``.
 
-    ``None`` means "not ours to route" (no comment on a PR, no live watch, a
-    finished run) and the caller lands the delivery as a new request, as before.
+    ``None`` means "not ours to route" (no comment on a PR, an author who is not
+    OWNER / MEMBER / COLLABORATOR, no live watch, a finished run) and the caller lands the delivery as a new request, as before.
     A run that is already ``open`` / ``running`` only gets the instruction queued
     — the next turn reads it; no second run is created. The caller commits.
     """
@@ -75,6 +92,16 @@ async def route_pr_comment_to_run(
     if parsed is None:
         return None
     repo, pr_number, text = parsed
+    author, association = _comment_author(payload)
+    if association not in _TRUSTED_ASSOCIATIONS:
+        logger.info(
+            "pr_comment_not_routed_untrusted_author",
+            repo=repo,
+            pr_number=pr_number,
+            author=author,
+            author_association=association or None,
+        )
+        return None
 
     async with workspace_session_scope(session, workspace_id):
         watch = (
@@ -95,7 +122,7 @@ async def route_pr_comment_to_run(
 
         run_payload = dict(run.payload or {})
         comments = list(run_payload.get("pr_comments") or [])
-        comments.append({"pr_number": pr_number, "body": text})
+        comments.append({"pr_number": pr_number, "body": text, "author": author})
         run_payload["pr_comments"] = comments
         run.payload = run_payload
         if run.status in _REOPEN:

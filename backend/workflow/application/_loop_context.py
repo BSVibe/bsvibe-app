@@ -366,9 +366,9 @@ def _consume_merge_conflict(run: ExecutionRun) -> None:
 
 
 def _pr_comment_messages(run: ExecutionRun) -> list[dict[str, Any]]:
-    """Founder review comments left on this run's PR, as turn-context messages.
+    """Review comments left on this run's PR, as turn-context messages.
 
-    ``run.payload["pr_comments"]`` is a list of ``{pr_number, body}`` the webhook
+    ``run.payload["pr_comments"]`` is a list of ``{pr_number, body, author}`` the webhook
     intake appends (``intake.pr_comment``). Each becomes a user message telling the
     agent to fix the SAME branch/PR — never to open a new one."""
     payload = run.payload if isinstance(run.payload, dict) else {}
@@ -383,8 +383,8 @@ def _pr_comment_messages(run: ExecutionRun) -> list[dict[str, Any]]:
             {
                 "role": "user",
                 "content": (
-                    f"The founder left a review comment on your pull request "
-                    f"#{entry.get('pr_number')}:\n\n{entry['body']}\n\n"
+                    f"{entry.get('author') or 'A reviewer'} left a review comment on "
+                    f"your pull request #{entry.get('pr_number')}:\n\n{entry['body']}\n\n"
                     "Address it on the SAME branch so the result is pushed to the "
                     "same pull request. Do not open a new pull request."
                 ),

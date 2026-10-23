@@ -12,14 +12,23 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend.connectors.db import ConnectorAccountRow
 from backend.data import Base
 from backend.data.rls import workspace_session_scope
+from backend.identity.infrastructure.repositories import SqlAlchemyResourceBindingRepository
+from backend.identity.workspaces_db import ProductRow, WorkspaceRow
 from backend.workflow.application._loop_context import _consume_pr_comments, _pr_comment_messages
 from backend.workflow.application.intake.pr_comment import route_pr_comment_to_run
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
+from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow, TriggerKind
+from backend.workflow.infrastructure.workers.intake_worker import (
+    IntakeWorker,
+    IntakeWorkerConfig,
+)
 from plugin.github.webhook import parse_webhook
 from tests._support import db_engine
 
@@ -28,14 +37,28 @@ pytestmark = pytest.mark.asyncio
 REPO = "acme/app"
 
 
-def _payload(*, pr: bool = True, number: int = 1218, text: str = "fix the lint") -> dict:
+def _payload(
+    *,
+    pr: bool = True,
+    number: int = 1218,
+    text: str = "fix the lint",
+    association: str = "OWNER",
+    login: str = "blasin",
+) -> dict:
     issue: dict = {"number": number, "title": "t"}
     if pr:
         issue["pull_request"] = {"url": "x"}
     return {
         "github_event": "issue_comment",
         "repo": REPO,
-        "body": {"issue": issue, "comment": {"body": text}},
+        "body": {
+            "issue": issue,
+            "comment": {
+                "body": text,
+                "author_association": association,
+                "user": {"login": login},
+            },
+        },
     }
 
 
@@ -45,8 +68,9 @@ async def _seed(
     run_status: RunStatus,
     watch_status: MergeWatchStatus = MergeWatchStatus.PENDING_CI,
     pr_number: int = 1218,
+    workspace_id: uuid.UUID | None = None,
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    run_id, ws = uuid.uuid4(), uuid.uuid4()
+    run_id, ws = uuid.uuid4(), workspace_id or uuid.uuid4()
     now = datetime.now(UTC)
     async with sf() as session:
         async with workspace_session_scope(session, ws):
@@ -91,7 +115,9 @@ async def test_comment_on_watched_pr_reopens_original_run(status: RunStatus) -> 
         assert routed == run_id
         run = await _run(sf, run_id, ws)
         assert run.status is RunStatus.OPEN
-        assert run.payload["pr_comments"] == [{"pr_number": 1218, "body": "fix the lint"}]
+        assert run.payload["pr_comments"] == [
+            {"pr_number": 1218, "body": "fix the lint", "author": "blasin"}
+        ]
 
 
 async def test_comment_on_running_run_is_queued_without_second_run() -> None:
@@ -145,10 +171,11 @@ async def test_drive_loop_reads_comment_once() -> None:
         id=uuid.uuid4(),
         workspace_id=uuid.uuid4(),
         status=RunStatus.OPEN,
-        payload={"pr_comments": [{"pr_number": 3, "body": "rename it"}]},
+        payload={"pr_comments": [{"pr_number": 3, "body": "rename it", "author": "blasin"}]},
     )
     (message,) = _pr_comment_messages(run)
     assert "rename it" in message["content"] and "#3" in message["content"]
+    assert "blasin" in message["content"] and "founder" not in message["content"]
     _consume_pr_comments(run)
     assert _pr_comment_messages(run) == []
 
@@ -177,3 +204,114 @@ async def test_bsvibe_own_comment_is_ignored() -> None:
     assert _parse(_delivery("🤖 Opened a pull request to resolve this: u")) is None
     assert _parse(_delivery("x", sender="Bot")) is None
     assert _parse(_delivery("fix the lint")) is not None
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "FIRST_TIMER", ""])
+async def test_stranger_comment_is_not_routed(association: str) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_id, ws = await _seed(sf, run_status=RunStatus.REVIEW_READY)
+        async with sf() as session:
+            payload = _payload(association=association, login="rando")
+            assert await route_pr_comment_to_run(session, workspace_id=ws, payload=payload) is None
+            await session.commit()
+        run = await _run(sf, run_id, ws)
+        assert run.status is RunStatus.REVIEW_READY
+        assert "pr_comments" not in run.payload
+
+
+@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
+async def test_trusted_comment_is_routed(association: str) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_id, ws = await _seed(sf, run_status=RunStatus.REVIEW_READY)
+        async with sf() as session:
+            payload = _payload(association=association)
+            assert (
+                await route_pr_comment_to_run(session, workspace_id=ws, payload=payload) == run_id
+            )
+            await session.commit()
+        assert (await _run(sf, run_id, ws)).status is RunStatus.OPEN
+
+
+async def _worker_scene(*, filters: dict, association: str = "COLLABORATOR"):  # noqa: ANN202
+    """A watched PR run + a github comment trigger on a binding with ``filters``."""
+    sf = async_sessionmaker(_ENGINE[0], expire_on_commit=False)
+    ws, product_id, account_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    async with sf() as s, workspace_session_scope(s, ws):
+        s.add(WorkspaceRow(id=ws, name="ws", safe_mode=True))
+        await s.flush()
+        s.add(ProductRow(id=product_id, workspace_id=ws, name="App", slug="app"))
+        s.add(
+            ConnectorAccountRow(
+                id=account_id,
+                workspace_id=ws,
+                connector="github",
+                webhook_token=f"tok-{uuid.uuid4().hex}",
+                signing_secret_ciphertext="cipher",
+            )
+        )
+        await s.flush()
+        await SqlAlchemyResourceBindingRepository(s).create(
+            workspace_id=ws,
+            product_id=product_id,
+            connector_account_id=account_id,
+            resource_id=REPO,
+            trigger={"filters": filters},
+        )
+        await s.commit()
+    run_id, _ = await _seed(sf, run_status=RunStatus.REVIEW_READY, workspace_id=ws)
+    payload = {
+        **_payload(association=association),
+        "action": "created",
+        "connector_account_id": str(account_id),
+        "resource_id": REPO,
+    }
+    async with sf() as s, workspace_session_scope(s, ws):
+        s.add(
+            TriggerEventRow(
+                id=uuid.uuid4(),
+                workspace_id=ws,
+                source="github",
+                trigger_kind=TriggerKind.WEBHOOK,
+                idempotency_key=f"k-{uuid.uuid4().hex}",
+                payload=payload,
+                received_at=datetime.now(UTC),
+            )
+        )
+        await s.commit()
+    await IntakeWorker(session_factory=sf, config=IntakeWorkerConfig()).drain_once()
+    async with sf() as s, workspace_session_scope(s, ws):
+        requests = list((await s.execute(select(RequestRow))).scalars().all())
+    return await _run(sf, run_id, ws), requests
+
+
+_ENGINE: list = []
+
+
+@pytest.fixture
+async def _engine():  # noqa: ANN202
+    async with db_engine(Base) as (engine, _pg):
+        _ENGINE[:] = [engine]
+        yield
+        _ENGINE.clear()
+
+
+async def test_paused_filter_binding_leaves_the_run_alone(_engine) -> None:  # noqa: ANN001
+    run, requests = await _worker_scene(filters={"action": "never"})
+    assert run.status is RunStatus.REVIEW_READY
+    assert "pr_comments" not in run.payload
+    assert requests == []
+
+
+async def test_open_binding_routes_collaborator_comment_to_run(_engine) -> None:  # noqa: ANN001
+    run, requests = await _worker_scene(filters={"action": "created"})
+    assert run.status is RunStatus.OPEN
+    assert [c["body"] for c in run.payload["pr_comments"]] == ["fix the lint"]
+    assert requests == []
+
+
+async def test_worker_does_not_route_a_stranger(_engine) -> None:  # noqa: ANN001
+    run, _requests = await _worker_scene(filters={"action": "created"}, association="NONE")
+    assert run.status is RunStatus.REVIEW_READY
+    assert "pr_comments" not in run.payload

@@ -39,6 +39,7 @@ from backend.notifications.copy import (
 from backend.notifications.emit import emit_notification
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
+from backend.workflow.application.intake.pr_comment import route_pr_comment_to_run
 from backend.workflow.application.intake_gate import (
     IntakeVerdict,
     gate_webhook_work,
@@ -221,6 +222,27 @@ class IntakeWorker(BaseWorker):
                                 workspace_id=str(trig.workspace_id),
                                 source=trig.source,
                             )
+                            count += 1
+                            continue
+
+                    # A comment on a PR BSVibe opened belongs to the run that opened
+                    # it — no new run. Routed HERE, past the binding filter and the
+                    # budget/run-cap gate above, so a paused filter stops it too.
+                    if trig.source == "github":
+                        routed_run_id = await route_pr_comment_to_run(
+                            session,
+                            workspace_id=trig.workspace_id,
+                            payload=dict(trig.payload or {}),
+                        )
+                        if routed_run_id is not None:
+                            trig.payload = {
+                                **(trig.payload or {}),
+                                RECEIVE_FILTERED_KEY: filtered_out_record(
+                                    filters={}, reason=f"routed_to_run:{routed_run_id}"
+                                ),
+                            }
+                            flag_modified(trig, "payload")
+                            await session.flush()
                             count += 1
                             continue
 
