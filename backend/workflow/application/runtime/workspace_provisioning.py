@@ -45,12 +45,30 @@ async def _product_workspace_provisioner(
     from backend.config import get_settings  # noqa: PLC0415 — lazy
     from backend.storage.product_workspace import (  # noqa: PLC0415 — lazy
         ensure_or_init_product_workspace,
+        sync_main_with_origin,
     )
     from backend.workflow.application.run_checkpoint import (  # noqa: PLC0415 — lazy
         provision_run_worktree,
     )
 
     await ensure_or_init_product_workspace(run.product_id)
+
+    async def _github_token() -> str | None:
+        from backend.connectors.auth.resolve import resolve_github_token  # noqa: PLC0415
+        from backend.router.accounts.crypto import cipher_from_settings  # noqa: PLC0415
+
+        try:
+            return await resolve_github_token(
+                session, workspace_id=run.workspace_id, cipher=cipher_from_settings()
+            )
+        except Exception:  # noqa: BLE001 — a public repo fetches without it; failure is reported
+            logger.warning("main_sync_credential_unavailable", run_id=str(run.id))
+            return None
+
+    # GitHub merges PRs the server never sees; a stale local ``main`` makes the run branch from
+    # old code and pollutes its diff. Fast-forward it BEFORE the worktree is made or reused.
+    # Not a fast-forward (local has commits GitHub lacks) is logged, never overwritten.
+    await sync_main_with_origin(run.product_id, _github_token)
     if workspace_dir.exists() and not any(workspace_dir.iterdir()):  # noqa: ASYNC240
         workspace_dir.rmdir()  # noqa: ASYNC240
     # #929 — keep the tree, restore it from its checkpoint, or start it from ``main``; never
