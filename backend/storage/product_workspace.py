@@ -49,6 +49,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
+from backend.storage.branch_point import branch_point
 from backend.workflow.infrastructure.advisory_lock import (
     release_run_dispatch_lock,
     try_run_dispatch_lock,
@@ -619,6 +620,82 @@ async def _configure_repo_identity(repo: Path) -> None:
     await _git("config", "user.email", _GIT_AUTHOR_EMAIL, cwd=repo)
 
 
+MainSyncStatus = Literal[
+    "no_origin", "fetch_failed", "up_to_date", "fast_forwarded", "ahead", "diverged", "ff_failed"
+]
+
+
+async def sync_main_with_origin(  # noqa: PLR0911 — one early return per reportable status
+    product_id: uuid.UUID, credential: Credential | None = None
+) -> MainSyncStatus:
+    """Bring the product repo's local ``main`` up to GitHub's ``main``, never past or over it.
+
+    PRs merge on GitHub while the server's local ``main`` stays where the clone left it, so every
+    new run branched from a stale ``main`` (conflicting with what had already merged) and the
+    deliverable diff showed other PRs' files. Call this before a run worktree is made or reused.
+
+    ``origin`` is fetched (``credential`` is asked only once there is a GitHub origin to fetch,
+    and its token is used for that one fetch only, never written to config) and
+    ``main`` is fast-forwarded. Anything that is not a clean fast-forward is REPORTED, not forced:
+    ``ahead`` / ``diverged`` mean local ``main`` holds commits GitHub lacks, and nothing is
+    overwritten. A product with no GitHub origin (bundle-only) is ``no_origin``. Never raises.
+    """
+    repo = product_workspace_path(product_id)
+    pid = str(product_id)
+    try:
+        origin = (await _git("remote", "get-url", "origin", cwd=repo, check=False)).stdout.strip()
+        if "://" not in origin and not origin.startswith("git@"):
+            return "no_origin"
+        token = await credential() if credential is not None else None
+        url = _authed_fetch_url(origin, token) if token else origin
+        fetched = await _git(
+            "fetch", "--quiet", url, "+main:refs/remotes/origin/main", cwd=repo, check=False
+        )
+        if fetched.returncode != 0:
+            logger.warning(
+                "product_main_fetch_failed",
+                product_id=pid,
+                stderr=(fetched.stderr.replace(token, "***") if token else fetched.stderr)[:300],
+            )
+            return "fetch_failed"
+        local = (await _git("rev-parse", "main", cwd=repo)).stdout.strip()
+        remote = (await _git("rev-parse", "refs/remotes/origin/main", cwd=repo)).stdout.strip()
+        if local == remote:
+            return "up_to_date"
+        if (
+            await _git("merge-base", "--is-ancestor", remote, local, cwd=repo, check=False)
+        ).returncode == 0:
+            logger.warning(
+                "product_main_ahead_of_origin", product_id=pid, local=local[:12], origin=remote[:12]
+            )
+            return "ahead"
+        if (
+            await _git("merge-base", "--is-ancestor", local, remote, cwd=repo, check=False)
+        ).returncode != 0:
+            logger.warning(
+                "product_main_diverged_from_origin",
+                product_id=pid,
+                local=local[:12],
+                origin=remote[:12],
+            )
+            return "diverged"
+        head = (await _git("symbolic-ref", "--short", "HEAD", cwd=repo, check=False)).stdout
+        if head.strip() == "main":
+            moved = await _git("merge", "--ff-only", "--quiet", remote, cwd=repo, check=False)
+        else:
+            moved = await _git(
+                "update-ref", "refs/heads/main", remote, local, cwd=repo, check=False
+            )
+        if moved.returncode != 0:
+            logger.warning("product_main_ff_failed", product_id=pid, stderr=moved.stderr[:300])
+            return "ff_failed"
+        logger.info("product_main_fast_forwarded", product_id=pid, to=remote[:12])
+        return "fast_forwarded"
+    except (ProductWorkspaceError, OSError):
+        logger.warning("product_main_sync_failed", product_id=pid, exc_info=True)
+        return "fetch_failed"
+
+
 async def add_run_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> Path:
     """``git worktree add var/runs/<rid> -b bsvibe/run/<rid> main``.
 
@@ -1024,11 +1101,23 @@ async def delete_run_checkpoint(
     await store.delete(run_id)
 
 
-async def capture_run_diff(product_id: uuid.UUID, run_id: uuid.UUID) -> str | None:
-    """The run's OWN changes as a unified diff (``git diff main...HEAD``), or ``None``.
+async def _run_branch_point(worktree: Path) -> str | None:
+    """The run's branch point, read through the decision the verify gate shares."""
 
-    Three-dot ``main...HEAD`` diffs against the merge-base of main and the run
-    branch, so it captures exactly what THIS run produced — new files as
+    async def query(args: tuple[str, ...]) -> tuple[int, str]:
+        result = await _git(*args, cwd=worktree, check=False)
+        return result.returncode, result.stdout
+
+    return await branch_point(query)
+
+
+async def capture_run_diff(product_id: uuid.UUID, run_id: uuid.UUID) -> str | None:
+    """The run's OWN changes as a unified diff (``git diff <branch point> HEAD``), or ``None``.
+
+    The branch point is :func:`backend.storage.branch_point.branch_point` — the SAME point the
+    verify gate measures from — not a literal local ``main``, which can lag ``origin/main`` and
+    would show other PRs' files as this run's. Diffing from the merge-base captures
+    exactly what THIS run produced — new files as
     additions, edited files as red/green — and excludes anything that arrived by
     merging main in (the verify-time :func:`merge_main_into_worktree`).
 
@@ -1044,7 +1133,10 @@ async def capture_run_diff(product_id: uuid.UUID, run_id: uuid.UUID) -> str | No
     if not (worktree / ".git").exists():
         return None
     try:
-        result = await _git("diff", "--no-color", "main...HEAD", cwd=worktree, check=False)
+        base = await _run_branch_point(worktree)
+        if base is None:
+            return None
+        result = await _git("diff", "--no-color", base, "HEAD", cwd=worktree, check=False)
     except (ProductWorkspaceError, OSError):
         return None
     if result.returncode != 0:
@@ -1054,7 +1146,7 @@ async def capture_run_diff(product_id: uuid.UUID, run_id: uuid.UUID) -> str | No
 
 
 async def capture_run_changed_paths(product_id: uuid.UUID, run_id: uuid.UUID) -> list[str] | None:
-    """The paths this run actually CHANGED (``git diff --name-only main...HEAD``),
+    """The paths this run actually CHANGED (``git diff --name-only <branch point> HEAD``),
     or ``None`` when that cannot be determined.
 
     The sibling of :func:`capture_run_diff` and deliberately the SAME ref range,
@@ -1073,7 +1165,10 @@ async def capture_run_changed_paths(product_id: uuid.UUID, run_id: uuid.UUID) ->
     if not (worktree / ".git").exists():
         return None
     try:
-        result = await _git("diff", "--name-only", "main...HEAD", cwd=worktree, check=False)
+        base = await _run_branch_point(worktree)
+        if base is None:
+            return None
+        result = await _git("diff", "--name-only", base, "HEAD", cwd=worktree, check=False)
     except (ProductWorkspaceError, OSError):
         return None
     if result.returncode != 0:
