@@ -332,7 +332,8 @@ class ConnectorDeliveryAdapter:
             deliverable_id=deliverable_id,
             artifact_type=_result_artifact_type(artifact_type),
             actions=actions,
-            error=None if any(a.succeeded for a in actions) or not actions else actions[-1].error,
+            # Any failed action (the github one carries the code) = NOT shipped.
+            error=next((a.error or "action failed" for a in actions if not a.succeeded), None),
         )
 
 

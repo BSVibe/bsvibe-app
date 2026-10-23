@@ -471,6 +471,47 @@ async def ship_delivered_review_ready_runs(session: AsyncSession, *, limit: int 
     return shipped
 
 
+async def find_shipped_runs_with_awaiting_merge(
+    session: AsyncSession, *, limit: int = 200
+) -> list[tuple[uuid.UUID, int | None]]:
+    """Operational query: runs that are ``shipped`` yet still carry ``awaiting_merge``.
+
+    A run with an open PR waits at ``review_ready`` for the merge, so ``shipped`` plus the
+    marker means a delivery that did not actually land shipped it (2026-10-23, run
+    ``f7c5b4d1``: the github push failed, telegram succeeded). Returns ``(run_id, pr_number)``
+    and logs each as ``run_shipped_with_awaiting_merge`` so it can be grepped.
+    """
+    from backend.data.rls import cross_tenant_session_read  # noqa: PLC0415
+
+    async with cross_tenant_session_read(session):
+        runs = (
+            (
+                await session.execute(
+                    select(ExecutionRun).where(ExecutionRun.status == RunStatus.SHIPPED)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    found: list[tuple[uuid.UUID, int | None]] = []
+    for run in runs:
+        payload = run.payload if isinstance(run.payload, dict) else {}
+        marker = payload.get(AWAITING_MERGE_KEY)
+        if marker is None:
+            continue
+        pr_number = marker.get("pr_number") if isinstance(marker, dict) else None
+        logger.warning(
+            "run_shipped_with_awaiting_merge",
+            run_id=str(run.id),
+            workspace_id=str(run.workspace_id),
+            pr_number=pr_number,
+        )
+        found.append((run.id, pr_number))
+        if len(found) >= limit:
+            break
+    return found
+
+
 async def _ship_run_via_review_ready(
     session: AsyncSession,
     run: ExecutionRun,
@@ -497,6 +538,7 @@ __all__ = [
     "AUTO_RESOLVED_DELIVERABLE_SHIPPED",
     "SYSTEM_AUTO_RESOLVE_ACTOR_ID",
     "auto_resolve_run_on_delivery",
+    "find_shipped_runs_with_awaiting_merge",
     "ship_delivered_review_ready_runs",
     "ship_if_delivered",
 ]

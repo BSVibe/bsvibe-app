@@ -260,6 +260,15 @@ class GitOps:
         except ValueError:
             return False
 
+    async def last_pushed_sha(self, dest: Path, branch: str) -> str | None:
+        """The sha this checkout last pushed ``branch`` at (its remote-tracking ref), or
+        ``None`` when it never pushed the branch."""
+        code, out, _err = await self._run(
+            "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}", cwd=dest
+        )
+        sha = out.strip()
+        return sha if code == 0 and sha else None
+
     async def push(self, dest: Path, branch: str, *, token: str | None) -> None:
         """Push ``branch`` to ``origin``.
 
@@ -272,10 +281,16 @@ class GitOps:
             origin = await self._run_checked("remote", "get-url", "origin", cwd=dest)
             authed = self.authed_url(origin.strip(), token=token)
             await self._run_checked("remote", "set-url", "origin", authed, cwd=dest, token=token)
+        # A run branch is BSVibe's own: a re-opened run that rebased onto a newer main has
+        # diverged from what we pushed last, so a plain push is rejected non-fast-forward.
+        # Force it, but only against the sha WE last pushed (the remote-tracking ref) -- if
+        # anyone else pushed since, the lease refuses and the push fails.
+        last_pushed = await self.last_pushed_sha(dest, branch)
+        push_args = ["push", "--set-upstream"]
+        if last_pushed is not None:
+            push_args.append(f"--force-with-lease={branch}:{last_pushed}")
         try:
-            await self._run_checked(
-                "push", "--set-upstream", "origin", branch, cwd=dest, token=token
-            )
+            await self._run_checked(*push_args, "origin", branch, cwd=dest, token=token)
         finally:
             # SECURITY — the push re-embedded the token into ``origin``; scrub it
             # back so a live credential never persists in ``.git/config`` on disk.
