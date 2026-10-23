@@ -219,6 +219,8 @@ async def _open_pr_and_settle(
                 },
             )
         except Exception as exc:  # noqa: BLE001 — soft-fail like the PR-url writeback
+            if _is_issues_permission_denied(exc):
+                _warn_issues_write_missing_once(workspace_id, binding.repo, source_issue)
             logger.warning(
                 "github_delivery_issue_comment_failed",
                 workspace_id=str(workspace_id),
@@ -237,6 +239,35 @@ async def _open_pr_and_settle(
         pushed_by=pushed_by,
     )
     return [ActionResult(action=action_prefix, succeeded=True, output=output)]
+
+
+_ISSUES_WRITE_HINT = (
+    "GitHub App 에 Issues 쓰기 권한이 없다 — GitHub App 설정(Permissions & events)에서 "
+    "Issues 를 'Read and write' 로 올린 뒤 설치 갱신을 승인하라"
+)
+# Workspaces already told in this process — the 403 repeats on every delivery, the
+# founder needs the cause once, not once per PR.
+_issues_write_warned: set[uuid.UUID] = set()
+
+
+def _is_issues_permission_denied(exc: BaseException) -> bool:
+    """True when ``exc`` is GitHub's 403 "Resource not accessible by integration"."""
+    text = str(exc)
+    return "403" in text and ("Resource not accessible" in text or "Forbidden" in text)
+
+
+def _warn_issues_write_missing_once(workspace_id: uuid.UUID, repo: str, issue_number: int) -> None:
+    """Surface the missing ``issues: write`` permission once per workspace."""
+    if workspace_id in _issues_write_warned:
+        return
+    _issues_write_warned.add(workspace_id)
+    logger.error(
+        "github_app_issues_write_permission_missing",
+        workspace_id=str(workspace_id),
+        repo=repo,
+        issue_number=issue_number,
+        hint=_ISSUES_WRITE_HINT,
+    )
 
 
 async def _persist_pr_url(
