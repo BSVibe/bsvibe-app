@@ -214,14 +214,23 @@ async def workspace_session_scope(
     So this publishes the GUC explicitly (the same thing ``api/deps.py`` and
     ``mcp/server.py`` do after resolving a request's workspace) and clears it on
     the way out, leaving the transaction with no tenant for whatever runs next.
+
+    Nested, it restores the OUTER scope's workspace instead of clearing: a helper
+    that scopes itself inside a caller's scope must not strip the caller's tenant
+    (prod 2026-10-23 — the intake worker's next INSERT ran with no GUC and failed
+    RLS on every iteration).
     """
+    outer = current_workspace_id.get()
     with workspace_scope(workspace_id):
         conn = await session.connection()
         await set_workspace_guc(conn, workspace_id)
         try:
             yield
         finally:
-            await clear_workspace_guc(await session.connection())
+            if outer is not None:
+                await set_workspace_guc(await session.connection(), outer)
+            else:
+                await clear_workspace_guc(await session.connection())
 
 
 _listener_installed = False
