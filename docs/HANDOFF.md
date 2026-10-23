@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-22
+# BSVibe session handoff — 2026-10-23
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,7 +21,41 @@
 
 ---
 
-## §0 — One line: **#929's code is done — the vault and skills can live in Postgres, and a second machine no longer loses work; turning it on is 형님's step**
+## §0 — One line: **BSVibe now fixes BSVibe — issues, review comments and red CI go back to the run that owns the PR; 15 harness/delivery defects found and fixed through that loop**
+
+10-22 → 10-23. Every code change below was written by BSVibe itself from a GitHub issue or a PR comment,
+reviewed here, approved in Safe Mode, and merged by its own merge watch — except where noted.
+
+| PR | Issue | What | |
+|---|---|---|---|
+| #1206 | #1202 | worker re-register: 409 instead of 500 on a live same-name worker; `register` defaults to the login issuer | ✅ |
+| #1210 | #1209 | the delivery sweep no longer re-"ships" a run awaiting merge every 5 s | ✅ |
+| #1211 | #1208 | a re-opened run: baseline = branch point; `NO_FAILURE_FOUND` / 3× same failure → Decision; "zero gate commands" is reported; founder answers reach the gate deriver | ✅ |
+| #1213 | #1212 | the baseline is re-read every round and picks the newer of `main` / `origin/main` | ✅ |
+| #1214 | #1203 | `python -m backend.identity.revoke_access_tokens` + OAuth key rotation runbook §3b | ✅ |
+| #1217 | #1216 | verification and the deliverable diff share one branch point (`backend/storage/branch_point.py`) | ✅ |
+| #1218 | #1215 | a failed GitHub action = not delivered, not shipped, one `delivery_failed` Decision; run branches push `--force-with-lease` | ✅ merged by hand (see §Ⅱ-g) |
+| #1219 | (#1218 review) | `delivery_failed` gets a question and working "send again / discard" actions | ✅ |
+| #1222 | #1221 | the GitHub App manifest asks `issues: write` (+ runbook `github-app-permissions.md`) | ✅ merged by hand |
+| #1223 | #1220 | a write-access reviewer's comment on a BSVibe PR goes to the run that opened it; everyone else's is a new request | ✅ merged by hand after a 600-LOC split |
+| #1225 | — | **hotfix:** a nested `workspace_session_scope` restores the outer tenant (intake outage 09:21–09:22Z) | ✅ written here |
+| #1226 | #1207 | KMS `PREVIOUS_KEYS` reaches the containers; rewrap runbook command | ✅ |
+| #1227 | #1224 | merge watch: per-head CI deadline, red CI sent back to the run (×2), "fix it again", watches a given-up PR until it merges/closes | ✅ merged by hand; its 400-LOC fix came through a PR comment routed to the same run (#1223) and was force-with-lease pushed to the same PR (#1218) |
+
+Also: #1204 (token connectors cannot rotate their token — open), #1205 (vault cut-over record, by hand).
+
+**Operational state, 10-23:**
+- **Vault + skills are rows** since 10-22 03:29Z; positive proof seen 10-22 08:19Z (a new `seeds/request/…` landed as a
+  `vault_documents` row, 0 files written under `/app/var/vault` since the cut-over). Keep the directories until 10-29.
+- **Telegram** moved to connector `a5fb238c` (10-22): chat_id + `authorized_user_ids` re-set, both bindings re-created,
+  webhook re-registered. First real send is the 10-26 report.
+- **GitHub App `bsvibe` now has Issues: write** — granted on BOTH installations (`blas1n` and the `BSVibe` org; each
+  installation approves separately). Probe: an empty-body `POST …/issues/<n>/comments` → 422.
+- **Credentials:** `rewrap` dry-run `current 26 · would rewrap 0 · undecryptable 0`.
+- Runs `7709a7a2`, `6fa72ec1`, `e2756fcd` had sat at `review_ready` after their PRs merged (the watch had given up);
+  they moved to `shipped` at 11:46Z, right after #1227 deployed (migration `merge_watch_ci_fix` ran).
+
+## §0-b — previous session (10-21 → 10-22): **#929's code is done — the vault and skills can live in Postgres, and a second machine no longer loses work; turning it on is 형님's step**
 
 10-21 → 10-22. All five deployed (`bsvibe-app.deployed` = `0e03c308`), host worker restarted 10-21 16:25 KST.
 **The vault and skills now live in Postgres** (cut-over 10-22 03:29Z — §Ⅲ 1).
@@ -40,28 +74,7 @@
 carries `authorized_user_ids: ["8242700007"]` with `chat_id` unchanged, so the migration ran and seeded the
 allowlist. The live taps remain (1:1, group, a refused tapper) (`docs/e2e/telegram-approval-allowlist-checklist.md` §B).
 
-## §0-b — previous session (10-19 → 10-21): **a run can move between machines without losing its work; codex is on the MCP surface; cloud sessions see the rules**
-
-10-19 → 10-21. Every GitHub write went pause → act → CI green → merge → no new run → restore (§Ⅳ).
-
-| PR | Issue | What | Prod check |
-|---|---|---|---|
-| #1183 | #1000 | codex agent runs act only through the BSVibe MCP surface (`view_image` allowed, models pinned to ones without `apply_patch`); opencode measured | ✅ deployed · ⏳ **형님:** one live codex run |
-| #1184 | #967 | an executor wait timeout says what it read in scope and what the row says unscoped — starvation vs an invisible row | ✅ deployed |
-| #1185 | #961 | the PWA can schedule a product's autonomous check (`product_tick`); deleting a product removes its schedules | ✅ deployed |
-| #1186 | #951 | cloud sessions get the rules: repo `CLAUDE.md` + a SessionStart hook (`.claude/hooks/install-skills.sh`) that installs `blas1n/claude-skills` — `docs/runbook/agent-context.md` | ✅ merged |
-| #1187 | #929 | the OAuth rate limit is shared across backend replicas (Redis sliding window, Lua) | ✅ deployed |
-| #1188 | #929 | a machine's product repo follows the bundle another machine shipped (fast-forward only) | ✅ deployed |
-| #1189 | #929 | verify disk slots are per machine — **`BSVIBE_MACHINE_ID`** (empty = single box) | ✅ deployed |
-| #1190 | #929 | a run's worktree (branch + uncommitted edits) is checkpointed to R2 before every claim release and restored on another machine; a run that cannot be restored is **refused**, never re-branched from `main` | ✅ deployed (inert: no machine id) |
-| #1191 | #929 | `execution_runs.home_machine` — stamped on claim, cleared on every release | ✅ migration `run_home_machine` ran |
-| #1192 | #929 | an MCP work-tool call for a run whose home is another machine is forwarded there (`bsvibe:machine:<id>` stream, at most once, deadline, refusal round-trips) | ✅ deployed, `mcp_lifespan_starting` clean (inert) |
-| #1193 | #929 | a finished run's R2 checkpoint is swept (DB-driven: the store cannot list) | ✅ deployed, host worker restarted 10-20 |
-
-Closed: **#1000**, **#967**, **#961**, **#951**. **#929** stage 1 of 4 done (`docs/design/stateless-workers.md`).
-Everything #929 is gated on `BSVIBE_MACHINE_ID`; prod leaves it empty, so the single box behaves as before.
-
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23)
 
 | | |
 |---|---|
@@ -78,6 +91,9 @@ Everything #929 is gated on `BSVIBE_MACHINE_ID`; prod leaves it empty, so the si
 | **#929 = B: state lives in R2, any machine can take over** (10-20) | Not "pin a run to its machine". Stage 1 (run worktrees, tool calls) is done; **no second machine before stages 1–4 are live**, each machine with its own `BSVIBE_MACHINE_ID` |
 | **The vault and skills move into Postgres rows, Markdown unchanged** (10-21) | #929 stage 2: one `vault_documents` table behind `StorageBackend`, import/export to a directory. Not R2 objects, not a shared mount — `docs/design/stateless-workers.md` §5 |
 | **Live UI checks sign in on the disposable stack** (10-19) | `admin@bsvibe.dev` + `~/.bsvibe/e2e-live.password` into `BSVIBE_E2E_PASSWORD` only, never printed, never prod. Export just the 4 public IdP keys from `.env.prod` |
+| **Anyone's issue or comment is work — by design** (10-23) | A real AI-agent company answers an incoming issue at once; the front triage drops the noise. Do not gate intake by author. Only a path that writes straight into a running run (a PR review comment → its run, #1223) requires OWNER / MEMBER / COLLABORATOR; anyone else's comment is a normal new request |
+| **BSVibe fixes BSVibe** (10-23) | Code changes go through BSVibe: an issue, or a comment on its PR. Review the deliverable, deny with a reason (`rejected_approach`) or approve; BSVibe's merge watch merges. Hand-written code only to unblock that loop itself (#1223's split, #1225's hotfix) |
+| **A PR review comment fixes THAT PR** (10-23) | It goes to the run that opened the PR (same branch, force-with-lease), never a second PR off main (#1220/#1223) |
 
 ## §Ⅱ — What this session found that the issues had wrong
 
@@ -165,34 +181,38 @@ Everything #929 is gated on `BSVIBE_MACHINE_ID`; prod leaves it empty, so the si
 * **A `--depth=1` clone cannot be bundled**, so a product bootstrapped shallow could not be restored on another
   machine (#1198).
 
+## §Ⅱ-g — What 10-22/23 found
+
+* **Merges by BSVibe show as `blas1n`.** The GitHub App acts with a user-to-server token (`ghu_`), so "merged by blas1n"
+  is usually the merge watch, not 형님 — read `github_merge_watch.status` before telling 형님 to merge.
+* **A comment on a BSVibe PR used to fork a second PR, and its merge closed the first** — BSVibe closes the
+  originating "issue" after a merge, and the originating issue of a PR comment is that PR. #1218 was closed unmerged
+  this way and recovered by hand (#1220 → #1223 fixed the routing).
+* **A nested `workspace_session_scope` stripped the outer tenant** → `INSERT INTO requests` failed RLS on every
+  intake iteration (10-23 09:21Z). Pausing the binding filter drained the poisoned trigger in one tick (the filter
+  runs before routing); #1225 fixed the scope. SQLite tests cannot see this — a PG test now pins it.
+* **A run's own verification only runs the tests it chose.** Two PRs went red in CI on repo-wide guards the run never
+  ran (`test_every_decision_has_a_way_out`, `test_h2a_decomposition` 600 LOC). Read CI, not only the deliverable.
+* **The merge watch gives up on PRs it touched itself** (deadline not restarted after its own freshen; red CI had no
+  way back to the run; a given-up PR's later merge was never noticed) → #1224/#1227.
+* **A re-opened run measured its changes from the wrong point** — its own first attempt vanished, then main's commits
+  leaked in after a mid-drive rebase, then a stale local `main` did the same → #1211/#1213/#1217. A run that could not
+  pass looped 30 rounds (~960k tokens) on `NO_FAILURE_FOUND`; Claude Code followed the harness's instruction exactly.
+* **The App manifest never asked `issues: write`**, so the "PR opened" comment on the issue had always 403'd.
+
 ## §Ⅲ — Next
 
-0. **10-26 (Mon) 00:30 UTC weekly run** — must end `shipped` with one Telegram message, no human step (#1180).
-   Also: BStockReport (`6c19a033`) was bootstrapped shallow before #1198, so the reclaim sweep logs
-   `product_bundle_publish_skipped_shallow` every 5 min (it publishes without a credential, and correctly keeps the repo).
-   The ship passes the GitHub credential and should unshallow it — after 10-26 that warning should stop. If it does
-   not, the repo cannot reach the bundle store and blocks a second machine for that product.
-1. **#929 turn-on** — in this order, each checked before the next:
-   1. ✅ **vault cut-over done 2026-10-22 03:29Z** (founder-approved, run by the agent in manual mode):
-      dry-run `would write 4230 · skipped 0` → backend + worker stopped → import `wrote 4230`, re-run
-      `unchanged 4230` → `BSVIBE_KNOWLEDGE_STORE_BACKEND=postgres` in `.env.prod` → recreated (both containers
-      print `postgres`). Rows: vault 4,227 (`5fa3494c` 4,184 · `6515bfc2` 43), skills 3 (all `6515bfc2`).
-      Tags, recent notes and skills over MCP identical before/after; no error in either log. Backup just
-      before: `bsvibe_2026-10-22_1226.sql.gz` + vault tgz, both off-box.
-      ⏳ **Positive proof still missing:** nothing has written to the vault since. The next write (at the latest
-      the 10-26 run's `seeds/request/<id>.md`) must appear as a `vault_documents` row and **not** as a file
-      under `/app/var/vault`. Keep `/app/var/vault` and `/app/var/skills` untouched until 10-29.
-   2. a `BSVIBE_MACHINE_ID` per box (the single box first, alone) — after (1) has its positive proof, so two
-      new paths do not go live at once. `BSVIBE_PRODUCT_BUNDLE_BACKEND=s3` is already set;
-   3. only then a second machine (runbook §"A second box"). Known, not blocking: `docs/design/stateless-workers.md` §6.
-2. **#930** — 2M tuning still cannot be done. 10-22: this month the founder workspace spent 1.42M of 50M
-   (runs 1,276,847 + ledger 139,612); since 10-01 only **2 shipped runs** (p50 27k, max 403k) — not a sample.
-3. ⏳ 형님's batch: codex live run (#1183, needs `codex login`) · #1046 live taps (1:1, then a group binding
-   and a second person).
-   #1173 rewrap dry-run done 10-22: `current 5 · would rewrap 20 · undecryptable 0` — `--apply` not run
-   (it rewrites secrets; only needed before a key rotation, harmless to leave).
-   Walks: #1174 server-sandbox secrets checklist, #1176/#1177 on the next runs.
-4. Outside the repo: #937 (cold-boot test, Supabase SMTP). Carry-overs in GitHub issues.
+0. **10-26 (Mon) 00:30 UTC weekly run** — must end `shipped` with one Telegram message, no human step (#1180), and is the
+   first send through the new Telegram connector `a5fb238c`. After it, BStockReport's
+   `product_bundle_publish_skipped_shallow` warning (every 5 min) should stop — if not, that product cannot reach the
+   bundle store.
+1. **#929 turn-on** — the vault cut-over is done and proven (§0). Next: a `BSVIBE_MACHINE_ID` on this box alone, then
+   a second machine (`docs/runbook/vault-to-postgres.md` §"A second box"). Keep `/app/var/vault` until 10-29.
+2. **Open follow-ups:** #1204 (token connectors cannot rotate a token in place) · the `merge_watch` CI hand-back sends the
+   check's name but GitHub Actions' `output.summary` is usually empty (the run re-runs the tests itself) · #1221 only
+   logs a missing App permission — tell 형님 instead.
+3. **#930** — 2M tuning still has no sample (2 shipped runs since 10-01).
+4. ⏳ 형님's batch: codex live run (#1183) · #1046 live taps · #937 outside the repo.
 
 ## §Ⅳ — Discipline that paid off
 
@@ -227,8 +247,9 @@ Everything #929 is gated on `BSVIBE_MACHINE_ID`; prod leaves it empty, so the si
 * **🔐 Agents cannot read prod containers or the prod DB** (`docker exec` / `inspect` / `psql` are refused
   as production reads). `docker --context colima logs` works and is where the drive loop's events are
   (`bsvibe-prod-worker-1`); `backend-1` carries the MCP / API side.
-* **🐳 Default docker context is `colima-palworld`; prod is `colima`.** Pass `--context colima`; never
-  `docker context use`.
+* **🐳 The default docker context is now prod (`colima`) — `colima-palworld` is gone (seen 10-23).** Always pass
+  `--context colima` explicitly, never `docker context use`, and do not start throwaway containers on this box: there
+  is no non-prod docker here any more. Verify on Postgres through CI.
 * **📏 `_drive_loop.py` is at 581 / 600** (`test_h2a_decomposition`). New loop logic goes to `_loop_turn.py`.
 * **🔪⭐ Never wire-cut while a suite runs in the background.** Cuts rewrite source files; a background run
   imports whatever is on disk at that moment. Stop it, cut, restore, then rerun.
