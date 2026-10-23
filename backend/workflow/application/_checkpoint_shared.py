@@ -98,6 +98,33 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
 }
 
 
+def _delivery_failed_question(payload: dict[str, object], language: str) -> str:
+    """What did not go out, and why: each failed action and its error (``failures``)."""
+    raw = payload.get("failures")
+    parts: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        action = str(item.get("action") or "").strip()
+        error = str(item.get("error") or "").strip()
+        if action:
+            parts.append(f"{action} ({error})" if error else action)
+    detail = "; ".join(parts)
+    if language == "ko":
+        head = "결과물을 내보내지 못했어요"
+        return (
+            f"{head} — {detail}. 다시 보낼까요, 폐기할까요?"
+            if detail
+            else f"{head} — 다시 보낼까요, 폐기할까요?"
+        )
+    head = "BSVibe couldn't send this out"
+    return (
+        f"{head} — {detail}. Send it again, or discard it?"
+        if detail
+        else f"{head} — send it again, or discard it?"
+    )
+
+
 def _round_cap_reached_question(payload: dict[str, object], language: str) -> str:
     """The Brief line for a ``round_cap_reached`` ``verification_failed`` Decision.
 
@@ -158,6 +185,9 @@ _EXECUTOR_DECISION_REASON_QUESTIONS: dict[str, dict[str, str]] = {
 # :func:`~backend.workflow.application.checkpoint_resolution.resolve_checkpoint`.
 # Adding a new action = one entry here + one handler. New Decision kinds may
 # opt in by adding themselves to this map.
+#: The Decision kind raised when a deliverable's delivery (push, outbound) failed.
+DELIVERY_FAILED_DECISION_KIND = "delivery_failed"
+
 ACTION_SHIP = "ship"
 ACTION_DISCARD = "discard"
 # L2 (#9): re-open the paused run for another attempt instead of shipping a
@@ -237,6 +267,13 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
         DecisionAction(key=ACTION_ACKNOWLEDGE, label_en="Got it", label_ko="확인했어요"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
+    # The push / outbound delivery of a deliverable failed. ``retry`` here puts the
+    # deliverable's delivery event back (``checkpoint_resolution``) — it does NOT
+    # re-drive the run, whose work is done. ``discard`` lets the delivery go.
+    DELIVERY_FAILED_DECISION_KIND: [
+        DecisionAction(key=ACTION_RETRY, label_en="Send again", label_ko="다시 보내기"),
+        DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
+    ],
     # W1: the ship_or_discard kind from L-P2 is retired. Verified runs no
     # longer need a founder-approval gate; W2 wires the actual auto-merge.
 }
@@ -266,6 +303,8 @@ def _question_text(decision: Decision, language: str = "en") -> str:
         reason = str(payload.get("reason") or "")
         if reason == "round_cap_reached":
             return _round_cap_reached_question(payload, language)
+        if decision.decision == DELIVERY_FAILED_DECISION_KIND:
+            return _delivery_failed_question(payload, language)
     # A reason-specific line wins over the kind's generic one, for a kind with
     # several distinct ways to arrive (``merge_watch_stalled``): the founder
     # reads what actually happened instead of a catch-all.
@@ -299,6 +338,7 @@ __all__ = [
     "ACTION_DISCARD",
     "ACTION_RETRY",
     "ACTION_SHIP",
+    "DELIVERY_FAILED_DECISION_KIND",
     "DecisionAction",
     "_decision_actions",
     "_decision_options",

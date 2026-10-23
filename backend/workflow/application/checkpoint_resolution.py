@@ -39,6 +39,7 @@ from backend.workflow.application._checkpoint_shared import (
     ACTION_DISCARD,
     ACTION_RETRY,
     ACTION_SHIP,
+    DELIVERY_FAILED_DECISION_KIND,
     _decision_actions,
     _decision_options,
     _question_text,
@@ -395,6 +396,10 @@ async def resolve_checkpoint(
         )
     elif action_key == ACTION_DISCARD:
         await _discard_decision_run(runner, session, run=run, decision=decision)
+    elif action_key == ACTION_RETRY and decision.decision == DELIVERY_FAILED_DECISION_KIND:
+        # "Send again": the work is done, only its delivery failed. Put the
+        # deliverable's delivery event back — the run is NOT re-driven.
+        await _redeliver(session, deliverables, run=run, decision=decision)
     elif action_key == ACTION_ACKNOWLEDGE:
         # A report, not a fork in the work (``merge_watch_stalled``): the founder
         # has seen it. The Decision is RESOLVED above; the run is deliberately
@@ -762,6 +767,65 @@ def _emit_founder_approved_delivery(
             },
         ),
         producer_id="workflow:checkpoint_ship",
+    )
+
+
+async def _redeliver(
+    session: AsyncSession,
+    deliverables: DeliverableRepository,
+    *,
+    run: ExecutionRun,
+    decision: Decision,
+) -> None:
+    """``delivery_failed`` → ``retry``: emit the deliverable's delivery event again.
+
+    The deliverable is the one the Decision names (``payload.deliverable_id``), else
+    the run's first. The founder's click is the approval, so the event is marked
+    founder-approved and Safe Mode does not ask a second time.
+    """
+    from backend.workflow.channels import DELIVERY_EVENTS  # noqa: PLC0415 — cross-domain
+    from backend.workflow.domain.delivery import FOUNDER_APPROVED_KEY  # noqa: PLC0415
+    from backend.workflow.infrastructure.delivery.db import (  # noqa: PLC0415
+        DeliveryEventRow,
+    )
+
+    recorded = decision.payload if isinstance(decision.payload, dict) else {}
+    deliverable: Deliverable | None = None
+    try:
+        named = uuid.UUID(str(recorded.get("deliverable_id")))
+    except ValueError:
+        named = None
+    if named is not None:
+        deliverable = await session.get(Deliverable, named)
+        if deliverable is not None and deliverable.run_id != run.id:
+            deliverable = None
+    if deliverable is None:
+        deliverable = await deliverables.find_first_by_run(run.id)
+    if deliverable is None:
+        raise InvalidAction(f"Run {run.id} has no deliverable to send again")
+
+    artifact_refs = (deliverable.payload or {}).get("artifact_refs")
+    DELIVERY_EVENTS.emit(
+        session,
+        DeliveryEventRow(
+            id=uuid.uuid4(),
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            deliverable_id=deliverable.id,
+            artifact_type=deliverable.deliverable_type.value,
+            payload={
+                "artifact_refs": artifact_refs if isinstance(artifact_refs, list) else [],
+                "summary": f"Sent again by the founder after {decision.decision}",
+                FOUNDER_APPROVED_KEY: True,
+            },
+        ),
+        producer_id="workflow:checkpoint_redeliver",
+    )
+    logger.info(
+        "checkpoint_delivery_resent",
+        run_id=str(run.id),
+        deliverable_id=str(deliverable.id),
+        decision_id=str(decision.id),
     )
 
 
