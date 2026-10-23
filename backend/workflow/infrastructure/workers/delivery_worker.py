@@ -71,7 +71,7 @@ from backend.workers.base import BaseWorker
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.channels import DELIVERY_EVENTS
 from backend.workflow.domain.delivery import FOUNDER_APPROVED_KEY, ActionResult, DeliveryResult
-from backend.workflow.infrastructure.db import Deliverable
+from backend.workflow.infrastructure.db import Decision, DecisionStatus, Deliverable
 from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
 
 logger = structlog.get_logger(__name__)
@@ -343,6 +343,21 @@ async def _escalate_failed_delivery(
             return  # nothing was attempted (no delivery target) -- not a failure
         failures = [{"action": "delivery", "error": result.error}]
     reason = "; ".join(f"{f['action']}: {f['error']}" for f in failures)
+    # One question per incident: the worker retries a failed event and re-dispatches each
+    # time, so an OPEN ``delivery_failed`` for this deliverable already asks the founder.
+    open_rows = await session.execute(
+        select(Decision).where(
+            Decision.run_id == run.id,
+            Decision.decision == "delivery_failed",
+            Decision.status == DecisionStatus.PENDING,
+        )
+    )
+    if any(
+        (row.payload or {}).get("deliverable_id") == str(deliverable_id)
+        for row in open_rows.scalars()
+    ):
+        logger.info("delivery_failure_decision_already_open", deliverable_id=str(deliverable_id))
+        return
     if _create_decision is None:
         logger.error("delivery_failure_decision_unwired", deliverable_id=str(deliverable_id))
         return
