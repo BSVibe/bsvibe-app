@@ -18,9 +18,11 @@ from typing import TYPE_CHECKING, Any
 
 from backend.workflow.application._loop_context import (
     _consume_merge_conflict,
+    _consume_pr_comments,
     _initial_user_message,
     _intent_title,
     _merge_conflict_directive,
+    _pr_comment_messages,
     _resumption_messages,
     is_client_attach_run,
     settle_client_attach,
@@ -178,6 +180,10 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     if conflict_directive is not None:
         messages.append(conflict_directive)
         _consume_merge_conflict(run)
+    # A founder review comment on this run's PR: read it once, then clear it.
+    if pr_comment_messages := _pr_comment_messages(run):
+        messages.extend(pr_comment_messages)
+        _consume_pr_comments(run)
     attempt.phase = RunAttemptPhase.WORKING
     await orch._session.flush()
 

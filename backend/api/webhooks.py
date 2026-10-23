@@ -68,6 +68,7 @@ from backend.shared.wire_kinds import (
     PAYLOAD_KEY_RESOURCE_ID,
 )
 from backend.workers.emit import STREAM_INTAKE, emit_stream_notification, get_emit_redis_client
+from backend.workflow.application.intake.pr_comment import route_pr_comment_to_run
 from backend.workflow.application.intake.webhook import WebhookOutcome, WebhookReceiver
 from bsvibe_sdk import WebhookSignatureError
 
@@ -381,6 +382,12 @@ async def _land_trigger(
     onto when the founder's binding matches. The caller commits.
     """
     payload: dict[str, Any] = dict(event.payload or {})
+    # A comment on a PR BSVibe opened belongs to the run that opened it — no new run.
+    if event.source == _GITHUB and (
+        await route_pr_comment_to_run(session, workspace_id=event.workspace_id, payload=payload)
+        is not None
+    ):
+        return WebhookOutcome(event=event, duplicate=True)
     product_id = await _resolve_inbound_product(
         session, account=account, parsed_product_id=event.product_id, payload=payload
     )

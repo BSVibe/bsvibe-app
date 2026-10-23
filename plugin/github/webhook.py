@@ -75,7 +75,7 @@ def _lower_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 @webhook("github")
-def parse_webhook(
+def parse_webhook(  # noqa: PLR0911 — one early return per skip rule
     *,
     workspace_id: uuid.UUID,
     headers: dict[str, str],
@@ -121,6 +121,11 @@ def parse_webhook(
     if event == "pull_request" and _is_own_branch(body):
         return None
 
+    # ...and BSVibe's own comments (delivery notices) are posted with that same
+    # founder token, so they carry no Bot sender either — only the marker.
+    if event == "issue_comment" and _is_own_comment(body):
+        return None
+
     if not delivery:
         raise WebhookError("missing X-GitHub-Delivery header")
 
@@ -164,6 +169,15 @@ _OWN_CLIENT_BRANCH = re.compile(r"run/[0-9a-f]{8}")
 def _is_own_branch(body: dict[str, Any]) -> bool:
     head = str(((body.get("pull_request") or {}).get("head") or {}).get("ref") or "")
     return head.startswith(_OWN_BRANCH_PREFIXES) or _OWN_CLIENT_BRANCH.fullmatch(head) is not None
+
+
+#: Every comment BSVibe posts opens with this marker (``🤖 Opened a pull request …``).
+OWN_COMMENT_MARKER = "🤖"
+
+
+def _is_own_comment(body: dict[str, Any]) -> bool:
+    text = str((body.get("comment") or {}).get("body") or "")
+    return text.lstrip().startswith(OWN_COMMENT_MARKER)
 
 
 def _join_text(parts: list[Any]) -> str | None:
