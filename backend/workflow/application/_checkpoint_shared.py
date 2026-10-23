@@ -265,6 +265,8 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
     # work that genuinely landed. The remedy otherwise lives on GitHub.
     "merge_watch_stalled": [
         DecisionAction(key=ACTION_ACKNOWLEDGE, label_en="Got it", label_ko="확인했어요"),
+        # Send the PR back to the run that opened it, with the failed checks.
+        DecisionAction(key=ACTION_RETRY, label_en="Fix it again", label_ko="다시 고치게 하기"),
         DecisionAction(key=ACTION_DISCARD, label_en="Discard", label_ko="폐기"),
     ],
     # The push / outbound delivery of a deliverable failed. ``retry`` here puts the

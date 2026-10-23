@@ -24,6 +24,7 @@ from backend.workflow.infrastructure.github.db import (
     MergeWatchStatus,
 )
 from backend.workflow.infrastructure.github.repository import (
+    FAILED_WATCH_HORIZON,
     GithubMergeWatchRepository,
     build_merge_watch_claim_stmt,
 )
@@ -132,7 +133,7 @@ async def test_claim_due_skips_future_next_poll() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status",
-    [MergeWatchStatus.MERGED, MergeWatchStatus.FAILED, MergeWatchStatus.ABANDONED],
+    [MergeWatchStatus.MERGED, MergeWatchStatus.ABANDONED],
 )
 async def test_claim_due_skips_terminal_status(status: MergeWatchStatus) -> None:
     async with db_engine(Base) as (engine, _is_pg):
@@ -145,6 +146,38 @@ async def test_claim_due_skips_terminal_status(status: MergeWatchStatus) -> None
         async with sf() as session:
             repo = GithubMergeWatchRepository(session)
             claimed = await repo.claim_due(now=datetime.now(tz=UTC), batch_size=10)
+            assert claimed == []
+
+
+@pytest.mark.asyncio
+async def test_claim_due_still_looks_at_a_recently_failed_watch() -> None:
+    """A ``failed`` watch's PR is still open — a human may merge it, and the run must hear."""
+    async with db_engine(Base) as (engine, _is_pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _watch_row(status=MergeWatchStatus.FAILED)
+        async with sf() as session:
+            await GithubMergeWatchRepository(session).add(row)
+            await session.commit()
+        async with sf() as session:
+            claimed = await GithubMergeWatchRepository(session).claim_due(
+                now=datetime.now(tz=UTC), batch_size=10
+            )
+            assert [c.id for c in claimed] == [row.id]
+
+
+@pytest.mark.asyncio
+async def test_claim_due_forgets_a_failed_watch_past_the_horizon() -> None:
+    async with db_engine(Base) as (engine, _is_pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _watch_row(status=MergeWatchStatus.FAILED)
+        async with sf() as session:
+            await GithubMergeWatchRepository(session).add(row)
+            await session.commit()
+        async with sf() as session:
+            claimed = await GithubMergeWatchRepository(session).claim_due(
+                now=datetime.now(tz=UTC) + FAILED_WATCH_HORIZON + timedelta(days=1),
+                batch_size=10,
+            )
             assert claimed == []
 
 

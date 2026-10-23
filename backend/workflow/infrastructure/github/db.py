@@ -107,6 +107,15 @@ class GithubMergeWatchRow(GithubMergeWatchBase):
     #: the live head is what makes an agent re-push start the grace over, the
     #: same way ``conflict_head_sha`` invalidates a stale conflict.
     ci_red_head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    #: The PR head last seen by the poll. ``deadline_at`` bounds how long ONE head may
+    #: wait for its CI, so a head that moved (the watch freshened it, or the agent
+    #: re-pushed a fix) restarts that clock — PR #1222 was abandoned at its original
+    #: +1h while the CI the watch itself restarted was still running.
+    head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    #: How many times red CI was sent back to the run, and the head it was sent on
+    #: (the same head again means the agent has not pushed yet — wait, don't resend).
+    ci_fix_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ci_fix_head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     conflict_dispatched: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     #: Conflict-robustness — how many times THIS conflict head has been
     #: re-dispatched to the agent. Reset to 1 on a fresh conflict (a first

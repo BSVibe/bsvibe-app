@@ -191,6 +191,24 @@ class ConflictEscalate(Protocol):
     ) -> None: ...
 
 
+class CiRedispatch(Protocol):
+    """Send red CI back to the run that opened the PR, to fix on the SAME branch.
+
+    The CI-failure twin of :class:`ConflictRedispatch` (implemented in
+    ``merge_watch_runtime``): it writes the failed checks on ``run.payload`` and
+    re-opens the run. ``failed_checks`` is ``[{name, conclusion, summary}]``.
+    """
+
+    async def __call__(
+        self,
+        run_id: uuid.UUID,
+        *,
+        failed_checks: list[dict[str, str]],
+        pr_number: int,
+        head_sha: str,
+    ) -> None: ...
+
+
 class PrConcluded(Protocol):
     """Tell the application a watched PR CONCLUDED — merged, or closed unmerged (#1109).
 
@@ -232,6 +250,7 @@ class StallEscalate(Protocol):
         reason: str,
         repo: str,
         pr_number: int,
+        failed_checks: list[dict[str, str]] | None = None,
     ) -> None: ...
 
 
@@ -273,6 +292,20 @@ def _head_sha(pr: dict[str, Any]) -> str | None:
     return str(sha) if isinstance(sha, str) and sha else None
 
 
+_CHECK_SUMMARY_MAX = 1500
+
+
+def _check_summary(run: dict[str, Any]) -> str:
+    """A failing check's own words (``output.title`` + ``summary``/``text``), trimmed."""
+    output = run.get("output")
+    if not isinstance(output, dict):
+        return ""
+    parts = [
+        str(output.get(key)).strip() for key in ("title", "summary", "text") if output.get(key)
+    ]
+    return "\n".join(parts)[:_CHECK_SUMMARY_MAX]
+
+
 def _head_advanced(current: str | None, dispatched: str | None) -> bool:
     """PR7 — has the PR head moved since a conflict was last dispatched?
 
@@ -307,6 +340,10 @@ class _WatchSnapshot:
     conflict_head_sha: str | None
     conflict_attempts: int
     conflict_dispatched_at: datetime | None
+    status: MergeWatchStatus = MergeWatchStatus.PENDING_CI
+    head_sha: str | None = None
+    ci_fix_attempts: int = 0
+    ci_fix_head_sha: str | None = None
 
     @classmethod
     def of(cls, row: GithubMergeWatchRow) -> _WatchSnapshot:
@@ -319,8 +356,12 @@ class _WatchSnapshot:
             pr_number=row.pr_number,
             branch=row.branch,
             base_branch=row.base_branch,
+            status=row.status,
             attempts=row.attempts,
             deadline_at=_aware(row.deadline_at),
+            head_sha=row.head_sha,
+            ci_fix_attempts=row.ci_fix_attempts,
+            ci_fix_head_sha=row.ci_fix_head_sha,
             ci_red_head_sha=row.ci_red_head_sha,
             conflict_dispatched=row.conflict_dispatched,
             conflict_head_sha=row.conflict_head_sha,
@@ -348,6 +389,13 @@ class MergeWatchWorkerConfig:
     #: Conflict-robustness — how many times a single conflict head may be
     #: re-dispatched before the worker escalates to a founder Decision. Default 2.
     conflict_max_redispatch: int = 2
+    #: How long one PR head may wait for its CI. Restarted whenever the head moves
+    #: (the watch freshened it, the agent re-pushed) — the clock is per head.
+    ci_deadline_s: float = 3600.0
+    #: How many times red CI is sent back to the run before the founder is asked.
+    ci_fix_max_redispatch: int = 2
+    #: How often a ``failed`` watch's PR is looked at, only to see it merge or close.
+    failed_poll_interval_s: float = 600.0
 
 
 class MergeWatchWorker(BaseWorker):
@@ -363,6 +411,7 @@ class MergeWatchWorker(BaseWorker):
         escalate_conflict: ConflictEscalate | None = None,
         escalate_stall: StallEscalate | None = None,
         pr_concluded: PrConcluded | None = None,
+        redispatch_ci: CiRedispatch | None = None,
         config: MergeWatchWorkerConfig | None = None,
         now: Clock | None = None,
     ) -> None:
@@ -381,6 +430,7 @@ class MergeWatchWorker(BaseWorker):
         # old log-only behavior rather than half-reporting.
         self._escalate_stall = escalate_stall
         self._pr_concluded = pr_concluded
+        self._redispatch_ci = redispatch_ci
         self._now = now or _utcnow
 
     @property
@@ -390,7 +440,12 @@ class MergeWatchWorker(BaseWorker):
     async def _tick(self) -> int:
         return await self.drain_once()
 
-    async def _gave_up(self, snap: _WatchSnapshot, reason: str) -> None:
+    async def _gave_up(
+        self,
+        snap: _WatchSnapshot,
+        reason: str,
+        failed_checks: list[dict[str, str]] | None = None,
+    ) -> None:
         """Tell the founder this watch is over and the PR is still open.
 
         Called BEFORE the row is marked terminal + committed, so an escalation
@@ -401,8 +456,11 @@ class MergeWatchWorker(BaseWorker):
         """
         if self._escalate_stall is None:
             return
+        # Only a red-CI give-up carries the failed checks, so the founder's
+        # "send it back to be fixed" has something to send.
+        extra = {"failed_checks": failed_checks} if failed_checks else {}
         await self._escalate_stall(
-            snap.run_id, reason=reason, repo=snap.repo, pr_number=snap.pr_number
+            snap.run_id, reason=reason, repo=snap.repo, pr_number=snap.pr_number, **extra
         )
 
     def _backoff(self, attempts: int, now: datetime) -> datetime:
@@ -456,12 +514,18 @@ class MergeWatchWorker(BaseWorker):
             processed += 1
         return processed
 
-    async def _process(self, snap: _WatchSnapshot, now: datetime) -> None:  # noqa: PLR0911, PLR0915 — one early return per PR state (merged/closed/clean/behind/deadline/pending)
+    async def _process(self, snap: _WatchSnapshot, now: datetime) -> None:  # noqa: PLR0911, PLR0912, PLR0915 — one early return per PR state (merged/closed/clean/behind/deadline/pending)
         """Run the state machine for one watched PR in its own transaction."""
         owner, name = _split_repo(snap.repo)
         async with self._session_factory() as session:
             repo = GithubMergeWatchRepository(session)
             client = await self._resolve_client(session, snap.workspace_id, snap.run_id)
+            failed_watch = snap.status is MergeWatchStatus.FAILED
+            if client is None and failed_watch:
+                # Already given up (and said so); with no client there is nothing to look at.
+                await self._look_again_later(repo, snap, now)
+                await session.commit()
+                return
             if client is None:
                 # No resolvable github target (connector removed / deactivated) —
                 # we can never make progress, so stop watching. The PR stays OPEN
@@ -486,7 +550,10 @@ class MergeWatchWorker(BaseWorker):
             # watching. Checked before the merge state machine so a cancelled run
             # never gets its conflicted PR merged or re-dispatched.
             if await self._run_cancelled(session, snap.run_id):
-                await self._close_orphaned_pr(client, owner, name, snap)
+                # A watch that already gave up and was discarded from its Decision
+                # is not an orphan to close — the founder only let it go.
+                if not failed_watch:
+                    await self._close_orphaned_pr(client, owner, name, snap)
                 await repo.mark_status(
                     snap.id, MergeWatchStatus.ABANDONED, last_error="run_cancelled"
                 )
@@ -515,6 +582,20 @@ class MergeWatchWorker(BaseWorker):
                 await self._report_concluded(snap, merged=False)
                 return
 
+            # A watch that gave up stays watched for exactly this: a human fixed the
+            # PR and merged it (or closed it) and the run must hear.
+            if failed_watch:
+                await self._look_again_later(repo, snap, now)
+                await session.commit()
+                return
+
+            # The head moved (we freshened it, or the agent re-pushed a fix): CI
+            # starts over on it, so the deadline does too.
+            if head_sha and head_sha != snap.head_sha:
+                snap.deadline_at = now + timedelta(seconds=self._cfg.ci_deadline_s)
+                snap.head_sha = head_sha
+                await repo.record_head(snap.id, head_sha=head_sha, deadline_at=snap.deadline_at)
+
             # 2. Mergeability gate.
             if mergeable_state == "clean":
                 merged_now = await self._merge_step(session, repo, snap, owner, name, client, now)
@@ -542,7 +623,10 @@ class MergeWatchWorker(BaseWorker):
             # founder heard "the checks never went green in time" 63 minutes
             # later. Late, and about the wrong thing — a red test and a hung CI
             # ask different things of the person reading it.
-            if head_sha and await self._checks_failed(client, owner, name, head_sha):
+            failed_checks = (
+                await self._failed_checks(client, owner, name, head_sha) if head_sha else []
+            )
+            if head_sha and failed_checks:
                 if snap.ci_red_head_sha != head_sha:
                     # FIRST red on this head. Red is decided about this ATTEMPT,
                     # not about the commit — a re-run replaces the check's
@@ -574,7 +658,54 @@ class MergeWatchWorker(BaseWorker):
                 # was red too. Now it is the founder's, and it is reported as a
                 # failure rather than as a deadline (#754) — one poll interval
                 # later than before, not the 63 minutes that fix was about.
-                await self._gave_up(snap, "ci_failed")
+                #
+                # But the red is the original run's to fix — the same hand-back as a
+                # merge conflict — before it is the founder's.
+                if snap.ci_fix_head_sha == head_sha:
+                    # Already sent back on this very head: the agent has not pushed
+                    # yet. Give it until the (restarted) deadline, then ask.
+                    if now <= snap.deadline_at:
+                        await repo.mark_status(
+                            snap.id,
+                            MergeWatchStatus.PENDING_CI,
+                            next_poll_at=self._backoff(snap.attempts, now),
+                            last_error="awaiting_ci_fix",
+                            increment_attempt=True,
+                        )
+                        await session.commit()
+                        return
+                elif (
+                    self._redispatch_ci is not None
+                    and snap.ci_fix_attempts < self._cfg.ci_fix_max_redispatch
+                ):
+                    await self._redispatch_ci(
+                        snap.run_id,
+                        failed_checks=failed_checks,
+                        pr_number=snap.pr_number,
+                        head_sha=head_sha,
+                    )
+                    await repo.mark_status(
+                        snap.id,
+                        MergeWatchStatus.PENDING_CI,
+                        next_poll_at=self._backoff(snap.attempts, now),
+                        last_error="ci_fix_dispatched",
+                        increment_attempt=True,
+                        ci_fix_attempts=snap.ci_fix_attempts + 1,
+                        ci_fix_head_sha=head_sha,
+                        # The agent needs time to fix, push, and wait for CI again.
+                        deadline_at=now + timedelta(seconds=self._cfg.ci_deadline_s),
+                    )
+                    await session.commit()
+                    logger.info(
+                        "merge_watch_ci_fix_dispatched",
+                        repo=snap.repo,
+                        pr_number=snap.pr_number,
+                        run_id=str(snap.run_id),
+                        failed_checks=[c["name"] for c in failed_checks],
+                        ci_fix_attempt=snap.ci_fix_attempts + 1,
+                    )
+                    return
+                await self._gave_up(snap, "ci_failed", failed_checks)
                 await repo.mark_status(snap.id, MergeWatchStatus.FAILED, last_error="ci_failed")
                 await session.commit()
                 logger.warning(
@@ -610,16 +741,27 @@ class MergeWatchWorker(BaseWorker):
             )
             await session.commit()
 
-    async def _checks_failed(
-        self, client: MergeWatchClient, owner: str, name: str, head_sha: str
-    ) -> bool:
-        """Has a check on ``head_sha`` COMPLETED with a failing conclusion?
+    async def _look_again_later(
+        self, repo: GithubMergeWatchRepository, snap: _WatchSnapshot, now: datetime
+    ) -> None:
+        """Keep a ``failed`` watch ``failed``; look at its PR again in a while."""
+        await repo.mark_status(
+            snap.id,
+            MergeWatchStatus.FAILED,
+            next_poll_at=now + timedelta(seconds=self._cfg.failed_poll_interval_s),
+        )
 
-        Only ``completed`` runs count: one still going is exactly the pending
+    async def _failed_checks(
+        self, client: MergeWatchClient, owner: str, name: str, head_sha: str
+    ) -> list[dict[str, str]]:
+        """The checks on ``head_sha`` that COMPLETED with a failing conclusion.
+
+        Each is ``{name, conclusion, summary}`` — the summary is the check's own
+        output, trimmed, so the run it goes back to can see what broke. Only ``completed`` runs count: one still going is exactly the pending
         case the deadline exists for. ``cancelled`` is deliberately included —
         a cancelled required check will not go green on its own either.
 
-        Fail-SOFT: an unreadable check-runs API answers ``False``, i.e. today's
+        Fail-SOFT: an unreadable check-runs API answers ``[]``, i.e. today's
         behaviour (keep polling until the deadline). Turning an API hiccup into
         "your CI failed" would be a worse lie than the one this fixes.
         """
@@ -627,12 +769,18 @@ class MergeWatchWorker(BaseWorker):
             runs = await client.get_check_runs(owner, name, head_sha)
         except Exception:  # noqa: BLE001 — an unreadable API is not a verdict
             logger.info("merge_watch_check_runs_unreadable", repo=f"{owner}/{name}", exc_info=True)
-            return False
-        return any(
-            run.get("status") == "completed" and run.get("conclusion") in _FAILING_CONCLUSIONS
+            return []
+        return [
+            {
+                "name": str(run.get("name") or "unnamed check"),
+                "conclusion": str(run.get("conclusion")),
+                "summary": _check_summary(run),
+            }
             for run in runs
             if isinstance(run, dict)
-        )
+            and run.get("status") == "completed"
+            and run.get("conclusion") in _FAILING_CONCLUSIONS
+        ]
 
     async def _merge_step(
         self,
@@ -809,6 +957,9 @@ class MergeWatchWorker(BaseWorker):
                     next_poll_at=self._backoff(snap.attempts, now),
                     last_error="freshened",
                     increment_attempt=True,
+                    # The push restarted CI from scratch; the deadline that bounded
+                    # the OLD head's run must not cut the new one short (PR #1222).
+                    deadline_at=now + timedelta(seconds=self._cfg.ci_deadline_s),
                 )
                 logger.info(
                     "merge_watch_freshened",
@@ -989,6 +1140,7 @@ class MergeWatchWorker(BaseWorker):
 
 __all__ = [
     "BranchFreshener",
+    "CiRedispatch",
     "Clock",
     "ConflictEscalate",
     "ConflictRedispatch",
