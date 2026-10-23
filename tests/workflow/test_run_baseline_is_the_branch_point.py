@@ -1,6 +1,6 @@
 """A run's baseline is where its branch left main — not wherever HEAD happens to be.
 
-Run ``f7c5b4d1`` (PR #1207) was reopened after a rejection. ``capture_inplace_baseline`` read
+Run ``5f677182`` (PR #1207) was reopened after a rejection. ``capture_inplace_baseline`` read
 ``HEAD`` at the top of the second attempt, and by then HEAD already carried the run's OWN first
 attempt — so ``baseline..HEAD`` erased it from the changed-file list. A ``.py`` committed the first
 time round vanished from the gate's inputs once only the docs were being fixed. Rebasing the run
@@ -19,6 +19,7 @@ import pytest
 from backend.workflow.application.inplace_gate import (
     capture_run_baseline,
     changed_paths,
+    current_run_baseline,
     reconcile_written_paths,
 )
 from backend.workflow.infrastructure.sandbox import NoopSandboxManager
@@ -36,7 +37,7 @@ def repo(tmp_path: Path) -> Path:
     (tmp_path / "README.md").write_text("docs\n")
     _git(tmp_path, "add", ".")
     _git(tmp_path, "commit", "-qm", "init")
-    _git(tmp_path, "checkout", "-qb", "run/f7c5b4d1")
+    _git(tmp_path, "checkout", "-qb", "run/5f677182")
     return tmp_path
 
 
@@ -71,7 +72,7 @@ async def test_a_rebased_run_does_not_inherit_mains_other_commits(repo: Path) ->
     _commit(repo, "engine.py")
     _git(repo, "checkout", "-q", "main")
     _commit(repo, "elsewhere.py")  # somebody else's merged work
-    _git(repo, "checkout", "-q", "run/f7c5b4d1")
+    _git(repo, "checkout", "-q", "run/5f677182")
     _git(repo, "rebase", "-q", "main")
     box = await NoopSandboxManager().acquire(uuid.uuid4(), str(repo))
 
@@ -98,3 +99,72 @@ async def test_without_a_main_ref_the_baseline_falls_back_to_head(tmp_path: Path
     head = _head(tmp_path)
 
     assert await capture_run_baseline(box) == head
+
+
+async def test_a_rebase_after_the_baseline_was_taken_does_not_drag_mains_commits_in(
+    repo: Path,
+) -> None:
+    box = await NoopSandboxManager().acquire(uuid.uuid4(), str(repo))
+    start = await capture_run_baseline(box)  # the drive begins on the old branch point
+    _commit(repo, "engine.py")  # the run's first attempt
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "elsewhere.py")  # somebody else's merged work
+    _git(repo, "checkout", "-q", "run/5f677182")
+    _git(repo, "rebase", "-q", "main")  # mid-drive rebase
+
+    baseline = await current_run_baseline(box, start)
+
+    assert await changed_paths(box, baseline) == ["engine.py"]
+    assert await reconcile_written_paths(box, baseline, ["engine.py"]) == ["engine.py"]
+    assert await changed_paths(box, start) == ["elsewhere.py", "engine.py"]  # the old reading
+
+
+async def test_without_a_rebase_the_current_baseline_is_the_one_taken_at_the_start(
+    repo: Path,
+) -> None:
+    box = await NoopSandboxManager().acquire(uuid.uuid4(), str(repo))
+    start = await capture_run_baseline(box)
+    _commit(repo, "engine.py")
+
+    assert await current_run_baseline(box, start) == start
+    assert await changed_paths(box, await current_run_baseline(box, start)) == ["engine.py"]
+
+
+async def test_when_no_branch_point_exists_the_start_baseline_is_kept(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q", "-b", "trunk")
+    box = await NoopSandboxManager().acquire(uuid.uuid4(), str(tmp_path))
+
+    assert await current_run_baseline(box, "abc123") == "abc123"
+
+
+async def test_a_run_rebased_onto_a_newer_origin_main_does_not_inherit_its_commits(
+    repo: Path,
+) -> None:
+    # The reused clone's local ``main`` lags; ``origin/main`` is what the run climbed onto.
+    box = await NoopSandboxManager().acquire(uuid.uuid4(), str(repo))
+    start = await capture_run_baseline(box)
+    _commit(repo, "engine.py")  # the run's first attempt
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "elsewhere.py")  # merged work the lagging local main never saw
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "reset", "-q", "--hard", "HEAD~1")  # local main falls behind origin/main
+    _git(repo, "checkout", "-q", "run/5f677182")
+    _git(repo, "rebase", "-q", "origin/main")
+
+    for baseline in (await current_run_baseline(box, start), await capture_run_baseline(box)):
+        assert await changed_paths(box, baseline) == ["engine.py"]
+        assert await reconcile_written_paths(box, baseline, ["engine.py"]) == ["engine.py"]
+
+
+async def test_a_lagging_origin_main_does_not_win_over_a_newer_local_main(repo: Path) -> None:
+    _git(repo, "update-ref", "refs/remotes/origin/main", "main")  # origin/main stays behind
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "elsewhere.py")
+    _git(repo, "checkout", "-q", "run/5f677182")
+    _git(repo, "rebase", "-q", "main")
+    _commit(repo, "engine.py")
+    box = await NoopSandboxManager().acquire(uuid.uuid4(), str(repo))
+
+    baseline = await current_run_baseline(box, None)
+
+    assert await changed_paths(box, baseline) == ["engine.py"]

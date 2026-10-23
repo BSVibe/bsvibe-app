@@ -11,7 +11,11 @@ Three ways the loop used to spin on a verdict nobody could change:
 
 from __future__ import annotations
 
-from backend.workflow.application.verify_stall import REPEAT_LIMIT, stall_question
+from backend.workflow.application.verify_stall import (
+    REPEAT_LIMIT,
+    failure_signature,
+    stall_question,
+)
 from backend.workflow.domain.verification_feedback import (
     GATE_DERIVED_EMPTY,
     NO_FAILURE_FOUND,
@@ -69,3 +73,33 @@ def test_a_repeated_failure_goes_to_the_founder() -> None:
     repeat = stall_question(failure, repeats=REPEAT_LIMIT)
     assert repeat is not None
     assert "grep -q x" in repeat["context"]
+
+
+def test_the_same_failure_with_a_changing_duration_is_still_the_same_failure() -> None:
+    def result(seconds: str) -> dict:
+        return {
+            "derived_gate": {
+                "commands": [
+                    {
+                        "command": "pytest -q",
+                        "status": "failed",
+                        "exit_code": 1,
+                        "stdout": f"1 failed in {seconds}s",
+                    }
+                ]
+            }
+        }
+
+    assert failure_signature(result("1.14")) == failure_signature(result("2.51"))
+
+
+def test_a_different_command_or_exit_code_is_a_different_failure() -> None:
+    def result(command: str, code: int) -> dict:
+        return {
+            "derived_gate": {
+                "commands": [{"command": command, "status": "failed", "exit_code": code}]
+            }
+        }
+
+    assert failure_signature(result("pytest", 1)) != failure_signature(result("ruff check", 1))
+    assert failure_signature(result("pytest", 1)) != failure_signature(result("pytest", 2))

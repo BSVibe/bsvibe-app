@@ -38,6 +38,7 @@ from backend.workflow.application.audit_events import (
 from backend.workflow.application.inplace_gate import (
     capture_inplace_baseline,
     capture_run_baseline,
+    current_run_baseline,
     reconcile_written_paths,
 )
 from backend.workflow.application.round_budget import (
@@ -68,7 +69,10 @@ from backend.workflow.domain.emit_deliverable import (
     _safe_args,
     handle_emit_deliverable,
 )
-from backend.workflow.domain.verification_feedback import render_verification_failure
+from backend.workflow.domain.verification_feedback import (
+    failure_signature,
+    render_verification_failure,
+)
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -181,7 +185,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     final_text = ""
     no_work_nudges = 0
     fail_streak = 0
-    last_failure: str | None = None
+    last_failure: tuple[object, ...] | None = None
     repeats = 0
     # #692 — a client_attach run works in the founder's own directory on the worker
     # (through BSVibe's tools, backed by ``ClientWorkerSandboxSession``), so the
@@ -424,7 +428,11 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
 
         # #1145 — the list is a log of write-tool calls; the tree is the truth. A deleted scratch
         # script leaves it, a file edited through the shell joins it, before anything reads it.
-        written_paths[:] = await reconcile_written_paths(box, run_baseline, written_paths)
+        # The branch point is re-read each time: a mid-drive rebase onto main moves it, and the
+        # value taken at the top would drag main's new commits into the list. An in-place run
+        # keeps its start-of-drive HEAD.
+        round_baseline = run_baseline if in_place else await current_run_baseline(box, run_baseline)
+        written_paths[:] = await reconcile_written_paths(box, round_baseline, written_paths)
         attempt.phase = RunAttemptPhase.VERIFYING
         # Verify-session-release (#686) — the SAME treatment the executor turn
         # boundary gets above, for the same reason. What follows is minutes of
@@ -449,7 +457,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 work_step=work_step,
                 attempt=attempt,
                 box=box,
-                baseline=run_baseline,
+                baseline=round_baseline,
                 written_paths=written_paths,
                 final_text=final_text,
                 messages=messages,
@@ -467,7 +475,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             box=box,
             written_paths=written_paths,
             final_text=final_text,
-            baseline=run_baseline,
+            baseline=round_baseline,
         )
         await orch._audit(
             run,
@@ -526,8 +534,9 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 final_text=final_text,
                 stats=round_budget_stats(orch, registry, _cycle),
             )
-        repeats = repeats + 1 if failure == last_failure else 0
-        last_failure = failure
+        signature = failure_signature(vresult)
+        repeats = repeats + 1 if signature == last_failure else 0
+        last_failure = signature
         hint = _review.stuck_review_hint(count=(fail_streak := fail_streak + 1), run=run)
         messages.extend(
             failed_round_messages(

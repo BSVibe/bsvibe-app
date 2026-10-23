@@ -76,19 +76,67 @@ async def capture_run_baseline(box: SandboxSession) -> str | None:
     ``HEAD`` is only the right baseline for a run that has not committed yet. A run REOPENED
     after a rejection starts with its own first attempt already on the branch, and reading
     ``HEAD`` then makes ``baseline..HEAD`` erase that attempt from the changed-file list
-    (``f7c5b4d1``: a ``.py`` committed the first time vanished once only the docs were fixed).
+    (``5f677182``: a ``.py`` committed the first time vanished once only the docs were fixed).
     The merge-base keeps the run's own commits, and — after a rebase onto a moved main — leaves
     main's other commits out. No ``main`` ref to measure from falls back to ``HEAD``.
     """
-    for ref in ("main", "origin/main"):
-        try:
-            res = await box.exec(f"git merge-base HEAD {ref}", timeout_s=_GIT_TIMEOUT_S, shell=True)
-        except Exception:  # noqa: BLE001 — an unreachable machine simply has no baseline
-            break
-        lines = res.stdout.strip().splitlines()
-        if not res.timed_out and res.exit_code == 0 and lines and lines[0].strip():
-            return lines[0].strip()
-    return await capture_inplace_baseline(box)
+    return await _branch_point(box) or await capture_inplace_baseline(box)
+
+
+_MAIN_REFS = ("main", "origin/main")
+
+
+async def _branch_point(box: SandboxSession) -> str | None:
+    """The merge-base with the main the run actually climbed onto, else ``None``.
+
+    A run's work tree is a reused clone, so local ``main`` can lag ``origin/main`` (seen in a
+    past run: local ``main`` sat at #1200 while the agent rebased onto an ``origin/main``
+    holding #1205). Measuring from the stale ref drags the newer commits into the changed list.
+    With both merge-bases found, the one that descends from the other is the more recent; one
+    ref alone answers for itself; unrelated points keep ``_MAIN_REFS`` order.
+    """
+    points = [p for p in [await _merge_base(box, ref) for ref in _MAIN_REFS] if p]
+    if not points:
+        return None
+    best = points[0]
+    for other in points[1:]:
+        if other != best and await _is_ancestor(box, best, other):
+            best = other
+    return best
+
+
+async def _is_ancestor(box: SandboxSession, older: str, newer: str) -> bool:
+    try:
+        res = await box.exec(
+            f"git merge-base --is-ancestor {shlex.quote(older)} {shlex.quote(newer)}",
+            timeout_s=_GIT_TIMEOUT_S,
+            shell=True,
+        )
+    except Exception:  # noqa: BLE001 — an unanswerable query keeps the earlier choice
+        return False
+    return not res.timed_out and res.exit_code == 0
+
+
+async def _merge_base(box: SandboxSession, ref: str) -> str | None:
+    try:
+        res = await box.exec(f"git merge-base HEAD {ref}", timeout_s=_GIT_TIMEOUT_S, shell=True)
+    except Exception:  # noqa: BLE001 — an unreachable machine simply has no baseline
+        return None
+    lines = res.stdout.strip().splitlines()
+    if not res.timed_out and res.exit_code == 0 and lines and lines[0].strip():
+        return lines[0].strip()
+    return None
+
+
+async def current_run_baseline(box: SandboxSession, start: str | None) -> str | None:
+    """The run's branch point NOW, else ``start`` (the one taken when the drive began).
+
+    The branch point moves when the agent rebases onto a newer main mid-drive; the value taken
+    at the top of the drive then makes ``start..HEAD`` pull main's new commits in
+    (``5f677182``). Recomputed wherever a changed-file list is needed; ``start`` is only the
+    answer for a tree that cannot name its branch point.
+    """
+    return await _branch_point(box) or start
 
 
 def _porcelain_paths(stdout: str) -> set[str]:
@@ -521,6 +569,7 @@ __all__ = [
     "capture_inplace_baseline",
     "capture_run_baseline",
     "changed_paths",
+    "current_run_baseline",
     "gate_failure_is_actionable",
     "run_inplace_gate",
 ]

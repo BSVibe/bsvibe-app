@@ -56,7 +56,7 @@ DERIVER_FAILED = (
 
 #: The gate was EXPECTED (a toolchain manifest is present) yet the deriver produced zero commands.
 #: ``verification_service`` fails this closed, and every check the agent declared can pass while it
-#: does — so without this line the agent is told nothing happened and goes round again (f7c5b4d1).
+#: does — so without this line the agent is told nothing happened and goes round again.
 GATE_DERIVED_EMPTY = (
     "The repo has a toolchain manifest, so a verification gate was expected, but the harness "
     "derived ZERO gate commands from it. Your declared checks passed; that does not count in "
@@ -204,6 +204,21 @@ def render_verification_failure(result: Mapping[str, Any], *, budget: int = FEED
     if total and failed < total:
         note = f"({total - failed} other command(s) passed; their output is omitted.)"
     return _assemble(sections, note, budget)
+
+
+def failure_signature(result: Mapping[str, Any]) -> tuple[Any, ...]:
+    """What makes two failed verifications "the same failure": WHICH checks failed and how.
+
+    The rendered text carries output that differs every run (``pytest``'s ``in 1.14s``), so
+    comparing it byte for byte never sees a repeat. The failed commands' names and exit codes
+    do not drift. A failure with no failed command (a probe, a judge) falls back to the text.
+    """
+    gate = result.get("derived_gate")
+    gate_commands = gate.get("commands") or [] if isinstance(gate, Mapping) else []
+    failed = [*_failed(gate_commands), *_failed(result.get("command_results") or [])]
+    if not failed:
+        return ("text", render_verification_failure(result))
+    return tuple((c.get("command"), c.get("exit_code")) for c in failed)
 
 
 def render_failed_commands(

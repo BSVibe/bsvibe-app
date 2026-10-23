@@ -116,7 +116,7 @@ def test_the_drive_loop_reconciles_before_it_verifies() -> None:
     from backend.workflow.application import _drive_loop
 
     src = inspect.getsource(_drive_loop.drive_loop)
-    call = "written_paths[:] = await reconcile_written_paths(box, run_baseline, written_paths)"
+    call = "written_paths[:] = await reconcile_written_paths(box, round_baseline, written_paths)"
     assert call in src
     assert src.index(call) < src.index("orch._assemble_contract(")
 
