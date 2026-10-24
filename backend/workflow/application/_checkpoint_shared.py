@@ -78,6 +78,12 @@ _EXECUTOR_DECISION_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "This product's saved copy has diverged from BSVibe's and can't be merged automatically — check which side should win.",
         "ko": "이 제품의 보관본이 BSVibe 의 사본과 갈라져 자동으로 합칠 수 없어요 — 어느 쪽을 남길지 확인해주세요.",
     },
+    # The PR is open; only the "here is the PR" comment on the originating issue
+    # was refused (403). A report with the fix, not a fork in the work.
+    "github_app_permission_missing": {
+        "en": "The GitHub App can't comment on issues, so the pull request link wasn't posted — set Issues to 'Read and write' in the App's permissions and approve the update (docs/runbook/github-app-permissions.md).",
+        "ko": "GitHub App 에 Issues 쓰기 권한이 없어 이슈에 PR 링크 코멘트를 달지 못했어요 — App 설정(Permissions & events)에서 Issues 를 'Read and write' 로 올리고 설치 갱신을 승인해주세요 (docs/runbook/github-app-permissions.md).",
+    },
     # #1074 — the run could not pick a model account (prod cc68f583 waited 30
     # hours on a blank checkpoint). Kept in step with the phone body
     # (``notifications.copy._NEEDS_YOU_REASON_BODY``).
@@ -215,6 +221,10 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
     ],
     # A report on a shipped run: nothing to retry, nothing to discard.
     "product_bundle_conflict": [
+        DecisionAction(key=ACTION_ACKNOWLEDGE, label_en="Got it", label_ko="확인했어요"),
+    ],
+    # A report about a PR that is already open: the fix lives on GitHub.
+    "github_app_permission_missing": [
         DecisionAction(key=ACTION_ACKNOWLEDGE, label_en="Got it", label_ko="확인했어요"),
     ],
     # #1074 — the founder answers by PICKING one of the payload's options (the

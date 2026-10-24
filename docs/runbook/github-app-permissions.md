@@ -9,6 +9,12 @@ PR 을 연 뒤 원래 이슈에 코멘트가 달리지 않고 로그에 다음�
 
 ```
 github_app_issues_write_permission_missing   (워크스페이스당 한 번)
+```
+
+같은 내용이 창업자에게도 간다 — Brief 에 `github_app_permission_missing` 결정("확인했어요" 로 닫는다)과
+`needs_you` 푸시가 워크스페이스당 한 번 생긴다. 한 번 만들어진 뒤에는(닫힌 뒤에도) 같은 원인으로 다시 알리지 않는다.
+
+```
 github_delivery_issue_comment_failed ... 403 Resource not accessible by integration
 ```
 

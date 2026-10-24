@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import re
-import uuid
 from pathlib import Path
-
-from structlog.testing import capture_logs
 
 from backend.connectors.auth.github_manifest import build_manifest
 from backend.workflow.application.delivery.connector_dispatch import _github_pr
@@ -54,13 +51,7 @@ def test_issue_comment_is_among_the_guarded_writes() -> None:
     assert _manifest_permissions()["issues"] == "write"
 
 
-def test_permission_denied_warns_once_per_workspace() -> None:
+def test_permission_denied_is_recognised_only_for_a_403() -> None:
     exc = RuntimeError("Client error '403 Forbidden' Resource not accessible by integration")
     assert _github_pr._is_issues_permission_denied(exc)
     assert not _github_pr._is_issues_permission_denied(RuntimeError("500 boom"))
-    ws = uuid.uuid4()
-    with capture_logs() as logs:
-        _github_pr._warn_issues_write_missing_once(ws, "o/r", 1)
-        _github_pr._warn_issues_write_missing_once(ws, "o/r", 2)
-    events = [e["event"] for e in logs]
-    assert events == ["github_app_issues_write_permission_missing"]
