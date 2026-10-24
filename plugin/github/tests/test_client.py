@@ -235,6 +235,27 @@ class TestGetCheckRuns:
             await client.get_check_runs("o", "r", "deadbeef")
 
 
+class TestGetJobLog:
+    @respx.mock
+    async def test_follows_the_redirect_without_the_token(self, client):
+        respx.get(f"{API}/repos/o/r/actions/jobs/42/logs").mock(
+            return_value=httpx.Response(302, headers={"location": "https://blob.example/log"})
+        )
+        blob = respx.get("https://blob.example/log").mock(
+            return_value=httpx.Response(200, text="FAILED tests/x.py::t")
+        )
+        assert await client.get_job_log("o", "r", 42) == "FAILED tests/x.py::t"
+        assert "authorization" not in blob.calls[0].request.headers
+
+    @respx.mock
+    async def test_raises_when_the_log_is_not_readable(self, client):
+        respx.get(f"{API}/repos/o/r/actions/jobs/42/logs").mock(
+            return_value=httpx.Response(403, json={"message": "Resource not accessible"})
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_job_log("o", "r", 42)
+
+
 class TestComments:
     @respx.mock
     async def test_post_comment(self, client):

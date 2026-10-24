@@ -34,6 +34,7 @@ from backend.workflow.infrastructure.workers.merge_watch_worker import (
     FreshenOutcome,
     MergeWatchWorker,
     MergeWatchWorkerConfig,
+    _log_excerpt,
 )
 from tests._support import db_engine
 
@@ -51,12 +52,20 @@ class _Github:
         self.pr = pr
         self.checks = checks or []
         self.merge_calls = 0
+        self.job_log: str | Exception = RuntimeError("no job log in this test")
+        self.job_ids: list[int] = []
 
     async def get_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]:
         return dict(self.pr)
 
     async def get_check_runs(self, owner: str, repo: str, ref: str) -> list[dict[str, Any]]:
         return self.checks
+
+    async def get_job_log(self, owner: str, repo: str, job_id: int) -> str:
+        self.job_ids.append(job_id)
+        if isinstance(self.job_log, Exception):
+            raise self.job_log
+        return self.job_log
 
     async def close_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]:
         return {"state": "closed"}
@@ -259,6 +268,77 @@ async def test_red_ci_is_sent_back_to_the_run_with_the_failed_check_names() -> N
         assert fetched.ci_fix_attempts == 1
         assert fetched.ci_fix_head_sha == _HEAD
         assert _at(fetched.deadline_at) == _NOW + timedelta(seconds=_CI_DEADLINE_S)
+
+
+_ACTIONS_LOG = "\n".join(
+    [
+        "2026-10-23T08:00:00.1234567Z ##[group]Run pytest",
+        "2026-10-23T08:00:01.0000000Z collected 900 items",
+        "2026-10-23T08:00:09.0000000Z =========================== short test summary info ============================",
+        "2026-10-23T08:00:09.0000000Z FAILED tests/test_guard.py::test_every_decision_has_a_way_out - AssertionError",
+        "2026-10-23T08:00:09.0000000Z ======================== 1 failed, 899 passed in 8.1s =========================",
+    ]
+)
+
+
+def _actions_check() -> list[dict[str, Any]]:
+    [check, other] = _red_check()
+    # check-run id != job id here on purpose: the job id comes from details_url.
+    check = {
+        **check,
+        "id": 111,
+        "output": {"title": None, "summary": None},
+        "details_url": "https://github.com/o/r/actions/runs/777/job/4242",
+    }
+    return [check, other]
+
+
+async def test_the_actions_job_log_excerpt_reaches_the_runs_turn_message() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = await _seed_watch(
+            sf, head_sha=_HEAD, ci_red_head_sha=_HEAD, run_status=RunStatus.REVIEW_READY
+        )
+        rec = _Recorder()
+        github = _Github(pr=_open_pr("unstable"), checks=_actions_check())
+        github.job_log = _ACTIONS_LOG
+        await _worker(sf, github, rec).drain_once()
+
+        assert github.job_ids == [4242]
+        [sent] = rec.ci
+        [check] = sent["failed_checks"]
+        assert "FAILED tests/test_guard.py::test_every_decision_has_a_way_out" in check["summary"]
+        assert "2026-10-23T" not in check["summary"], "log timestamps are noise"
+        assert "collected 900 items" not in check["summary"], "only the failing part"
+
+        with workspace_scope(row.workspace_id):
+            await build_merge_watch_ci_redispatch(session_factory=sf)(
+                row.run_id, failed_checks=sent["failed_checks"], pr_number=1222, head_sha=_HEAD
+            )
+        [message] = ci_failure_messages(await _run(sf, row))
+        assert "test_every_decision_has_a_way_out" in message["content"]
+
+
+async def test_an_unreadable_job_log_sends_the_check_name_alone() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        await _seed_watch(sf, head_sha=_HEAD, ci_red_head_sha=_HEAD)
+        rec = _Recorder()
+        github = _Github(pr=_open_pr("unstable"), checks=_actions_check())
+        github.job_log = PermissionError("403 Resource not accessible by integration")
+        await _worker(sf, github, rec).drain_once()
+
+        [sent] = rec.ci
+        assert sent["failed_checks"] == [
+            {"name": "lint-and-test", "conclusion": "failure", "summary": ""}
+        ]
+
+
+async def test_a_log_without_failure_lines_falls_back_to_its_tail() -> None:
+    log = "\n".join(f"line {i}" for i in range(500))
+    excerpt = _log_excerpt(log)
+    assert excerpt.endswith("line 499") and "line 100" not in excerpt
+    assert len(_log_excerpt("FAILED x\n" * 2000)) <= 3000
 
 
 async def test_the_same_red_head_is_not_sent_back_twice() -> None:

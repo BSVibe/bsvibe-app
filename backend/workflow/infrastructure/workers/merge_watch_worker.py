@@ -55,6 +55,7 @@ discarded the run) stay quiet, because they already know.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -104,6 +105,8 @@ class MergeWatchClient(Protocol):
     async def close_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]: ...
 
     async def get_check_runs(self, owner: str, repo: str, ref: str) -> list[dict[str, Any]]: ...
+
+    async def get_job_log(self, owner: str, repo: str, job_id: int) -> str: ...
 
 
 #: Resolve a per-row GitHub client (token + base_url from the github binding of
@@ -304,6 +307,36 @@ def _check_summary(run: dict[str, Any]) -> str:
         str(output.get(key)).strip() for key in ("title", "summary", "text") if output.get(key)
     ]
     return "\n".join(parts)[:_CHECK_SUMMARY_MAX]
+
+
+_LOG_EXCERPT_MAX = 3000
+_LOG_TAIL_LINES = 40
+# An Actions check-run's ``details_url`` is ``…/actions/runs/{run}/job/{job_id}`` —
+# the job id is read from there rather than assumed equal to the check-run id.
+_JOB_URL = re.compile(r"/actions/runs/\d+/job/(\d+)")
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_LOG_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T[\d:.]+Z ?")
+_FAILURE_LINE = re.compile(
+    r"(^FAILED |^ERROR |^E {2,}|short test summary|^=+ .*(failed|error).* =+$"
+    r"|\.(py|ts|tsx|js):\d+(:\d+)?:? |error TS\d+|\berror\b.*:|##\[error\])",
+    re.IGNORECASE,
+)
+
+
+def _job_id(run: dict[str, Any]) -> int | None:
+    """The Actions job id behind a check-run (``None`` for a non-Actions check)."""
+    match = _JOB_URL.search(str(run.get("details_url") or ""))
+    return int(match.group(1)) if match else None
+
+
+def _log_excerpt(log: str) -> str:
+    """The failing part of a job log: pytest/ruff/mypy error lines, else the last lines."""
+    lines = [_LOG_TIMESTAMP.sub("", _ANSI.sub("", raw)).rstrip() for raw in log.splitlines()]
+    lines = [line for line in lines if line]
+    hits = [line for line in lines if _FAILURE_LINE.search(line)]
+    excerpt = "\n".join(hits) if hits else "\n".join(lines[-_LOG_TAIL_LINES:])
+    # The last lines are the verdict (pytest's summary, ruff's count) — keep them on overflow.
+    return excerpt[-_LOG_EXCERPT_MAX:]
 
 
 def _head_advanced(current: str | None, dispatched: str | None) -> bool:
@@ -770,17 +803,49 @@ class MergeWatchWorker(BaseWorker):
         except Exception:  # noqa: BLE001 — an unreadable API is not a verdict
             logger.info("merge_watch_check_runs_unreadable", repo=f"{owner}/{name}", exc_info=True)
             return []
-        return [
-            {
-                "name": str(run.get("name") or "unnamed check"),
-                "conclusion": str(run.get("conclusion")),
-                "summary": _check_summary(run),
-            }
-            for run in runs
-            if isinstance(run, dict)
-            and run.get("status") == "completed"
-            and run.get("conclusion") in _FAILING_CONCLUSIONS
-        ]
+        failed: list[dict[str, str]] = []
+        for run in runs:
+            if not (
+                isinstance(run, dict)
+                and run.get("status") == "completed"
+                and run.get("conclusion") in _FAILING_CONCLUSIONS
+            ):
+                continue
+            summary = _check_summary(run)
+            excerpt = await self._job_log_excerpt(client, owner, name, run)
+            if excerpt:
+                summary = f"{summary}\n\nJob log excerpt:\n{excerpt}".strip()
+            failed.append(
+                {
+                    "name": str(run.get("name") or "unnamed check"),
+                    "conclusion": str(run.get("conclusion")),
+                    "summary": summary,
+                }
+            )
+        return failed
+
+    async def _job_log_excerpt(
+        self, client: MergeWatchClient, owner: str, name: str, run: dict[str, Any]
+    ) -> str:
+        """The failing part of an Actions job's log, or ``""``.
+
+        Fail-SOFT: a non-Actions check, a missing ``actions: read`` permission,
+        expired logs or a network error all answer ``""`` — the check then goes
+        back by name (and its own output) alone, as before.
+        """
+        job_id = _job_id(run)
+        if job_id is None:
+            return ""
+        try:
+            return _log_excerpt(await client.get_job_log(owner, name, job_id))
+        except Exception:  # noqa: BLE001 — an unreadable log must not block the hand-back
+            logger.info(
+                "merge_watch_job_log_unreadable",
+                repo=f"{owner}/{name}",
+                job_id=job_id,
+                exc_info=True,
+            )
+            return ""
 
     async def _merge_step(
         self,

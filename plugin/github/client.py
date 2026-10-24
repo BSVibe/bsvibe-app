@@ -226,6 +226,32 @@ class GithubClient:
             return []
         return runs
 
+    async def get_job_log(self, owner: str, repo: str, job_id: int) -> str:
+        """The plain-text log of one Actions job (needs the ``actions: read`` permission).
+
+        Mirrors ``GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs``, which
+        answers 302 to a short-lived pre-signed blob URL. That second hop is
+        fetched WITHOUT our token (another host, already signed). Raises on
+        403/404/410 (no permission, expired logs) so the caller can fall back
+        to the check's name alone.
+        """
+        resp = await self._request("GET", f"/repos/{owner}/{repo}/actions/jobs/{job_id}/logs")
+        if resp.status_code in (301, 302, 303, 307, 308):
+            location = resp.headers.get("location")
+            if not location:
+                raise httpx.HTTPStatusError(
+                    "github: job log redirect without a location",
+                    request=resp.request,
+                    response=resp,
+                )
+            if self._client is not None:
+                resp = await self._client.get(location)
+            else:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    resp = await client.get(location)
+        resp.raise_for_status()
+        return resp.text
+
     # ── issue comments ───────────────────────────────────────────────────────
 
     async def post_comment(
