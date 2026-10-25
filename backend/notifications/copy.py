@@ -174,6 +174,13 @@ _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
         "en": "This product's saved copy has diverged from BSVibe's and can't be merged automatically.",
         "ko": "이 제품의 보관본이 BSVibe 의 사본과 갈라져 자동으로 합칠 수 없어요.",
     },
+    # The PR is open; only the PR-link comment on its issue was refused (403). Says
+    # what is missing and where to fix it — kept in step with the Brief question
+    # for ``github_app_permission_missing`` (``_checkpoint_shared``).
+    "github_app_issues_write_missing": {
+        "en": "The GitHub App has no Issues write permission, so the pull request link wasn't posted on the issue — set Issues to 'Read and write' and approve the update.",
+        "ko": "GitHub App 에 Issues 쓰기 권한이 없어 이슈에 PR 링크 코멘트를 달지 못했어요 — Issues 를 'Read and write' 로 올리고 설치 갱신을 승인해주세요.",
+    },
     # #1074 — the run could not pick a model account. Was a raw Decision with no
     # notification at all: a schedule run sat 30 hours before anyone noticed.
     "ambiguous_model_account": {
