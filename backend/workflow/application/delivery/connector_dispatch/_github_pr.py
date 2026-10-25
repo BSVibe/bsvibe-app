@@ -19,6 +19,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.workflow.domain.delivery import ActionResult
@@ -220,7 +221,13 @@ async def _open_pr_and_settle(
             )
         except Exception as exc:  # noqa: BLE001 — soft-fail like the PR-url writeback
             if _is_issues_permission_denied(exc):
-                _warn_issues_write_missing_once(workspace_id, binding.repo, source_issue)
+                await _warn_issues_write_missing_once(
+                    deps.session_factory,
+                    workspace_id=workspace_id,
+                    run_id=run_id,
+                    repo=binding.repo,
+                    issue_number=source_issue,
+                )
             logger.warning(
                 "github_delivery_issue_comment_failed",
                 workspace_id=str(workspace_id),
@@ -245,9 +252,10 @@ _ISSUES_WRITE_HINT = (
     "GitHub App 에 Issues 쓰기 권한이 없다 — GitHub App 설정(Permissions & events)에서 "
     "Issues 를 'Read and write' 로 올린 뒤 설치 갱신을 승인하라"
 )
-# Workspaces already told in this process — the 403 repeats on every delivery, the
-# founder needs the cause once, not once per PR.
-_issues_write_warned: set[uuid.UUID] = set()
+#: The Decision kind that tells the founder (a report — the PR is already open).
+_PERMISSION_MISSING_KIND = "github_app_permission_missing"
+_ISSUES_WRITE_REASON = "github_app_issues_write_missing"
+_RUNBOOK = "docs/runbook/github-app-permissions.md"
 
 
 def _is_issues_permission_denied(exc: BaseException) -> bool:
@@ -256,18 +264,97 @@ def _is_issues_permission_denied(exc: BaseException) -> bool:
     return "403" in text and ("Resource not accessible" in text or "Forbidden" in text)
 
 
-def _warn_issues_write_missing_once(workspace_id: uuid.UUID, repo: str, issue_number: int) -> None:
-    """Surface the missing ``issues: write`` permission once per workspace."""
-    if workspace_id in _issues_write_warned:
-        return
-    _issues_write_warned.add(workspace_id)
-    logger.error(
-        "github_app_issues_write_permission_missing",
-        workspace_id=str(workspace_id),
-        repo=repo,
-        issue_number=issue_number,
-        hint=_ISSUES_WRITE_HINT,
+async def _warn_issues_write_missing_once(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    workspace_id: uuid.UUID,
+    run_id: uuid.UUID,
+    repo: str,
+    issue_number: int,
+) -> None:
+    """Tell the founder, once per workspace, that the App lacks ``issues: write``.
+
+    The fact "already told" is the Decision row itself (any status — an
+    acknowledged one still counts), not process memory: a restart or a second
+    worker finds it and stays quiet. The ``needs_you`` notification is staged in the
+    same transaction, exactly as ``create_decision`` does (that function is not
+    imported here: it reaches ``plugin.audit``, which the inbound layer, of which
+    this package is a dependency, must not). The run is left untouched — the PR is
+    already open. Soft — never raises into the delivery path.
+    """
+    from backend.data.rls import workspace_session_scope  # noqa: PLC0415
+    from backend.identity.workspaces_db import load_workspace_language  # noqa: PLC0415
+    from backend.notifications.copy import (  # noqa: PLC0415
+        NEEDS_YOU_LINK,
+        needs_you_reason_body,
+        notification_copy,
     )
+    from backend.notifications.emit import emit_notification  # noqa: PLC0415
+    from backend.workflow.infrastructure.db import Decision  # noqa: PLC0415
+
+    try:
+        async with session_factory() as session, workspace_session_scope(session, workspace_id):
+            already = await session.execute(
+                select(Decision.id)
+                .where(
+                    Decision.workspace_id == workspace_id,
+                    Decision.decision == _PERMISSION_MISSING_KIND,
+                )
+                .limit(1)
+            )
+            if already.first() is not None:
+                return
+            run = await session.get(ExecutionRun, run_id)
+            if run is None:
+                return
+            decision = Decision(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                workspace_id=workspace_id,
+                decision=_PERMISSION_MISSING_KIND,
+                actor_id=None,
+                rationale=f"{_ISSUES_WRITE_HINT} ({_RUNBOOK})",
+                payload={
+                    "reason": _ISSUES_WRITE_REASON,
+                    "repo": repo,
+                    "issue_number": issue_number,
+                    "hint": _ISSUES_WRITE_HINT,
+                    "runbook": _RUNBOOK,
+                },
+            )
+            session.add(decision)
+            await session.flush()
+            language = await load_workspace_language(session, workspace_id)
+            copy = notification_copy(
+                "needs_you", language, detail=needs_you_reason_body(_ISSUES_WRITE_REASON, language)
+            )
+            await emit_notification(
+                session,
+                workspace_id=workspace_id,
+                product_id=run.product_id,
+                event="needs_you",
+                dedupe_key=f"needs_you:{decision.id}",
+                payload={
+                    "title": copy.title,
+                    "body": copy.body,
+                    "link": NEEDS_YOU_LINK,
+                    "run_id": str(run.id),
+                    "decision_id": str(decision.id),
+                },
+                producer_id="workflow:create_decision",
+            )
+            await session.commit()
+        logger.error(
+            "github_app_issues_write_permission_missing",
+            workspace_id=str(workspace_id),
+            repo=repo,
+            issue_number=issue_number,
+            hint=_ISSUES_WRITE_HINT,
+        )
+    except Exception:  # noqa: BLE001 — telling the founder
+        logger.warning(
+            "github_app_permission_decision_failed", workspace_id=str(workspace_id), exc_info=True
+        )
 
 
 async def _persist_pr_url(

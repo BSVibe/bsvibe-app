@@ -185,6 +185,7 @@ _KINDS: dict[str, dict[str, Any]] = {
     "no_model_account": {},
     "ambiguous_model_account": {"options": ["opus", "sonnet"]},
     "product_bundle_conflict": {"reason": "product_bundle_publish_conflict"},
+    "github_app_permission_missing": {"reason": "github_app_issues_write_missing"},
     "delivery_failed": {
         "reason": "delivery_failed",
         "failures": [{"action": "github:outbound:code", "error": "push rejected"}],
