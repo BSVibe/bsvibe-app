@@ -70,6 +70,7 @@ from backend.data.scoping import workspace_scope
 from backend.storage.github_repo_lock import GithubRepoBusy, github_repo_lock
 from backend.workers.base import BaseWorker
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.github.repository import GithubMergeWatchRepository
 from plugin.github.client import MergeResult
@@ -631,6 +632,27 @@ class MergeWatchWorker(BaseWorker):
 
             # 2. Mergeability gate.
             if mergeable_state == "clean":
+                # The run that opened this PR may be reopened (a review comment
+                # routed to it, #1232) and still fixing it: merging the head
+                # that was reviewed would land the code the reviewer asked to
+                # change. Wait for the fix; the time it takes is not CI time.
+                if await self._run_still_fixing(session, snap.run_id):
+                    snap.deadline_at = now + timedelta(seconds=self._cfg.ci_deadline_s)
+                    await repo.mark_status(
+                        snap.id,
+                        MergeWatchStatus.PENDING_CI,
+                        next_poll_at=now + timedelta(seconds=self._cfg.poll_interval_s),
+                        deadline_at=snap.deadline_at,
+                        last_error="run_still_fixing",
+                    )
+                    await session.commit()
+                    logger.info(
+                        "merge_watch_deferred_run_fixing",
+                        repo=snap.repo,
+                        pr_number=snap.pr_number,
+                        run_id=str(snap.run_id),
+                    )
+                    return
                 merged_now = await self._merge_step(session, repo, snap, owner, name, client, now)
                 await session.commit()
                 if merged_now:
@@ -1198,6 +1220,28 @@ class MergeWatchWorker(BaseWorker):
         → ``False``: treat as still-live and run the normal state machine."""
         status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run_id))
         return status is RunStatus.CANCELLED
+
+    async def _run_still_fixing(self, session: AsyncSession, run_id: uuid.UUID) -> bool:
+        """Is the run that opened the PR still working on it?
+
+        ``open`` / ``running`` (reopened by a review comment), or a new artifact of
+        the same run not yet delivered — pending / extended / approved in Safe Mode.
+        Merging then would ship the code before the fix and, once the run is
+        ``shipped``, hide the waiting fix from the queue. Missing run → ``False``."""
+        status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run_id))
+        if status in (RunStatus.OPEN, RunStatus.RUNNING):
+            return True
+        waiting = await session.scalar(
+            select(SafeModeQueueItemRow.id)
+            .where(
+                SafeModeQueueItemRow.run_id == run_id,
+                SafeModeQueueItemRow.status.in_(
+                    (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED, SafeModeStatus.APPROVED)
+                ),
+            )
+            .limit(1)
+        )
+        return waiting is not None
 
     async def _close_orphaned_pr(
         self, client: MergeWatchClient, owner: str, name: str, snap: _WatchSnapshot

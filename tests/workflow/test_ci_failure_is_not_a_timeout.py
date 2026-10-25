@@ -284,6 +284,10 @@ def _worker(
         async def commit(self) -> None:
             return None
 
+        async def scalar(self, *_a: Any, **_k: Any) -> None:
+            # No run row, no queued item: nothing is still fixing the PR.
+            return None
+
         async def __aenter__(self) -> Any:
             return self
 
