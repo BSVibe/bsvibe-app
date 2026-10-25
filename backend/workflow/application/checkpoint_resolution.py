@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from sqlalchemy import select
 
-from backend.common.decision_kinds import REPORT_DECISION_KINDS
+from backend.common.decision_kinds import REPORT_DECISION_KINDS as _REPORT_DECISION_KINDS
 from backend.common.settle_kinds import (
     DECISION_RESOLUTION_SETTLE_KIND,
     NEGATIVE_PATTERN_SETTLE_KIND,
@@ -405,7 +405,7 @@ async def resolve_checkpoint(  # noqa: PLR0912, PLR0915 — one branch per resol
         # has seen it. The Decision is RESOLVED above; the run is deliberately
         # untouched.
         pass
-    elif run.status in _TERMINAL_RUN_STATUSES or decision.decision in REPORT_DECISION_KINDS:
+    elif run.status in _TERMINAL_RUN_STATUSES or decision.decision in _REPORT_DECISION_KINDS:
         # A free-text reply on a run that already ENDED — or on a REPORT about work
         # already out as a PR (#1109: that run waits at review_ready for its merge).
         # The resume below would re-open finished work — re-running its approval +
