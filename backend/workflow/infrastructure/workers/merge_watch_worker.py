@@ -1225,35 +1225,37 @@ class MergeWatchWorker(BaseWorker):
         """Is the run that opened the PR still working on it?
 
         ``open`` / ``running`` (reopened by a review comment), or a new artifact of
-        the same run not yet delivered — pending / extended in Safe Mode, or any
-        deliverable without ``delivered_at`` (an approved item stays ``approved`` forever).
+        the same run not yet delivered — judged by the run's latest artifact only: pending /
+        extended in Safe Mode, or approved without ``delivered_at`` (an approved item stays
+        ``approved`` forever; a denied / expired one is not waiting).
         Merging then would ship the code before the fix and, once the run is
         ``shipped``, hide the waiting fix from the queue. Missing run → ``False``."""
         status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run_id))
         if status in (RunStatus.OPEN, RunStatus.RUNNING):
             return True
-        waiting = await session.scalar(
-            select(SafeModeQueueItemRow.id)
-            .where(
-                SafeModeQueueItemRow.run_id == run_id,
-                SafeModeQueueItemRow.status.in_((SafeModeStatus.PENDING, SafeModeStatus.EXTENDED)),
+        # Only the run's LATEST artifact can be "the fix still waiting": a Safe Mode deny
+        # leaves ``delivered_at`` and ``retracted_at`` empty on older artifacts forever.
+        latest = (
+            await session.execute(
+                select(Deliverable.id, Deliverable.delivered_at)
+                .where(Deliverable.run_id == run_id)
+                .order_by(Deliverable.created_at.desc(), Deliverable.id.desc())
+                .limit(1)
             )
+        ).first()
+        if latest is None:
+            return False
+        item_status = await session.scalar(
+            select(SafeModeQueueItemRow.status)
+            .where(SafeModeQueueItemRow.deliverable_id == latest.id)
+            .order_by(SafeModeQueueItemRow.created_at.desc())
             .limit(1)
         )
-        if waiting is not None:
+        if item_status in (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED):
             return True
         # APPROVED is not "delivered": nothing flips an approved item to delivered, so the
-        # fact lives on the deliverable itself.
-        undelivered = await session.scalar(
-            select(Deliverable.id)
-            .where(
-                Deliverable.run_id == run_id,
-                Deliverable.delivered_at.is_(None),
-                Deliverable.retracted_at.is_(None),
-            )
-            .limit(1)
-        )
-        return undelivered is not None
+        # fact lives on the deliverable itself. DENIED / EXPIRED are not waiting.
+        return item_status == SafeModeStatus.APPROVED and latest.delivered_at is None
 
     async def _close_orphaned_pr(
         self, client: MergeWatchClient, owner: str, name: str, snap: _WatchSnapshot

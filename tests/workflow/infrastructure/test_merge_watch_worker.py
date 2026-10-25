@@ -1419,7 +1419,8 @@ async def test_pr_is_not_merged_while_the_runs_new_artifact_waits_in_safe_mode()
         sf = async_sessionmaker(engine, expire_on_commit=False)
         row = _row()
         await _seed(sf, row)
-        await _seed_run(sf, row, RunStatus.REVIEW_READY, queue_item=SafeModeStatus.PENDING)
+        await _seed_run(sf, row, RunStatus.REVIEW_READY)
+        await _seed_deliverable(sf, row, delivered=False, queue_status=SafeModeStatus.PENDING)
         client = _FakeClient(pr=dict(_CLEAN_PR))
         assert await _worker(sf, client).drain_once() == 1
         assert client.merge_calls == []
@@ -1431,6 +1432,7 @@ async def _seed_deliverable(
     *,
     delivered: bool,
     queue_status: SafeModeStatus,
+    created_at: datetime = _FIXED_NOW,
 ) -> None:
     deliverable_id = uuid.uuid4()
     async with sf() as s, workspace_session_scope(s, row.workspace_id):
@@ -1441,8 +1443,8 @@ async def _seed_deliverable(
                 workspace_id=row.workspace_id,
                 deliverable_type=DeliverableType.PR,
                 payload={},
-                delivered_at=_FIXED_NOW if delivered else None,
-                created_at=_FIXED_NOW,
+                delivered_at=created_at if delivered else None,
+                created_at=created_at,
             )
         )
         s.add(
@@ -1454,10 +1456,48 @@ async def _seed_deliverable(
                 status=queue_status,
                 expires_at=_FIXED_NOW + timedelta(days=7),
                 extension_count=0,
-                created_at=_FIXED_NOW,
+                created_at=created_at,
             )
         )
         await s.commit()
+
+
+async def test_old_denied_artifact_does_not_block_a_delivered_latest_one() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.REVIEW_READY)
+        await _seed_deliverable(
+            sf,
+            row,
+            delivered=False,
+            queue_status=SafeModeStatus.DENIED,
+            created_at=_FIXED_NOW - timedelta(hours=2),
+        )
+        await _seed_deliverable(sf, row, delivered=True, queue_status=SafeModeStatus.APPROVED)
+        client = _FakeClient(pr=dict(_CLEAN_PR))
+        assert await _worker(sf, client).drain_once() == 1
+        assert len(client.merge_calls) == 1
+
+
+async def test_undelivered_approved_latest_artifact_blocks_despite_old_delivered_one() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.REVIEW_READY)
+        await _seed_deliverable(
+            sf,
+            row,
+            delivered=True,
+            queue_status=SafeModeStatus.APPROVED,
+            created_at=_FIXED_NOW - timedelta(hours=2),
+        )
+        await _seed_deliverable(sf, row, delivered=False, queue_status=SafeModeStatus.APPROVED)
+        client = _FakeClient(pr=dict(_CLEAN_PR))
+        assert await _worker(sf, client).drain_once() == 1
+        assert client.merge_calls == []
 
 
 async def test_approved_and_delivered_original_artifact_does_not_block_the_merge() -> None:
