@@ -323,11 +323,11 @@ async def test_safe_mode_approve_delivers_shaped_notion_event(
     assert "Quarterly Spec" in body  # title = first line of the summary
     assert "The spec body" in body  # body carries the rest of the summary
 
-    # 4. Item marked APPROVED.
+    # 4. The send landed, so the approved item moved on to DELIVERED.
     async with sf() as s, workspace_session_scope(s, workspace_id):
         item = await s.get(SafeModeQueueItemRow, uuid.UUID(item_id))
         assert item is not None
-        assert item.status is SafeModeStatus.APPROVED
+        assert item.status is SafeModeStatus.DELIVERED
         assert item.decided_at is not None
         # The in-app Deliverable is untouched.
         assert await s.get(Deliverable, deliverable_id) is not None

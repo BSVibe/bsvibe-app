@@ -290,9 +290,12 @@ class SafeModeQueue:
         (#1109 — the merge watch decides that one). Through ``move_run_status``, so
         a run moved elsewhere meanwhile is left as it is.
         """
-        from sqlalchemy import select  # noqa: PLC0415
+        from sqlalchemy import and_, or_, select  # noqa: PLC0415
 
-        from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+        from backend.workflow.infrastructure.db import (  # noqa: PLC0415
+            Deliverable,
+            ExecutionRun,
+        )
 
         row = await self._repo.get(item_id)
         if row is None or row.run_id is None:
@@ -303,12 +306,22 @@ class SafeModeQueue:
         payload = run.payload if isinstance(run.payload, dict) else {}
         if "awaiting_merge" in payload:
             return
+        # ``approved`` is live only while its deliverable has not gone out: the delivery seam
+        # moves a delivered one to ``delivered``, and ``delivered_at`` covers rows it never saw.
         live = (
             await self._session.execute(
-                select(SafeModeQueueItemRow.id).where(
+                select(SafeModeQueueItemRow.id)
+                .outerjoin(Deliverable, Deliverable.id == SafeModeQueueItemRow.deliverable_id)
+                .where(
                     SafeModeQueueItemRow.run_id == run.id,
-                    SafeModeQueueItemRow.status.in_(
-                        (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED, SafeModeStatus.APPROVED)
+                    or_(
+                        SafeModeQueueItemRow.status.in_(
+                            (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED)
+                        ),
+                        and_(
+                            SafeModeQueueItemRow.status == SafeModeStatus.APPROVED,
+                            Deliverable.delivered_at.is_(None),
+                        ),
                     ),
                 )
             )
