@@ -98,6 +98,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from sqlalchemy import select
 
+from backend.common.decision_kinds import REPORT_DECISION_KINDS
 from backend.workflow.application.run_status import move_run_status
 from backend.workflow.infrastructure.db import (
     TERMINAL_RUN_STATUSES,
@@ -416,7 +417,7 @@ async def ship_if_delivered(session: AsyncSession, run: ExecutionRun) -> bool:
             )
         )
         or any(
-            d.status is DecisionStatus.PENDING
+            d.status is DecisionStatus.PENDING and d.decision not in REPORT_DECISION_KINDS
             for d in await SqlAlchemyDecisionRepository(session).list_by_run(
                 run.id, run.workspace_id
             )

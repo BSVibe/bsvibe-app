@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from sqlalchemy import select
 
+from backend.common.decision_kinds import REPORT_DECISION_KINDS as _REPORT_DECISION_KINDS
 from backend.common.settle_kinds import (
     DECISION_RESOLUTION_SETTLE_KIND,
     NEGATIVE_PATTERN_SETTLE_KIND,
@@ -114,12 +115,6 @@ _SUMMARY_CAP = 500
 #: kept local because the reason differs (there: an auto-resolution that has
 #: nothing to close; here: a resume that has nowhere to go).
 _TERMINAL_RUN_STATUSES = frozenset({RunStatus.SHIPPED, RunStatus.FAILED, RunStatus.CANCELLED})
-
-#: Decision kinds that REPORT on work already out of the agent's hands — a free-text
-#: reply records the founder's words and never resumes the run (#1109).
-_REPORT_DECISION_KINDS = frozenset(
-    {"merge_watch_stalled", "product_bundle_conflict", "github_app_permission_missing"}
-)
 
 logger = structlog.get_logger(__name__)
 
