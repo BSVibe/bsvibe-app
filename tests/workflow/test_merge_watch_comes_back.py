@@ -319,6 +319,49 @@ async def test_the_actions_job_log_excerpt_reaches_the_runs_turn_message() -> No
         assert "test_every_decision_has_a_way_out" in message["content"]
 
 
+async def test_the_job_log_is_not_downloaded_on_the_first_red_look() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        await _seed_watch(sf, head_sha=_HEAD)  # first red look
+        rec = _Recorder()
+        github = _Github(pr=_open_pr("unstable"), checks=_actions_check())
+        github.job_log = _ACTIONS_LOG
+        await _worker(sf, github, rec).drain_once()
+
+        assert rec.ci == [] and rec.stalls == []
+        assert github.job_ids == []
+
+
+async def test_the_job_log_is_not_downloaded_while_awaiting_the_fix() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        await _seed_watch(
+            sf, head_sha=_HEAD, ci_red_head_sha=_HEAD, ci_fix_attempts=1, ci_fix_head_sha=_HEAD
+        )
+        rec = _Recorder()
+        github = _Github(pr=_open_pr("unstable"), checks=_actions_check())
+        github.job_log = _ACTIONS_LOG
+        await _worker(sf, github, rec).drain_once()
+
+        assert rec.ci == [] and rec.stalls == []
+        assert github.job_ids == []
+
+
+async def test_the_job_log_is_downloaded_when_giving_up() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        await _seed_watch(sf, head_sha=_HEAD, ci_red_head_sha=_HEAD, ci_fix_attempts=2)
+        rec = _Recorder()
+        github = _Github(pr=_open_pr("unstable"), checks=_actions_check())
+        github.job_log = _ACTIONS_LOG
+        await _worker(sf, github, rec).drain_once()
+
+        assert github.job_ids == [4242]
+        [stall] = rec.stalls
+        assert "test_every_decision_has_a_way_out" in stall["failed_checks"][0]["summary"]
+        assert "details_url" not in stall["failed_checks"][0]
+
+
 async def test_an_unreadable_job_log_sends_the_check_name_alone() -> None:
     async with db_engine(Base) as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
