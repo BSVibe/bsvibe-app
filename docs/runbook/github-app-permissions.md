@@ -27,3 +27,16 @@ github_delivery_issue_comment_failed ... 403 Resource not accessible by integrat
 4. 다음 배송부터 코멘트가 달린다. 재연결은 필요 없다.
 
 새로 만드는 App 은 manifest 가 `issues: write` 를 요청하므로 이 절차가 필요 없다.
+
+## Actions (Read-only) — CI 실패 로그 발췌
+
+머지 감시는 PR 의 CI 가 빨개지면 원래 런에 실패를 돌려보낼 때 Actions 잡 로그
+(`GET /repos/{o}/{r}/actions/jobs/{job_id}/logs`)의 실패 발췌를 붙인다. 이 읽기에는
+**Actions: Read-only** 권한이 필요하다 (manifest 의 `actions: read`).
+
+- 새로 만드는 App 은 manifest 가 요청하므로 할 일이 없다.
+- **이미 설치된 App 은 사람이 올려야 한다**: 위 절차와 같이 Permissions & events 의
+  Repository permissions → **Actions** 를 `Read-only` 로 바꾸고, Installation 페이지에서
+  변경 요청을 승인한다.
+- 올리기 전에는 로그 읽기가 403 이고, 머지 감시는 예전처럼 검사 **이름만** 런에 넘긴다
+  (로그에 `merge_watch_job_log_unreadable` 이 남는다). 기능은 깨지지 않고 발췌만 빠진다.

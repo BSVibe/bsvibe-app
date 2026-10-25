@@ -55,6 +55,7 @@ discarded the run) stay quiet, because they already know.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -104,6 +105,8 @@ class MergeWatchClient(Protocol):
     async def close_pr(self, owner: str, repo: str, number: int) -> dict[str, Any]: ...
 
     async def get_check_runs(self, owner: str, repo: str, ref: str) -> list[dict[str, Any]]: ...
+
+    async def get_job_log(self, owner: str, repo: str, job_id: int) -> str: ...
 
 
 #: Resolve a per-row GitHub client (token + base_url from the github binding of
@@ -304,6 +307,36 @@ def _check_summary(run: dict[str, Any]) -> str:
         str(output.get(key)).strip() for key in ("title", "summary", "text") if output.get(key)
     ]
     return "\n".join(parts)[:_CHECK_SUMMARY_MAX]
+
+
+_LOG_EXCERPT_MAX = 3000
+_LOG_TAIL_LINES = 40
+# An Actions check-run's ``details_url`` is ``…/actions/runs/{run}/job/{job_id}`` —
+# the job id is read from there rather than assumed equal to the check-run id.
+_JOB_URL = re.compile(r"/actions/runs/\d+/job/(\d+)")
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_LOG_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T[\d:.]+Z ?")
+_FAILURE_LINE = re.compile(
+    r"(^FAILED |^ERROR |^E {2,}|short test summary|^=+ .*(failed|error).* =+$"
+    r"|\.(py|ts|tsx|js):\d+(:\d+)?:? |error TS\d+|\berror\b.*:|##\[error\])",
+    re.IGNORECASE,
+)
+
+
+def _job_id(run: dict[str, Any]) -> int | None:
+    """The Actions job id behind a check-run (``None`` for a non-Actions check)."""
+    match = _JOB_URL.search(str(run.get("details_url") or ""))
+    return int(match.group(1)) if match else None
+
+
+def _log_excerpt(log: str) -> str:
+    """The failing part of a job log: pytest/ruff/mypy error lines, else the last lines."""
+    lines = [_LOG_TIMESTAMP.sub("", _ANSI.sub("", raw)).rstrip() for raw in log.splitlines()]
+    lines = [line for line in lines if line]
+    hits = [line for line in lines if _FAILURE_LINE.search(line)]
+    excerpt = "\n".join(hits) if hits else "\n".join(lines[-_LOG_TAIL_LINES:])
+    # The last lines are the verdict (pytest's summary, ruff's count) — keep them on overflow.
+    return excerpt[-_LOG_EXCERPT_MAX:]
 
 
 def _head_advanced(current: str | None, dispatched: str | None) -> bool:
@@ -678,6 +711,9 @@ class MergeWatchWorker(BaseWorker):
                     self._redispatch_ci is not None
                     and snap.ci_fix_attempts < self._cfg.ci_fix_max_redispatch
                 ):
+                    failed_checks = await self._with_log_excerpts(
+                        client, owner, name, failed_checks
+                    )
                     await self._redispatch_ci(
                         snap.run_id,
                         failed_checks=failed_checks,
@@ -705,6 +741,7 @@ class MergeWatchWorker(BaseWorker):
                         ci_fix_attempt=snap.ci_fix_attempts + 1,
                     )
                     return
+                failed_checks = await self._with_log_excerpts(client, owner, name, failed_checks)
                 await self._gave_up(snap, "ci_failed", failed_checks)
                 await repo.mark_status(snap.id, MergeWatchStatus.FAILED, last_error="ci_failed")
                 await session.commit()
@@ -756,8 +793,9 @@ class MergeWatchWorker(BaseWorker):
     ) -> list[dict[str, str]]:
         """The checks on ``head_sha`` that COMPLETED with a failing conclusion.
 
-        Each is ``{name, conclusion, summary}`` — the summary is the check's own
-        output, trimmed, so the run it goes back to can see what broke. Only ``completed`` runs count: one still going is exactly the pending
+        Each is ``{name, conclusion, summary, details_url}`` — the summary is the
+        check's own output, trimmed; the job-log excerpt is added later by
+        :meth:`_with_log_excerpts`, only when the checks are sent on. Only ``completed`` runs count: one still going is exactly the pending
         case the deadline exists for. ``cancelled`` is deliberately included —
         a cancelled required check will not go green on its own either.
 
@@ -770,17 +808,69 @@ class MergeWatchWorker(BaseWorker):
         except Exception:  # noqa: BLE001 — an unreadable API is not a verdict
             logger.info("merge_watch_check_runs_unreadable", repo=f"{owner}/{name}", exc_info=True)
             return []
-        return [
-            {
-                "name": str(run.get("name") or "unnamed check"),
-                "conclusion": str(run.get("conclusion")),
-                "summary": _check_summary(run),
-            }
-            for run in runs
-            if isinstance(run, dict)
-            and run.get("status") == "completed"
-            and run.get("conclusion") in _FAILING_CONCLUSIONS
-        ]
+        failed: list[dict[str, str]] = []
+        for run in runs:
+            if not (
+                isinstance(run, dict)
+                and run.get("status") == "completed"
+                and run.get("conclusion") in _FAILING_CONCLUSIONS
+            ):
+                continue
+            failed.append(
+                {
+                    "name": str(run.get("name") or "unnamed check"),
+                    "conclusion": str(run.get("conclusion")),
+                    "summary": _check_summary(run),
+                    # Carried only so the log can be fetched later; stripped by
+                    # ``_with_log_excerpts`` before the checks leave the worker.
+                    "details_url": str(run.get("details_url") or ""),
+                }
+            )
+        return failed
+
+    async def _with_log_excerpts(
+        self, client: MergeWatchClient, owner: str, name: str, failed_checks: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        """``failed_checks`` as ``{name, conclusion, summary}`` with job-log excerpts attached.
+
+        The log is megabytes, so this runs only where the excerpt is used — right
+        before a hand-back to the run or a give-up — never on every poll.
+        """
+        out: list[dict[str, str]] = []
+        for check in failed_checks:
+            summary = check["summary"]
+            excerpt = await self._job_log_excerpt(
+                client, owner, name, {"details_url": check.get("details_url", "")}
+            )
+            if excerpt:
+                summary = f"{summary}\n\nJob log excerpt:\n{excerpt}".strip()
+            out.append(
+                {"name": check["name"], "conclusion": check["conclusion"], "summary": summary}
+            )
+        return out
+
+    async def _job_log_excerpt(
+        self, client: MergeWatchClient, owner: str, name: str, run: dict[str, Any]
+    ) -> str:
+        """The failing part of an Actions job's log, or ``""``.
+
+        Fail-SOFT: a non-Actions check, a missing ``actions: read`` permission,
+        expired logs or a network error all answer ``""`` — the check then goes
+        back by name (and its own output) alone, as before.
+        """
+        job_id = _job_id(run)
+        if job_id is None:
+            return ""
+        try:
+            return _log_excerpt(await client.get_job_log(owner, name, job_id))
+        except Exception:  # noqa: BLE001 — an unreadable log must not block the hand-back
+            logger.info(
+                "merge_watch_job_log_unreadable",
+                repo=f"{owner}/{name}",
+                job_id=job_id,
+                exc_info=True,
+            )
+            return ""
 
     async def _merge_step(
         self,

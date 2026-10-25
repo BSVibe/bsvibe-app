@@ -28,7 +28,12 @@ _HTTP_TIMEOUT = 10.0
 # ``issues`` / ``issue_comment`` events are delivered only to an App holding the
 # issues permission. An already-created App keeps its old permissions: the owner
 # must raise Issues in the App settings (docs/runbook/github-app-permissions.md).
+# ``actions: read`` lets the merge watch read a failed job's log
+# (``GET /actions/jobs/{id}/logs``) to hand the failure excerpt back to the run;
+# without it the watch falls back to the check's name alone. Existing installs
+# must raise Actions to Read-only by hand (same runbook).
 _DEFAULT_PERMISSIONS = {
+    "actions": "read",
     "contents": "write",
     "pull_requests": "write",
     "issues": "write",
