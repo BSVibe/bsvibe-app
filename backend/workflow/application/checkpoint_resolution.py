@@ -788,6 +788,9 @@ async def _send_stalled_pr_back(
     pr_number = recorded.get("pr_number")
     if not isinstance(pr_number, int):
         raise InvalidAction(f"Decision {decision.id} names no pull request to send back")
+    if recorded.get("reason") == "review_comment_unaddressed":
+        await _send_review_comments_back(session, run=run, pr_number=pr_number)
+        return
     checks = recorded.get("failed_checks")
     failed_checks = [c for c in checks if isinstance(c, dict)] if isinstance(checks, list) else []
     sent = await send_ci_failure_to_run(
@@ -795,6 +798,44 @@ async def _send_stalled_pr_back(
     )
     if not sent:
         raise InvalidAction(f"Run {run.id} is {run.status.value} and cannot take the PR back")
+    await revive_merge_watch(
+        session,
+        run,
+        pr_number=pr_number,
+        ci_deadline_s=get_settings().github_auto_merge_ci_deadline_s,
+    )
+
+
+async def _send_review_comments_back(
+    session: AsyncSession, *, run: ExecutionRun, pr_number: int
+) -> None:
+    """``review_comment_unaddressed`` → ``retry``: hand the reviewer's words back to the run.
+
+    The comments come from the run's durable record (the ``pr_comments`` queue was consumed
+    when the failed drive began) and go back the way intake queues them, so the next drive
+    injects them as before. No CI failure is involved. The watch is revived to merge the fix.
+    """
+    from backend.config import get_settings  # noqa: PLC0415
+    from backend.workflow.application.intake.ci_failure import (  # noqa: PLC0415
+        revive_merge_watch,
+    )
+    from backend.workflow.application.run_status import move_run_status  # noqa: PLC0415
+    from backend.workflow.domain.pr_review import unaddressed_comments  # noqa: PLC0415
+
+    if run.status is not RunStatus.FAILED:
+        raise InvalidAction(f"Run {run.id} is {run.status.value} and cannot take the PR back")
+    delivered = (
+        await session.scalars(select(Deliverable.delivered_at).where(Deliverable.run_id == run.id))
+    ).all()
+    comments = unaddressed_comments(run.payload, delivered)
+    if not comments:
+        raise InvalidAction(f"Run {run.id} has no recorded review comment to send back")
+    payload = dict(run.payload or {})
+    payload["pr_comments"] = [*(payload.get("pr_comments") or []), *comments]
+    run.payload = payload
+    await move_run_status(
+        session, run, RunStatus.OPEN, reason=f"review comment on PR #{pr_number} sent back"
+    )
     await revive_merge_watch(
         session,
         run,

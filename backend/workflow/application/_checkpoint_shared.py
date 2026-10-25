@@ -299,10 +299,22 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
 }
 
 
+# A reason can narrow its kind's actions: a report about a run that already shipped has
+# nothing to send back or let go, so only "Got it" is real.
+_EXECUTOR_REASON_ACTIONS: dict[tuple[str, str], list[DecisionAction]] = {
+    ("merge_watch_stalled", "shipped_with_waiting_deliverable"): [
+        DecisionAction(key=ACTION_ACKNOWLEDGE, label_en="Got it", label_ko="확인했어요"),
+    ],
+}
+
+
 def _decision_actions(decision: Decision) -> list[DecisionAction] | None:
     """The structured one-click actions for ``decision``, or ``None`` if the
-    kind doesn't carry any (a vanilla ask_user_question Decision)."""
-    return _EXECUTOR_DECISION_ACTIONS.get(decision.decision)
+    kind doesn't carry any (a vanilla ask_user_question Decision). A reason that
+    narrows its kind's actions (:data:`_EXECUTOR_REASON_ACTIONS`) wins."""
+    payload = decision.payload if isinstance(decision.payload, dict) else {}
+    narrowed = _EXECUTOR_REASON_ACTIONS.get((decision.decision, str(payload.get("reason") or "")))
+    return narrowed or _EXECUTOR_DECISION_ACTIONS.get(decision.decision)
 
 
 def _question_text(decision: Decision, language: str = "en") -> str:
