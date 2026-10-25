@@ -69,6 +69,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.data.scoping import workspace_scope
 from backend.storage.github_repo_lock import GithubRepoBusy, github_repo_lock
 from backend.workers.base import BaseWorker
+from backend.workflow.domain.pr_review import comment_received_at, review_comment_unaddressed
 from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
@@ -80,6 +81,10 @@ logger = structlog.get_logger(__name__)
 #: Check-run conclusions that mean this head will not go green by waiting.
 #: ``neutral`` / ``skipped`` / ``success`` are not failures; ``cancelled`` is,
 #: because a cancelled required check never completes on its own either.
+#: Why a watch gave up on a PR whose run failed before the reviewer's comment was answered
+#: (``row.last_error`` ≡ the ``merge_watch_stalled`` Decision's ``payload["reason"]``).
+REVIEW_COMMENT_UNADDRESSED = "review_comment_unaddressed"
+
 _FAILING_CONCLUSIONS = frozenset({"failure", "timed_out", "action_required", "cancelled"})
 
 
@@ -648,6 +653,21 @@ class MergeWatchWorker(BaseWorker):
                     await session.commit()
                     logger.info(
                         "merge_watch_deferred_run_fixing",
+                        repo=snap.repo,
+                        pr_number=snap.pr_number,
+                        run_id=str(snap.run_id),
+                    )
+                    return
+                # The reopened run FAILED before its fix reached the PR: the head on the
+                # PR is still the one the reviewer asked to change. Not ours to merge.
+                if await self._failed_without_the_fix(session, snap.run_id):
+                    await self._gave_up(snap, REVIEW_COMMENT_UNADDRESSED)
+                    await repo.mark_status(
+                        snap.id, MergeWatchStatus.FAILED, last_error=REVIEW_COMMENT_UNADDRESSED
+                    )
+                    await session.commit()
+                    logger.warning(
+                        "merge_watch_held_review_comment_unaddressed",
                         repo=snap.repo,
                         pr_number=snap.pr_number,
                         run_id=str(snap.run_id),
@@ -1257,6 +1277,29 @@ class MergeWatchWorker(BaseWorker):
         # fact lives on the deliverable itself. DENIED / EXPIRED are not waiting.
         return item_status == SafeModeStatus.APPROVED and latest.delivered_at is None
 
+    async def _failed_without_the_fix(self, session: AsyncSession, run_id: uuid.UUID) -> bool:
+        """Did a review comment reach this run, and the run ``failed`` before a fix was delivered?
+
+        Judged from the run's durable records, not from ``payload["pr_comments"]`` (the
+        drive loop clears that when it starts): the time the comment arrived, against the
+        ``delivered_at`` of the run's deliverables. Only a ``failed`` run — one that is
+        still working, or waiting in Safe Mode, is :meth:`_run_still_fixing`'s.
+        """
+        status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run_id))
+        if status is not RunStatus.FAILED:
+            return False
+        payload = await session.scalar(
+            select(ExecutionRun.payload).where(ExecutionRun.id == run_id)
+        )
+        if comment_received_at(payload) is None:
+            return False
+        delivered = (
+            await session.scalars(
+                select(Deliverable.delivered_at).where(Deliverable.run_id == run_id)
+            )
+        ).all()
+        return review_comment_unaddressed(payload, delivered)
+
     async def _close_orphaned_pr(
         self, client: MergeWatchClient, owner: str, name: str, snap: _WatchSnapshot
     ) -> None:
@@ -1297,6 +1340,7 @@ __all__ = [
     "MergeWatchClient",
     "MergeWatchWorker",
     "MergeWatchWorkerConfig",
+    "REVIEW_COMMENT_UNADDRESSED",
     "PrConcluded",
     "StallEscalate",
 ]

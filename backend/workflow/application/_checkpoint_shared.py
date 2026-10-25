@@ -177,6 +177,14 @@ _EXECUTOR_DECISION_REASON_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "The checks on BSVibe's pull request never went green in time — take a look at it.",
         "ko": "BSVibe가 올린 PR의 검사가 제한 시간 안에 통과하지 못했어요 — 한번 봐주세요.",
     },
+    "shipped_with_waiting_deliverable": {
+        "en": "BSVibe's pull request was merged while a newer change of the run was still waiting for approval or delivery, so it left the queue. Check that it landed.",
+        "ko": "BSVibe가 올린 PR이 병합됐는데, 같은 작업의 더 새로운 변경이 승인이나 배송을 기다리던 중이었어요. 대기열에서는 사라졌으니 반영됐는지 확인해주세요.",
+    },
+    "review_comment_unaddressed": {
+        "en": "A reviewer asked for changes on BSVibe's pull request, but the work failed before the fix was pushed, so it was not merged. Send it back to be fixed, or decide yourself.",
+        "ko": "리뷰 코멘트로 수정을 요청받았는데 수정이 올라가기 전에 작업이 실패했어요. PR은 병합하지 않았어요. 다시 고치게 하거나 직접 판단해주세요.",
+    },
     "ci_failed": {
         "en": "The checks on BSVibe's pull request failed — the failing one says why.",
         "ko": "BSVibe가 올린 PR의 검사가 실패했어요 — 실패한 검사에 이유가 있어요.",

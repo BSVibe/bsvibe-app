@@ -14,6 +14,7 @@ Real Postgres (``BSVIBE_DATABASE_URL``) for the ExecutionRun row.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -23,12 +24,23 @@ from backend.data import Base
 from backend.data.rls import workspace_session_scope
 from backend.data.scoping import workspace_scope
 from backend.workflow.application.runtime.merge_watch_runtime import (
+    SHIPPED_WITH_WAITING,
+    SHIPPED_WITH_WAITING_KEY,
     build_merge_watch_conflict_escalate,
     build_merge_watch_conflict_redispatch,
+    build_merge_watch_pr_concluded,
     build_merge_watch_stall_escalate,
     build_merge_watch_workers,
 )
-from backend.workflow.infrastructure.db import Decision, DecisionStatus, ExecutionRun, RunStatus
+from backend.workflow.infrastructure.db import (
+    Decision,
+    DecisionStatus,
+    Deliverable,
+    DeliverableType,
+    ExecutionRun,
+    RunStatus,
+)
+from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from tests._support import db_engine
 
 pytestmark = pytest.mark.asyncio
@@ -195,6 +207,82 @@ async def test_stall_escalate_raises_stalled_decision_without_reviving_the_run()
             assert decision.payload["reason"] == "ci_deadline_exceeded"
             assert decision.payload["repo"] == "acme/x"
             assert decision.payload["pr_number"] == 23
+
+
+async def _seed_waiting_item(
+    sf: async_sessionmaker,  # noqa: ANN001
+    run_id: uuid.UUID,
+    ws: uuid.UUID,
+    *,
+    status: SafeModeStatus,
+    delivered: bool,
+) -> None:
+    deliverable_id = uuid.uuid4()
+    async with sf() as session, workspace_session_scope(session, ws):
+        session.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=run_id,
+                workspace_id=ws,
+                deliverable_type=DeliverableType.PR,
+                payload={},
+                delivered_at=datetime.now(tz=UTC) if delivered else None,
+            )
+        )
+        session.add(
+            SafeModeQueueItemRow(
+                id=uuid.uuid4(),
+                workspace_id=ws,
+                deliverable_id=deliverable_id,
+                run_id=run_id,
+                status=status,
+                expires_at=datetime.now(tz=UTC) + timedelta(days=7),
+                extension_count=0,
+            )
+        )
+        await session.commit()
+
+
+@pytest.mark.parametrize(
+    ("status", "delivered", "recorded"),
+    [
+        (SafeModeStatus.PENDING, False, True),
+        (SafeModeStatus.APPROVED, False, True),
+        (SafeModeStatus.APPROVED, True, False),
+        (SafeModeStatus.DENIED, False, False),
+    ],
+)
+async def test_merge_that_ships_a_run_with_a_waiting_item_is_recorded_and_told(
+    status: SafeModeStatus, delivered: bool, recorded: bool
+) -> None:
+    """Once shipped, the queue hides the held item. The merge must say it was there."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_id, ws = await _seed_run(sf, status=RunStatus.REVIEW_READY)
+        await _seed_waiting_item(sf, run_id, ws, status=status, delivered=delivered)
+
+        concluded = build_merge_watch_pr_concluded(session_factory=sf)
+        with workspace_scope(ws):
+            await concluded(run_id, merged=True, pr_number=9)
+
+        async with sf() as session, workspace_session_scope(session, ws):
+            run = await session.get(ExecutionRun, run_id)
+            assert run is not None
+            assert run.status is RunStatus.SHIPPED
+            decisions = (
+                (await session.execute(select(Decision).where(Decision.run_id == run_id)))
+                .scalars()
+                .all()
+            )
+            if not recorded:
+                assert SHIPPED_WITH_WAITING_KEY not in run.payload
+                assert decisions == []
+                return
+            assert len(run.payload[SHIPPED_WITH_WAITING_KEY]) == 1
+            (decision,) = decisions
+            assert decision.decision == "merge_watch_stalled"
+            assert decision.payload["reason"] == SHIPPED_WITH_WAITING
+            assert decision.payload["pr_number"] == 9
 
 
 async def test_stall_escalate_missing_run_is_a_noop() -> None:
