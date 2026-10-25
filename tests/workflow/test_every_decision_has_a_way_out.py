@@ -352,9 +352,9 @@ async def test_a_bundle_publish_conflict_is_a_report_on_a_shipped_run(sf) -> Non
     divergence. It used to be a ``merge_conflict_review`` offering retry/discard on a
     run that ships right after, which the transition table now refuses silently. It
     is a report: acknowledge, and a reply never re-drives the run (#1074 inventory)."""
+    from backend.common.decision_kinds import REPORT_DECISION_KINDS
     from backend.workflow.application._checkpoint_shared import ACTION_ACKNOWLEDGE
     from backend.workflow.application.agent_runner import AgentRunner
-    from backend.workflow.application.checkpoint_resolution import _REPORT_DECISION_KINDS
 
     workspace_id, run_id, _ = await _seed(sf, labels=["only"])
 
@@ -368,7 +368,7 @@ async def test_a_bundle_publish_conflict_is_a_report_on_a_shipped_run(sf) -> Non
     assert decision.decision == "product_bundle_conflict"
     actions = _decision_actions(decision)
     assert actions is not None and {a.key for a in actions} == {ACTION_ACKNOWLEDGE}
-    assert decision.decision in _REPORT_DECISION_KINDS
+    assert decision.decision in REPORT_DECISION_KINDS
 
 
 class TestDeliveryFailed:

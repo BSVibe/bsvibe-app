@@ -32,6 +32,8 @@ from backend.data.scoping import workspace_scope
 from backend.workflow.application.agent_runner import AgentRunner
 from backend.workflow.domain.delivery import ActionResult, DeliveryResult
 from backend.workflow.infrastructure.db import (
+    Decision,
+    DecisionStatus,
     Deliverable,
     DeliverableType,
     ExecutionBase,
@@ -261,6 +263,70 @@ async def test_an_item_already_decided_does_not_hold_the_run(sf) -> None:
     await _to_review_ready(sf, ws, run_id)
 
     assert await _status(sf, ws, run_id) is RunStatus.SHIPPED
+
+
+async def _pending_decision(sf_: async_sessionmaker, ws: uuid.UUID, run_id: uuid.UUID, kind: str):
+    async with sf_() as s, workspace_session_scope(s, ws):
+        s.add(
+            Decision(
+                workspace_id=ws,
+                run_id=run_id,
+                decision=kind,
+                status=DecisionStatus.PENDING,
+                created_at=datetime.now(tz=UTC),
+            )
+        )
+        await s.commit()
+
+
+async def test_a_pending_report_decision_does_not_hold_an_unwatched_run(sf) -> None:
+    """A report-only Decision (no merge watch to conclude it) must not strand a delivered run."""
+    ws, run_id, _d = await _seed(sf, delivered=True)
+    await _pending_decision(sf, ws, run_id, "github_app_permission_missing")
+
+    await _to_review_ready(sf, ws, run_id)
+
+    assert await _status(sf, ws, run_id) is RunStatus.SHIPPED
+
+
+async def test_ship_if_delivered_returns_true_past_a_pending_report_decision(sf) -> None:
+    from backend.workflow.application.run_delivery_resolution import ship_if_delivered
+
+    ws, run_id, _d = await _seed(
+        sf,
+        status=RunStatus.REVIEW_READY,
+        payload={"delivers_via_local_product_repo": False},
+        delivered=True,
+    )
+    await _pending_decision(sf, ws, run_id, "github_app_permission_missing")
+
+    async with sf() as s, workspace_session_scope(s, ws):
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        assert await ship_if_delivered(s, run) is True
+        await s.commit()
+
+    assert await _status(sf, ws, run_id) is RunStatus.SHIPPED
+
+
+async def test_a_pending_real_checkpoint_still_holds_the_run(sf) -> None:
+    from backend.workflow.application.run_delivery_resolution import ship_if_delivered
+
+    ws, run_id, _d = await _seed(
+        sf,
+        status=RunStatus.REVIEW_READY,
+        payload={"delivers_via_local_product_repo": False},
+        delivered=True,
+    )
+    await _pending_decision(sf, ws, run_id, "human_review_required")
+
+    async with sf() as s, workspace_session_scope(s, ws):
+        run = await s.get(ExecutionRun, run_id)
+        assert run is not None
+        assert await ship_if_delivered(s, run) is False
+        await s.commit()
+
+    assert await _status(sf, ws, run_id) is RunStatus.REVIEW_READY
 
 
 async def test_a_retracted_delivery_does_not_count(sf) -> None:
