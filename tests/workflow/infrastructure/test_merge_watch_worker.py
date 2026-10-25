@@ -38,7 +38,12 @@ from backend.workflow.application.runtime.merge_watch_server_freshen import (
     FreshnessTarget,
     freshen_in_clone,
 )
-from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+from backend.workflow.infrastructure.db import (
+    Deliverable,
+    DeliverableType,
+    ExecutionRun,
+    RunStatus,
+)
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.delivery.git_ops import GitError, GitOps
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
@@ -1415,6 +1420,65 @@ async def test_pr_is_not_merged_while_the_runs_new_artifact_waits_in_safe_mode()
         row = _row()
         await _seed(sf, row)
         await _seed_run(sf, row, RunStatus.REVIEW_READY, queue_item=SafeModeStatus.PENDING)
+        client = _FakeClient(pr=dict(_CLEAN_PR))
+        assert await _worker(sf, client).drain_once() == 1
+        assert client.merge_calls == []
+
+
+async def _seed_deliverable(
+    sf: async_sessionmaker[AsyncSession],
+    row: GithubMergeWatchRow,
+    *,
+    delivered: bool,
+    queue_status: SafeModeStatus,
+) -> None:
+    deliverable_id = uuid.uuid4()
+    async with sf() as s, workspace_session_scope(s, row.workspace_id):
+        s.add(
+            Deliverable(
+                id=deliverable_id,
+                run_id=row.run_id,
+                workspace_id=row.workspace_id,
+                deliverable_type=DeliverableType.PR,
+                payload={},
+                delivered_at=_FIXED_NOW if delivered else None,
+                created_at=_FIXED_NOW,
+            )
+        )
+        s.add(
+            SafeModeQueueItemRow(
+                id=uuid.uuid4(),
+                workspace_id=row.workspace_id,
+                deliverable_id=deliverable_id,
+                run_id=row.run_id,
+                status=queue_status,
+                expires_at=_FIXED_NOW + timedelta(days=7),
+                extension_count=0,
+                created_at=_FIXED_NOW,
+            )
+        )
+        await s.commit()
+
+
+async def test_approved_and_delivered_original_artifact_does_not_block_the_merge() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.REVIEW_READY)
+        await _seed_deliverable(sf, row, delivered=True, queue_status=SafeModeStatus.APPROVED)
+        client = _FakeClient(pr=dict(_CLEAN_PR))
+        assert await _worker(sf, client).drain_once() == 1
+        assert len(client.merge_calls) == 1
+
+
+async def test_undelivered_approved_artifact_still_blocks_the_merge() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.REVIEW_READY)
+        await _seed_deliverable(sf, row, delivered=False, queue_status=SafeModeStatus.APPROVED)
         client = _FakeClient(pr=dict(_CLEAN_PR))
         assert await _worker(sf, client).drain_once() == 1
         assert client.merge_calls == []

@@ -69,7 +69,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.data.scoping import workspace_scope
 from backend.storage.github_repo_lock import GithubRepoBusy, github_repo_lock
 from backend.workers.base import BaseWorker
-from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.github.repository import GithubMergeWatchRepository
@@ -1225,7 +1225,8 @@ class MergeWatchWorker(BaseWorker):
         """Is the run that opened the PR still working on it?
 
         ``open`` / ``running`` (reopened by a review comment), or a new artifact of
-        the same run not yet delivered — pending / extended / approved in Safe Mode.
+        the same run not yet delivered — pending / extended in Safe Mode, or any
+        deliverable without ``delivered_at`` (an approved item stays ``approved`` forever).
         Merging then would ship the code before the fix and, once the run is
         ``shipped``, hide the waiting fix from the queue. Missing run → ``False``."""
         status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run_id))
@@ -1235,13 +1236,24 @@ class MergeWatchWorker(BaseWorker):
             select(SafeModeQueueItemRow.id)
             .where(
                 SafeModeQueueItemRow.run_id == run_id,
-                SafeModeQueueItemRow.status.in_(
-                    (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED, SafeModeStatus.APPROVED)
-                ),
+                SafeModeQueueItemRow.status.in_((SafeModeStatus.PENDING, SafeModeStatus.EXTENDED)),
             )
             .limit(1)
         )
-        return waiting is not None
+        if waiting is not None:
+            return True
+        # APPROVED is not "delivered": nothing flips an approved item to delivered, so the
+        # fact lives on the deliverable itself.
+        undelivered = await session.scalar(
+            select(Deliverable.id)
+            .where(
+                Deliverable.run_id == run_id,
+                Deliverable.delivered_at.is_(None),
+                Deliverable.retracted_at.is_(None),
+            )
+            .limit(1)
+        )
+        return undelivered is not None
 
     async def _close_orphaned_pr(
         self, client: MergeWatchClient, owner: str, name: str, snap: _WatchSnapshot
