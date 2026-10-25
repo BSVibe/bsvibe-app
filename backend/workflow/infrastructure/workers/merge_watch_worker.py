@@ -69,7 +69,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.data.scoping import workspace_scope
 from backend.storage.github_repo_lock import GithubRepoBusy, github_repo_lock
 from backend.workers.base import BaseWorker
-from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
+from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.github.repository import GithubMergeWatchRepository
 from plugin.github.client import MergeResult
@@ -631,6 +632,27 @@ class MergeWatchWorker(BaseWorker):
 
             # 2. Mergeability gate.
             if mergeable_state == "clean":
+                # The run that opened this PR may be reopened (a review comment
+                # routed to it, #1232) and still fixing it: merging the head
+                # that was reviewed would land the code the reviewer asked to
+                # change. Wait for the fix; the time it takes is not CI time.
+                if await self._run_still_fixing(session, snap.run_id):
+                    snap.deadline_at = now + timedelta(seconds=self._cfg.ci_deadline_s)
+                    await repo.mark_status(
+                        snap.id,
+                        MergeWatchStatus.PENDING_CI,
+                        next_poll_at=now + timedelta(seconds=self._cfg.poll_interval_s),
+                        deadline_at=snap.deadline_at,
+                        last_error="run_still_fixing",
+                    )
+                    await session.commit()
+                    logger.info(
+                        "merge_watch_deferred_run_fixing",
+                        repo=snap.repo,
+                        pr_number=snap.pr_number,
+                        run_id=str(snap.run_id),
+                    )
+                    return
                 merged_now = await self._merge_step(session, repo, snap, owner, name, client, now)
                 await session.commit()
                 if merged_now:
@@ -1198,6 +1220,42 @@ class MergeWatchWorker(BaseWorker):
         → ``False``: treat as still-live and run the normal state machine."""
         status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run_id))
         return status is RunStatus.CANCELLED
+
+    async def _run_still_fixing(self, session: AsyncSession, run_id: uuid.UUID) -> bool:
+        """Is the run that opened the PR still working on it?
+
+        ``open`` / ``running`` (reopened by a review comment), or a new artifact of
+        the same run not yet delivered — judged by the run's latest artifact only: pending /
+        extended in Safe Mode, or approved without ``delivered_at`` (an approved item stays
+        ``approved`` forever; a denied / expired one is not waiting).
+        Merging then would ship the code before the fix and, once the run is
+        ``shipped``, hide the waiting fix from the queue. Missing run → ``False``."""
+        status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run_id))
+        if status in (RunStatus.OPEN, RunStatus.RUNNING):
+            return True
+        # Only the run's LATEST artifact can be "the fix still waiting": a Safe Mode deny
+        # leaves ``delivered_at`` and ``retracted_at`` empty on older artifacts forever.
+        latest = (
+            await session.execute(
+                select(Deliverable.id, Deliverable.delivered_at)
+                .where(Deliverable.run_id == run_id)
+                .order_by(Deliverable.created_at.desc(), Deliverable.id.desc())
+                .limit(1)
+            )
+        ).first()
+        if latest is None:
+            return False
+        item_status = await session.scalar(
+            select(SafeModeQueueItemRow.status)
+            .where(SafeModeQueueItemRow.deliverable_id == latest.id)
+            .order_by(SafeModeQueueItemRow.created_at.desc())
+            .limit(1)
+        )
+        if item_status in (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED):
+            return True
+        # APPROVED is not "delivered": nothing flips an approved item to delivered, so the
+        # fact lives on the deliverable itself. DENIED / EXPIRED are not waiting.
+        return item_status == SafeModeStatus.APPROVED and latest.delivered_at is None
 
     async def _close_orphaned_pr(
         self, client: MergeWatchClient, owner: str, name: str, snap: _WatchSnapshot

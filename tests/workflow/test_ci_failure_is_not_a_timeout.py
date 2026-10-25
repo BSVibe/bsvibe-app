@@ -284,6 +284,18 @@ def _worker(
         async def commit(self) -> None:
             return None
 
+        async def scalar(self, *_a: Any, **_k: Any) -> None:
+            # No run row, no queued item: nothing is still fixing the PR.
+            return None
+
+        async def execute(self, *_a: Any, **_k: Any) -> Any:
+            # No artifact for the run: nothing is waiting to be delivered.
+            class _NoRows:
+                def first(self) -> None:
+                    return None
+
+            return _NoRows()
+
         async def __aenter__(self) -> Any:
             return self
 
