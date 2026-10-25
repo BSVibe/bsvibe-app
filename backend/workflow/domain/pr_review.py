@@ -1,6 +1,6 @@
 """Was a review comment on a run's PR ever answered by a fix that reached the PR?
 
-``run.payload["pr_comments"]`` cannot say: the drive loop consumes (clears) it when it
+The run payload's consumed comment queue cannot say: the drive loop consumes (clears) it when it
 injects the comments into the turn, so once the run has ``failed`` the queue is gone.
 What stays is a pair of facts:
 

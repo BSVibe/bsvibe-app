@@ -1280,7 +1280,7 @@ class MergeWatchWorker(BaseWorker):
     async def _failed_without_the_fix(self, session: AsyncSession, run_id: uuid.UUID) -> bool:
         """Did a review comment reach this run, and the run ``failed`` before a fix was delivered?
 
-        Judged from the run's durable records, not from ``payload["pr_comments"]`` (the
+        Judged from the run's durable records, not from the run payload's consumed comment queue (the
         drive loop clears that when it starts): the time the comment arrived, against the
         ``delivered_at`` of the run's deliverables. Only a ``failed`` run — one that is
         still working, or waiting in Safe Mode, is :meth:`_run_still_fixing`'s.
