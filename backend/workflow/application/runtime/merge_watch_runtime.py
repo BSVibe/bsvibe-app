@@ -42,7 +42,8 @@ from backend.workflow.application.runtime.merge_watch_redispatch import (
     build_merge_watch_ci_redispatch,
     build_merge_watch_conflict_redispatch,
 )
-from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+from backend.workflow.infrastructure.db import Deliverable, ExecutionRun, RunStatus
+from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.workers.merge_watch_worker import (
     ConflictEscalate,
     MergeClientResolver,
@@ -239,6 +240,34 @@ def build_merge_watch_stall_escalate(
     return _escalate
 
 
+#: Run payload key + Decision reason: the PR merged (the run ``shipped``) while the run
+#: still had deliverables held for the founder. ``shipped`` hides the queue item from the
+#: "Needs you" list (``list_pending_by_workspace``), so without this it just disappeared.
+SHIPPED_WITH_WAITING_KEY = "shipped_with_waiting_items"
+SHIPPED_WITH_WAITING = "shipped_with_waiting_deliverable"
+
+
+async def _waiting_items(session: AsyncSession, run_id: uuid.UUID) -> list[uuid.UUID]:
+    """Queue items of ``run_id`` that still wait on the founder or on delivery.
+
+    ``pending`` / ``extended``, or ``approved`` whose deliverable has no ``delivered_at``
+    (approval never flips the item to delivered; the fact lives on the deliverable).
+    """
+    rows = (
+        await session.execute(
+            select(SafeModeQueueItemRow.id, SafeModeQueueItemRow.status, Deliverable.delivered_at)
+            .join(Deliverable, Deliverable.id == SafeModeQueueItemRow.deliverable_id, isouter=True)
+            .where(SafeModeQueueItemRow.run_id == run_id)
+        )
+    ).all()
+    return [
+        item_id
+        for item_id, status, delivered_at in rows
+        if status in (SafeModeStatus.PENDING, SafeModeStatus.EXTENDED)
+        or (status is SafeModeStatus.APPROVED and delivered_at is None)
+    ]
+
+
 def build_merge_watch_pr_concluded(
     *, session_factory: async_sessionmaker[AsyncSession]
 ) -> PrConcluded:
@@ -254,6 +283,7 @@ def build_merge_watch_pr_concluded(
         from backend.workflow.application.run_delivery_resolution import (  # noqa: PLC0415
             AWAITING_MERGE_KEY,
         )
+        from backend.workflow.application.run_persistence import create_decision  # noqa: PLC0415
         from backend.workflow.application.run_status import move_run_status  # noqa: PLC0415
 
         async with session_factory() as session:
@@ -265,10 +295,38 @@ def build_merge_watch_pr_concluded(
             reason = (
                 f"PR #{pr_number} merged" if merged else f"PR #{pr_number} closed without merging"
             )
+            # Read BEFORE the move: once the run is ``shipped`` the Safe Mode queue stops
+            # listing its held items, so this is the last moment anyone can say what was
+            # still waiting.
+            waiting = await _waiting_items(session, run_id) if merged else []
             if await move_run_status(session, run, to_status, reason=reason):
                 payload = dict(run.payload or {})
                 payload.pop(AWAITING_MERGE_KEY, None)
+                if waiting:
+                    payload[SHIPPED_WITH_WAITING_KEY] = [str(i) for i in waiting]
                 run.payload = payload
+                if waiting:
+                    await create_decision(
+                        session,
+                        run,
+                        None,
+                        kind="merge_watch_stalled",
+                        payload={
+                            "reason": SHIPPED_WITH_WAITING,
+                            "pr_number": pr_number,
+                            "queue_item_ids": [str(i) for i in waiting],
+                        },
+                        rationale=(
+                            f"PR #{pr_number} merged while {len(waiting)} deliverable(s) "
+                            "of the run were still waiting for delivery"
+                        ),
+                    )
+                    logger.warning(
+                        "merge_watch_shipped_with_waiting_items",
+                        run_id=str(run_id),
+                        pr_number=pr_number,
+                        queue_item_ids=[str(i) for i in waiting],
+                    )
             await session.commit()
         logger.info(
             "merge_watch_pr_concluded",

@@ -16,6 +16,7 @@ and this is the same shape for a comment.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -24,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data.rls import workspace_session_scope
 from backend.workflow.application.run_status import move_run_status
+from backend.workflow.domain.pr_review import COMMENT_RECEIVED_AT_KEY, record_comment
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 
@@ -124,6 +126,13 @@ async def route_pr_comment_to_run(
         comments = list(run_payload.get("pr_comments") or [])
         comments.append({"pr_number": pr_number, "body": text, "author": author})
         run_payload["pr_comments"] = comments
+        # The queue above is cleared when the drive loop injects it; this stays, so a run
+        # that later fails can still be told apart from one that never heard the reviewer.
+        received_at = datetime.now(tz=UTC)
+        run_payload[COMMENT_RECEIVED_AT_KEY] = received_at.isoformat()
+        record_comment(
+            run_payload, pr_number=pr_number, body=text, author=author, received_at=received_at
+        )
         run.payload = run_payload
         if run.status in _REOPEN:
             await move_run_status(

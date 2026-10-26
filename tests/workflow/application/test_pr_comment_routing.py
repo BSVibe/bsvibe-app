@@ -25,6 +25,7 @@ from backend.workflow.application.intake.pr_comment import (
     pr_comment_messages,
     route_pr_comment_to_run,
 )
+from backend.workflow.domain.pr_review import comment_received_at
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow, TriggerKind
@@ -167,6 +168,22 @@ async def test_unwatched_or_finished_pr_is_not_routed() -> None:
             )
         assert (await _run(sf, run_id, ws)).status is RunStatus.REVIEW_READY
         assert "pr_comments" not in (await _run(sf, merged_run, merged_ws)).payload
+
+
+async def test_the_arrival_of_a_comment_outlives_the_consumed_queue() -> None:
+    """``pr_comments`` is cleared when the drive starts; the record that a comment came is not."""
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        run_id, ws = await _seed(
+            sf, run_status=RunStatus.FAILED, watch_status=MergeWatchStatus.FAILED
+        )
+        async with sf() as session:
+            await route_pr_comment_to_run(session, workspace_id=ws, payload=_payload())
+            await session.commit()
+        run = await _run(sf, run_id, ws)
+        consume_pr_comments(run)
+        assert "pr_comments" not in run.payload
+        assert comment_received_at(run.payload) is not None
 
 
 async def test_drive_loop_reads_comment_once() -> None:
