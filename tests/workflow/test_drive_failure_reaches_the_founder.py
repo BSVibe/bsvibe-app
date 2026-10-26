@@ -359,7 +359,9 @@ async def test_the_founder_can_retry_or_discard_but_not_ship() -> None:
     from backend.workflow.application._checkpoint_shared import _decision_actions
     from backend.workflow.infrastructure.workers.agent_worker import DRIVE_FAILED_KIND
 
-    actions = _decision_actions(SimpleNamespace(decision=DRIVE_FAILED_KIND))  # type: ignore[arg-type]
+    actions = _decision_actions(
+        SimpleNamespace(decision=DRIVE_FAILED_KIND, payload={"reason": "drive_failed_repeatedly"})  # type: ignore[arg-type]
+    )
     keys = {a.key for a in (actions or [])}
 
     assert "retry" in keys and "discard" in keys

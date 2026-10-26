@@ -216,6 +216,36 @@ def test_every_kind_offers_a_way_forward(kind: str) -> None:
     assert _decision_actions(decision) or _decision_options(decision), f"{kind} is a dead end"
 
 
+#: ``merge_watch_stalled`` arrives by several reasons, and what the founder can DO differs: a
+#: report about a run that already shipped has nothing to send back or let go. Pinned per
+#: reason, not per kind — a button that cannot work (``retry`` on a shipped run is refused)
+#: is a dead end dressed as a way out.
+_STALLED_REASON_ACTIONS: dict[str, list[str]] = {
+    "github_binding_unavailable": ["acknowledge", "retry", "discard"],
+    "ci_deadline_exceeded": ["acknowledge", "retry", "discard"],
+    "ci_failed": ["acknowledge", "retry", "discard"],
+    "review_comment_unaddressed": ["acknowledge", "retry", "discard"],
+    "shipped_with_waiting_deliverable": ["acknowledge"],
+}
+
+
+def test_every_stalled_reason_is_pinned() -> None:
+    """A new reason with its own question must say which actions it really has."""
+    from backend.workflow.application._checkpoint_shared import (
+        _EXECUTOR_DECISION_REASON_QUESTIONS,
+    )
+
+    assert set(_EXECUTOR_DECISION_REASON_QUESTIONS) == set(_STALLED_REASON_ACTIONS)
+
+
+@pytest.mark.parametrize("reason", sorted(_STALLED_REASON_ACTIONS))
+def test_every_stalled_reason_offers_only_actions_that_work(reason: str) -> None:
+    decision = Decision(decision="merge_watch_stalled", payload={"reason": reason})
+    actions = _decision_actions(decision)
+    assert actions is not None
+    assert [a.key for a in actions] == _STALLED_REASON_ACTIONS[reason]
+
+
 def _returned_strings(func: ast.AST) -> set[str]:
     return {
         n.value.value

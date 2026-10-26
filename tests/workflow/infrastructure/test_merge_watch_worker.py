@@ -1368,6 +1368,7 @@ async def _seed_run(
     status: RunStatus,
     *,
     queue_item: SafeModeStatus | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> None:
     async with sf() as s, workspace_session_scope(s, row.workspace_id):
         s.add(
@@ -1375,7 +1376,7 @@ async def _seed_run(
                 id=row.run_id,
                 workspace_id=row.workspace_id,
                 status=status,
-                payload={},
+                payload=payload or {},
                 created_at=_FIXED_NOW,
             )
         )
@@ -1677,3 +1678,86 @@ async def test_red_ci_resent_deadline_passed_with_delivered_fix_still_gives_up()
         assert fetched.status is MergeWatchStatus.FAILED
         assert fetched.last_error == "ci_failed"
         assert len(stall.calls) == 1 and stall.calls[0][1] == "ci_failed"
+
+
+# -- a reopened run that FAILED before its fix reached the PR -----------------------------
+
+_COMMENTED = {"pr_comment_received_at": (_FIXED_NOW - timedelta(hours=1)).isoformat()}
+
+
+def _review_stalling_worker(
+    sf: async_sessionmaker[AsyncSession], client: Any, stall: _RecordingStall
+) -> MergeWatchWorker:
+    return MergeWatchWorker(
+        session_factory=sf,
+        client_resolver=_resolver_for(client),
+        escalate_stall=stall,
+        config=MergeWatchWorkerConfig(poll_interval_s=30.0),
+        now=lambda: _FIXED_NOW,
+    )
+
+
+async def test_failed_run_with_unanswered_review_comment_is_not_merged_and_asks_the_founder() -> (
+    None
+):
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        # ``pr_comments`` was consumed when the drive started; only the record remains.
+        await _seed_run(sf, row, RunStatus.FAILED, payload=dict(_COMMENTED))
+        client = _FakeClient(pr=dict(_CLEAN_PR))
+        stall = _RecordingStall()
+        assert await _review_stalling_worker(sf, client, stall).drain_once() == 1
+        fetched = await _fetch(sf, row.id)
+        assert client.merge_calls == []
+        assert fetched.status is MergeWatchStatus.FAILED
+        assert fetched.last_error == "review_comment_unaddressed"
+        assert stall.calls == [(row.run_id, "review_comment_unaddressed", row.repo, row.pr_number)]
+
+
+async def test_failed_run_whose_fix_was_delivered_after_the_comment_still_merges() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.FAILED, payload=dict(_COMMENTED))
+        await _seed_deliverable(sf, row, delivered=True, queue_status=SafeModeStatus.APPROVED)
+        client = _FakeClient(pr=dict(_CLEAN_PR))
+        stall = _RecordingStall()
+        assert await _review_stalling_worker(sf, client, stall).drain_once() == 1
+        assert len(client.merge_calls) == 1
+        assert stall.calls == []
+
+
+async def test_delivery_older_than_the_comment_does_not_count_as_the_fix() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.FAILED, payload=dict(_COMMENTED))
+        await _seed_deliverable(
+            sf,
+            row,
+            delivered=True,
+            queue_status=SafeModeStatus.APPROVED,
+            created_at=_FIXED_NOW - timedelta(hours=3),
+        )
+        client = _FakeClient(pr=dict(_CLEAN_PR))
+        stall = _RecordingStall()
+        assert await _review_stalling_worker(sf, client, stall).drain_once() == 1
+        assert client.merge_calls == []
+        assert len(stall.calls) == 1
+
+
+async def test_failed_run_that_never_heard_a_review_comment_is_judged_as_before() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row()
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.FAILED)
+        client = _FakeClient(pr=dict(_CLEAN_PR))
+        stall = _RecordingStall()
+        assert await _review_stalling_worker(sf, client, stall).drain_once() == 1
+        assert len(client.merge_calls) == 1
+        assert stall.calls == []

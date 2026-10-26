@@ -177,6 +177,14 @@ _EXECUTOR_DECISION_REASON_QUESTIONS: dict[str, dict[str, str]] = {
         "en": "The checks on BSVibe's pull request never went green in time — take a look at it.",
         "ko": "BSVibe가 올린 PR의 검사가 제한 시간 안에 통과하지 못했어요 — 한번 봐주세요.",
     },
+    "shipped_with_waiting_deliverable": {
+        "en": "BSVibe's pull request was merged while a newer change of the run was still waiting for approval or delivery, so it left the queue. Check that it landed.",
+        "ko": "BSVibe가 올린 PR이 병합됐는데, 같은 작업의 더 새로운 변경이 승인이나 배송을 기다리던 중이었어요. 대기열에서는 사라졌으니 반영됐는지 확인해주세요.",
+    },
+    "review_comment_unaddressed": {
+        "en": "A reviewer asked for changes on BSVibe's pull request, but the work failed before the fix was pushed, so it was not merged. Send it back to be fixed, or decide yourself.",
+        "ko": "리뷰 코멘트로 수정을 요청받았는데 수정이 올라가기 전에 작업이 실패했어요. PR은 병합하지 않았어요. 다시 고치게 하거나 직접 판단해주세요.",
+    },
     "ci_failed": {
         "en": "The checks on BSVibe's pull request failed — the failing one says why.",
         "ko": "BSVibe가 올린 PR의 검사가 실패했어요 — 실패한 검사에 이유가 있어요.",
@@ -291,10 +299,22 @@ _EXECUTOR_DECISION_ACTIONS: dict[str, list[DecisionAction]] = {
 }
 
 
+# A reason can narrow its kind's actions: a report about a run that already shipped has
+# nothing to send back or let go, so only "Got it" is real.
+_EXECUTOR_REASON_ACTIONS: dict[tuple[str, str], list[DecisionAction]] = {
+    ("merge_watch_stalled", "shipped_with_waiting_deliverable"): [
+        DecisionAction(key=ACTION_ACKNOWLEDGE, label_en="Got it", label_ko="확인했어요"),
+    ],
+}
+
+
 def _decision_actions(decision: Decision) -> list[DecisionAction] | None:
     """The structured one-click actions for ``decision``, or ``None`` if the
-    kind doesn't carry any (a vanilla ask_user_question Decision)."""
-    return _EXECUTOR_DECISION_ACTIONS.get(decision.decision)
+    kind doesn't carry any (a vanilla ask_user_question Decision). A reason that
+    narrows its kind's actions (:data:`_EXECUTOR_REASON_ACTIONS`) wins."""
+    payload = decision.payload if isinstance(decision.payload, dict) else {}
+    narrowed = _EXECUTOR_REASON_ACTIONS.get((decision.decision, str(payload.get("reason") or "")))
+    return narrowed or _EXECUTOR_DECISION_ACTIONS.get(decision.decision)
 
 
 def _question_text(decision: Decision, language: str = "en") -> str:

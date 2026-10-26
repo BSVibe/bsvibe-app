@@ -191,6 +191,14 @@ _NEEDS_YOU_REASON_BODY: dict[str, dict[str, str]] = {
         "en": "There is no active model account to run this task — connect one, then try again.",
         "ko": "이 작업을 돌릴 모델 계정이 없어요 — 계정을 연결한 뒤 다시 시도해주세요.",
     },
+    "review_comment_unaddressed": {
+        "en": "The work failed before a reviewer's requested change reached the pull request.",
+        "ko": "리뷰로 요청받은 수정이 PR에 올라가기 전에 작업이 실패했어요.",
+    },
+    "shipped_with_waiting_deliverable": {
+        "en": "The pull request was merged while a newer change was still waiting for delivery.",
+        "ko": "PR이 병합됐는데 더 새로운 변경이 배송을 기다리던 중이었어요.",
+    },
     # The merge watch gave up on an OPEN pull request. Both reasons end the same
     # way — a PR nobody will merge — but call for different things, so they get
     # their own bodies rather than one catch-all. Kept in step with
