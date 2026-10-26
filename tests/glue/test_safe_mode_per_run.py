@@ -267,7 +267,8 @@ async def test_approve_run_dispatches_all_pending_items_for_run(
 
     async with sf() as s:
         rows = (await s.execute(select(SafeModeQueueItemRow))).scalars().all()
-        assert {r.status for r in rows} == {SafeModeStatus.APPROVED}
+        # Every dispatch succeeded, so the approved items moved on to delivered.
+        assert {r.status for r in rows} == {SafeModeStatus.DELIVERED}
 
 
 async def test_approve_run_unknown_run_404(client: httpx.AsyncClient) -> None:

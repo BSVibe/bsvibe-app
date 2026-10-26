@@ -86,6 +86,8 @@ class SqlAlchemySafeModeQueueRepository:
                 SafeModeQueueItemRow.status.in_(
                     [
                         SafeModeStatus.APPROVED,
+                        # A delivered approval is still a decided one — keep it on the Resolved tab.
+                        SafeModeStatus.DELIVERED,
                         SafeModeStatus.DENIED,
                         SafeModeStatus.EXPIRED,
                     ]
