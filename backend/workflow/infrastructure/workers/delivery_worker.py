@@ -61,7 +61,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import structlog
-from sqlalchemy import Select, delete, select
+from sqlalchemy import Select, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.data.rls import workspace_session_scope
@@ -72,7 +72,11 @@ from backend.workflow.application.safe_mode_queue import SafeModeQueue
 from backend.workflow.channels import DELIVERY_EVENTS
 from backend.workflow.domain.delivery import FOUNDER_APPROVED_KEY, ActionResult, DeliveryResult
 from backend.workflow.infrastructure.db import Decision, DecisionStatus, Deliverable
-from backend.workflow.infrastructure.delivery.db import DeliveryEventRow
+from backend.workflow.infrastructure.delivery.db import (
+    DeliveryEventRow,
+    SafeModeQueueItemRow,
+    SafeModeStatus,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -292,9 +296,21 @@ async def _mark_delivered(session: AsyncSession, deliverable_id: uuid.UUID) -> N
     The fact a later moment needs: a run whose output was delivered while it was still RUNNING
     is shipped when it reaches REVIEW_READY by asking this (2026-10-19)."""
     row = await session.get(Deliverable, deliverable_id)
-    if row is None or row.delivered_at is not None:
+    if row is None:
         return
-    row.delivered_at = datetime.now(tz=UTC)
+    # The queue item's lifecycle edge (D3: approved -> delivered). Nothing else calls it, so an
+    # approved item stayed ``approved`` for good. Also on a repeat delivery: it only moves items
+    # still ``approved``, and a send that landed is a send that landed.
+    await session.execute(
+        update(SafeModeQueueItemRow)
+        .where(
+            SafeModeQueueItemRow.deliverable_id == deliverable_id,
+            SafeModeQueueItemRow.status == SafeModeStatus.APPROVED,
+        )
+        .values(status=SafeModeStatus.DELIVERED)
+    )
+    if row.delivered_at is None:
+        row.delivered_at = datetime.now(tz=UTC)
     await session.commit()
 
 

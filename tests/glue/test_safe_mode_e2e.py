@@ -228,7 +228,8 @@ async def test_safe_mode_holds_then_approve_dispatches(
     async with sf() as s:
         item = await s.get(SafeModeQueueItemRow, uuid.UUID(item_id))
         assert item is not None
-        assert item.status is SafeModeStatus.APPROVED
+        # The sink dispatch succeeded, so the approved item moved on to delivered.
+        assert item.status is SafeModeStatus.DELIVERED
         assert item.decided_at is not None
 
     # 4. The queue no longer lists it (no longer pending).
