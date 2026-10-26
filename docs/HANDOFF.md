@@ -21,7 +21,36 @@
 
 ---
 
-## §0 — One line: **BSVibe now fixes BSVibe — issues, review comments and red CI go back to the run that owns the PR; 15 harness/delivery defects found and fixed through that loop**
+## §0 — One line: **The merge watch and Safe Mode now agree on what "still being fixed" means; 7 issues fixed through BSVibe, the weekly report is back**
+
+10-24 → 10-26. Every code change was written by BSVibe from an issue filed here, reviewed here (3 denials with a
+reason, 2 review comments), approved in Safe Mode after 형님's go-ahead, and merged by the merge watch — except
+#1239 (merged by hand, see §Ⅱ-h).
+
+| PR | Issue | What | |
+|---|---|---|---|
+| #1231 | #1229 | a red CI hand-back carries the Actions job-log excerpt (pytest `FAILED`, ruff/mypy lines; else the tail), fetched only when handing back or giving up; manifest asks `actions: read` | ✅ |
+| #1232 | #1230 | a missing App `issues: write` raises one `github_app_permission_missing` report Decision per workspace (the row is the memory, not the process) | ✅ — its review fix was lost, see §Ⅱ-h |
+| #1235 | #1233 | report Decisions (`backend/common/decision_kinds.py`) no longer hold a delivered run in `review_ready` | ✅ |
+| #1236 | #1234 | the merge watch does not merge while the run is still fixing: run `open`/`running`, or its **latest** deliverable pending in Safe Mode / approved but not delivered | ✅ |
+| #1239 | #1238 | a successful delivery moves the Safe Mode item `approved → delivered`; migration `safe_mode_approved_delivered` moves the old ones | ✅ merged by hand |
+| #1240 | #1237 | a run re-opened by a review comment that then fails is not merged — `review_comment_unaddressed` Decision whose "fix it again" re-sends the reviewer's words (`pr_comment_record`); a merge that ships a run with a held item records it and tells 형님 | ✅ |
+| #1242 | #1241 | the CI-deadline and red-again give-ups wait while the fix is still pending approval | ✅ |
+
+Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
+
+**Operational state, 10-26:**
+- **GitHub App Actions: Read-only** granted by 형님 on both installations (10-25). Proven live: PR #1239's red CI went back
+  at 16:25Z and the run fixed exactly the two failing tests at the logged lines two minutes later.
+- **BStockReport's client path is now `~/Works/BStockReport/main`** (`products.metadata.client_workspace_path`; the old
+  `~/Works/BStockReport-client` was gone, last used 10-19). The 10-26 weekly run failed on it at 00:30Z
+  (`could not provision this run's worktree:` with an empty detail — a missing cwd prints nothing), was retried at 02:15Z
+  and shipped; the report went out through Telegram connector `a5fb238c` at 02:18Z. The `.git` there is a file, so the
+  provisioner cannot write `.git/info/exclude` — run worktrees may show as untracked in that checkout; harmless.
+- The `product_bundle_publish_skipped_shallow` warning stopped after that run (0 in the first 400 s of the 03:35Z container).
+- `safe_mode_approved_delivered` ran on deploy (10-26 02:14Z). How many rows it moved is not logged — unknown.
+
+## §0-b — previous session (10-22 → 10-23): **BSVibe now fixes BSVibe — issues, review comments and red CI go back to the run that owns the PR; 15 harness/delivery defects found and fixed through that loop**
 
 10-22 → 10-23. Every code change below was written by BSVibe itself from a GitHub issue or a PR comment,
 reviewed here, approved in Safe Mode, and merged by its own merge watch — except where noted.
@@ -55,26 +84,7 @@ Also: #1204 (token connectors cannot rotate their token — open), #1205 (vault 
 - Runs `7709a7a2`, `6fa72ec1`, `e2756fcd` had sat at `review_ready` after their PRs merged (the watch had given up);
   they moved to `shipped` at 11:46Z, right after #1227 deployed (migration `merge_watch_ci_fix` ran).
 
-## §0-b — previous session (10-21 → 10-22): **#929's code is done — the vault and skills can live in Postgres, and a second machine no longer loses work; turning it on is 형님's step**
-
-10-21 → 10-22. All five deployed (`bsvibe-app.deployed` = `0e03c308`), host worker restarted 10-21 16:25 KST.
-**The vault and skills now live in Postgres** (cut-over 10-22 03:29Z — §Ⅲ 1).
-
-| PR | What | Prod check |
-|---|---|---|
-| #1195 | `vault_documents` (RLS) + `PgDocumentStorage`, the second `StorageBackend`, behind shared contract tests | ✅ backend booted on `alembic upgrade head` 10-21 07:27Z · live since the 10-22 cut-over |
-| #1196 | `Vault` I/O and the garden writer go through the store; one factory `backend.knowledge.vault_store` + `BSVIBE_KNOWLEDGE_STORE_BACKEND` | ✅ live since 10-22 |
-| #1197 | originals, indexes, code graph, MCP, `/inside` and skills through the store; AST guard on direct file I/O; `python -m backend.knowledge.store import [--dry-run] \| export <dir>`; compose passes `BSVIBE_MACHINE_ID` + the store backend (they were never reaching a container) | ✅ store live 10-22, machine id unset · runbook `docs/runbook/vault-to-postgres.md` |
-| #1198 | bootstrap clones full history (a shallow repo cannot be bundled); a deliverable's file is read from the run's checkpoint when the tree is on another machine; vault locks are real (`StorageBackend.lock`: advisory lock on rows, `flock` on files) | ✅ |
-| #1199 | stage 4: A→B→A restores the newer checkpoint · a tool call for a run nobody drives is refused when routing is on · the sandbox reaper actually runs (API process) · verification compose projects carry the machine id | ✅ design doc §6 |
-
-**#929 stages 1, 2 and 4 are merged; stage 3 did not exist.** Stage 1 is still inert (no `BSVIBE_MACHINE_ID`). — §Ⅲ.
-
-**#1046 was already implemented** by #1047 (09-23). Checked 10-22 over MCP: the prod Telegram account
-carries `authorized_user_ids: ["8242700007"]` with `chat_id` unchanged, so the migration ran and seeded the
-allowlist. The live taps remain (1:1, group, a refused tapper) (`docs/e2e/telegram-approval-allowlist-checklist.md` §B).
-
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26)
 
 | | |
 |---|---|
@@ -94,6 +104,7 @@ allowlist. The live taps remain (1:1, group, a refused tapper) (`docs/e2e/telegr
 | **Anyone's issue or comment is work — by design** (10-23) | A real AI-agent company answers an incoming issue at once; the front triage drops the noise. Do not gate intake by author. Only a path that writes straight into a running run (a PR review comment → its run, #1223) requires OWNER / MEMBER / COLLABORATOR; anyone else's comment is a normal new request |
 | **BSVibe fixes BSVibe** (10-23) | Code changes go through BSVibe: an issue, or a comment on its PR. Review the deliverable, deny with a reason (`rejected_approach`) or approve; BSVibe's merge watch merges. Hand-written code only to unblock that loop itself (#1223's split, #1225's hotfix) |
 | **A PR review comment fixes THAT PR** (10-23) | It goes to the run that opened the PR (same branch, force-with-lease), never a second PR off main (#1220/#1223) |
+| **BStockReport runs from `~/Works/BStockReport/main`** (10-26) | The bare-repo worktree replaces the deleted `BStockReport-client`; the run worktrees are made inside it |
 
 ## §Ⅱ — What this session found that the issues had wrong
 
@@ -200,18 +211,37 @@ allowlist. The live taps remain (1:1, group, a refused tapper) (`docs/e2e/telegr
   pass looped 30 rounds (~960k tokens) on `NO_FAILURE_FOUND`; Claude Code followed the harness's instruction exactly.
 * **The App manifest never asked `issues: write`**, so the "PR opened" comment on the issue had always 403'd.
 
+## §Ⅱ-h — What 10-24/26 found
+
+* **A Safe Mode deny with a reason re-drives the SAME run**; it does not cancel it. A comment on the issue after a deny
+  started a duplicate run (`01b6dd55`, cancelled). Deny with `rejected_approach` + the correction, and nothing else.
+  `queue_cleanup` is the one that releases the run.
+* **The merge watch merged a reviewed head while the fix waited for approval** (#1232, 10-25 04:54Z): CI went green on
+  the old head, the watch merged, the run shipped and its pending fix vanished from the queue (the pending list hides
+  items of shipped runs). → #1234, #1237.
+* **Nothing ever moved a Safe Mode item past `approved`** — `SafeModeQueueService.mark_delivered` had no caller (the
+  `relay_worker` one is the audit outbox). Two of #1234's three attempts were wrong because of it: counting `APPROVED`
+  as "waiting" would have stalled every merge for good; counting any undelivered deliverable would have let a run's
+  own denied attempt block it forever (a deny does not set `retracted_at`). Judge by the latest deliverable. → #1238.
+* **The CI deadline counted the founder's approval time** — #1239's fix waited overnight for approval and the watch gave
+  up at its one-hour deadline, so the green PR was merged by hand. → #1241.
+* **A run checks only the tests it chose.** #1239 went red on two older tests that pinned the old behaviour; #1240 on a
+  `SimpleNamespace` stub. CI + the job-log hand-back fixed both without a human.
+* **Filing a follow-up before its base merges makes the run stop and ask** (#1237 asked "#1234 is not on main"). File
+  dependent issues after the base PR merges.
+* **Two PRs adding a same-named test helper conflict** (`_stalling_worker`, #1240/#1242); the merge watch sent the
+  conflict back and the run renamed one. Expected, not a defect.
+* **A missing cwd makes the host executor's exec fail with no output** — "could not provision this run's worktree: " with
+  nothing after the colon means look at the path first.
+
 ## §Ⅲ — Next
 
-0. **10-26 (Mon) 00:30 UTC weekly run** — must end `shipped` with one Telegram message, no human step (#1180), and is the
-   first send through the new Telegram connector `a5fb238c`. After it, BStockReport's
-   `product_bundle_publish_skipped_shallow` warning (every 5 min) should stop — if not, that product cannot reach the
-   bundle store.
-1. **#929 turn-on** — the vault cut-over is done and proven (§0). Next: a `BSVIBE_MACHINE_ID` on this box alone, then
+1. **#929 turn-on** — the vault cut-over is done and proven (§0-b). Next: a `BSVIBE_MACHINE_ID` on this box alone, then
    a second machine (`docs/runbook/vault-to-postgres.md` §"A second box"). Keep `/app/var/vault` until 10-29.
-2. **Open follow-ups:** #1204 (token connectors cannot rotate a token in place) · the `merge_watch` CI hand-back sends the
-   check's name but GitHub Actions' `output.summary` is usually empty (the run re-runs the tests itself) · #1221 only
-   logs a missing App permission — tell 형님 instead.
-3. **#930** — 2M tuning still has no sample (2 shipped runs since 10-01).
+2. **Open follow-ups:** #1204 (token connectors cannot rotate a token in place) · the `merge_watch_stalled` Decision is
+   reused for several reasons whose actions differ — they are pinned per reason in `test_every_decision_has_a_way_out`;
+   a new reason must be added there.
+3. **#930** — 2M tuning still has no sample.
 4. ⏳ 형님's batch: codex live run (#1183) · #1046 live taps · #937 outside the repo.
 
 ## §Ⅳ — Discipline that paid off
