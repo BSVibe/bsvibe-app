@@ -729,6 +729,10 @@ class MergeWatchWorker(BaseWorker):
                         )
                         await session.commit()
                         return
+                    # Past the deadline — but a fix that waits on the founder's
+                    # Safe Mode approval is not CI time, and its card is already out.
+                    if await self._defer_while_run_fixing(session, repo, snap, now):
+                        return
                 elif (
                     self._redispatch_ci is not None
                     and snap.ci_fix_attempts < self._cfg.ci_fix_max_redispatch
@@ -777,6 +781,8 @@ class MergeWatchWorker(BaseWorker):
 
             # 3. CI still pending (blocked / unstable / unknown / anything else).
             if now > snap.deadline_at:
+                if await self._defer_while_run_fixing(session, repo, snap, now):
+                    return
                 await self._gave_up(snap, "ci_deadline_exceeded")
                 await repo.mark_status(
                     snap.id, MergeWatchStatus.FAILED, last_error="ci_deadline_exceeded"
@@ -1211,6 +1217,33 @@ class MergeWatchWorker(BaseWorker):
             run_id=str(snap.run_id),
             conflict_attempt=next_attempt,
         )
+
+    async def _defer_while_run_fixing(
+        self, session: AsyncSession, repo: Any, snap: _WatchSnapshot, now: datetime
+    ) -> bool:
+        """Past the CI deadline: don't give up while the run is still fixing.
+
+        The time a fix takes (or waits for Safe Mode approval) is not CI time, so the
+        deadline restarts and the row is polled again. No Decision — the founder
+        already holds the Safe Mode card. ``False`` → not fixing, caller gives up."""
+        if not await self._run_still_fixing(session, snap.run_id):
+            return False
+        snap.deadline_at = now + timedelta(seconds=self._cfg.ci_deadline_s)
+        await repo.mark_status(
+            snap.id,
+            MergeWatchStatus.PENDING_CI,
+            next_poll_at=now + timedelta(seconds=self._cfg.poll_interval_s),
+            deadline_at=snap.deadline_at,
+            last_error="run_still_fixing",
+        )
+        await session.commit()
+        logger.info(
+            "merge_watch_deferred_run_fixing",
+            repo=snap.repo,
+            pr_number=snap.pr_number,
+            run_id=str(snap.run_id),
+        )
+        return True
 
     async def _run_cancelled(self, session: AsyncSession, run_id: uuid.UUID) -> bool:
         """PR7 — is the PR's originating run terminally CANCELLED (founder discard)?

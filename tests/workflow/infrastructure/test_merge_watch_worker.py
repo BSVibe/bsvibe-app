@@ -1426,6 +1426,49 @@ async def test_pr_is_not_merged_while_the_runs_new_artifact_waits_in_safe_mode()
         assert client.merge_calls == []
 
 
+_BLOCKED_PR = {"state": "open", "merged": False, "mergeable_state": "blocked"}
+
+
+async def test_deadline_passed_while_fix_waits_in_safe_mode_does_not_give_up() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row(deadline_at=_FIXED_NOW - timedelta(minutes=1))
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.REVIEW_READY)
+        await _seed_deliverable(sf, row, delivered=False, queue_status=SafeModeStatus.PENDING)
+        await _worker(sf, _FakeClient(pr=dict(_BLOCKED_PR))).drain_once()
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.PENDING_CI
+        assert fetched.last_error == "run_still_fixing"
+        assert _at(fetched.deadline_at) > _FIXED_NOW
+
+
+@pytest.mark.parametrize("status", [RunStatus.OPEN, RunStatus.RUNNING])
+async def test_deadline_passed_while_run_is_working_does_not_give_up(status: RunStatus) -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row(deadline_at=_FIXED_NOW - timedelta(minutes=1))
+        await _seed(sf, row)
+        await _seed_run(sf, row, status)
+        await _worker(sf, _FakeClient(pr=dict(_BLOCKED_PR))).drain_once()
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.PENDING_CI
+        assert _at(fetched.deadline_at) > _FIXED_NOW
+
+
+async def test_deadline_passed_with_delivered_fix_still_gives_up() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _row(deadline_at=_FIXED_NOW - timedelta(minutes=1))
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.REVIEW_READY)
+        await _seed_deliverable(sf, row, delivered=True, queue_status=SafeModeStatus.APPROVED)
+        await _worker(sf, _FakeClient(pr=dict(_BLOCKED_PR))).drain_once()
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.FAILED
+        assert fetched.last_error == "ci_deadline_exceeded"
+
+
 async def _seed_deliverable(
     sf: async_sessionmaker[AsyncSession],
     row: GithubMergeWatchRow,
