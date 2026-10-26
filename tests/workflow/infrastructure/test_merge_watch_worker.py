@@ -1576,3 +1576,104 @@ async def test_review_ready_run_without_waiting_item_merges_the_new_head() -> No
         client = _FakeClient(pr=dict(_CLEAN_PR))
         assert await _worker(sf, client).drain_once() == 1
         assert len(client.merge_calls) == 1
+
+
+# ── 빨간 CI 를 돌려보낸 뒤(#1239): 같은 head 가 또 빨갛고 마감이 지난 경로 ─────────────────
+
+
+class _RedClient(_FakeClient):
+    """실패한 check 가 있는 head 를 돌려주는 GitHub 더블."""
+
+    async def get_check_runs(self, owner: str, repo: str, ref: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": "lint-and-test",
+                "status": "completed",
+                "conclusion": "failure",
+                "output": {"title": "2 failed", "summary": "tests/test_x.py::test_y FAILED"},
+            }
+        ]
+
+
+_RED_HEAD = "r" * 40
+_RED_PR = {
+    "state": "open",
+    "merged": False,
+    "mergeable_state": "unstable",
+    "head": {"sha": _RED_HEAD},
+}
+
+
+class _RecordingRedStall(_RecordingStall):
+    """``_RecordingStall`` that also accepts the failed checks a red-CI give-up carries."""
+
+    async def __call__(  # type: ignore[override]
+        self,
+        run_id: uuid.UUID,
+        *,
+        reason: str,
+        repo: str,
+        pr_number: int,
+        failed_checks: list[dict[str, str]] | None = None,
+    ) -> None:
+        await super().__call__(run_id, reason=reason, repo=repo, pr_number=pr_number)
+
+
+def _red_resent_row() -> GithubMergeWatchRow:
+    """빨간 CI 를 이미 원래 런에 돌려보냈고, 같은 head 가 여전히 빨간 채 마감이 지난 감시."""
+    row = _row(deadline_at=_FIXED_NOW - timedelta(minutes=1))
+    row.head_sha = _RED_HEAD
+    row.ci_red_head_sha = _RED_HEAD
+    row.ci_fix_head_sha = _RED_HEAD
+    row.ci_fix_attempts = 1
+    return row
+
+
+def _stalling_worker(
+    sf: async_sessionmaker[AsyncSession], client: Any, stall: _RecordingRedStall
+) -> MergeWatchWorker:
+    return MergeWatchWorker(
+        session_factory=sf,
+        client_resolver=_resolver_for(client),
+        escalate_stall=stall,
+        config=MergeWatchWorkerConfig(poll_interval_s=30.0, ci_fix_max_redispatch=2),
+        now=lambda: _FIXED_NOW,
+    )
+
+
+async def test_red_ci_resent_deadline_passed_while_fix_waits_in_safe_mode_does_not_give_up() -> (
+    None
+):
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _red_resent_row()
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.REVIEW_READY)
+        await _seed_deliverable(sf, row, delivered=False, queue_status=SafeModeStatus.PENDING)
+        client = _RedClient(pr=dict(_RED_PR))
+        stall = _RecordingRedStall()
+        assert await _stalling_worker(sf, client, stall).drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.PENDING_CI
+        assert fetched.last_error == "run_still_fixing"
+        assert _at(fetched.deadline_at) > _FIXED_NOW  # 승인 기다리는 시간은 CI 시간이 아니다
+        assert stall.calls == []
+        assert client.merge_calls == []
+
+
+async def test_red_ci_resent_deadline_passed_with_delivered_fix_still_gives_up() -> None:
+    async with db_engine(Base) as (engine, _pg):
+        sf = async_sessionmaker(engine, expire_on_commit=False)
+        row = _red_resent_row()
+        await _seed(sf, row)
+        await _seed_run(sf, row, RunStatus.REVIEW_READY)
+        await _seed_deliverable(sf, row, delivered=True, queue_status=SafeModeStatus.APPROVED)
+        client = _RedClient(pr=dict(_RED_PR))
+        stall = _RecordingRedStall()
+        assert await _stalling_worker(sf, client, stall).drain_once() == 1
+
+        fetched = await _fetch(sf, row.id)
+        assert fetched.status is MergeWatchStatus.FAILED
+        assert fetched.last_error == "ci_failed"
+        assert len(stall.calls) == 1 and stall.calls[0][1] == "ci_failed"
