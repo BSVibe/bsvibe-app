@@ -3,6 +3,8 @@ no real GitHub calls. (rule python-testing: never call real APIs in tests.)"""
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -104,9 +106,26 @@ class TestOpenPr:
         get = respx.get(url__startswith=f"{API}/repos/o/r/pulls").mock(
             return_value=httpx.Response(200, json=[{"number": 2, "state": "open"}])
         )
+        patch = respx.patch(f"{API}/repos/o/r/pulls/2").mock(
+            return_value=httpx.Response(200, json={"number": 2, "state": "open"})
+        )
         data = await client.open_pr("o", "r", head="feat", base="main", title="T", body="B")
         assert data["number"] == 2
         assert post.called and get.called
+        # #1244 — the re-delivery's body (its ledger, its Closes/Refs line) replaces the old.
+        assert json.loads(patch.calls.last.request.content) == {"title": "T", "body": "B"}
+
+    @respx.mock
+    async def test_a_refused_body_update_still_returns_the_existing_pr(self, client):
+        respx.post(f"{API}/repos/o/r/pulls").mock(
+            return_value=httpx.Response(422, json={"errors": [{"message": "already exists"}]})
+        )
+        respx.get(url__startswith=f"{API}/repos/o/r/pulls").mock(
+            return_value=httpx.Response(200, json=[{"number": 2, "state": "open"}])
+        )
+        respx.patch(f"{API}/repos/o/r/pulls/2").mock(return_value=httpx.Response(500))
+        data = await client.open_pr("o", "r", head="feat", base="main", title="T", body="B")
+        assert data["number"] == 2
 
     @respx.mock
     async def test_open_pr_head_filter_is_owner_qualified(self, client):

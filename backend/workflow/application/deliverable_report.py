@@ -27,7 +27,9 @@ from backend.workflow.application.deliverable_narrative import (
     split_knowledge,
 )
 from backend.workflow.application.deliverable_references import references_of
+from backend.workflow.application.requirements_ledger import latest_ledger_rows
 from backend.workflow.domain.repositories import DeliverableRepository
+from backend.workflow.domain.requirements import ledger_counts, render_ledger_table
 from backend.workflow.infrastructure.db import (
     ExecutionRun,
     VerificationOutcome,
@@ -105,6 +107,10 @@ async def build_deliverable_report(
         session, row.run_id, workspace_id, references_of(verifications)
     )
 
+    # The gate's last verdict, read off the verification row (the run's payload is not
+    # written during verification).
+    ledger = await latest_ledger_rows(session, row.run_id)
+
     return DeliverableReportResponse(
         deliverable=to_response(row, verified=verified),
         request=request,
@@ -115,6 +121,9 @@ async def build_deliverable_report(
         references=referenced,
         written=written,
         narrative=narrative,
+        requirements=ledger,
+        requirements_table=render_ledger_table(ledger) if ledger else None,
+        ledger_counts=ledger_counts(ledger) if ledger else {},
     )
 
 

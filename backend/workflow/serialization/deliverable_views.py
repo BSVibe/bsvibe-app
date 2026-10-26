@@ -102,6 +102,13 @@ class DeliverableReportResponse(BaseModel):
     written: list[WrittenNote] = []
     # R1 — chat-composed plain-language "what this did" (cached); falls back to request.
     narrative: str | None = None
+    # The requirements ledger: what the request asked for, item by item, with the verdict the
+    # gate reached (done / deferred / 확인 못 함) and the evidence. ``requirements_table`` is the
+    # same ledger as the markdown table the PR body carries; ``ledger_counts`` is
+    # requirements_total / _done / _deferred. Empty for a run that had no ledger.
+    requirements: list[dict[str, Any]] = []
+    requirements_table: str | None = None
+    ledger_counts: dict[str, int] = {}
 
 
 class DeliverableDiffResponse(BaseModel):

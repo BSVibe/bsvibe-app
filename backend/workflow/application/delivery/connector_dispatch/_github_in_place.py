@@ -142,9 +142,6 @@ async def _deliver_client_attach_pr(
             )
         ]
 
-    if source_issue is not None:
-        body = f"{body}\n\nCloses #{source_issue}".strip()
-
     return await _open_pr_and_settle(
         deps=deps,
         binding=binding,

@@ -255,11 +255,6 @@ async def deliver_github(
         source_issue = await _source_github_issue_number(session, run_id)
     token = creds["token"]
 
-    # Link the PR to the originating issue: ``Closes #N`` cross-links + auto-closes
-    # it on merge. Skipped for non-issue-sourced runs (Direct chat) — unchanged.
-    if source_issue is not None:
-        body = f"{body}\n\nCloses #{source_issue}".strip()
-
     # 3. Push the branch to the (real-or-test) remote. The server's own
     #    credential, because the server holds this checkout — the mirror image
     #    of client_attach, where the founder's machine pushes with theirs.

@@ -28,6 +28,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from backend.workflow.domain.requirements import ledger_passed, render_ledger_failure
+
 # Generous next to the 1500 that lost run 010bbdd8, but the budget is not what
 # fixed this — the ordering is. A budget only decides how much of the tail of an
 # already-correct report survives.
@@ -128,6 +130,25 @@ def _probe_block(probe: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _ledger_and_scope(result: Mapping[str, Any]) -> list[str]:
+    """The ledger (items the request asked for that the run has not shown), then scope.
+
+    Scope is not gating on its own, but it names files the agent should not have touched, and
+    an agent that cannot see them cannot put them back.
+    """
+    sections: list[str] = []
+    rows = [r for r in result.get("requirements") or [] if isinstance(r, Mapping)]
+    if rows and not ledger_passed(rows):
+        sections.append(render_ledger_failure(rows))
+    scope = result.get("scope")
+    if isinstance(scope, Mapping) and scope.get("flagged_paths"):
+        lines = [f"SCOPE FLAGGED: {list(scope['flagged_paths'])}"]
+        if scope.get("reasoning"):
+            lines.append(_clip(str(scope["reasoning"]), _PER_OUTPUT_BUDGET))
+        sections.append("\n".join(lines))
+    return sections
+
+
 def _sections(result: Mapping[str, Any]) -> list[str]:
     """Every failing surface, in the order ``verification_service`` ranks them."""
     sections: list[str] = []
@@ -166,14 +187,7 @@ def _sections(result: Mapping[str, Any]) -> list[str]:
         reasoning = str(judge.get("reasoning") or "(no reasoning given)")
         sections.append("JUDGE REJECTED THE WORK:\n" + _clip(reasoning, _PER_OUTPUT_BUDGET))
 
-    # 4. Scope. Not gating on its own, but it names files the agent should not
-    #    have touched, and an agent that cannot see them cannot put them back.
-    scope = result.get("scope")
-    if isinstance(scope, Mapping) and scope.get("flagged_paths"):
-        lines = [f"SCOPE FLAGGED: {list(scope['flagged_paths'])}"]
-        if scope.get("reasoning"):
-            lines.append(_clip(str(scope["reasoning"]), _PER_OUTPUT_BUDGET))
-        sections.append("\n".join(lines))
+    sections.extend(_ledger_and_scope(result))
 
     # 5. The agent's own attestation, LAST — advisory once the derived gate has
     #    spoken, and the block whose verbosity used to bury everything above it.

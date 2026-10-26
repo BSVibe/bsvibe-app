@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from backend.workflow.domain.requirements import parse_requirement_evidence
+
 CheckKind = Literal["command", "judge"]
 _VALID_KINDS: frozenset[str] = frozenset({"command", "judge"})
 
@@ -57,9 +59,16 @@ class VerificationContract:
     """The full declared contract for one RunAttempt's work step."""
 
     checks: tuple[VerificationCheck, ...]
+    #: Per-requirement evidence the run submitted (``domain.requirements``): the gate holds
+    #: the run to the request's ledger with it. Not a check — it rides the contract because
+    #: that is what already travels from the declaration to ``verify``.
+    requirement_evidence: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {"checks": [c.to_dict() for c in self.checks]}
+        out: dict[str, Any] = {"checks": [c.to_dict() for c in self.checks]}
+        if self.requirement_evidence:
+            out["requirement_evidence"] = [dict(e) for e in self.requirement_evidence]
+        return out
 
     @property
     def command_checks(self) -> tuple[VerificationCheck, ...]:
@@ -134,7 +143,10 @@ def parse_verification_contract(raw: Any) -> VerificationContract | None:
     checks = [c for c in (_parse_check(item) for item in raw_checks) if c is not None]
     if not checks:
         return None
-    return VerificationContract(checks=tuple(checks))
+    return VerificationContract(
+        checks=tuple(checks),
+        requirement_evidence=tuple(parse_requirement_evidence(raw.get("requirement_evidence"))),
+    )
 
 
 __all__ = [
