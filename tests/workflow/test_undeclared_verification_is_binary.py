@@ -52,7 +52,7 @@ class _Box:
 
     async def exec(self, command: str, **_kw: Any) -> _Exec:
         self.queries.append(command)
-        if command.startswith("git status"):
+        if "status --porcelain" in command:
             return _Exec(self._porcelain)
         return _Exec(self._diff)
 

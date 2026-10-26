@@ -196,9 +196,13 @@ async def _git_changed(
     tracked: set[str] = set()
     untracked: set[str] = set()
     answered = False
-    queries = ["git status --porcelain"]
+    # quotePath=false: git otherwise wraps non-ASCII paths in octal escapes
+    # ("\354\204\244.md"), which name no file on disk.
+    queries = ["git -c core.quotePath=false status --porcelain"]
     if baseline:
-        queries.append(f"git diff --name-only {shlex.quote(baseline)}..HEAD")
+        queries.append(
+            f"git -c core.quotePath=false diff --name-only {shlex.quote(baseline)}..HEAD"
+        )
     for query in queries:
         try:
             res = await box.exec(query, timeout_s=_GIT_TIMEOUT_S, shell=True)
@@ -210,7 +214,7 @@ async def _git_changed(
             continue
         if res.timed_out or res.exit_code != 0:
             continue
-        if query.startswith("git status"):
+        if "status --porcelain" in query:
             answered = True
             lines = res.stdout.splitlines()
             untracked |= _porcelain_paths("\n".join(ln for ln in lines if ln.startswith("??")))

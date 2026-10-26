@@ -61,7 +61,7 @@ class _Box:
 
     async def exec(self, command: str, *, timeout_s: float, shell: bool = False) -> SandboxResult:
         self.commands.append(command)
-        if command.startswith("git status --porcelain"):
+        if "status --porcelain" in command:
             body = "\n".join(f" M {p}" for p in self._changed)
             return SandboxResult(exit_code=0, stdout=body, stderr="", timed_out=False)
         return SandboxResult(exit_code=0, stdout="", stderr="", timed_out=False)
