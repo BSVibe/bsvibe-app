@@ -258,9 +258,14 @@ _LEDGER_ARTIFACT_TYPES = frozenset({"code", "pr"})
 
 async def _ledger_applies(session: AsyncSession, run: ExecutionRun, framed: FramedRequest) -> bool:
     """v1 holds a run to its ledger only where verification can judge it: a code run
-    verified on the server. A ``client_attach`` run settles on the founder's machine and a
+    verified on the server, working the whole request. A ``client_attach`` run settles on the founder's machine and a
     prose deliverable has no diff to cite, so neither is shown a ledger it could not meet."""
     if framed.path_classification != "agent_loop":
+        return False
+    # A real split hands each step run one slice of the request, so the whole ledger would
+    # be demanded of the first. ONE step — what a workspace with stage rules usually gets —
+    # is the whole request in one run, and keeps it (prod #1246 had no ledger for this).
+    if len(framed.steps) > 1:
         return False
     if framed.artifact_type_hint not in _LEDGER_ARTIFACT_TYPES:
         return False
@@ -912,11 +917,9 @@ class AgentWorker(BaseWorker):
                         "stage": first.stage,
                         "step_index": 0,
                     }
-                elif await _ledger_applies(session, run, framed):
+                if await _ledger_applies(session, run, framed):
                     # The requirements ledger: the checkable items of the request, which
-                    # verification holds the run to. Not for a split request — each step
-                    # run owns one slice of it, and the whole ledger would be demanded of
-                    # the first.
+                    # verification holds the run to (see :func:`_ledger_applies`).
                     record_requirements(run, request)
                 await session.flush()
 
