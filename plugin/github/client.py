@@ -101,7 +101,17 @@ class GithubClient:
         if resp.status_code == 422:
             existing = await self._find_open_pr_for_head(owner, repo, head)
             if existing is not None:
-                return existing
+                # #1244 — bring the existing PR's title/body up to THIS delivery: the body
+                # is rebuilt every time (the founder's request, the requirements ledger,
+                # the Closes/Refs line that depends on it), and the first attempt's would
+                # otherwise keep claiming what that attempt delivered. A refused update
+                # keeps the PR as it was — the push landed, so the re-delivery stands.
+                try:
+                    return await self.update_pr(
+                        owner, repo, int(existing["number"]), title=title, body=body
+                    )
+                except Exception:  # noqa: BLE001 — the PR exists; its old body is the fallback
+                    return existing
         return self._json(resp)
 
     async def compare_branch(

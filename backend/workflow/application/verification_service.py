@@ -36,6 +36,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
+from backend.workflow.application.requirements_ledger import (
+    diff_excerpt,
+    gate_facts,
+    judge_ledger,
+    latest_ledger_rows,
+    run_requirements,
+)
 from backend.workflow.application.sandbox_provisioning import ensure_sandbox_ready
 from backend.workflow.domain.gate_derivation import (
     DerivedGate,
@@ -56,6 +63,7 @@ from backend.workflow.domain.outcome_demonstration import (
     parse_demonstration_plan,
     summarize,
 )
+from backend.workflow.domain.requirements import ledger_passed, public_rows
 from backend.workflow.domain.verifier_contract import (
     VerificationCheck,
     VerificationContract,
@@ -562,7 +570,10 @@ class VerificationService:
 
         if not checks:
             return None
-        return VerificationContract(checks=tuple(checks))
+        # The ledger evidence is not a check: carry it across the merge, or the gate would
+        # see every requirement as unevidenced.
+        evidence = declared.requirement_evidence if declared is not None else ()
+        return VerificationContract(checks=tuple(checks), requirement_evidence=evidence)
 
     async def verify(
         self,
@@ -818,7 +829,22 @@ class VerificationService:
             # work still proceeds (no regression).
             command_gate_pass = all_cmd_pass
 
-        passed = command_gate_pass and judge_pass and demo_pass
+        # The requirements ledger: every item the request asked for needs evidence the gate
+        # can confirm. Judged last, over what actually ran and passed above — and only judged
+        # when everything else passed (a failing run is about to change anyway).
+        ledger = await self._judge_requirements(
+            run,
+            contract,
+            written_paths,
+            box,
+            baseline,
+            command_results,
+            derived_gate,
+            judge=command_gate_pass and judge_pass and demo_pass,
+        )
+        ledger_pass = ledger is None or ledger_passed(ledger)
+
+        passed = command_gate_pass and judge_pass and demo_pass and ledger_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
 
         vr = VerificationResult(
@@ -834,6 +860,7 @@ class VerificationService:
                 "judge": judge_blob,
                 "outcome_demonstration": demonstration,
                 "scope": scope,
+                **({} if ledger is None else {"requirements": public_rows(ledger)}),
                 "gate_expected": gate_expected,
                 # Does the repo-gate concept apply at all (a product run on a
                 # real worktree)? A Direct scratch answer has no gate to be
@@ -898,6 +925,47 @@ class VerificationService:
         )
         await self._session.flush()
         return vr
+
+    async def _judge_requirements(
+        self,
+        run: ExecutionRun,
+        contract: VerificationContract,
+        written_paths: list[str],
+        box: SandboxSession,
+        baseline: str | None,
+        command_results: list[dict[str, Any]],
+        derived_gate: dict[str, Any] | None,
+        *,
+        judge: bool,
+    ) -> list[dict[str, Any]] | None:
+        """The ledger verdict rows (``None`` = this run has no ledger). The judge sees one
+        item and the diff of the paths cited for it — never the whole diff."""
+        requirements = run_requirements(run)
+        if not requirements:
+            return None
+
+        async def complete(messages: list[dict[str, str]]) -> str:
+            turn = await self._complete(run, list(messages))
+            return str(turn.content or "")
+
+        prior = await latest_ledger_rows(self._session, run.id)
+        await self._release_connection(run)
+        facts = await gate_facts(
+            box=box,
+            baseline=baseline,
+            written_paths=written_paths,
+            command_results=command_results,
+            derived_gate=derived_gate,
+        )
+        return await judge_ledger(
+            requirements,
+            contract.requirement_evidence,
+            facts,
+            excerpt=diff_excerpt(box, baseline),
+            complete=complete,
+            prior_rows=prior,
+            judge=judge,
+        )
 
     @staticmethod
     def _is_real_worktree(run: ExecutionRun) -> bool:

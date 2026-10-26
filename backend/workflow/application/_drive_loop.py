@@ -23,6 +23,7 @@ from backend.workflow.application._loop_context import (
     _merge_conflict_directive,
     _resumption_messages,
     is_client_attach_run,
+    ledger_messages,
     settle_client_attach,
     system_prompt_for,
 )
@@ -175,6 +176,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         messages.append(skill_hint)
     # Resumption context (founder-resolved prior questions).
     messages.extend(_resumption_messages(run))
+    messages.extend(ledger_messages(run))  # what the request asked for, item by item
     # PR7 — a re-dispatched merge conflict: surface the conflict to the agent
     # BEFORE its turn, then consume the one-shot key so a later resume does not
     # re-inject it (a persistent marker classifies any ask raised now as a

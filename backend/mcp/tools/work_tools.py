@@ -37,6 +37,7 @@ from backend.workflow.application.tool_registry import (
     RUN_TOOL_FORWARDING,
     WORK_TOOL_MCP_NAMES,
 )
+from backend.workflow.domain.requirements import REQUIREMENT_EVIDENCE_SCHEMA
 
 logger = structlog.get_logger(__name__)
 
@@ -175,6 +176,12 @@ class DeclareVerificationInput(_WorkInput):
             "OPTIONAL — something non-obvious you learned doing this work, as "
             "{topic, insight}. Prose, in the workspace's language."
         ),
+    )
+    requirement_evidence: list[dict[str, Any]] | None = Field(
+        None,
+        description=REQUIREMENT_EVIDENCE_SCHEMA["description"]
+        + " Each entry: {requirement_id, status?: 'done'|'deferred', paths?: [..], "
+        "tests?: [..], note?}.",
     )
     round_budget: int | None = Field(
         None,

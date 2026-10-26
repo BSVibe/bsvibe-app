@@ -22,7 +22,9 @@ In-memory SQLite by default, real Postgres when ``BSVIBE_DATABASE_URL`` is set
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -602,3 +604,87 @@ async def test_source_issue_number_none_for_direct_run(
         await s.commit()
         assert await _source_github_issue_number(s, run.id) is None
         assert await _source_github_issue_number(s, None) is None
+
+
+@respx.mock
+async def test_a_deferred_ledger_item_refs_the_issue_instead_of_closing_it(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher, tmp_path: Path
+) -> None:
+    """#1244 — the PR body carries the gate's ledger verdict, and ``Closes #N`` is written
+    only when every owed item is done. An item put off → ``Refs #N``: merging must not
+    close an issue whose work is not all there."""
+    from backend.workflow.infrastructure.db import VerificationOutcome, VerificationResult
+
+    workspace_id = uuid.uuid4()
+    bare = await _make_bare_remote(tmp_path)
+    workspace_root = tmp_path / "runs"
+    pr_route = respx.post(f"{GITHUB_API}/repos/owner/name/pulls").mock(
+        return_value=httpx.Response(
+            201, json={"number": 7, "html_url": "https://github.com/owner/name/pull/7"}
+        )
+    )
+    respx.post(f"{GITHUB_API}/repos/owner/name/issues/42/comments").mock(
+        return_value=httpx.Response(201, json={"id": 1, "html_url": "https://x"})
+    )
+
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        await _seed_github_connector(s, cipher, workspace_id)
+        run_id = await _seed_run_from_github_issue(s, workspace_id, 42)
+
+    deps = _execution_deps(sf, workspace_root, cipher, bare, _scripted_writes_file())
+    assert await AgentWorker(session_factory=sf, execution=deps).drive_once() == 1
+
+    # The gate's newest verdict: one item done, one put off with a reason.
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        s.add(
+            VerificationResult(
+                run_id=run_id,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.PASSED,
+                contract={},
+                result={
+                    "requirements": [
+                        {
+                            "id": "R1",
+                            "text": "the route",
+                            "kind": "do",
+                            "status": "done",
+                            "paths": ["app.py"],
+                            "tests": [],
+                            "note": "",
+                        },
+                        {
+                            "id": "R2",
+                            "text": "the PWA button",
+                            "kind": "do",
+                            "status": "deferred",
+                            "paths": [],
+                            "tests": [],
+                            "note": "needs a design call",
+                        },
+                    ]
+                },
+                created_at=datetime.now(tz=UTC) + timedelta(seconds=5),
+            )
+        )
+        await s.commit()
+
+    registry = await _plugins()
+    adapter = build_connector_delivery_adapter(
+        session_factory=sf,
+        plugins=list(registry.values()),
+        cipher=cipher,
+        workspace_root=workspace_root,
+        remote_url_for=lambda _repo: bare.as_uri(),
+    )
+    worker = DeliveryWorker(
+        session_factory=sf,
+        dispatcher=adapter,
+        config=DeliveryWorkerConfig(batch_size=10, poll_interval_s=0.01),
+    )
+    assert await worker.drain_once() == 1
+
+    pr_body = json.loads(pr_route.calls.last.request.content)["body"]
+    assert "Refs #42" in pr_body
+    assert "Closes #42" not in pr_body
+    assert "| R2 | the PWA button | deferred | needs a design call |" in pr_body

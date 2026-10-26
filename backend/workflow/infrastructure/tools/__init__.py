@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from backend.config import get_settings
+from backend.workflow.domain.requirements import REQUIREMENT_EVIDENCE_SCHEMA
 from backend.workflow.infrastructure.sandbox import SandboxError, SandboxSession
 
 if TYPE_CHECKING:
@@ -586,6 +587,7 @@ class ToolRegistry:
                             "required": ["kind"],
                         },
                     },
+                    "requirement_evidence": REQUIREMENT_EVIDENCE_SCHEMA,
                     "round_budget": {
                         "type": "integer",
                         "minimum": 1,
@@ -801,7 +803,22 @@ class ToolRegistry:
                 "declare_verification: no usable check. A 'command' check needs a "
                 "non-empty 'command'; a 'judge' check needs a non-empty 'criteria' list."
             )
-        self.declared_contract = contract.to_dict()
+        declared_contract = contract.to_dict()
+        # The ledger evidence is sticky across re-declarations (a re-declare that repeats
+        # only the checks must not drop what the run already showed): a new entry for an id
+        # replaces the old one, every other id is kept.
+        from backend.workflow.domain.requirements import (  # noqa: PLC0415
+            merge_evidence,
+            parse_requirement_evidence,
+        )
+
+        evidence = merge_evidence(
+            parse_requirement_evidence((self.declared_contract or {}).get("requirement_evidence")),
+            parse_requirement_evidence(args.get("requirement_evidence")),
+        )
+        if evidence:
+            declared_contract["requirement_evidence"] = evidence
+        self.declared_contract = declared_contract
         # Sticky, unlike the contract: a re-declare that only repeats the checks must not
         # silently drop an earlier round_budget the agent already committed to.
         round_budget = args.get("round_budget")
