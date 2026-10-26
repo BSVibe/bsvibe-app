@@ -290,8 +290,8 @@ async def test_deriver_is_grounded_in_what_git_says_changed() -> None:
     box = _Box(
         manifests={"pyproject.toml": "[project]\nname='x'\n"},
         outputs={
-            "git diff --name-only": "src/pkg/delivery.py\ntests/test_delivery.py\n",
-            "git status --porcelain": " M src/pkg/report.py\n?? tests/test_new.py\n",
+            "diff --name-only": "src/pkg/delivery.py\ntests/test_delivery.py\n",
+            "status --porcelain": " M src/pkg/report.py\n?? tests/test_new.py\n",
         },
     )
     llm = _Llm(_GATE_JSON)
@@ -312,7 +312,7 @@ async def test_renamed_path_is_reported_at_its_new_name() -> None:
 
     box = _Box(
         manifests={"pyproject.toml": "[project]\nname='x'\n"},
-        outputs={"git status --porcelain": "R  src/old.py -> src/new.py\n"},
+        outputs={"status --porcelain": "R  src/old.py -> src/new.py\n"},
     )
     llm = _Llm(_GATE_JSON)
     await run_inplace_gate(_service(llm), run=_Run(), box=box, baseline=None)
@@ -328,7 +328,7 @@ async def test_a_run_that_changed_nothing_still_reports_nothing() -> None:
 
     box = _Box(
         manifests={"pyproject.toml": "[project]\nname='x'\n"},
-        outputs={"git diff --name-only": "\n", "git status --porcelain": "\n"},
+        outputs={"diff --name-only": "\n", "status --porcelain": "\n"},
     )
     llm = _Llm(_GATE_JSON)
     await run_inplace_gate(_service(llm), run=_Run(), box=box, baseline="abc123def")
