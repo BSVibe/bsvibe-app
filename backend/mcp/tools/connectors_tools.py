@@ -31,7 +31,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import select
 
-from backend.api.v1.connectors import get_import_dispatcher
+from backend.api.v1.connectors import (
+    CredentialRotationError,
+    binding_counts,
+    get_import_dispatcher,
+    rotate_connector_credential,
+)
 from backend.common.connector_redaction import (
     public_delivery_config as _public_delivery_config,
 )
@@ -69,6 +74,7 @@ def _row_to_dict(
     *,
     oauth_account_label: str | None = None,
     needs_reauth: bool = False,
+    binding_count: int = 0,
 ) -> dict[str, Any]:
     info = get_connector_catalog().get(row.connector)
     return {
@@ -88,6 +94,8 @@ def _row_to_dict(
         # C4 드리프트 수정 — REST 응답에는 있고 MCP 에는 없던 필드. 토큰이 죽어
         # 재연결이 필요한 커넥터를 MCP 사용자도 볼 수 있어야 한다.
         "needs_reauth": needs_reauth,
+        # 이 커넥터를 가리키는 제품 바인딩 수 — 끄면 전부 고아가 된다.
+        "binding_count": binding_count,
         "last_import_at": row.last_import_at.isoformat() if row.last_import_at else None,
         "last_import_count": row.last_import_count,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -152,12 +160,14 @@ async def _h_list(_args: ConnectorsListInput, ctx: ToolContext) -> Any:
     needs_reauth_by_id = {
         account_id: status == "needs_reauth" for account_id, _label, status in token_rows
     }
+    bound = await binding_counts(ctx.session, [r.id for r in rows])
     return _Envelope(
         [
             _row_to_dict(
                 r,
                 oauth_account_label=labels.get(r.id),
                 needs_reauth=needs_reauth_by_id.get(r.id, False),
+                binding_count=bound.get(r.id, 0),
             )
             for r in rows
         ]
@@ -174,7 +184,8 @@ class ConnectorsShowInput(BaseModel):
 
 async def _h_show(args: ConnectorsShowInput, ctx: ToolContext) -> Any:
     row = await _resolve_connector(ctx, args.connector_id)
-    return _Envelope(_row_to_dict(row))
+    bound = await binding_counts(ctx.session, [row.id])
+    return _Envelope(_row_to_dict(row, binding_count=bound.get(row.id, 0)))
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +439,53 @@ async def _h_webhook_register(args: ConnectorsWebhookRegisterInput, ctx: ToolCon
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_connectors_rotate_credential — mirrors PUT /connectors/{id}/credential
+# ---------------------------------------------------------------------------
+class ConnectorsRotateCredentialInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connector_id: uuid.UUID
+    signing_secret: str = Field(..., min_length=1, max_length=1024)
+
+
+class ConnectorsRotateCredentialOutput(BaseModel):
+    """The redacted row + ingress outcome. Never the token (``token_hint`` only)."""
+
+    model_config = ConfigDict(extra="forbid")
+    connector: dict[str, Any]
+    webhook_registered: bool | None = None
+
+
+async def _h_rotate_credential(args: ConnectorsRotateCredentialInput, ctx: ToolContext) -> Any:
+    row = await _resolve_connector(ctx, args.connector_id)
+    if not row.is_active:
+        raise ToolError(f"connector not found: {args.connector_id}")
+
+    def _factory(bot_token: str) -> Any:
+        injected = (ctx.extras or {}).get("telegram_client_factory")
+        if injected is not None:
+            return injected(bot_token)
+        from plugin.telegram.client import TelegramClient  # noqa: PLC0415
+
+        return TelegramClient(bot_token)
+
+    try:
+        registered = await rotate_connector_credential(
+            ctx.session,
+            row,
+            new_secret=args.signing_secret,
+            cipher=cipher_from_settings(),
+            telegram_factory=_factory,
+        )
+    except CredentialRotationError as exc:
+        raise ToolError(str(exc)) from None
+    bound = await binding_counts(ctx.session, [row.id])
+    return ConnectorsRotateCredentialOutput(
+        connector=_row_to_dict(row, binding_count=bound.get(row.id, 0)),
+        webhook_registered=registered,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 # ── OAuth connect / GitHub-App setup (this branch) ──────────────────────
@@ -651,6 +709,25 @@ def register_connectors_tools(registry: ToolRegistry) -> None:
             handler=_h_webhook_register,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.connectors_webhook_register.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_connectors_rotate_credential",
+            description=(
+                "Replace the token of a token-connected connector (e.g. a Telegram "
+                "bot token) IN PLACE — the connector keeps its id, product bindings, "
+                "approver allowlist and chat_id; revoke + re-create would lose all "
+                "of them. Telegram's new token is verified (getMe) before anything is "
+                "overwritten, then its webhook is re-registered under the new token. "
+                "Returns the redacted connector (token_hint only) and "
+                "webhook_registered. OAuth-connected connectors are refused — reconnect them."
+            ),
+            input_schema=ConnectorsRotateCredentialInput,
+            output_schema=ConnectorsRotateCredentialOutput,
+            handler=_h_rotate_credential,
+            required_scopes=("mcp:write",),
+            audit_event="bsvibe.mcp.connectors_rotate_credential.invoked",
         )
     )
     registry.register(

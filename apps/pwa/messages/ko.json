@@ -627,7 +627,18 @@
         "importNow": "지금 가져오기",
         "importing": "가져오는 중…",
         "importError": "가져오기에 실패했어요. 커넥터 설정을 확인하고 다시 시도해 주세요.",
-        "lastImported": "마지막 가져오기 {count}건 · {at}"
+        "lastImported": "마지막 가져오기 {count}건 · {at}",
+        "revokeBoundWarning": "이 커넥터를 가리키는 제품 바인딩이 {count}개 있어요. 해지하면 그 제품들의 전달과 승인이 멈춰요.",
+        "rotate": "토큰 교체",
+        "rotateHeading": "새 토큰",
+        "rotateHint": "같은 커넥터의 토큰만 바꿔요. 제품 바인딩, 승인 유저, 채팅 설정은 그대로 남아요.",
+        "rotatePlaceholder": "새 토큰을 붙여넣으세요",
+        "rotateSave": "새 토큰 저장",
+        "rotating": "저장 중…",
+        "rotated": "토큰을 교체했어요",
+        "rotatedWebhookFailed": "토큰은 교체했지만 웹훅 재등록에 실패했어요. 커넥터 설정에서 다시 시도해 주세요.",
+        "rotateRejected": "그 토큰은 거부되어서 아무것도 바뀌지 않았어요.",
+        "rotateError": "토큰을 교체하지 못했어요. 다시 시도해 주세요."
       },
       "approvers": {
         "heading": "승인 허용 유저",

@@ -996,6 +996,19 @@ export interface Connector {
    *  badge so the founder sees a dead credential immediately rather
    *  than waiting for the next dispatch to fail silently. */
   needs_reauth?: boolean;
+  /** How many product bindings point at this connector (backend
+   *  `ConnectorOut.binding_count`). Revoking orphans all of them, so the
+   *  revoke confirmation warns when this is above zero. */
+  binding_count?: number;
+}
+
+/** `PUT /api/v1/connectors/{id}/credential` response. The token is never
+ *  echoed — `connector.token_hint` is all the UI gets. `webhook_registered` is
+ *  `null` for a connector without a programmatic ingress; for telegram it says
+ *  whether the webhook now points at the new token. */
+export interface ConnectorCredentialRotated {
+  connector: Connector;
+  webhook_registered: boolean | null;
 }
 
 /** `POST /api/v1/connectors/{id}/import` response (backend

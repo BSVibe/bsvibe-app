@@ -9,6 +9,7 @@ import {
   listConnectors,
   listUnclaimedInstalls,
   revokeConnector,
+  rotateConnectorCredential,
   startConnectorOAuth,
   triggerImport,
   updateConnector,
@@ -247,6 +248,7 @@ export default function Connectors() {
                 revoke={revokeConnector}
                 triggerImport={triggerImport}
                 updateConnector={updateConnector}
+                rotateCredential={rotateConnectorCredential}
               />
             ))}
           </ul>
