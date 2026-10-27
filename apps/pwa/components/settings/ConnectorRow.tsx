@@ -1,10 +1,11 @@
 "use client";
 
-import type { Connector, ConnectorImportResult } from "@/lib/api/types";
+import type { Connector, ConnectorCredentialRotated, ConnectorImportResult } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
 import { ApproversEditor } from "./ApproversEditor";
 import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
+import { CredentialRotator } from "./CredentialRotator";
 import { GithubAppSetup } from "./GithubAppSetup";
 import { isOAuthConnector } from "./connector-fields";
 
@@ -47,12 +48,16 @@ export default function ConnectorRow({
   revoke,
   triggerImport,
   updateConnector,
+  rotateCredential,
 }: {
   connector: Connector;
   onRevoked: () => void;
   onImported?: () => void;
   onUpdated?: () => void;
   revoke: (id: string) => Promise<void>;
+  /** Present → a token-connected card offers "Replace token" (the OAuth
+   *  connectors' equivalent is their Reconnect control). */
+  rotateCredential?: (id: string, signingSecret: string) => Promise<ConnectorCredentialRotated>;
   triggerImport?: (id: string) => Promise<ConnectorImportResult>;
   updateConnector?: (
     id: string,
@@ -68,6 +73,11 @@ export default function ConnectorRow({
   // slack/discord interactive-approval cards authorize the tapping user against
   // `authorized_user_ids` — render the inline editor for those (never telegram).
   const showApprovers = connector.is_active && APPROVER_LIST_CONNECTORS.has(connector.connector);
+
+  // A pasted token (not OAuth) is the only credential this control can swap.
+  const showRotate =
+    connector.is_active && rotateCredential !== undefined && !isOAuthConnector(connector.connector);
+  const boundCount = connector.binding_count ?? 0;
 
   async function confirmRevoke() {
     if (state === "revoking") return;
@@ -181,6 +191,20 @@ export default function ConnectorRow({
             onSaved={onUpdated}
             updateConnector={updateConnector}
           />
+        ) : null}
+        {showRotate ? (
+          <CredentialRotator
+            connector={connector}
+            onRotated={onUpdated}
+            rotateCredential={rotateCredential}
+          />
+        ) : null}
+        {/* Revoking orphans every product binding that points here — say so
+            BEFORE the confirm button, not after. */}
+        {(state === "confirming" || state === "revoking") && boundCount > 0 ? (
+          <p className="connector-card__error" role="alert" data-testid="revoke-bound-warning">
+            {t("revokeBoundWarning", { count: boundCount })}
+          </p>
         ) : null}
       </div>
 

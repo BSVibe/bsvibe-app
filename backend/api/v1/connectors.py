@@ -49,7 +49,7 @@ from typing import Annotated, Any
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
@@ -74,6 +74,7 @@ from backend.connectors.telegram_webhook import (
 from backend.extensions.plugin.base import PluginMeta, PluginRunError
 from backend.extensions.plugin.context import SkillContext
 from backend.extensions.plugin.runner import PluginRunner
+from backend.identity.workspaces_db import ResourceBindingRow
 from backend.router.accounts.crypto import CredentialCipher, cipher_from_settings
 
 logger = structlog.get_logger(__name__)
@@ -199,6 +200,33 @@ class ConnectorOut(BaseModel):
     # badge so the founder sees the credential is dead instead of
     # waiting for the next dispatch to fail silently.
     needs_reauth: bool = False
+    # How many product×connector bindings (``resource_bindings``) point at this
+    # connector. Revoking it silently orphans every one of them, so the row UI
+    # shows the count in its revoke confirmation instead of letting a founder
+    # switch the connector off blind.
+    binding_count: int = 0
+
+
+class ConnectorCredentialRotate(BaseModel):
+    """PUT body — the replacement token for a token-connected connector."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    signing_secret: str = Field(min_length=1, max_length=1024)
+
+
+class ConnectorCredentialRotated(BaseModel):
+    """Rotation response — the row (redacted like any other) + ingress outcome.
+
+    Never the token itself; ``connector.token_hint`` is the only hint.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    connector: ConnectorOut
+    # ``None`` for a connector with no programmatic ingress; for telegram,
+    # whether Telegram now delivers to this binding under the NEW token.
+    webhook_registered: bool | None = None
 
 
 class ConnectorImportResult(BaseModel):
@@ -255,6 +283,7 @@ def _row_to_out(
     *,
     oauth_account_label: str | None = None,
     needs_reauth: bool = False,
+    binding_count: int = 0,
 ) -> ConnectorOut:
     info = _capabilities(row.connector)
     return ConnectorOut(
@@ -273,7 +302,22 @@ def _row_to_out(
         last_import_count=row.last_import_count,
         oauth_account_label=oauth_account_label,
         needs_reauth=needs_reauth,
+        binding_count=binding_count,
     )
+
+
+async def binding_counts(
+    session: AsyncSession, account_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Product bindings per connector id, in one grouped query."""
+    if not account_ids:
+        return {}
+    rows = await session.execute(
+        select(ResourceBindingRow.connector_account_id, func.count())
+        .where(ResourceBindingRow.connector_account_id.in_(account_ids))
+        .group_by(ResourceBindingRow.connector_account_id)
+    )
+    return {account_id: count for account_id, count in rows.all()}
 
 
 @router.get("")
@@ -310,11 +354,13 @@ async def list_connectors(
     needs_reauth_by_id: dict[uuid.UUID, bool] = {
         account_id: status == "needs_reauth" for account_id, _label, status in token_rows
     }
+    bound = await binding_counts(session, [r.id for r in rows])
     return [
         _row_to_out(
             r,
             oauth_account_label=labels.get(r.id),
             needs_reauth=needs_reauth_by_id.get(r.id, False),
+            binding_count=bound.get(r.id, 0),
         )
         for r in rows
     ]
@@ -373,6 +419,85 @@ async def _register_telegram_ingress(
         telegram=factory(bot_token),
         public_base_url=get_settings().oauth_issuer,
     )
+
+
+class CredentialRotationError(Exception):
+    """A rotation that was refused. The message is safe to show — never a token."""
+
+
+class CredentialRejected(CredentialRotationError):
+    """The provider refused the replacement token; nothing was written."""
+
+
+class CredentialNotRotatable(CredentialRotationError):
+    """The connector's credential is not a pasted token (OAuth-connected)."""
+
+
+async def rotate_connector_credential(
+    session: AsyncSession,
+    row: ConnectorAccountRow,
+    *,
+    new_secret: str,
+    cipher: CredentialCipher,
+    telegram_factory: TelegramClientFactory,
+) -> bool | None:
+    """Swap the token on ``row`` IN PLACE — same id, bindings, config, ingress URL.
+
+    Shared by the REST route and the MCP tool so the two surfaces cannot drift.
+    Revoke + re-create is the only alternative and it throws all of that away:
+    the product bindings cascade-delete and the approver allowlist / ``chat_id``
+    have to be re-typed.
+
+    Telegram's new token is probed with ``getMe`` BEFORE anything is written, so
+    a typo cannot overwrite a working connection. After the swap the ingress is
+    registered again under the new token. A failed re-registration does not undo
+    the (already validated) rotation; the return value reports it so the caller
+    can say "token saved, webhook needs a retry". Returns ``None`` for a
+    connector with no programmatic ingress.
+    """
+    oauth_bound = await session.execute(
+        select(ConnectorOAuthTokenRow.connector_account_id).where(
+            ConnectorOAuthTokenRow.connector_account_id == row.id
+        )
+    )
+    if oauth_bound.first() is not None:
+        raise CredentialNotRotatable(
+            f"connector {row.connector!r} is connected via OAuth — reconnect it instead"
+        )
+
+    if row.connector == "telegram":
+        try:
+            await telegram_factory(new_secret).get_me()
+        except Exception as exc:  # noqa: BLE001 — any failure means "not a usable token"
+            # Class name only: the exception text can carry the token-bearing URL.
+            logger.warning(
+                "connector_credential_rotation_rejected",
+                connector_id=str(row.id),
+                error_type=type(exc).__name__,
+            )
+            raise CredentialRejected("telegram rejected the new bot token") from None
+
+    row.signing_secret_ciphertext = cipher.encrypt(new_secret)
+    await session.commit()
+    logger.info(
+        "audit.connector.credential_rotated",
+        connector_id=str(row.id),
+        connector=row.connector,
+        workspace_id=str(row.workspace_id),
+    )
+    if row.connector != "telegram":
+        return None
+    try:
+        result = await _register_telegram_ingress(row, cipher=cipher, factory=telegram_factory)
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 — the rotation itself already succeeded
+        logger.warning(
+            "connector_webhook_register_on_rotate_failed",
+            connector_id=str(row.id),
+            error_type=type(exc).__name__,
+        )
+        return False
+    return result.registered
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -474,6 +599,50 @@ async def update_connector(
     row.delivery_config = {**(row.delivery_config or {}), **payload.delivery_config}
     await session.commit()
     return _row_to_out(row)
+
+
+@router.put("/{connector_id}/credential")
+async def rotate_credential(
+    connector_id: uuid.UUID,
+    payload: ConnectorCredentialRotate,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
+    telegram_factory: Annotated[TelegramClientFactory, Depends(get_telegram_client_factory)],
+) -> ConnectorCredentialRotated:
+    """Replace the token of a token-connected connector, keeping the same row.
+
+    The id, product bindings, ``authorized_user_ids``, ``chat_id`` and webhook
+    URL all survive; only the encrypted credential changes. The old token stops
+    being used the moment this commits (every outbound call decrypts the stored
+    value). The response never carries the token — ``token_hint`` only.
+
+    * 404 — not in this workspace, or soft-revoked
+    * 422 — OAuth-connected (reconnect instead) or the provider rejected the token
+    """
+    row = await session.get(ConnectorAccountRow, connector_id)
+    if row is None or row.workspace_id != workspace_id or not row.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"connector {connector_id} not found",
+        )
+    try:
+        registered = await rotate_connector_credential(
+            session,
+            row,
+            new_secret=payload.signing_secret,
+            cipher=cipher,
+            telegram_factory=telegram_factory,
+        )
+    except CredentialRotationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from None
+    bound = await binding_counts(session, [row.id])
+    return ConnectorCredentialRotated(
+        connector=_row_to_out(row, binding_count=bound.get(row.id, 0)),
+        webhook_registered=registered,
+    )
 
 
 # ── inbound import (Lift B) ─────────────────────────────────────────────────
@@ -798,6 +967,11 @@ __all__ = [
     "ConnectorCatalog",
     "ConnectorCreate",
     "ConnectorCreated",
+    "ConnectorCredentialRotate",
+    "ConnectorCredentialRotated",
+    "CredentialNotRotatable",
+    "CredentialRejected",
+    "CredentialRotationError",
     "ConnectorImportResult",
     "ConnectorOut",
     "ConnectorUpdate",
@@ -805,8 +979,11 @@ __all__ = [
     "create_connector",
     "get_catalog",
     "get_import_dispatcher",
+    "binding_counts",
     "list_connectors",
     "revoke_connector",
+    "rotate_connector_credential",
+    "rotate_credential",
     "router",
     "trigger_import",
     "update_connector",

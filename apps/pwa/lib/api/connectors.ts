@@ -21,6 +21,7 @@ import type {
   ConnectorCatalog,
   ConnectorCreate,
   ConnectorCreated,
+  ConnectorCredentialRotated,
   ConnectorImportResult,
   ConnectorUpdate,
 } from "./types";
@@ -71,6 +72,24 @@ export function updateConnector(connectorId: string, patch: ConnectorUpdate): Pr
     method: "PATCH",
     body: JSON.stringify(patch),
   });
+}
+
+/** Replace the token of a token-connected connector IN PLACE
+ *  (`PUT /api/v1/connectors/{id}/credential`) — same row, so its product
+ *  bindings, approvers and chat config survive (revoke + re-create loses them).
+ *  A telegram token is verified before anything is overwritten (422 when the
+ *  provider rejects it) and its webhook is re-registered under the new one. */
+export function rotateConnectorCredential(
+  connectorId: string,
+  signingSecret: string,
+): Promise<ConnectorCredentialRotated> {
+  return apiFetch<ConnectorCredentialRotated>(
+    `/api/v1/connectors/${encodeURIComponent(connectorId)}/credential`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ signing_secret: signingSecret }),
+    },
+  );
 }
 
 /** Soft-revoke a connector by id — the backend flips `is_active` False and the

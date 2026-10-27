@@ -230,6 +230,17 @@ class TelegramClient:
         resp = await self._post("setWebhook", {"url": url, "secret_token": secret_token})
         return self._ok_with_reason(resp)
 
+    async def get_me(self) -> dict[str, Any]:
+        """Who this token belongs to (``getMe``) — the cheapest "is it valid?" probe.
+
+        A revoked or mistyped token answers HTTP 401 with an ``ok:false`` body;
+        that RAISES, so a caller can refuse a replacement token before it
+        overwrites a working one.
+        """
+        resp = await self._post("getMe", {})
+        result: dict[str, Any] = self._ok_with_reason(resp)["result"]
+        return result
+
     async def get_webhook_info(self) -> dict[str, Any]:
         """Telegram's own view of this bot's webhook.
 

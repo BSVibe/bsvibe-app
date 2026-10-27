@@ -19,6 +19,7 @@ from backend.connectors.db import ConnectorAccountRow
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
+from backend.router.accounts.crypto import cipher_from_settings
 
 from .._support import db_engine
 from ._rls import scoped_session
@@ -624,3 +625,131 @@ async def test_claim_install_wrong_ref_refused(db, workspace_id, user_id, regist
                 {"provider": "sentry", "installation_ref": "inst-guessed"},
                 ctx,
             )
+
+
+# ── bsvibe_connectors_rotate_credential — parity with PUT /{id}/credential ──
+
+
+class _Telegram:
+    """Records the token each call used; ``get_me`` rejects tokens in ``rejects``."""
+
+    def __init__(self, rejects: frozenset[str] = frozenset()) -> None:
+        self.rejects = rejects
+        self.get_me_tokens: list[str] = []
+        self.webhook_tokens: list[str] = []
+        self._url = ""
+
+    def factory(self, token: str) -> Any:
+        outer = self
+
+        class _Client:
+            async def get_me(self) -> dict[str, Any]:
+                outer.get_me_tokens.append(token)
+                if token in outer.rejects:
+                    raise RuntimeError(f"401 for url '/bot{token}/getMe'")
+                return {"id": 1}
+
+            async def set_webhook(self, url: str, *, secret_token: str) -> dict[str, Any]:
+                outer.webhook_tokens.append(token)
+                outer._url = url
+                return {"ok": True}
+
+            async def get_webhook_info(self) -> dict[str, Any]:
+                return {"url": outer._url, "pending_update_count": 0}
+
+        return _Client()
+
+
+async def _call(db, registry, workspace_id, user_id, name, args, *, tg=None):
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+            extras={"telegram_client_factory": tg.factory} if tg else {},
+        )
+        return await registry.call_tool(name, args, ctx)
+
+
+async def _create_telegram(db, registry, workspace_id, user_id) -> str:
+    created = await _call(
+        db,
+        registry,
+        workspace_id,
+        user_id,
+        "bsvibe_connectors_create",
+        {
+            "connector": "telegram",
+            "signing_secret": "111111:old-token-AAAA",
+            "delivery_config": {"chat_id": "42", "authorized_user_ids": ["u1"]},
+        },
+    )
+    return str(created["id"])
+
+
+async def test_rotate_credential_swaps_the_token_on_the_same_row(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    cid = await _create_telegram(db, registry, workspace_id, user_id)
+    tg = _Telegram()
+    out = await _call(
+        db,
+        registry,
+        workspace_id,
+        user_id,
+        "bsvibe_connectors_rotate_credential",
+        {"connector_id": cid, "signing_secret": "222222:new-token-BBBB"},
+        tg=tg,
+    )
+    assert out["connector"]["id"] == cid
+    assert out["webhook_registered"] is True
+    assert "222222:new-token-BBBB" not in str(out)
+    assert tg.get_me_tokens == ["222222:new-token-BBBB"]
+    assert tg.webhook_tokens == ["222222:new-token-BBBB"]
+    async with db() as s:
+        row = await s.get(ConnectorAccountRow, uuid.UUID(cid))
+        assert cipher_from_settings().decrypt(row.signing_secret_ciphertext) == (
+            "222222:new-token-BBBB"
+        )
+        assert row.delivery_config["chat_id"] == "42"
+        assert row.delivery_config["authorized_user_ids"] == ["u1"]
+
+
+async def test_rotate_credential_refuses_a_token_telegram_rejects(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    cid = await _create_telegram(db, registry, workspace_id, user_id)
+    tg = _Telegram(rejects=frozenset({"999999:typo-CCCC"}))
+    with pytest.raises(ToolError) as err:
+        await _call(
+            db,
+            registry,
+            workspace_id,
+            user_id,
+            "bsvibe_connectors_rotate_credential",
+            {"connector_id": cid, "signing_secret": "999999:typo-CCCC"},
+            tg=tg,
+        )
+    assert "999999:typo-CCCC" not in str(err.value)
+    async with db() as s:
+        row = await s.get(ConnectorAccountRow, uuid.UUID(cid))
+        assert cipher_from_settings().decrypt(row.signing_secret_ciphertext) == (
+            "111111:old-token-AAAA"
+        )
+
+
+async def test_rotate_credential_cross_workspace_404(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    cid = await _create_telegram(db, registry, workspace_id, user_id)
+    with pytest.raises(ToolError, match="connector not found"):
+        await _call(
+            db,
+            registry,
+            uuid.uuid4(),
+            user_id,
+            "bsvibe_connectors_rotate_credential",
+            {"connector_id": cid, "signing_secret": "222222:new-token-BBBB"},
+            tg=_Telegram(),
+        )

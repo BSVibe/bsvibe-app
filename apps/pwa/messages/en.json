@@ -627,7 +627,18 @@
         "importNow": "Import now",
         "importing": "Importing…",
         "importError": "Import failed. Check the connector config and try again.",
-        "lastImported": "Last imported {count} · {at}"
+        "lastImported": "Last imported {count} · {at}",
+        "revokeBoundWarning": "{count, plural, one {# product binding points at this connector. Revoking it stops that product\u2019s deliveries and approvals.} other {# product bindings point at this connector. Revoking it stops those products\u2019 deliveries and approvals.}}",
+        "rotate": "Replace token",
+        "rotateHeading": "New token",
+        "rotateHint": "Replaces the token on this same connector. Its product bindings, approvers and chat settings stay as they are.",
+        "rotatePlaceholder": "Paste the new token",
+        "rotateSave": "Save new token",
+        "rotating": "Saving\u2026",
+        "rotated": "Token replaced",
+        "rotatedWebhookFailed": "Token replaced, but re-registering the webhook failed. Try again from the connector settings.",
+        "rotateRejected": "That token was rejected, so nothing was changed.",
+        "rotateError": "Couldn\u2019t replace the token. Please try again."
       },
       "approvers": {
         "heading": "Authorized approvers",
