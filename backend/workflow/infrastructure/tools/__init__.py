@@ -121,8 +121,8 @@ FILE_WRITE_MAX_BYTES: int = 256 * 1024
 # bolted on after (or never) — TDD discipline, enforced not merely nudged.
 VERIFY_FIRST_REFUSAL: str = (
     "Declare your verification first: call declare_verification(...) describing "
-    "how this work will be checked (a command check that runs the real test/lint, "
-    "scoped to the files you change), then write."
+    "how this work will be checked (a command check that runs the real tests and lint "
+    "the way the repo's CI does), then write."
 )
 
 
@@ -538,11 +538,15 @@ class ToolRegistry:
                 "`pytest` or `python -m pytest` may not be on the sandbox venv path and "
                 "fails with 'No module named pytest'; for Node use the package script "
                 "(`pnpm test`, `npm run lint`). "
-                "SCOPE every command to the files you changed, never the whole repo: "
-                "a repo-wide lint/format (e.g. `ruff check .`, `pnpm lint`) fails on "
-                "pre-existing debt you did not touch, and trying to satisfy it "
-                "rewrites unrelated files. Pass the changed paths explicitly — e.g. "
-                "`uv run ruff check src/foo.py`, `uv run pytest tests/test_foo.py`. "
+                "SCOPE lint/format to the files you changed: a repo-wide lint/format "
+                "(e.g. `ruff check .`, `pnpm lint`) fails on pre-existing debt you did not "
+                "touch, and trying to satisfy it rewrites unrelated files — e.g. "
+                "`uv run ruff check src/foo.py`. Do NOT narrow tests that way: your change "
+                "can break code you did not touch, so run the tests of the changed code AND "
+                "of the code that depends on it (its package or suite directory), not only "
+                "the test file you wrote. Run type checks the way the repo's CI runs them, "
+                "with the tool versions CI pins. "
+                "Commands run with `CI=true`, as in CI. "
                 "FORMAT your changed files before declaring done (the project quality "
                 "gate runs `ruff format --check` on them) — e.g. `uv run ruff format "
                 "src/foo.py tests/test_foo.py`. "

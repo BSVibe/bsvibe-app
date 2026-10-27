@@ -437,7 +437,10 @@ class ProductsSetMetadataInput(BaseModel):
 
 async def _h_products_set_metadata(args: ProductsSetMetadataInput, ctx: ToolContext) -> Any:
     row = await _resolve_product(ctx, args.slug_or_id)
-    row.product_metadata = sealed_product_metadata(args.metadata, row.product_metadata)
+    try:
+        row.product_metadata = sealed_product_metadata(args.metadata, row.product_metadata)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
     await ctx.session.commit()
     await ctx.session.refresh(row)
     return _Envelope(_product_to_dict(row))

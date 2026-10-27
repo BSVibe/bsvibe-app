@@ -136,7 +136,8 @@ class VerificationCheck(BaseModel):
         description=(
             "For kind='command': the shell command to run. Use the PROJECT RUNNER so it "
             "resolves in the sandbox (`uv run pytest tests/test_x.py`, `uv run ruff check "
-            "src/x.py`) and SCOPE it to the files you changed — never the whole repo."
+            "src/x.py`). Scope lint/format to the files you changed; for tests, run those "
+            "covering your change and the code depending on it, not only your test file."
         ),
     )
     criteria: list[str] | None = Field(
@@ -307,8 +308,8 @@ _FORWARDING_PRESENTATION: dict[str, tuple[type[BaseModel], str, bool]] = {
         (
             "Declare HOW this work will be verified, as a list of `checks` — REQUIRED "
             "before you may write any file. A 'command' check is a shell command whose "
-            "exit code is the verdict, run through the project runner and scoped to the "
-            "files you change (e.g. `uv run pytest tests/test_x.py`). Call this FIRST. "
+            "exit code is the verdict, run through the project runner the way the repo's CI "
+            "runs it (e.g. `uv run pytest tests/test_x.py`). Call this FIRST. "
             "Optionally set `round_budget` to how many rounds you expect this step to "
             "take — the run stops at that count instead of the platform default."
         ),

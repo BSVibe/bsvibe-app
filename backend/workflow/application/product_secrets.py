@@ -17,6 +17,7 @@ from backend.router.accounts.crypto import (
     CredentialCipher,
     cipher_from_settings,
 )
+from backend.workflow.domain.declared_checks import validate_declared_checks
 from backend.workflow.domain.verify_secrets import seal_secrets
 
 
@@ -37,6 +38,8 @@ def sealed_product_metadata(incoming: dict[str, Any], prior: Any) -> dict[str, A
     failing because of a key that product never needed — and every deployment
     and test that stores no secrets keeps working exactly as before.
     """
+    # Same seam, same reason: a malformed declaration would be read back as nothing.
+    validate_declared_checks(incoming)
     cipher: CredentialCipher | None = None
 
     def _encrypt(plaintext: str) -> str:

@@ -35,10 +35,12 @@ from typing import Any
 import structlog
 
 from backend.storage.branch_point import branch_point
+from backend.workflow.application.gate_commands import any_failed, run_gate_commands
 from backend.workflow.application.verification_service import (
     DerivedGateFailed,
     VerificationService,
 )
+from backend.workflow.domain.declared_checks import DeclaredChecks
 from backend.workflow.domain.gate_derivation import surface_exercised
 from backend.workflow.domain.verifier_contract import VerificationContract
 from backend.workflow.infrastructure.db import VerificationOutcome, VerificationResult
@@ -264,6 +266,7 @@ async def run_inplace_gate(
     box: SandboxSession,
     baseline: str | None = None,
     environment: Any = None,
+    declared: DeclaredChecks = DeclaredChecks(),  # noqa: B008 — frozen, never mutated
 ) -> dict[str, Any] | None:
     """Derive and run this repo's verification gate on the founder's machine.
 
@@ -359,7 +362,7 @@ async def run_inplace_gate(
     # was withheld while ``declare_verification`` sat on the workspace axis, on
     # the false premise that a declared contract needs a server-side worktree.
     # It does not: these commands run through the same box the derived gate uses.)
-    declared = await _declared_checks(service, run, check_box)
+    run_declared = await _declared_checks(service, run, check_box)
 
     # The founder's CI file names the checks this repo requires of itself — the
     # deriver's prompt has always said to prefer a CI step verbatim, and until
@@ -389,15 +392,17 @@ async def run_inplace_gate(
 
     if not gate.applicable or gate.is_empty:
         # The deriver ran and found nothing to run. Honest, but it proves nothing.
-        # Nothing DERIVABLE to run — but a declared contract may still have run.
-        passed = not any(r["status"] == "failed" for r in declared)
+        # Nothing DERIVABLE to run — but a declared contract may still have run, and the
+        # product's own floor and final still do.
+        ran = await _with_product_checks(service, run_declared, box=check_box, declared=declared)
+        passed = not any_failed(ran)
         blob = {
             "origin": "derived_in_place",
             "applicable": gate.applicable,
-            "commands": declared,
+            "commands": ran,
             "passed": passed,
-            "proved": passed and any(r["status"] == "passed" for r in declared),
-            "surface_exercised": surface_exercised(declared),
+            "proved": passed and any(r["status"] == "passed" for r in ran),
+            "surface_exercised": surface_exercised(ran),
             **({"environment": described} if described is not None else {}),
         }
         await _persist(
@@ -408,8 +413,13 @@ async def run_inplace_gate(
         )
         return blob
 
-    results = [*declared, *await _run_commands(service, gate=gate, box=check_box)]
-    passed = not any(r["status"] == "failed" for r in results)
+    results = await _with_product_checks(
+        service,
+        [*run_declared, *await _run_commands(service, gate=gate, box=check_box)],
+        box=check_box,
+        declared=declared,
+    )
+    passed = not any_failed(results)
     # PROVED needs something to have ACTUALLY run and passed. A gate whose every
     # command was missing from that machine (exit 127) is not a proof.
     proved = passed and any(r["status"] == "passed" for r in results)
@@ -491,31 +501,50 @@ async def _run_commands(
     """
     from backend.config import get_settings  # noqa: PLC0415
 
-    timeout_s = get_settings().verify_gate_command_timeout_s
     venv_ready = await service._ensure_project_venv(box)
-    venv_bin = f"{box.workspace_mount}/.venv/bin"
-    results: list[dict[str, Any]] = []
-    for c in gate.commands:
-        # The RECORDED command stays the clean derived one — the PATH prefix is
-        # an execution detail, not part of what was verified.
-        command = f'export PATH="{venv_bin}:$PATH"; {c.command}' if venv_ready else c.command
-        res = await box.exec(command, timeout_s=timeout_s, shell=True)
-        if res.exit_code == 0 and not res.timed_out:
-            status = "passed"
-        elif res.exit_code == 127:
-            # The tool is not on that machine — recorded, never a false-fail.
-            status = "unavailable"
-        else:
-            status = "failed"
-        results.append(
-            {
-                "command": c.command,
-                "kind": c.kind,
-                "status": status,
-                "exit_code": res.exit_code,
-                "timed_out": res.timed_out,
-                "output": "\n".join(o for o in (res.stdout, res.stderr) if o)[-2000:],
-            }
+    return await run_gate_commands(
+        box,
+        [(c.command, c.kind) for c in gate.commands],
+        venv_bin=f"{box.workspace_mount}/.venv/bin" if venv_ready else None,
+        timeout_s=get_settings().verify_gate_command_timeout_s,
+    )
+
+
+async def _with_product_checks(
+    service: VerificationService,
+    ran: list[dict[str, Any]],
+    *,
+    box: SandboxSession,
+    declared: DeclaredChecks,
+) -> list[dict[str, Any]]:
+    """``ran`` plus the product's floor — and, when nothing has failed, its final run.
+
+    The same declaration the server gate runs: the two execution models differ in where a
+    command runs, never in what the product requires of a change."""
+    from backend.config import get_settings  # noqa: PLC0415
+
+    if not declared.floor and not declared.final:
+        return ran
+    settings = get_settings()
+    venv_ready = await service._ensure_project_venv(box)
+    venv_bin = f"{box.workspace_mount}/.venv/bin" if venv_ready else None
+    results = [
+        *ran,
+        *await run_gate_commands(
+            box,
+            [(c, "floor") for c in declared.floor],
+            venv_bin=venv_bin,
+            timeout_s=settings.verify_gate_command_timeout_s,
+        ),
+    ]
+    if declared.final and not any_failed(results):
+        results.extend(
+            await run_gate_commands(
+                box,
+                [(c, "final") for c in declared.final],
+                venv_bin=venv_bin,
+                timeout_s=settings.verify_final_command_timeout_s,
+            )
         )
     return results
 

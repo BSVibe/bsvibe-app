@@ -224,7 +224,12 @@ async def update_product(
     # ORM attribute is ``product_metadata`` (``metadata`` is reserved by
     # SQLAlchemy's declarative base); the wire field is ``metadata``.
     if payload.metadata is not None:
-        row.product_metadata = sealed_product_metadata(payload.metadata, row.product_metadata)
+        try:
+            row.product_metadata = sealed_product_metadata(payload.metadata, row.product_metadata)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
     await session.commit()
     return ProductResponse.model_validate(row)
 
