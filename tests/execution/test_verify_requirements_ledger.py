@@ -47,7 +47,7 @@ _FULL_EVIDENCE = (
 def _box() -> FakeBox:
     return FakeBox(
         exec_map={
-            "git -c core.quotePath=false status --porcelain": SandboxResult(
+            "git -c core.quotePath=false status --porcelain --untracked-files=all": SandboxResult(
                 exit_code=0, stdout=_STATUS, stderr="", timed_out=False
             )
         },

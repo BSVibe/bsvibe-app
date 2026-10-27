@@ -198,7 +198,9 @@ async def _git_changed(
     answered = False
     # quotePath=false: git otherwise wraps non-ASCII paths in octal escapes
     # ("\354\204\244.md"), which name no file on disk.
-    queries = ["git -c core.quotePath=false status --porcelain"]
+    # untracked-files=all: git otherwise folds a new directory into one "?? dir/" entry, and
+    # every consumer of this list would then know none of the files inside it.
+    queries = ["git -c core.quotePath=false status --porcelain --untracked-files=all"]
     if baseline:
         queries.append(
             f"git -c core.quotePath=false diff --name-only {shlex.quote(baseline)}..HEAD"
