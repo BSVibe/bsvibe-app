@@ -150,6 +150,9 @@ class Settings(BaseSettings):
     # suite runs to completion instead of a false timeout-fail.
     verify_command_timeout_s: float = 300.0
     verify_gate_command_timeout_s: float = 900.0
+    # A product's ``verify_final`` is its CI-equivalent full run — longer than any one
+    # derived check, so it gets its own budget rather than a false timeout-fail.
+    verify_final_command_timeout_s: float = 2400.0
     # Standing a DISPOSABLE verification stack up is not a gate command: a cold
     # image build is minutes, and charging it to the per-command budget above
     # would turn a slow build into a false verification FAILURE. Its own budget,

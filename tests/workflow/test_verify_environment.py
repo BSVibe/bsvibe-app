@@ -260,6 +260,10 @@ class _NullSession:
     async def flush(self) -> None:
         return None
 
+    async def execute(self, *_a: Any, **_k: Any) -> Any:
+        """Settling reads the product's declared checks; this product declares none."""
+        return type("_Result", (), {"first": lambda self: None})()
+
 
 class _Run:
     def __init__(self) -> None:

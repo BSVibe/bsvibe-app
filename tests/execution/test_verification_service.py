@@ -36,6 +36,7 @@ from backend.workflow.application.verification_service import (
     DerivedGateOk,
     VerificationService,
 )
+from backend.workflow.domain.declared_checks import CI_PREFIX
 from backend.workflow.domain.verifier_contract import (
     VerificationCheck,
     VerificationContract,
@@ -105,6 +106,9 @@ class FakeBox:
         shell: bool = False,
         env: Mapping[str, str] | None = None,
     ) -> SandboxResult:
+        # Every gate command carries CI's marker (test_verify_ci_parity proves it reaches a
+        # real shell); scripted results are keyed by the command the check names.
+        command = command.removeprefix(CI_PREFIX)
         self.exec_calls.append(command)
         return self._exec_map.get(
             command, SandboxResult(exit_code=0, stdout="ok", stderr="", timed_out=False)

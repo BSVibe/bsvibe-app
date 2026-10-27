@@ -502,6 +502,7 @@ async def settle_client_attach(
     in the sandbox, so a pass is a real proof. A ``None`` gate means the repo
     declares no toolchain: legitimately gateless.
     """
+    from backend.workflow.application import gate_commands  # noqa: PLC0415
     from backend.workflow.application.audit_events import LoopTerminal  # noqa: PLC0415
     from backend.workflow.application.client_attach_delivery import (  # noqa: PLC0415
         commit_and_push_run_work,
@@ -518,6 +519,7 @@ async def settle_client_attach(
 
     gate = None
     if getattr(box, "runs_in_place", False):
+        declared = await gate_commands.product_declared_checks(orch._session, run.product_id)
         # The disposable environment is opened HERE and not inside the gate: it
         # is scoped to the verification, and holding it around the gate call is
         # what guarantees it is torn down whichever way that call returns.
@@ -530,6 +532,7 @@ async def settle_client_attach(
                 box=box,
                 baseline=baseline,
                 environment=environment,
+                declared=declared,
             )
     if gate is not None and gate_failure_is_actionable(gate) and cycle + 1 < orch._max_cycles:
         # A real failure on the founder's machine — feed it back and let the

@@ -36,6 +36,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
+from backend.workflow.application.gate_commands import (
+    any_failed,
+    product_declared_checks,
+    run_gate_commands,
+)
 from backend.workflow.application.requirements_ledger import (
     diff_excerpt,
     gate_facts,
@@ -44,6 +49,7 @@ from backend.workflow.application.requirements_ledger import (
     run_requirements,
 )
 from backend.workflow.application.sandbox_provisioning import ensure_sandbox_ready
+from backend.workflow.domain.declared_checks import gate_command
 from backend.workflow.domain.gate_derivation import (
     DerivedGate,
     derivation_planner_messages,
@@ -613,6 +619,8 @@ class VerificationService:
         # adds it; glue tests that bypass the provisioner have a plain
         # empty dir and should skip the merge step entirely).
         merge_conflict_paths: list[str] = []
+        # Read while the connection is still held: what the PRODUCT requires checked.
+        declared = await product_declared_checks(self._session, run.product_id)
         # Every step from here to the final persist is external work (git,
         # sandbox, LLM) that touches no DB — so hold no connection across it.
         # See :meth:`_release_connection` for the failure this prevents (#686).
@@ -779,7 +787,9 @@ class VerificationService:
         #   • DerivedGateFailed      — the deriver could NOT run. On a repo that HAS
         #                              a toolchain manifest this fails CLOSED.
         await self._release_connection(run)
-        gate_outcome = await self._run_derived_gate(run, box, written_paths, baseline)
+        gate_outcome = await self._run_derived_gate(
+            run, box, written_paths, baseline, floor=declared.floor
+        )
         derived_gate = gate_outcome.blob if isinstance(gate_outcome, DerivedGateOk) else None
         deriver_failed = isinstance(gate_outcome, DerivedGateFailed)
 
@@ -845,6 +855,13 @@ class VerificationService:
         ledger_pass = ledger is None or ledger_passed(ledger)
 
         passed = command_gate_pass and judge_pass and demo_pass and ledger_pass
+        if passed and declared.final and derived_gate is not None:
+            # The product's CI-equivalent run: last, and only for a round that passed
+            # everything else — so a change that would turn CI red fails HERE.
+            final = await self._run_final_checks(box, declared.final)
+            derived_gate["commands"] = [*derived_gate["commands"], *final]
+            if any_failed(final):
+                derived_gate["passed"] = passed = False
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
         if not passed:
             # The cause, where an operator looks first — a verdict that read only "failed"
@@ -1046,7 +1063,7 @@ class VerificationService:
         venv_bin = f"{box.workspace_mount}/.venv/bin"
         for check in contract.command_checks:
             command = check.command or ""
-            run_command = f'export PATH="{venv_bin}:$PATH"; {command}' if venv_ready else command
+            run_command = gate_command(command, venv_bin if venv_ready else None)
             res = await box.exec(
                 run_command,
                 timeout_s=get_settings().verify_command_timeout_s,
@@ -1236,6 +1253,8 @@ class VerificationService:
         box: SandboxSession,
         written_paths: list[str],
         baseline: str | None = None,
+        *,
+        floor: tuple[str, ...] = (),
     ) -> DerivedGateOutcome:
         """I1′ — the repo's OWN verification gate, DERIVED by an LLM grounded in
         the repo's declarations (not a per-stack detector list nor a hardcoded
@@ -1271,7 +1290,14 @@ class VerificationService:
         )
         if isinstance(gate, DerivedGateFailed):
             return gate
-        if not gate.applicable or gate.is_empty:
+        derived = gate.applicable and not gate.is_empty
+        commands: list[tuple[str, str]] = (
+            [(c.command, c.kind) for c in gate.commands] if derived else []
+        )
+        # The product's floor runs beside whatever was derived — including nothing: it is
+        # what the PRODUCT requires of every change, not something a model must remember.
+        commands.extend((command, "floor") for command in floor)
+        if not commands:
             return DerivedGateOk(
                 {
                     "origin": "derived",
@@ -1281,35 +1307,13 @@ class VerificationService:
                 }
             )
         venv_ready = await self._ensure_project_venv(box)
-        venv_bin = f"{box.workspace_mount}/.venv/bin"
-        results: list[dict[str, Any]] = []
-        for c in gate.commands:
-            run_command = (
-                f'export PATH="{venv_bin}:$PATH"; {c.command}' if venv_ready else c.command
-            )
-            res = await box.exec(
-                run_command,
-                timeout_s=get_settings().verify_gate_command_timeout_s,
-                shell=True,
-            )
-            output = "\n".join(o for o in (res.stdout, res.stderr) if o)[-2000:]
-            if res.exit_code == 0 and not res.timed_out:
-                status = "passed"
-            elif res.exit_code == 127:
-                status = "unavailable"
-            else:
-                status = "failed"
-            results.append(
-                {
-                    "command": c.command,
-                    "kind": c.kind,
-                    "status": status,
-                    "exit_code": res.exit_code,
-                    "timed_out": res.timed_out,
-                    "output": output,
-                }
-            )
-        passed = not any(r["status"] == "failed" for r in results)
+        results = await run_gate_commands(
+            box,
+            commands,
+            venv_bin=f"{box.workspace_mount}/.venv/bin" if venv_ready else None,
+            timeout_s=get_settings().verify_gate_command_timeout_s,
+        )
+        passed = not any_failed(results)
         return DerivedGateOk(
             {
                 "origin": "derived",
@@ -1320,6 +1324,17 @@ class VerificationService:
                 # where a command runs, never in what verification means.
                 "surface_exercised": surface_exercised(results),
             }
+        )
+
+    async def _run_final_checks(
+        self, box: SandboxSession, commands: tuple[str, ...]
+    ) -> list[dict[str, Any]]:
+        venv_ready = await self._ensure_project_venv(box)
+        return await run_gate_commands(
+            box,
+            [(command, "final") for command in commands],
+            venv_bin=f"{box.workspace_mount}/.venv/bin" if venv_ready else None,
+            timeout_s=get_settings().verify_final_command_timeout_s,
         )
 
     async def _ensure_project_venv(self, box: SandboxSession) -> bool:
@@ -1446,7 +1461,7 @@ class VerificationService:
         venv_bin = f"{box.workspace_mount}/.venv/bin"
 
         def _wrap(command: str) -> str:
-            return f'export PATH="{venv_bin}:$PATH"; {command}' if venv_ready else command
+            return gate_command(command, venv_bin if venv_ready else None)
 
         for setup_cmd in plan.setup:
             # Best-effort prep (build / install). A failed setup is not asserted
