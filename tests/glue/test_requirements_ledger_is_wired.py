@@ -146,3 +146,77 @@ async def test_a_request_with_no_structure_gets_no_ledger(
         m["content"] for m in llm.calls[0]["messages"] if isinstance(m.get("content"), str)
     )
     assert "REQUIREMENTS LEDGER" not in blob
+
+
+@pytest.mark.parametrize(("steps", "applies"), [(0, True), (1, True), (2, False)])
+async def test_a_one_step_plan_is_still_one_run_and_keeps_its_ledger(
+    monkeypatch: pytest.MonkeyPatch, steps: int, applies: bool
+) -> None:
+    """A workspace with routing rules makes the framer return ``steps`` — usually ONE (the
+    prompt says so). One step IS the whole request; only a real split (2+) hands each run a
+    slice, and only then is the whole ledger wrong for the first run (prod #1246, 2026-10-26)."""
+    from backend.workflow.application import _loop_context
+    from backend.workflow.application.stages.frame import FrameStep
+    from backend.workflow.infrastructure.workers.agent_worker import _ledger_applies
+
+    async def _not_client_attach(session: Any, run: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(_loop_context, "is_client_attach_run", _not_client_attach)
+    framed = _framed("agent_loop", "code")
+    framed.steps = [FrameStep(stage=f"s{i}", intent="do it") for i in range(steps)]
+    assert await _ledger_applies(None, None, framed) is applies  # type: ignore[arg-type]
+
+
+class _OneStepFrameLlm:
+    async def complete_text(self, *, system: str, user: str) -> TextCompletion:
+        return TextCompletion(
+            text=json.dumps(
+                {
+                    "framed_intent": "build a report",
+                    "skill_match": None,
+                    "artifact_type_hint": "code",
+                    "path_classification": "agent_loop",
+                    "steps": [{"stage": "impl", "intent": "build a report"}],
+                }
+            )
+        )
+
+
+async def test_a_workspace_with_stage_rules_still_records_the_ledger(
+    sf: async_sessionmaker[AsyncSession], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Through the worker: a stage vocabulary makes the framer answer one step — the run
+    must still carry its ledger (prod #1246 had none)."""
+    from backend.router.routing.run_routing.chaining import StageTerm
+    from backend.workflow.infrastructure.workers import agent_worker
+
+    async def _vocab(session: Any, request: Any) -> list[StageTerm]:
+        return [StageTerm(label="impl")]
+
+    monkeypatch.setattr(agent_worker, "_split_vocabulary_for", _vocab)
+    workspace_id = uuid.uuid4()
+    async with sf() as session, workspace_session_scope(session, workspace_id):
+        run_id = await _seed_request_and_run(session, workspace_id=workspace_id, text=_REQUEST)
+        await session.commit()
+    llm = _RecordingLlm()
+
+    def _orchestrator_factory(session: AsyncSession, run: ExecutionRun) -> RunOrchestrator:
+        return RunOrchestrator(session=session, llm=llm, sandbox_manager=NoopSandboxManager())
+
+    deps = AgentExecutionDeps(
+        skill_loader_for=lambda ws: SkillLoader(tmp_path / "skills" / str(ws)),
+        orchestrator_factory=_orchestrator_factory,
+        workspace_root=tmp_path / "runs",
+        frame_llm=_OneStepFrameLlm(),
+    )
+    assert await AgentWorker(session_factory=sf, execution=deps).drive_once() == 1
+
+    async with sf() as session, workspace_session_scope(session, workspace_id):
+        run = await session.get(ExecutionRun, run_id)
+        assert run is not None
+        assert run.payload.get("stage") == "impl"  # the one-step plan was taken
+        assert [i["text"] for i in run.payload["requirements"]] == [
+            "집계 스크립트를 만든다",
+            "결과를 표로 보여 준다",
+        ]
