@@ -788,7 +788,7 @@ class VerificationService:
         #                              a toolchain manifest this fails CLOSED.
         await self._release_connection(run)
         gate_outcome = await self._run_derived_gate(
-            run, box, written_paths, baseline, floor=declared.floor
+            run, box, written_paths, baseline, floor=declared.floor, final=declared.final
         )
         derived_gate = gate_outcome.blob if isinstance(gate_outcome, DerivedGateOk) else None
         deriver_failed = isinstance(gate_outcome, DerivedGateFailed)
@@ -1193,6 +1193,8 @@ class VerificationService:
         written_paths: list[str],
         baseline: str | None = None,
         ci_declarations: dict[str, str] | None = None,
+        *,
+        product_checks: tuple[str, ...] = (),
     ) -> DerivedGate | DerivedGateFailed:
         """Ask the independent deriver for this repo's verification commands,
         grounded in its manifests. Bounded — a hung executor CLI must never stall
@@ -1217,6 +1219,7 @@ class VerificationService:
                         # The gate is re-derived on EVERY verification, so a founder's answer
                         # that is not passed here binds only the agent (f7c5b4d1).
                         founder_decisions=founder_decisions_from_payload(run.payload),
+                        product_checks=product_checks,
                     ),
                 ),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
@@ -1255,6 +1258,7 @@ class VerificationService:
         baseline: str | None = None,
         *,
         floor: tuple[str, ...] = (),
+        final: tuple[str, ...] = (),
     ) -> DerivedGateOutcome:
         """I1′ — the repo's OWN verification gate, DERIVED by an LLM grounded in
         the repo's declarations (not a per-stack detector list nor a hardcoded
@@ -1287,6 +1291,8 @@ class VerificationService:
             await self._still_present(box, written_paths),
             baseline,
             ci_declarations,
+            # Only when declared: what the product already runs is not the deriver's to repeat.
+            **({"product_checks": (*floor, *final)} if floor or final else {}),
         )
         if isinstance(gate, DerivedGateFailed):
             return gate

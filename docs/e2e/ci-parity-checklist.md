@@ -9,27 +9,39 @@ red when its production edge is removed).
 
 ## A. Declaration
 
-- [ ] `bsvibe_products_set_metadata` with `verify_floor: "x"` (a string) is refused with a
+- [x] `bsvibe_products_set_metadata` with `verify_floor: "x"` (a string) is refused with a
       message naming the key.
-- [ ] Setting a list for `verify_floor` / `verify_final` on bsvibe-app is accepted, and
+- [x] Setting a list for `verify_floor` / `verify_final` on bsvibe-app is accepted, and
       `bsvibe_products_show` returns it unchanged (secrets still masked, not wiped).
 
 ## B. A live run on bsvibe-app
 
-- [ ] `runs_detail` for the next run's verification shows `floor` commands in
+- [x] `runs_detail` for the next run's verification shows `floor` commands in
       `derived_gate.commands` on every round.
-- [ ] The passing round shows `final` commands, and no failed round does.
+- [x] The passing round shows `final` commands, and no failed round does.
 - [ ] A round whose `final` fails goes back to the agent with the failing command in the
       feedback (not a silent pass, not a founder question).
-- [ ] No round fails on `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` (CI=true reached the
+- [x] No round fails on `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` (CI=true reached the
       command).
 
 ## C. Parked #1204 re-run
 
-- [ ] The derived pnpm commands use the CI-pinned version (`pnpm@10.33.0`), not `pnpm@10`.
+- [x] The derived pnpm commands use the CI-pinned version (`pnpm@10.33.0`), not `pnpm@10`.
 - [ ] The run passes in one round, or its failure names a real defect in the change.
+      (2026-10-27, run d8ae99bd: round 1 failed only because no `requirement_evidence` was
+      declared — all 16 checks passed; round 2 passed with floor + final. Section E closes it.)
 
 ## D. client_attach (BStockReport)
 
 - [ ] A run with no `verify_floor` / `verify_final` declared behaves as before (no extra
       commands in the in-place gate blob).
+
+## E. Before a round is spent
+
+- [ ] A run that says "done" with owed ledger items unevidenced gets ONE
+      `REQUIREMENT EVIDENCE MISSING` turn naming them, and its first verification carries the
+      evidence.
+- [ ] The derived gate no longer repeats a command the product's floor or final runs (no second
+      full pytest in the same verification).
+- [ ] A ledger item that names an identifier deep in a long diff is judged `done` or
+      `rejected`, not `unclear` from a cut-off excerpt.

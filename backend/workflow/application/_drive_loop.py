@@ -47,6 +47,7 @@ from backend.workflow.application.intake.pr_comment import (
     consume_pr_comments,
     pr_comment_messages,
 )
+from backend.workflow.application.requirements_ledger import evidence_owed_messages
 from backend.workflow.application.round_budget import (
     RoundBudgetTracker,
     finalize_round_cap_decision,
@@ -204,11 +205,9 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     no_work_nudges = 0
     fail_streak = 0
     stall = StallTracker()  # failed rounds running that moved nothing (``verify_stall``)
-    # #692 — a client_attach run works in the founder's own directory on the worker
-    # (through BSVibe's tools, backed by ``ClientWorkerSandboxSession``), so the
-    # server holds no copy of the source and settles on the in-place gate rather
-    # than on a server-side diff. Resolved once here; consumed at the "model is
-    # done" branch below.
+    evidence_reminded = False  # ledger evidence is asked for once, before a round is spent
+    # #692 — a client_attach run works in the founder's own directory (server holds no copy
+    # of the source) and settles on the in-place gate. Consumed at the "done" branch below.
     client_attach = await is_client_attach_run(orch._session, run)
     # Where the tree stood BEFORE the agent touched it — knowable only here, since
     # the agent's commits then move HEAD. Two consumers: the in-place gate, and the
@@ -443,6 +442,12 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             )
             continue
 
+        if not evidence_reminded and (
+            owed := evidence_owed_messages(run, registry.declared_contract, turn.content)
+        ):
+            evidence_reminded = True
+            messages.extend(owed)
+            continue
         # #1145 — the list is a log of write-tool calls; the tree is the truth. A deleted scratch
         # script leaves it, a file edited through the shell joins it, before anything reads it.
         # The branch point is re-read each time: a mid-drive rebase onto main moves it, and the
@@ -451,19 +456,12 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         round_baseline = run_baseline if in_place else await current_run_baseline(box, run_baseline)
         written_paths[:] = await reconcile_written_paths(box, round_baseline, written_paths)
         attempt.phase = RunAttemptPhase.VERIFYING
-        # Verify-session-release (#686) — the SAME treatment the executor turn
-        # boundary gets above, for the same reason. What follows is minutes of
-        # external work: ``_assemble_contract`` calls the LLM and ``_verify``
-        # runs the contract's commands + probes in the sandbox. A ``flush`` here
-        # would leave that write's transaction OPEN across all of it, and the
-        # per-connection ``idle_in_transaction_session_timeout`` guard (120s,
-        # #633) then kills the connection — so the run does all its work and
-        # dies on the post-verify ``record_activity`` write with
-        # PendingRollbackError, recording nothing. Committing ends the
-        # transaction and returns the connection to the pool;
-        # ``expire_on_commit=False`` keeps the loaded ORM attributes usable and
-        # later writes autobegin a fresh short transaction. ``claimed_at`` is
-        # refreshed as a heartbeat so a long verify is never reaped as stale.
+        # Verify-session-release (#686): minutes of external work follow (contract LLM, sandbox
+        # commands). A ``flush`` would hold the transaction open across it and the 120s
+        # idle-in-transaction guard (#633) kills the connection — the run then dies on its
+        # post-verify write with PendingRollbackError. Committing returns the connection;
+        # ``expire_on_commit=False`` keeps ORM state usable. ``claimed_at`` is a heartbeat so
+        # a long verify is never reaped as stale.
         run.claimed_at = datetime.now(UTC)
         await orch._session.commit()
         contract = await orch._assemble_contract(registry, written_paths, final_text)
