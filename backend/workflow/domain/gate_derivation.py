@@ -159,6 +159,9 @@ _DERIVATION_SYSTEM_PROMPT = (
     "suite directory), never only the changed test file. It does not apply to surface "
     "checks either, which are declared somewhere other than the changed files by nature.\n"
     "CI DECLARATIONS, when given, are what this repo requires of ITSELF — a check named there is one the gate should include, written the way the repo writes it; a CI lint / format step is narrowed by the SCOPE rule above, while a CI type check, build or guard step is NOT narrowed: run it the way CI runs it.\n"
+    "PRODUCT CHECKS, when given, already run on every verification (or once at its end) "
+    "beside your commands. NEVER emit one of them or an equivalent (the same tool over the "
+    "same or a wider scope) — it would run twice. Derive only what they do not cover.\n"
     "TOOL VERSIONS: use the exact version the CI configuration pins (a setup step's version "
     "input, a package-manager field in a manifest) — invoke that version explicitly, never "
     "a floating major. Commands run with `CI=true`, as in CI.\n"
@@ -218,6 +221,7 @@ def derivation_planner_messages(
     baseline: str | None = None,
     ci_declarations: dict[str, str] | None = None,
     founder_decisions: Sequence[Mapping[str, str]] | None = None,
+    product_checks: Sequence[str] = (),
 ) -> list[dict[str, str]]:
     """Build the (system, user) message pair grounding the deriver in the repo.
 
@@ -266,6 +270,12 @@ def derivation_planner_messages(
         if founder_decisions
         else ""
     )
+    product_block = (
+        "\n\nChecks the product already runs (do not emit these or an equivalent):\n"
+        + "\n".join(f"- {c}" for c in product_checks)
+        if product_checks
+        else ""
+    )
     user = (
         f"Task intent:\n{intent}\n\n"
         f"{decisions_block}"
@@ -273,6 +283,7 @@ def derivation_planner_messages(
         f"Files changed by this work step:\n{changed_block}\n\n"
         f"The repository's own declarations:\n{manifest_block}"
         f"{ci_block}"
+        f"{product_block}"
     )
     return [
         {"role": "system", "content": _DERIVATION_SYSTEM_PROMPT},

@@ -410,6 +410,65 @@ def ledger_prompt(requirements: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+_HUNK_START = re.compile(r"^@@ ", re.M)
+_BACKTICKED = re.compile(r"`([^`]{3,80})`")
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
+
+
+def relevant_hunks(diff: str, about: str, *, budget: int) -> str:
+    """``diff`` cut to ``budget`` around what ``about`` names, instead of its head.
+
+    A long diff's first hunks are rarely the ones an item is about. Hunks are ranked by the
+    identifiers ``about`` mentions (backticked ones weigh most), kept in file order, and the
+    rest are counted, never silently dropped. Nothing to match keeps the head."""
+    if len(diff) <= budget:
+        return diff
+    starts = [m.start() for m in _HUNK_START.finditer(diff)]
+    if not starts:
+        return diff[:budget] + "\n[... cut ...]"
+    header = diff[: starts[0]]
+    hunks = [diff[a:b] for a, b in zip(starts, [*starts[1:], len(diff)], strict=True)]
+    strong = {t for t in _BACKTICKED.findall(about)}
+    weak = set(_IDENTIFIER.findall(about)) - strong
+
+    def score(hunk: str) -> int:
+        return sum(5 for t in strong if t in hunk) + sum(1 for t in weak if t in hunk)
+
+    ranked = sorted(range(len(hunks)), key=lambda i: (-score(hunks[i]), i))
+    keep: set[int] = set()
+    used = len(header)
+    for i in ranked:
+        if used + len(hunks[i]) > budget:
+            continue
+        keep.add(i)
+        used += len(hunks[i])
+    omitted = len(hunks) - len(keep)
+    shown = header + "".join(hunks[i] for i in sorted(keep))
+    return shown + (f"\n[... {omitted} other hunk(s) omitted ...]" if omitted else "")
+
+
+def unevidenced(
+    requirements: Sequence[Mapping[str, Any]], evidence: Sequence[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    """Owed items the declaration has no entry for — not even a deferral."""
+    named = {str(e.get("requirement_id")) for e in evidence}
+    return [i for i in requirements if i.get("kind") in OWED_KINDS and i["id"] not in named]
+
+
+def evidence_reminder(items: Sequence[Mapping[str, Any]]) -> str:
+    """Asked once, before verifying, when the run says it is done with items unevidenced."""
+    lines = [
+        "REQUIREMENT EVIDENCE MISSING — you are about to be verified, and your "
+        "declare_verification names no evidence for these ledger items. Verification FAILS "
+        "for each one. Call declare_verification again with `requirement_evidence` for every "
+        "item below (paths you changed, tests that run it, or `status: deferred` with a note), "
+        "then finish.",
+        "",
+    ]
+    lines += [f"- {i['id']} [{i.get('kind', 'do')}] {i['text']}" for i in items]
+    return "\n".join(lines)
+
+
 _STATUS_WORDS = {
     "missing": "no evidence",
     "rejected": "evidence does not satisfy it",
@@ -452,6 +511,9 @@ def public_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "evidence_reminder",
+    "relevant_hunks",
+    "unevidenced",
     "LEDGER_RESULT_KEY",
     "OWED_KINDS",
     "REQUIREMENTS_KEY",

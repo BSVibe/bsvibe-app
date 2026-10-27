@@ -49,8 +49,14 @@ from tests.execution.test_verification_service import (
 _SEES_CI = 'test "$CI" = true'
 
 
+#: What the last stubbed deriver was handed — the product checks it was told about.
+_AUTHOR_KWARGS: dict[str, Any] = {}
+
+
 def _gate(*commands: str) -> Any:
-    async def author(*_a: Any, **_k: Any) -> DerivedGate:
+    async def author(*_a: Any, **kwargs: Any) -> DerivedGate:
+        _AUTHOR_KWARGS.clear()
+        _AUTHOR_KWARGS.update(kwargs)
         return DerivedGate(
             applicable=True,
             commands=tuple(DerivedCommand(command=c, kind="test") for c in commands),
@@ -397,3 +403,76 @@ async def test_settling_a_client_attach_run_hands_the_products_declaration_to_it
         cycle=0,
     )
     assert seen["declared"] is product_checks
+
+
+# ── the deriver is shown what the product already runs ───────────────────────
+
+
+def test_the_deriver_is_shown_the_products_own_checks() -> None:
+    """Prod #1204 re-run round 2 ran the full suite twice: the deriver copied CI's test step
+    and the product's final ran it again."""
+    from backend.workflow.domain.gate_derivation import derivation_planner_messages
+
+    system, user = derivation_planner_messages(
+        manifests={}, changed_files=[], intent="x", product_checks=("make ci",)
+    )
+    assert "PRODUCT CHECKS" in system["content"]
+    assert "make ci" in user["content"]
+    _, bare = derivation_planner_messages(manifests={}, changed_files=[], intent="x")
+    assert "already runs" not in bare["content"]
+
+
+async def test_the_server_gate_hands_floor_and_final_to_the_deriver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def author(*_a: Any, **kwargs: Any) -> DerivedGate:
+        seen.update(kwargs)
+        return DerivedGate(applicable=True, commands=())
+
+    async with memory_session() as session:
+        svc = VerificationService(session=session, llm=StubLlm([]))
+        monkeypatch.setattr(svc, "_author_derived_gate", author)
+        monkeypatch.setattr(svc, "_is_real_worktree", lambda r: True)
+        run = await _make_run(session)
+        run.product_id = uuid.uuid4()
+        await svc._run_derived_gate(
+            run, NoopSandboxSession(str(tmp_path)), [], floor=("make g",), final=("make ci",)
+        )
+    assert seen["product_checks"] == ("make g", "make ci")
+
+
+async def test_the_in_place_gate_hands_floor_and_final_to_the_deriver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.workflow.application.inplace_gate import run_inplace_gate
+    from backend.workflow.domain.declared_checks import DeclaredChecks
+    from tests.workflow.test_verify_unified_across_models import _GATE_JSON, _Box, _Llm, _Run
+    from tests.workflow.test_verify_unified_across_models import _service as _unified
+
+    svc = _unified(_Llm(_GATE_JSON))
+    seen: dict[str, Any] = {}
+    real = svc._author_derived_gate
+
+    async def author(*args: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(svc, "_author_derived_gate", author)
+    await run_inplace_gate(
+        svc,
+        run=_Run(),
+        box=_Box(manifests={"pyproject.toml": "x"}),
+        declared=DeclaredChecks(floor=("make g",), final=("make ci",)),
+    )
+    assert seen["product_checks"] == ("make g", "make ci")
+
+
+async def test_verify_tells_the_deriver_about_the_products_final(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _verify_product_run(
+        tmp_path, monkeypatch, {FLOOR_KEY: ["true"], FINAL_KEY: ["make ci"]}, derived=("false",)
+    )
+    assert _AUTHOR_KWARGS["product_checks"] == ("true", "make ci")

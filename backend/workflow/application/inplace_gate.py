@@ -370,8 +370,15 @@ async def run_inplace_gate(
     # the manifests: it is about the source under test, not the check runner.
     ci_declarations = await service._read_ci_declarations(box)
 
+    product_checks = (*declared.floor, *declared.final)
     gate = await service._author_derived_gate(
-        run, intent, manifests, changed, baseline, ci_declarations
+        run,
+        intent,
+        manifests,
+        changed,
+        baseline,
+        ci_declarations,
+        **({"product_checks": product_checks} if product_checks else {}),
     )
 
     if isinstance(gate, DerivedGateFailed):

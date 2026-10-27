@@ -33,6 +33,7 @@ from backend.workflow.domain.requirements import (
     GateFacts,
     build_ledger,
     check_ledger,
+    relevant_hunks,
 )
 
 if TYPE_CHECKING:
@@ -49,8 +50,8 @@ _JUDGE_TIMEOUT_S = 120.0
 #: How many item judges run at once.
 _JUDGE_CONCURRENCY = 3
 #: What the judge reads of the cited evidence, per path and in total.
-_PATH_EXCERPT_CHARS = 2500
-_EVIDENCE_CHARS = 6000
+_PATH_EXCERPT_CHARS = 5000
+_EVIDENCE_CHARS = 10000
 
 _JUDGE_SYSTEM = (
     "You check ONE requirement against the evidence a coding agent cited for it. Answer with "
@@ -89,6 +90,29 @@ def _passed_commands(
         if isinstance(c, Mapping) and (c.get("status") == "passed" or c.get("passed") is True):
             out.append(str(c.get("command") or ""))
     return tuple(c for c in out if c)
+
+
+def evidence_owed_messages(
+    run: ExecutionRun, declared_contract: Mapping[str, Any] | None, turn_text: str | None
+) -> list[dict[str, Any]]:
+    """The turn that asks for missing ledger evidence — ``[]`` when nothing is owed.
+
+    Asked before verifying: a declaration that names none of an owed item is a failed round
+    already, and the loop can see that without spending one."""
+    from backend.workflow.domain.requirements import (  # noqa: PLC0415
+        evidence_reminder,
+        parse_requirement_evidence,
+        unevidenced,
+    )
+
+    evidence = parse_requirement_evidence((declared_contract or {}).get("requirement_evidence"))
+    owed = unevidenced(run_requirements(run), evidence)
+    if not owed:
+        return []
+    return [
+        {"role": "assistant", "content": turn_text or "(done)"},
+        {"role": "user", "content": evidence_reminder(owed)},
+    ]
 
 
 async def gate_facts(
@@ -140,9 +164,9 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
                     )
                 except Exception:  # noqa: BLE001
                     text = "(could not read this file)"
-            clipped = text[:_PATH_EXCERPT_CHARS]
-            if len(text) > _PATH_EXCERPT_CHARS:
-                clipped += "\n[... cut ...]"
+            # Cut around what the item names — the head of a long diff is rarely it.
+            about = f"{row.get('text', '')} {row.get('note', '')}"
+            clipped = relevant_hunks(text, about, budget=_PATH_EXCERPT_CHARS)
             parts.append(f"--- {path}\n{clipped}")
         for test in row.get("tests") or []:
             parts.append(f"--- test {test}: passed at the gate")
