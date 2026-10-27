@@ -34,6 +34,7 @@ from backend.workflow.infrastructure.db import (
     ExecutionRunActivity,
     ExecutionRunHistory,
     RunStatus,
+    VerificationOutcome,
     VerificationResult,
 )
 from backend.workflow.serialization.run_views import (
@@ -303,6 +304,22 @@ def _build_timeline(
     return derived, "derived"
 
 
+#: How much of a failed verdict's account the detail carries.
+_FAILURE_CHARS = 4000
+
+
+def _verification_failure(row: VerificationResult) -> str | None:
+    """A failed verdict as the agent reads it next round; ``None`` for a pass."""
+    if row.outcome is not VerificationOutcome.FAILED:
+        return None
+    from backend.workflow.domain.verification_feedback import (  # noqa: PLC0415
+        render_verification_failure,
+    )
+
+    result = row.result if isinstance(row.result, dict) else {}
+    return render_verification_failure(result)[:_FAILURE_CHARS]
+
+
 async def build_run_detail(
     *,
     run_id: uuid.UUID,
@@ -429,6 +446,7 @@ async def build_run_detail(
                 id=verification_row.id,
                 outcome=verification_row.outcome,
                 created_at=verification_row.created_at,
+                failure=_verification_failure(verification_row),
             )
             if verification_row is not None
             else None

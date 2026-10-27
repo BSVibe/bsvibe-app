@@ -215,3 +215,14 @@ async def test_a_judge_blip_is_not_remembered_as_a_verdict() -> None:
 
     assert _rows(first)["R1"]["status"] == "unclear"
     assert _rows(second)["R1"]["status"] == "done"  # judged again, not the blip reused
+
+
+async def test_a_failed_verification_says_in_the_log_what_failed() -> None:
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        await _verify(({"requirement_id": "R1", "paths": ["backend/api/connectors.py"]},), _judge(_OK))
+
+    [event] = [e for e in logs if e["event"] == "verification_failed"]
+    assert event["ledger_missing"] == ["R2"]
+    assert "failed_checks" in event

@@ -67,7 +67,12 @@ from backend.workflow.application.tool_registry import (
 from backend.workflow.application.undeclared_verification import (
     settle_undeclared_verification,
 )
-from backend.workflow.application.verify_stall import settle_stalled_verification, stall_question
+from backend.workflow.application.verify_stall import (
+    StallTracker,
+    settle_stalled_verification,
+    stall_question,
+    tree_fingerprint,
+)
 from backend.workflow.domain import request_review as _review
 from backend.workflow.domain.emit_deliverable import (
     EMIT_DELIVERABLE_NAME,
@@ -76,7 +81,6 @@ from backend.workflow.domain.emit_deliverable import (
     handle_emit_deliverable,
 )
 from backend.workflow.domain.verification_feedback import (
-    failure_signature,
     render_verification_failure,
 )
 from backend.workflow.infrastructure.db import (
@@ -199,8 +203,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     final_text = ""
     no_work_nudges = 0
     fail_streak = 0
-    last_failure: tuple[object, ...] | None = None
-    repeats = 0
+    stall = StallTracker()  # failed rounds running that moved nothing (``verify_stall``)
     # #692 — a client_attach run works in the founder's own directory on the worker
     # (through BSVibe's tools, backed by ``ClientWorkerSandboxSession``), so the
     # server holds no copy of the source and settles on the in-place gate rather
@@ -537,7 +540,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         vresult = verdict.result if isinstance(verdict.result, dict) else {}
         failure = render_verification_failure(vresult)
         # A verdict the agent cannot move is the founder's to settle (see ``verify_stall``).
-        if (stalled := stall_question(failure, repeats=repeats)) is not None:
+        if stalled := stall_question(failure, repeats=stall.repeats, unchanged=stall.unchanged):
             return await settle_stalled_verification(
                 orch,
                 run=run,
@@ -548,9 +551,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
                 final_text=final_text,
                 stats=round_budget_stats(orch, registry, _cycle),
             )
-        signature = failure_signature(vresult)
-        repeats = repeats + 1 if signature == last_failure else 0
-        last_failure = signature
+        stall.observe(vresult, tree=await tree_fingerprint(box, round_baseline))
         hint = _review.stuck_review_hint(count=(fail_streak := fail_streak + 1), run=run)
         messages.extend(
             failed_round_messages(

@@ -846,6 +846,27 @@ class VerificationService:
 
         passed = command_gate_pass and judge_pass and demo_pass and ledger_pass
         outcome = VerificationOutcome.PASSED if passed else VerificationOutcome.FAILED
+        if not passed:
+            # The cause, where an operator looks first — a verdict that read only "failed"
+            # left 8 rounds of #1204 with no visible reason.
+            logger.info(
+                "verification_failed",
+                run_id=str(run.id),
+                failed_checks=[
+                    {"command": str(c.get("command") or "")[:200], "exit_code": c.get("exit_code")}
+                    for c in [
+                        *((derived_gate or {}).get("commands") or []),
+                        *command_results,
+                    ]
+                    if isinstance(c, dict)
+                    and (c.get("status") == "failed" or c.get("passed") is False)
+                ],
+                judge_failed=not judge_pass,
+                demonstration_failed=not demo_pass,
+                ledger_missing=[
+                    r["id"] for r in ledger or [] if r.get("status") in {"missing", "rejected"}
+                ],
+            )
 
         vr = VerificationResult(
             id=uuid.uuid4(),
