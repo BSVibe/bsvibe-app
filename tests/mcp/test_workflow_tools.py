@@ -588,6 +588,55 @@ async def test_runs_detail_returns_the_same_derivation_the_browser_gets(
     assert detail["deliverable_id"] is None
 
 
+async def test_runs_detail_says_why_the_last_verification_failed(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    """A failed verdict used to read as ``{outcome: failed}`` and nothing else — the founder (and
+    any reviewer) could not see which check broke or how (prod #1204: 8 rounds, no visible
+    cause). The detail now carries the same failure text the agent is handed next round."""
+    from backend.workflow.infrastructure.db import VerificationOutcome, VerificationResult
+
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.RUNNING)
+    async with scoped_session(db, workspace_id) as s:
+        s.add(
+            VerificationResult(
+                run_id=run_id,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.FAILED,
+                contract={},
+                result={
+                    "gate_expected": True,
+                    "derived_gate": {
+                        "origin": "derived",
+                        "applicable": True,
+                        "passed": False,
+                        "commands": [
+                            {
+                                "command": "npx --yes pnpm@10 install",
+                                "kind": "quality",
+                                "status": "failed",
+                                "exit_code": 1,
+                                "output": "ERR_PNPM_IGNORED_BUILDS: esbuild",
+                            }
+                        ],
+                    },
+                },
+            )
+        )
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        detail = await registry.call_tool("bsvibe_runs_detail", {"run_id": str(run_id)}, ctx)
+
+    failure = detail["verification"]["failure"]
+    assert "npx --yes pnpm@10 install" in failure
+    assert "ERR_PNPM_IGNORED_BUILDS" in failure
+
+
 async def test_runs_detail_other_workspace_is_not_found(
     db, workspace_id, user_id, registry, seeded
 ) -> None:

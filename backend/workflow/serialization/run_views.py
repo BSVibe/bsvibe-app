@@ -94,6 +94,9 @@ class RunVerification(BaseModel):
     id: uuid.UUID
     outcome: VerificationOutcome
     created_at: datetime
+    # A failed verdict's own account — the same text the agent is handed for the next round
+    # (which checks failed, their exit codes and output tails). ``None`` when it passed.
+    failure: str | None = None
 
 
 class RunActivity(BaseModel):
