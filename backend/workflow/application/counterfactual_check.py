@@ -38,6 +38,9 @@ logger = structlog.get_logger(__name__)
 Complete = Callable[[list[dict[str, str]]], Awaitable[str]]
 
 _GIT_TIMEOUT_S = 30.0
+#: A change touching more non-test files than this is not taken away — the paths go on one
+#: command line, and a change that large is not one a single guard test speaks to anyway.
+_MAX_PATHS = 200
 _NOTES = {
     "holds": "fails without the change",
     "vacuous": "passes without the change — this test does not guard what the change added",
@@ -134,6 +137,15 @@ async def _without_change(
             logger.error("counterfactual_restore_incomplete", paths=changed, left=left[:500])
 
 
+async def _committed_changes(box: SandboxSession, baseline: str) -> list[str] | None:
+    """Non-test paths the run's COMMITS changed — what ``HEAD`` can put back. Never the
+    working tree's untracked files: a tool's leftovers are not the change (prod #1259)."""
+    code, out = await _git(box, f"diff --name-only {shlex.quote(baseline)} HEAD")
+    if code != 0:
+        return None
+    return sorted(p for p in out.split() if p and not is_test_path(p))
+
+
 async def check_guards(
     rows: list[dict[str, Any]],
     *,
@@ -144,15 +156,40 @@ async def check_guards(
     venv_bin: str | None,
     prior_rows: Sequence[Mapping[str, Any]] = (),
 ) -> None:
-    """Annotate each checkable guard row with ``counterfactual``. Never changes a status."""
+    """Annotate each checkable guard row with ``counterfactual``. Never changes a status, and
+    never raises: report-only work that ends a run would cost more than it reports (#1259)."""
     candidates = [r for r in rows if any(r is c for c in guard_candidates(rows))]
+    try:
+        await _check(candidates, box, baseline, facts, complete, venv_bin, prior_rows)
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        logger.warning("counterfactual_failed", error_type=type(exc).__name__, exc_info=True)
+        for row in candidates:
+            if not row.get(COUNTERFACTUAL_KEY):
+                _mark(row, UNKNOWN, "the check could not run")
+
+
+async def _check(
+    candidates: list[dict[str, Any]],
+    box: SandboxSession,
+    baseline: str,
+    facts: GateFacts,
+    complete: Complete,
+    venv_bin: str | None,
+    prior_rows: Sequence[Mapping[str, Any]],
+) -> None:
     todo = _reuse_prior(candidates, prior_rows)
     if not todo:
         return
-    changed = sorted(p for p in facts.diff_paths if not p.endswith("/") and not is_test_path(p))
-    if not changed:
+    changed = await _committed_changes(box, baseline)
+    if not changed or len(changed) > _MAX_PATHS:
+        reason = (
+            "the run changed only tests — nothing to take away"
+            if changed == []
+            else "the change could not be listed, or is too large to take away"
+        )
+        logger.info("counterfactual_skipped", paths=None if changed is None else len(changed))
         for row in todo:
-            _mark(row, UNKNOWN, "the run changed only tests — nothing to take away")
+            _mark(row, UNKNOWN, reason)
         return
     commands = await _commands_for(todo, facts, complete)
     if not commands:
