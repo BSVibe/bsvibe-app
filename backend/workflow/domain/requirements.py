@@ -528,15 +528,29 @@ def render_ledger_table(rows: Sequence[Mapping[str, Any]]) -> str:
     out = ["| | Item | Status | Evidence |", "|---|---|---|---|"]
     for row in rows:
         evidence = ", ".join([*row.get("paths", []), *row.get("tests", [])]) or row.get("note", "")
-        out.append(
-            f"| {row['id']} | {_cell(row['text'])} | {row.get('status')} | {_cell(evidence)} |"
-        )
+        status = str(row.get("status"))
+        if row.get("counterfactual") == "vacuous":
+            # Report-only: the test that was cited still passes with the change taken away.
+            status += f" ⚠ {row.get('counterfactual_note') or 'passes without the change'}"
+        out.append(f"| {row['id']} | {_cell(row['text'])} | {_cell(status)} | {_cell(evidence)} |")
     return "\n".join(out)
 
 
 def public_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Rows as stored on the verification result (no excerpts)."""
-    keep = ("id", "text", "kind", "source", "status", "paths", "tests", "note", "excerpt_hash")
+    keep = (
+        "id",
+        "text",
+        "kind",
+        "source",
+        "status",
+        "paths",
+        "tests",
+        "note",
+        "excerpt_hash",
+        "counterfactual",
+        "counterfactual_note",
+    )
     return [{k: r[k] for k in keep if k in r} for r in rows]
 
 

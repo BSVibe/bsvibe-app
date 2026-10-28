@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
+from backend.workflow.application.counterfactual_check import check_guards
 from backend.workflow.application.gate_commands import (
     any_failed,
     product_declared_checks,
@@ -995,7 +996,7 @@ class VerificationService:
             command_results=command_results,
             derived_gate=derived_gate,
         )
-        return await judge_ledger(
+        rows = await judge_ledger(
             requirements,
             contract.requirement_evidence,
             facts,
@@ -1004,6 +1005,19 @@ class VerificationService:
             prior_rows=prior,
             judge=judge,
         )
+        if judge and baseline:
+            # R4, report-only: does each cited guard test fail with the change taken away?
+            venv_ready = await self._ensure_project_venv(box)
+            await check_guards(
+                rows,
+                box=box,
+                baseline=baseline,
+                facts=facts,
+                complete=complete,
+                venv_bin=f"{box.workspace_mount}/.venv/bin" if venv_ready else None,
+                prior_rows=prior,
+            )
+        return rows
 
     @staticmethod
     def _is_real_worktree(run: ExecutionRun) -> bool:
