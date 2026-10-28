@@ -379,8 +379,10 @@ def ledger_closes(rows: Sequence[Mapping[str, Any]]) -> bool:
 def ledger_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     return {
         "requirements_total": len(rows),
-        "requirements_done": sum(1 for r in rows if r.get("status") in {"done", "unclear"}),
+        "requirements_done": sum(1 for r in rows if r.get("status") == "done"),
         "requirements_deferred": sum(1 for r in rows if r.get("status") == "deferred"),
+        # Shown apart: an unclear item passes the gate but keeps the issue open (``Refs``).
+        "requirements_unclear": sum(1 for r in rows if r.get("status") == "unclear"),
     }
 
 
@@ -415,12 +417,35 @@ _BACKTICKED = re.compile(r"`([^`]{3,80})`")
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
 
 
+def _window(hunk: str, strong: set[str], weak: set[str], budget: int) -> str:
+    """The part of one oversized hunk around the first line naming what the item is about."""
+    lines = hunk.splitlines(keepends=True)
+    head, body = lines[0], lines[1:]
+    at = next((i for i, ln in enumerate(body) if any(t in ln for t in strong)), None)
+    if at is None:
+        at = next((i for i, ln in enumerate(body) if any(t in ln for t in weak)), 0)
+    start = max(at - 3, 0)
+    out, used = [head], len(head)
+    if start:
+        out.append(f"[... {start} line(s) above ...]\n")
+    for ln in body[start:]:
+        if used + len(ln) > budget:
+            out.append("[... rest of hunk cut ...]\n")
+            break
+        out.append(ln)
+        used += len(ln)
+    return "".join(out)
+
+
 def relevant_hunks(diff: str, about: str, *, budget: int) -> str:
     """``diff`` cut to ``budget`` around what ``about`` names, instead of its head.
 
     A long diff's first hunks are rarely the ones an item is about. Hunks are ranked by the
-    identifiers ``about`` mentions (backticked ones weigh most), kept in file order, and the
-    rest are counted, never silently dropped. Nothing to match keeps the head."""
+    identifiers ``about`` mentions (backticked ones weigh most, and ``file::test`` counts its
+    test name), kept in file order, and the rest are counted, never silently dropped. A hunk
+    too large for what is left is shown as a window around its first matching line — one
+    5,900-char hunk used to leave the judge with nothing (prod #1255). Nothing to match keeps
+    the head."""
     if len(diff) <= budget:
         return diff
     starts = [m.start() for m in _HUNK_START.finditer(diff)]
@@ -428,22 +453,27 @@ def relevant_hunks(diff: str, about: str, *, budget: int) -> str:
         return diff[:budget] + "\n[... cut ...]"
     header = diff[: starts[0]]
     hunks = [diff[a:b] for a, b in zip(starts, [*starts[1:], len(diff)], strict=True)]
-    strong = {t for t in _BACKTICKED.findall(about)}
+    strong = set(_BACKTICKED.findall(about))
+    strong |= {t.rsplit("::", 1)[1] for t in strong if "::" in t}
     weak = set(_IDENTIFIER.findall(about)) - strong
 
     def score(hunk: str) -> int:
         return sum(5 for t in strong if t in hunk) + sum(1 for t in weak if t in hunk)
 
     ranked = sorted(range(len(hunks)), key=lambda i: (-score(hunks[i]), i))
-    keep: set[int] = set()
+    shown_hunks: dict[int, str] = {}
     used = len(header)
+    windowed = False
     for i in ranked:
-        if used + len(hunks[i]) > budget:
-            continue
-        keep.add(i)
-        used += len(hunks[i])
-    omitted = len(hunks) - len(keep)
-    shown = header + "".join(hunks[i] for i in sorted(keep))
+        if used + len(hunks[i]) <= budget:
+            shown_hunks[i] = hunks[i]
+            used += len(hunks[i])
+        elif not windowed and budget - used >= 300 and (score(hunks[i]) or not shown_hunks):
+            shown_hunks[i] = _window(hunks[i], strong, weak, budget - used)
+            used += len(shown_hunks[i])
+            windowed = True
+    omitted = len(hunks) - len(shown_hunks)
+    shown = header + "".join(shown_hunks[i] for i in sorted(shown_hunks))
     return shown + (f"\n[... {omitted} other hunk(s) omitted ...]" if omitted else "")
 
 

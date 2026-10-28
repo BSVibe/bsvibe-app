@@ -165,7 +165,8 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
                 except Exception:  # noqa: BLE001
                     text = "(could not read this file)"
             # Cut around what the item names — the head of a long diff is rarely it.
-            about = f"{row.get('text', '')} {row.get('note', '')}"
+            cited = " ".join(f"`{t}`" for t in row.get("tests") or [])
+            about = f"{row.get('text', '')} {row.get('note', '')} {cited}"
             clipped = relevant_hunks(text, about, budget=_PATH_EXCERPT_CHARS)
             parts.append(f"--- {path}\n{clipped}")
         for test in row.get("tests") or []:

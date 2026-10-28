@@ -199,8 +199,9 @@ def test_only_done_items_pass_and_unclear_passes_but_is_counted() -> None:
         [_row("done"), _row("deferred"), _row("unclear"), _row("noted", "constraint")]
     ) == {
         "requirements_total": 4,
-        "requirements_done": 2,
+        "requirements_done": 1,
         "requirements_deferred": 1,
+        "requirements_unclear": 1,
     }
 
 
@@ -259,3 +260,16 @@ def test_a_file_in_a_new_untracked_directory_counts() -> None:
         [{"requirement_id": "R1", "paths": ["backend/new_pkg/mod.py"]}]
     )
     assert check_ledger(ledger, evidence, facts)[0]["status"] == "pending"
+
+
+def test_an_unclear_item_is_counted_as_unclear_not_done() -> None:
+    """#1255's PR said Refs (3 items unclear) while its report said 8 of 8 done."""
+    from backend.workflow.domain.requirements import ledger_counts
+
+    rows = [{"status": "done"}, {"status": "unclear"}, {"status": "deferred"}]
+    assert ledger_counts(rows) == {
+        "requirements_total": 3,
+        "requirements_done": 1,
+        "requirements_deferred": 1,
+        "requirements_unclear": 1,
+    }
