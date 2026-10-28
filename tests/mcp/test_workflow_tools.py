@@ -637,6 +637,139 @@ async def test_runs_detail_says_why_the_last_verification_failed(
     assert "ERR_PNPM_IGNORED_BUILDS" in failure
 
 
+async def _detail_via_builder(db, workspace_id, run_id):
+    from backend.workflow.application.run_detail import build_run_detail  # noqa: PLC0415
+    from backend.workflow.infrastructure.repositories import (  # noqa: PLC0415
+        SqlAlchemyDecisionRepository,
+        SqlAlchemyDeliverableRepository,
+        SqlAlchemyRunRepository,
+    )
+
+    async with db() as s:
+        return await build_run_detail(
+            run_id=run_id,
+            workspace_id=workspace_id,
+            session=s,
+            runs=SqlAlchemyRunRepository(s),
+            decisions=SqlAlchemyDecisionRepository(s),
+            deliverables=SqlAlchemyDeliverableRepository(s),
+        )
+
+
+async def _seed_verification(db, workspace_id, run_id, outcome, result) -> None:
+    from backend.workflow.infrastructure.db import VerificationResult  # noqa: PLC0415
+
+    async with scoped_session(db, workspace_id) as s:
+        s.add(
+            VerificationResult(
+                run_id=run_id,
+                workspace_id=workspace_id,
+                outcome=outcome,
+                contract={},
+                result=result,
+            )
+        )
+        await s.commit()
+
+
+async def test_runs_detail_lists_floor_and_final_checks(db, workspace_id, seeded) -> None:
+    from backend.workflow.infrastructure.db import VerificationOutcome  # noqa: PLC0415
+
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    await _seed_verification(
+        db,
+        workspace_id,
+        run_id,
+        VerificationOutcome.PASSED,
+        {
+            "derived_gate": {
+                "passed": True,
+                "commands": [
+                    {"command": "pytest", "kind": "test", "status": "passed", "exit_code": 0},
+                    {"command": "make floor", "kind": "floor", "status": "passed", "exit_code": 0},
+                    {"command": "make final", "kind": "final", "status": "unavailable"},
+                ],
+            },
+            "requirements": [
+                {"id": "R1", "status": "done"},
+                {"id": "R2", "status": "deferred"},
+                {"id": "R3", "status": "done"},
+            ],
+        },
+    )
+
+    detail = await _detail_via_builder(db, workspace_id, run_id)
+
+    v = detail.verification
+    assert v is not None
+    by_kind = {c.kind: c for c in v.checks}
+    assert by_kind["floor"].status == "passed"
+    assert by_kind["floor"].exit_code == 0
+    assert by_kind["final"].status == "unavailable"
+    assert by_kind["final"].exit_code is None
+    assert (v.requirements_total, v.requirements_done, v.requirements_deferred) == (3, 2, 1)
+
+
+async def test_runs_detail_checks_carry_no_output_and_truncate_commands(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    from backend.workflow.infrastructure.db import VerificationOutcome  # noqa: PLC0415
+
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    await _seed_verification(
+        db,
+        workspace_id,
+        run_id,
+        VerificationOutcome.PASSED,
+        {
+            "derived_gate": {
+                "passed": True,
+                "commands": [
+                    {
+                        "command": "echo " + "x" * 500,
+                        "kind": "quality",
+                        "status": "passed",
+                        "exit_code": 0,
+                        "output": "SECRET_TOKEN=hunter2",
+                    }
+                ],
+            }
+        },
+    )
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+            session=s,
+        )
+        detail = await registry.call_tool("bsvibe_runs_detail", {"run_id": str(run_id)}, ctx)
+
+    (check,) = detail["verification"]["checks"]
+    assert "output" not in check
+    assert len(check["command"]) == 200
+    assert "hunter2" not in str(detail)
+
+
+async def test_runs_detail_tolerates_legacy_and_missing_verification(
+    db, workspace_id, seeded
+) -> None:
+    from backend.workflow.infrastructure.db import VerificationOutcome  # noqa: PLC0415
+
+    bare = await _seed_run(db, workspace_id, status=RunStatus.RUNNING)
+    detail = await _detail_via_builder(db, workspace_id, bare)
+    assert detail is not None
+    assert detail.verification is None
+
+    legacy = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    await _seed_verification(
+        db, workspace_id, legacy, VerificationOutcome.PASSED, {"command_results": []}
+    )
+    detail = await _detail_via_builder(db, workspace_id, legacy)
+    assert detail is not None and detail.verification is not None
+    assert detail.verification.checks == []
+    assert detail.verification.requirements_total is None
+
+
 async def test_runs_detail_other_workspace_is_not_found(
     db, workspace_id, user_id, registry, seeded
 ) -> None:

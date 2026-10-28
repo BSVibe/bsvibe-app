@@ -44,6 +44,7 @@ from backend.workflow.serialization.run_views import (
     RunPartialDeliverable,
     RunTriggerContext,
     RunVerification,
+    RunVerificationCheck,
 )
 
 
@@ -320,6 +321,62 @@ def _verification_failure(row: VerificationResult) -> str | None:
     return render_verification_failure(result)[:_FAILURE_CHARS]
 
 
+#: A check's command is shown truncated — it is a label, not the whole script.
+_CHECK_COMMAND_CHARS = 200
+_CHECK_KINDS = frozenset({"quality", "test", "surface", "floor", "final", "declared"})
+_CHECK_STATUSES = frozenset({"passed", "failed", "unavailable"})
+
+
+def _verification_checks(result: dict[str, Any]) -> list[RunVerificationCheck]:
+    """The gate's recorded commands, without their output. Tolerant of old rows."""
+    gate = result.get("derived_gate")
+    commands = gate.get("commands") if isinstance(gate, dict) else None
+    if not isinstance(commands, list):
+        return []
+    checks: list[RunVerificationCheck] = []
+    for c in commands:
+        if not isinstance(c, dict):
+            continue
+        command = str(c.get("command") or c.get("cmd") or "").strip()
+        if not command:
+            continue
+        status = c.get("status")
+        if status not in _CHECK_STATUSES:
+            status = "passed" if c.get("passed") is True else "failed"
+        kind = c.get("kind")
+        exit_code = c.get("exit_code")
+        checks.append(
+            RunVerificationCheck(
+                command=command[:_CHECK_COMMAND_CHARS],
+                kind=kind if kind in _CHECK_KINDS else "declared",
+                status=status,
+                exit_code=exit_code if isinstance(exit_code, int) else None,
+            )
+        )
+    return checks
+
+
+def _run_verification(row: VerificationResult) -> RunVerification:
+    result = row.result if isinstance(row.result, dict) else {}
+    ledger = result.get("requirements")
+    rows = [r for r in ledger if isinstance(r, dict)] if isinstance(ledger, list) else []
+    tally: dict[str, int] = {}
+    if rows:
+        tally = {
+            "requirements_total": len(rows),
+            "requirements_done": sum(1 for r in rows if r.get("status") == "done"),
+            "requirements_deferred": sum(1 for r in rows if r.get("status") == "deferred"),
+        }
+    return RunVerification(
+        id=row.id,
+        outcome=row.outcome,
+        created_at=row.created_at,
+        failure=_verification_failure(row),
+        checks=_verification_checks(result),
+        **tally,
+    )
+
+
 async def build_run_detail(
     *,
     run_id: uuid.UUID,
@@ -442,14 +499,7 @@ async def build_run_detail(
             for d in decision_rows
         ],
         verification=(
-            RunVerification(
-                id=verification_row.id,
-                outcome=verification_row.outcome,
-                created_at=verification_row.created_at,
-                failure=_verification_failure(verification_row),
-            )
-            if verification_row is not None
-            else None
+            _run_verification(verification_row) if verification_row is not None else None
         ),
         deliverable_id=deliverable_id,
         partial_deliverables=partial_deliverables,

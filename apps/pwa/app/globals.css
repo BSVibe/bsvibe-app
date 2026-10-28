@@ -8431,6 +8431,30 @@ main.login {
   color: var(--amber-ink);
 }
 
+.run-verification__group-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 0.6rem 0 0.2rem;
+}
+
+.run-verification__checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.run-verification__check--failed {
+  color: var(--amber-ink);
+}
+
+.run-verification__requirements {
+  font-size: 0.85rem;
+  margin: 0.6rem 0 0;
+}
+
 .run-deliverable__link {
   font-size: 0.9rem;
   color: var(--ink);

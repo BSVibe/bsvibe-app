@@ -91,6 +91,39 @@ describe("Run-detail surface (Triggered)", () => {
     vi.restoreAllMocks();
   });
 
+  it("lists failed checks first and groups product checks", async () => {
+    const detail: RunDetailModel = {
+      ...REVIEW_READY,
+      verification: {
+        id: "v2",
+        outcome: "failed",
+        created_at: NOW,
+        checks: [
+          { command: "make floor", kind: "floor", status: "passed", exit_code: 0 },
+          { command: "pytest", kind: "test", status: "passed", exit_code: 0 },
+          { command: "make final", kind: "final", status: "unavailable", exit_code: null },
+          { command: "ruff check", kind: "quality", status: "failed", exit_code: 1 },
+        ],
+        requirements_total: 3,
+        requirements_done: 2,
+        requirements_deferred: 1,
+      },
+    };
+    global.fetch = vi.fn(async () => json(detail)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const region = await screen.findByRole("region", { name: /verification|checked/i });
+    const groups = Array.from(region.querySelectorAll("[data-group]"));
+    expect(groups.map((g) => g.getAttribute("data-group"))).toEqual(["failed", "product", "other"]);
+    expect(within(groups[0] as HTMLElement).getByText("ruff check")).toBeInTheDocument();
+    const product = within(groups[1] as HTMLElement);
+    expect(product.getByText("make floor")).toBeInTheDocument();
+    expect(product.getByText("make final")).toBeInTheDocument();
+    expect(within(groups[2] as HTMLElement).getByText("pytest")).toBeInTheDocument();
+    expect(within(region).getByText(/2 of 3 done, 1 deferred/)).toBeInTheDocument();
+  });
+
   it("renders the trigger context, status, decision, verification, and report link", async () => {
     global.fetch = vi.fn(async () => json(TRIGGERED)) as unknown as typeof fetch;
 
