@@ -68,3 +68,64 @@ async def test_the_judges_excerpt_is_cut_around_the_item() -> None:
         }
     )
     assert "_register_telegram_ingress" in shown
+
+
+# ── one hunk larger than the whole budget ────────────────────────────────────
+#
+# Prod #1255 (run cf897406, 2026-10-28): three guard items cited tests in
+# ``tests/mcp/test_workflow_tools.py``, whose diff was ONE 5,900-char hunk. Whole hunks only
+# were kept, nothing fit, and the judge was shown no test body — all three came back unclear.
+
+_ONE_BIG = _HEADER + (
+    "@@ -630,6 +630,140 @@\n"
+    # An early line that matches the item's words weakly (file and module names), far above
+    # the test: only the cited test NAME can steer the window down to the body.
+    + "+# helpers shared by tests/mcp/test_workflow_tools.py and test_runs_detail_other\n"
+    + "".join(f"+    filler_{i} = {i}\n" for i in range(300))
+    + "+async def test_runs_detail_lists_floor_and_final_checks(db) -> None:\n"
+    + "+    assert by_kind['floor'].status == 'passed'\n"
+    + "".join(f"+    tail_{i} = {i}\n" for i in range(300))
+)
+
+
+def test_an_oversized_hunk_is_cut_around_what_the_item_names() -> None:
+    shown = relevant_hunks(
+        _ONE_BIG,
+        "`tests/mcp/test_workflow_tools.py::test_runs_detail_lists_floor_and_final_checks`",
+        budget=1500,
+    )
+    assert len(shown) <= 1500 + 200
+    assert "async def test_runs_detail_lists_floor_and_final_checks" in shown
+    assert "by_kind['floor']" in shown
+
+
+def test_an_oversized_hunk_with_no_match_keeps_its_head() -> None:
+    shown = relevant_hunks(_ONE_BIG, "nothing here matches", budget=1500)
+    assert "filler_0" in shown
+    assert len(shown) <= 1500 + 200
+
+
+async def test_the_cited_test_name_steers_the_excerpt() -> None:
+    class _Big(_Box):
+        async def exec(self, command: str, **_k: Any) -> SandboxResult:
+            return SandboxResult(exit_code=0, stdout=_ONE_BIG, stderr="", timed_out=False)
+
+    excerpt = diff_excerpt(_Big(), "abc123")  # type: ignore[arg-type]
+    shown = await excerpt(
+        {
+            "id": "R5",
+            "text": "통과한 검증의 런 상세 테스트",
+            "paths": ["tests/mcp/test_workflow_tools.py"],
+            "tests": [
+                "tests/mcp/test_workflow_tools.py::test_runs_detail_lists_floor_and_final_checks"
+            ],
+            "note": "",
+        }
+    )
+    assert "by_kind['floor']" in shown
+
+
+def test_the_big_fixture_really_exceeds_the_judges_budget() -> None:
+    from backend.workflow.application.requirements_ledger import _PATH_EXCERPT_CHARS
+
+    assert len(_ONE_BIG) > _PATH_EXCERPT_CHARS * 2
