@@ -1093,6 +1093,22 @@
       "inconclusive": "검증이 불확실해요"
     },
     "noVerification": "아직 이 실행에 대한 검증 기록이 없어요.",
+    "checks": {
+      "failedGroup": "실패한 검사",
+      "productGroup": "제품 검사",
+      "otherGroup": "그 밖의 검사",
+      "status": {
+        "passed": "통과",
+        "failed": "실패",
+        "unavailable": "실행하지 못함"
+      },
+      "kind": {
+        "floor": "바닥 검사",
+        "final": "최종 검사"
+      },
+      "exitCode": "종료 코드 {code}",
+      "requirements": "요구사항 {total}개 중 {done}개 완료, {deferred}개 보류"
+    },
     "deliverable": "전달됨",
     "viewReport": "전달 리포트 보기",
     "timeline": "진행한 일",

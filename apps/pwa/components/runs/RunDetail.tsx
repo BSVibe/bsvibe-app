@@ -498,17 +498,75 @@ function DecisionBlock({
   );
 }
 
+const PRODUCT_CHECK_KINDS = new Set(["floor", "final"]);
+
+/** The checks the verification ran: failed ones first, then the product checks
+ *  (floor / final) grouped together, then the rest. */
+function VerificationChecks({ verification }: { verification: RunVerification }) {
+  const t = useTranslations("run");
+  const checks = verification.checks ?? [];
+  const failed = checks.filter((c) => c.status === "failed");
+  const rest = checks.filter((c) => c.status !== "failed");
+  const product = rest.filter((c) => PRODUCT_CHECK_KINDS.has(c.kind));
+  const other = rest.filter((c) => !PRODUCT_CHECK_KINDS.has(c.kind));
+  const groups = [
+    { key: "failed", label: t("checks.failedGroup"), items: failed },
+    { key: "product", label: t("checks.productGroup"), items: product },
+    { key: "other", label: t("checks.otherGroup"), items: other },
+  ].filter((g) => g.items.length > 0);
+  const total = verification.requirements_total;
+
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.key} className="run-verification__group" data-group={g.key}>
+          <h3 className="run-verification__group-label">{g.label}</h3>
+          <ul className="run-verification__checks">
+            {g.items.map((c, i) => (
+              <li
+                key={`${c.kind}-${i}-${c.command}`}
+                className={`run-verification__check run-verification__check--${c.status}`}
+              >
+                <code>{c.command}</code>{" "}
+                <span>
+                  {PRODUCT_CHECK_KINDS.has(c.kind) ? `${t(`checks.kind.${c.kind}`)} · ` : ""}
+                  {t(`checks.status.${c.status}`)}
+                  {c.exit_code !== null && c.exit_code !== undefined
+                    ? ` (${t("checks.exitCode", { code: c.exit_code })})`
+                    : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {total ? (
+        <p className="run-verification__requirements">
+          {t("checks.requirements", {
+            total,
+            done: verification.requirements_done ?? 0,
+            deferred: verification.requirements_deferred ?? 0,
+          })}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 function VerificationBlock({ verification }: { verification: RunVerification | null }) {
   const t = useTranslations("run");
   return (
     <section className="run-verification" aria-label={t("verification")}>
       <h2 className="section-label">{t("verification")}</h2>
       {verification ? (
-        <span
-          className={`run-verification__verdict run-verification__verdict--${verification.outcome}`}
-        >
-          {t(`verdictLabel.${verification.outcome}`)}
-        </span>
+        <>
+          <span
+            className={`run-verification__verdict run-verification__verdict--${verification.outcome}`}
+          >
+            {t(`verdictLabel.${verification.outcome}`)}
+          </span>
+          <VerificationChecks verification={verification} />
+        </>
       ) : (
         <p className="run-verification__empty">{t("noVerification")}</p>
       )}

@@ -86,6 +86,17 @@ class RunDecision(BaseModel):
     created_at: datetime
 
 
+class RunVerificationCheck(BaseModel):
+    """One check the verification ran — what was run and how it ended, never its output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    command: str
+    kind: str
+    status: str
+    exit_code: int | None = None
+
+
 class RunVerification(BaseModel):
     """The latest VerificationResult outcome for the run, if any."""
 
@@ -97,6 +108,13 @@ class RunVerification(BaseModel):
     # A failed verdict's own account — the same text the agent is handed for the next round
     # (which checks failed, their exit codes and output tails). ``None`` when it passed.
     failure: str | None = None
+    # The checks the gate ran (``derived_gate.commands``): command · kind · status · exit code.
+    # Empty for a verification recorded without a derived gate.
+    checks: list[RunVerificationCheck] = []
+    # Requirements-ledger tally; omitted (``None``) for a run that has no ledger.
+    requirements_total: int | None = None
+    requirements_done: int | None = None
+    requirements_deferred: int | None = None
 
 
 class RunActivity(BaseModel):
@@ -214,4 +232,5 @@ __all__ = [
     "RunRetryResponse",
     "RunTriggerContext",
     "RunVerification",
+    "RunVerificationCheck",
 ]

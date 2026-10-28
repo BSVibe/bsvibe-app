@@ -259,6 +259,24 @@ export interface RunVerification {
   id: string;
   outcome: VerificationOutcome;
   created_at: string;
+  failure?: string | null;
+  /** The checks the gate ran — never their output. Absent on older servers. */
+  checks?: RunVerificationCheck[];
+  /** Requirements-ledger tally; null/absent when the run has no ledger. */
+  requirements_total?: number | null;
+  requirements_done?: number | null;
+  requirements_deferred?: number | null;
+}
+
+export type RunCheckKind = "quality" | "test" | "surface" | "floor" | "final" | "declared";
+export type RunCheckStatus = "passed" | "failed" | "unavailable";
+
+/** One check a verification ran (backend RunVerificationCheck). */
+export interface RunVerificationCheck {
+  command: string;
+  kind: RunCheckKind;
+  status: RunCheckStatus;
+  exit_code: number | null;
 }
 
 /** One meaningful event on the run's timeline — the STORY of what the agent did
