@@ -27,7 +27,10 @@ from typing import Any
 
 FLOOR_KEY = "verify_floor"
 FINAL_KEY = "verify_final"
-_KEYS = (FLOOR_KEY, FINAL_KEY)
+#: Fast checks run when the agent says it is done, BEFORE a verification round is spent: a
+#: failure goes back as a turn (prod #1259 spent a 16-minute round on a one-line type error).
+PRECHECK_KEY = "verify_precheck"
+_KEYS = (FLOOR_KEY, FINAL_KEY, PRECHECK_KEY)
 
 #: CI's own marker. In the command string, not the exec ``env``: some boxes run the command
 #: one shell removed (a disposable environment wraps it in ``docker exec``), where an outer
@@ -39,6 +42,7 @@ CI_PREFIX = "export CI=true; "
 class DeclaredChecks:
     floor: tuple[str, ...] = ()
     final: tuple[str, ...] = ()
+    precheck: tuple[str, ...] = ()
 
 
 def _commands(raw: Any) -> tuple[str, ...]:
@@ -51,7 +55,9 @@ def read_declared_checks(metadata: Mapping[str, Any] | None) -> DeclaredChecks:
     """The product's declared checks. Lenient: the write seam already refused bad shapes."""
     meta = metadata or {}
     return DeclaredChecks(
-        floor=_commands(meta.get(FLOOR_KEY)), final=_commands(meta.get(FINAL_KEY))
+        floor=_commands(meta.get(FLOOR_KEY)),
+        final=_commands(meta.get(FINAL_KEY)),
+        precheck=_commands(meta.get(PRECHECK_KEY)),
     )
 
 
@@ -82,6 +88,7 @@ __all__ = [
     "DeclaredChecks",
     "FINAL_KEY",
     "FLOOR_KEY",
+    "PRECHECK_KEY",
     "gate_command",
     "read_declared_checks",
     "validate_declared_checks",
