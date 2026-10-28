@@ -45,3 +45,9 @@ red when its production edge is removed).
       full pytest in the same verification).
 - [ ] A ledger item that names an identifier deep in a long diff is judged `done` or
       `rejected`, not `unclear` from a cut-off excerpt.
+
+## F. Quick checks before a round (`verify_precheck`)
+
+- [ ] With bsvibe-app's `verify_precheck` set, a run whose change breaks mypy gets a
+      `QUICK CHECKS FAILED` turn naming the error, and its first verification passes the final `mypy`.
+- [ ] A run whose quick checks pass sees no such turn (no added round, ~1.5 min added once).

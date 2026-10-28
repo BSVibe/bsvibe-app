@@ -47,6 +47,7 @@ from backend.workflow.application.intake.pr_comment import (
     consume_pr_comments,
     pr_comment_messages,
 )
+from backend.workflow.application.precheck import MAX_PRECHECKS, precheck_messages
 from backend.workflow.application.requirements_ledger import evidence_owed_messages
 from backend.workflow.application.round_budget import (
     RoundBudgetTracker,
@@ -205,7 +206,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     no_work_nudges = 0
     fail_streak = 0
     stall = StallTracker()  # failed rounds running that moved nothing (``verify_stall``)
-    evidence_reminded = False  # ledger evidence is asked for once, before a round is spent
+    evidence_reminded, prechecks = False, 0  # both are asked BEFORE a round is spent
     # #692 — a client_attach run works in the founder's own directory (server holds no copy
     # of the source) and settles on the in-place gate. Consumed at the "done" branch below.
     client_attach = await is_client_attach_run(orch._session, run)
@@ -448,20 +449,20 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             evidence_reminded = True
             messages.extend(owed)
             continue
-        # #1145 — the list is a log of write-tool calls; the tree is the truth. A deleted scratch
-        # script leaves it, a file edited through the shell joins it, before anything reads it.
-        # The branch point is re-read each time: a mid-drive rebase onto main moves it, and the
-        # value taken at the top would drag main's new commits into the list. An in-place run
-        # keeps its start-of-drive HEAD.
+        if prechecks < MAX_PRECHECKS and (
+            failed := await precheck_messages(orch._session, run, box, turn.content)
+        ):
+            prechecks += 1
+            messages.extend(failed)
+            continue
+        # #1145 — the tree, not the write-tool log, is the truth. The branch point is re-read
+        # each time (a mid-drive rebase moves it); an in-place run keeps its start-of-drive HEAD.
         round_baseline = run_baseline if in_place else await current_run_baseline(box, run_baseline)
         written_paths[:] = await reconcile_written_paths(box, round_baseline, written_paths)
         attempt.phase = RunAttemptPhase.VERIFYING
-        # Verify-session-release (#686): minutes of external work follow (contract LLM, sandbox
-        # commands). A ``flush`` would hold the transaction open across it and the 120s
-        # idle-in-transaction guard (#633) kills the connection — the run then dies on its
-        # post-verify write with PendingRollbackError. Committing returns the connection;
-        # ``expire_on_commit=False`` keeps ORM state usable. ``claimed_at`` is a heartbeat so
-        # a long verify is never reaped as stale.
+        # Verify-session-release (#686): minutes of external work follow; a ``flush`` would hold
+        # the transaction open and the 120s idle guard (#633) kills it (PendingRollbackError on
+        # the post-verify write). Commit instead; ``claimed_at`` is a heartbeat for long verifies.
         run.claimed_at = datetime.now(UTC)
         await orch._session.commit()
         contract = await orch._assemble_contract(registry, written_paths, final_text)

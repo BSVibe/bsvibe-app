@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-23
+# BSVibe session handoff — 2026-10-28
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,7 +21,29 @@
 
 ---
 
-## §0 — One line: **The merge watch and Safe Mode now agree on what "still being fixed" means; 7 issues fixed through BSVibe, the weekly report is back**
+## §0 — One line: **Verification now checks what was asked, the way CI checks it — #1255 passed in round 1**
+
+10-26 → 10-28. Reliability work was done **by hand** (형님 10-26: pushing BSVibe through its own verification gaps was
+not converging). Plan R1–R6; R1–R4 shipped, each proven on a real BSVibe run afterwards.
+
+| PR | What | Proven on |
+|---|---|---|
+| #1245 · #1248 | **R1 requirements ledger** — checkable items extracted from the request (checkboxes, list items under 할 것/가드/완료 기준-style headings); each owed item needs `requirement_evidence` (a changed path, or a test whose file changed / a passing test run covered); per-item judge; PR says `Closes` only when every owed item is `done`, else `Refs` | #1249 → PR #1250 |
+| #1251 | **R2** an unchanged tree between failed verifications counts as a repeat (`tree_fingerprint`), stops at `REPEAT_LIMIT` with a `no_progress` question; `runs_detail.verification.failure` shows why | #1204 stall |
+| #1252 | **R3** every gate command runs with `CI=true`; product metadata `verify_floor` (every verification) and `verify_final` (once, after everything else passed — the CI-equivalent run); deriver told to keep tests/types/CI steps unnarrowed and on CI's pinned versions | #1204 re-run `d8ae99bd` |
+| #1254 | the loop asks once for missing ledger evidence before verifying · the deriver is shown floor/final and does not repeat them · the item judge sees the hunks its item names | #1255 run `cf897406` — **round-1 pass** |
+| #1256 | an oversized hunk is shown as a window around the cited test; `requirements_unclear` counted apart from done | — |
+| #1258 · #1260 | **R4 counterfactual (report-only)** — each guard item done on cited tests: non-test commits put back to the baseline, the test run alone, `HEAD` restored; row `counterfactual` = holds / vacuous / unknown, ⚠ in the PR table. #1260: it never raises (it once ended a run as `system_error`), and takes away only `baseline..HEAD`, ≤ 200 paths | #1259 run `686d3874` — 4/4 `holds` |
+| this PR | **`verify_precheck`** — the product's quick checks run when the agent says done; a failure is a turn, not a round (≤ 3 per drive) | — |
+
+Issues worked through BSVibe in the same window: #1204 (token rotation, PR #1253), #1255 (run detail shows the checks,
+PR #1257), #1259 (runs_list carries a title/preview, not the whole intent). #1244 is the ledger issue itself.
+
+**bsvibe-app product metadata (set 10-27):** `verify_floor` = lint-imports + `tests/architecture` +
+`test_h2a_decomposition` + `test_every_decision_has_a_way_out` (~5 s) · `verify_final` = ruff check / format --check,
+mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 (~11 min). `verify_precheck` is not set yet.
+
+## §0-b — previous session (10-24 → 10-26): **The merge watch and Safe Mode now agree on what "still being fixed" means; 7 issues fixed through BSVibe, the weekly report is back**
 
 10-24 → 10-26. Every code change was written by BSVibe from an issue filed here, reviewed here (3 denials with a
 reason, 2 review comments), approved in Safe Mode after 형님's go-ahead, and merged by the merge watch — except
@@ -50,41 +72,7 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
 - The `product_bundle_publish_skipped_shallow` warning stopped after that run (0 in the first 400 s of the 03:35Z container).
 - `safe_mode_approved_delivered` ran on deploy (10-26 02:14Z). How many rows it moved is not logged — unknown.
 
-## §0-b — previous session (10-22 → 10-23): **BSVibe now fixes BSVibe — issues, review comments and red CI go back to the run that owns the PR; 15 harness/delivery defects found and fixed through that loop**
-
-10-22 → 10-23. Every code change below was written by BSVibe itself from a GitHub issue or a PR comment,
-reviewed here, approved in Safe Mode, and merged by its own merge watch — except where noted.
-
-| PR | Issue | What | |
-|---|---|---|---|
-| #1206 | #1202 | worker re-register: 409 instead of 500 on a live same-name worker; `register` defaults to the login issuer | ✅ |
-| #1210 | #1209 | the delivery sweep no longer re-"ships" a run awaiting merge every 5 s | ✅ |
-| #1211 | #1208 | a re-opened run: baseline = branch point; `NO_FAILURE_FOUND` / 3× same failure → Decision; "zero gate commands" is reported; founder answers reach the gate deriver | ✅ |
-| #1213 | #1212 | the baseline is re-read every round and picks the newer of `main` / `origin/main` | ✅ |
-| #1214 | #1203 | `python -m backend.identity.revoke_access_tokens` + OAuth key rotation runbook §3b | ✅ |
-| #1217 | #1216 | verification and the deliverable diff share one branch point (`backend/storage/branch_point.py`) | ✅ |
-| #1218 | #1215 | a failed GitHub action = not delivered, not shipped, one `delivery_failed` Decision; run branches push `--force-with-lease` | ✅ merged by hand (see §Ⅱ-g) |
-| #1219 | (#1218 review) | `delivery_failed` gets a question and working "send again / discard" actions | ✅ |
-| #1222 | #1221 | the GitHub App manifest asks `issues: write` (+ runbook `github-app-permissions.md`) | ✅ merged by hand |
-| #1223 | #1220 | a write-access reviewer's comment on a BSVibe PR goes to the run that opened it; everyone else's is a new request | ✅ merged by hand after a 600-LOC split |
-| #1225 | — | **hotfix:** a nested `workspace_session_scope` restores the outer tenant (intake outage 09:21–09:22Z) | ✅ written here |
-| #1226 | #1207 | KMS `PREVIOUS_KEYS` reaches the containers; rewrap runbook command | ✅ |
-| #1227 | #1224 | merge watch: per-head CI deadline, red CI sent back to the run (×2), "fix it again", watches a given-up PR until it merges/closes | ✅ merged by hand; its 400-LOC fix came through a PR comment routed to the same run (#1223) and was force-with-lease pushed to the same PR (#1218) |
-
-Also: #1204 (token connectors cannot rotate their token — open), #1205 (vault cut-over record, by hand).
-
-**Operational state, 10-23:**
-- **Vault + skills are rows** since 10-22 03:29Z; positive proof seen 10-22 08:19Z (a new `seeds/request/…` landed as a
-  `vault_documents` row, 0 files written under `/app/var/vault` since the cut-over). Keep the directories until 10-29.
-- **Telegram** moved to connector `a5fb238c` (10-22): chat_id + `authorized_user_ids` re-set, both bindings re-created,
-  webhook re-registered. First real send is the 10-26 report.
-- **GitHub App `bsvibe` now has Issues: write** — granted on BOTH installations (`blas1n` and the `BSVibe` org; each
-  installation approves separately). Probe: an empty-body `POST …/issues/<n>/comments` → 422.
-- **Credentials:** `rewrap` dry-run `current 26 · would rewrap 0 · undecryptable 0`.
-- Runs `7709a7a2`, `6fa72ec1`, `e2756fcd` had sat at `review_ready` after their PRs merged (the watch had given up);
-  they moved to `shipped` at 11:46Z, right after #1227 deployed (migration `merge_watch_ci_fix` ran).
-
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28)
 
 | | |
 |---|---|
@@ -105,6 +93,9 @@ Also: #1204 (token connectors cannot rotate their token — open), #1205 (vault 
 | **BSVibe fixes BSVibe** (10-23) | Code changes go through BSVibe: an issue, or a comment on its PR. Review the deliverable, deny with a reason (`rejected_approach`) or approve; BSVibe's merge watch merges. Hand-written code only to unblock that loop itself (#1223's split, #1225's hotfix) |
 | **A PR review comment fixes THAT PR** (10-23) | It goes to the run that opened the PR (same branch, force-with-lease), never a second PR off main (#1220/#1223) |
 | **BStockReport runs from `~/Works/BStockReport/main`** (10-26) | The bare-repo worktree replaces the deleted `BStockReport-client`; the run worktrees are made inside it |
+| **Reliability work by hand** (10-26) | The verification harness (R1–R6) is written here, not through BSVibe — an exception to "BSVibe fixes BSVibe" while the harness is what is being fixed. Product issues still go through BSVibe |
+| **The goal is a round-1 pass** (10-26) | "실제 프로덕션까지 가려면 1라운드만에 요청한게 통과해야 해" — judged on real issue runs, stack- and deliverable-agnostic (no Python-only fix) |
+| **R4 is report-only** (10-28) | A guard test that passes with the change taken away is marked, never failed — regression tests of existing behaviour pass legitimately. Gate it only after its false-positive rate is measured (R6) |
 
 ## §Ⅱ — What this session found that the issues had wrong
 
@@ -234,15 +225,36 @@ Also: #1204 (token connectors cannot rotate their token — open), #1205 (vault 
 * **A missing cwd makes the host executor's exec fail with no output** — "could not provision this run's worktree: " with
   nothing after the colon means look at the path first.
 
+## §Ⅱ-i — What 10-26/28 found
+
+* **Verification passed what was not asked and failed on what no work could fix.** #1204's first run did one of five
+  items and passed; its re-run failed 8 rounds on the sandbox lacking `CI=true` (pnpm aborts without a TTY). Both were
+  harness facts, not agent quality.
+* **The model re-derives the gate each round**, so failure *text* drifts and "same failure 3×" never fired. The tree is
+  what cannot drift (R2).
+* **A gate command loop existed twice** (server and in-place gate) and they had drifted; one runner now
+  (`gate_commands.run_gate_commands`).
+* **Telling the deriver "don't repeat the product's checks" moved type errors to the final check** — #1259 spent a
+  round on a one-line mypy error. `verify_precheck` is the answer (this PR).
+* **A report-only check ended a run.** R4 passed a path list from the working tree to one `git` argv; round 2's list
+  was too long (`Errno 7`) and the exception was not caught. Where the long list came from is **still unknown** — the
+  next `counterfactual_skipped` log line carries the count.
+* **The ledger judge read the head of long diffs**, then nothing at all for a single 5,900-char hunk — "unclear" items
+  turned `Closes` into `Refs` (#1204, #1255 had to be closed by hand).
+* **The auto-mode classifier blocks `gh pr merge` on a bare "응" and issue writes it cannot tie to an explicit ask.**
+  Ask 형님 for an explicit "N 머지해" / "닫아".
+
 ## §Ⅲ — Next
 
-1. **#929 turn-on** — the vault cut-over is done and proven (§0-b). Next: a `BSVIBE_MACHINE_ID` on this box alone, then
-   a second machine (`docs/runbook/vault-to-postgres.md` §"A second box"). Keep `/app/var/vault` until 10-29.
-2. **Open follow-ups:** #1204 (token connectors cannot rotate a token in place) · the `merge_watch_stalled` Decision is
-   reused for several reasons whose actions differ — they are pinned per reason in `test_every_decision_has_a_way_out`;
-   a new reason must be added there.
-3. **#930** — 2M tuning still has no sample.
-4. ⏳ 형님's batch: codex live run (#1183) · #1046 live taps · #937 outside the repo.
+1. **Set bsvibe-app's `verify_precheck`** after this PR deploys (proposed: ruff check, ruff format --check, mypy
+   backend/, lint-imports — ~1.5 min), then run one more medium issue to see a round-1 pass with it.
+2. **R5 independent reviewer**, **R6 metrics** (round-1 pass rate, rounds per run, vacuous-guard rate) — open.
+3. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
+   (`docs/runbook/vault-to-postgres.md` §"A second box"). `/app/var/vault` may go after 10-29.
+4. **#930** — 2M tuning still has no sample.
+5. ⏳ 형님's batch: codex live run (#1183) · #1046 live taps · #937 outside the repo.
+6. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md` (C live, B, D),
+   `ci-parity-checklist.md` (B failing-final, D, E), `counterfactual-guard-checklist.md` (B, C).
 
 ## §Ⅳ — Discipline that paid off
 
