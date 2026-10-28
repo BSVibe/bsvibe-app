@@ -271,3 +271,67 @@ async def test_verification_runs_the_check_only_for_a_round_that_passed(monkeypa
     assert seen == ["base123"]
     await verify("false", _judge())
     assert seen == ["base123"]  # a failed round is not spent on it
+
+
+# ── it reports; it never takes verification down ─────────────────────────────
+#
+# Prod #1259 (run 686d3874, 2026-10-28): round 2's path list was too long for one argv —
+# ``OSError: [Errno 7] Argument list too long: 'docker'`` — and the exception ended the RUN as
+# system_error. A report-only check must not be able to do that.
+
+
+class _Exploding(NoopSandboxSession):
+    async def exec(self, command: str, **kwargs: Any) -> Any:
+        if "status --porcelain" in command:
+            raise OSError(7, "Argument list too long")
+        return await super().exec(command, **kwargs)
+
+
+async def test_a_fault_inside_the_check_marks_unknown_and_never_raises(tmp_path: Path) -> None:
+    root, baseline = _repo(tmp_path)
+    rows = [_row()]
+    await check_guards(
+        rows,
+        box=_Exploding(str(root)),
+        baseline=baseline,
+        facts=_FACTS,
+        complete=_model("test -f tests/test_rotate.py"),
+        venv_bin=None,
+    )
+    assert rows[0]["counterfactual"] == "unknown"
+    assert rows[0]["status"] == "done"
+
+
+async def test_only_committed_changes_are_taken_away_never_stray_files(tmp_path: Path) -> None:
+    root, baseline = _repo(tmp_path)
+    (root / "stray.py").write_text("left by a tool\n")  # untracked, not part of the change
+    facts = GateFacts(diff_paths=_FACTS.diff_paths | {"stray.py"}, passed_commands=())
+    rows = [_row()]
+    await check_guards(
+        rows,
+        box=NoopSandboxSession(str(root)),
+        baseline=baseline,
+        facts=facts,
+        complete=_model("test -f tests/test_rotate.py && grep -q NEW src.py"),
+        venv_bin=None,
+    )
+    assert rows[0]["counterfactual"] == "holds"  # the stray file did not make the tree "dirty"
+    assert (root / "stray.py").read_text() == "left by a tool\n"
+
+
+async def test_a_change_too_large_to_take_away_is_skipped(tmp_path: Path, monkeypatch: Any) -> None:
+    import backend.workflow.application.counterfactual_check as cc
+
+    monkeypatch.setattr(cc, "_MAX_PATHS", 1)  # this run changed two non-test files
+    root, baseline = _repo(tmp_path)
+    rows = [_row()]
+    await check_guards(
+        rows,
+        box=NoopSandboxSession(str(root)),
+        baseline=baseline,
+        facts=_FACTS,
+        complete=_model("test -f tests/test_rotate.py"),
+        venv_bin=None,
+    )
+    assert rows[0]["counterfactual"] == "unknown"
+    assert (root / "src.py").read_text() == "OLD\nNEW\n"
