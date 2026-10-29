@@ -133,6 +133,7 @@ async def _dispatch_best_effort(
     # 지연 import — ``connectors.approval_callback`` 이 이 모듈을 타고 들어와도
     # ``backend.api.webhooks`` 가 ``plugin.*`` 정적 엣지를 얻지 않게 한다 (R2c).
     from backend.workflow.infrastructure.workers.delivery_worker import (  # noqa: PLC0415
+        _delivery_succeeded,
         dispatch_delivery,
         persist_compensation_handles,
     )
@@ -152,12 +153,39 @@ async def _dispatch_best_effort(
         logger.warning(
             "safe_mode_approve_dispatch_failed",
             deliverable_id=str(deliverable_id),
+            run_id=await _run_id_of(session, deliverable_id),
             exc_info=True,
         )
         return False
 
+    # Handles are persisted even when part of the delivery failed: a PR that did open (or a
+    # message that did go out) must stay retractable. Only successful actions carry handles.
     await persist_compensation_handles(session, deliverable_id=deliverable_id, result=result)
+    if not _delivery_succeeded(result):
+        # ``dispatch_delivery`` already raised the ``delivery_failed`` Decision; here the
+        # item is simply not counted as dispatched.
+        logger.warning(
+            "safe_mode_approve_delivery_failed",
+            deliverable_id=str(deliverable_id),
+            run_id=await _run_id_of(session, deliverable_id),
+            error=result.error,
+            failures=[
+                {"action": a.action, "error": a.error} for a in result.actions if not a.succeeded
+            ],
+        )
+        return False
     return True
+
+
+async def _run_id_of(session: AsyncSession, deliverable_id: uuid.UUID) -> str | None:
+    from backend.workflow.infrastructure.db import Deliverable  # noqa: PLC0415
+
+    try:
+        deliverable = await session.get(Deliverable, deliverable_id)
+    except Exception:  # noqa: BLE001 — a log field must never mask the original failure
+        return None
+    run_id = getattr(deliverable, "run_id", None)
+    return str(run_id) if run_id is not None else None
 
 
 async def approve_run_and_dispatch(

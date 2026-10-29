@@ -33,7 +33,7 @@ from backend.workflow.domain.delivery import ActionResult
 from backend.workflow.infrastructure.delivery.git_ops import GitOps
 
 from ._builders import _split_summary
-from ._github_in_place import _deliver_client_attach_pr, _run_is_client_attach
+from ._github_in_place import NO_CHANGES_ERROR, _deliver_client_attach_pr, _run_is_client_attach
 from ._github_pr import _open_pr_and_settle, _source_github_issue_number
 from ._resolver import GithubBinding, product_runs_in_place, resolve_github_binding
 
@@ -221,8 +221,8 @@ async def deliver_github(
     if not committed:
         ahead = await deps.git_ops.is_ahead_of_base(checkout, binding.base_branch)
         if not ahead:
-            logger.info(
-                "github_delivery_no_changes_noop",
+            logger.warning(
+                "github_delivery_no_changes_failed",
                 workspace_id=str(workspace_id),
                 deliverable_id=str(deliverable_id),
                 run_id=str(run_id),
@@ -230,8 +230,8 @@ async def deliver_github(
             return [
                 ActionResult(
                     action=action_prefix,
-                    succeeded=True,
-                    output={"skipped": True, "reason": "no_changes"},
+                    succeeded=False,
+                    error=NO_CHANGES_ERROR,
                 )
             ]
         logger.info(

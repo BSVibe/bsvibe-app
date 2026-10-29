@@ -34,6 +34,9 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+# A verified code change that produces no commit is not a clean no-op: no PR was opened.
+NO_CHANGES_ERROR = "no changes to deliver: no PR was opened for a verified code change"
+
 
 async def _run_is_client_attach(
     session_factory: async_sessionmaker[AsyncSession], run_id: uuid.UUID
@@ -123,11 +126,11 @@ async def _deliver_client_attach_pr(
     if not compared.get("exists") or int(compared.get("ahead_by") or 0) <= 0:
         # Nothing landed on this branch: the run changed nothing, or its push
         # never made it. Either way an empty PR would be a claim that work
-        # happened — and it is not a delivery FAILURE, exactly as on the server
-        # side. The run's own record of the push is in its ``LoopTerminal``
+        # happened — and for a verified code change that is a delivery FAILURE, exactly as
+        # on the server side. The run's own record of the push is in its ``LoopTerminal``
         # audit (#735) for anyone asking which of the two it was.
-        logger.info(
-            "github_delivery_no_changes_noop",
+        logger.warning(
+            "github_delivery_no_changes_failed",
             workspace_id=str(workspace_id),
             deliverable_id=str(deliverable_id),
             run_id=str(run_id),
@@ -137,8 +140,8 @@ async def _deliver_client_attach_pr(
         return [
             ActionResult(
                 action=action_prefix,
-                succeeded=True,
-                output={"skipped": True, "reason": "no_changes"},
+                succeeded=False,
+                error=NO_CHANGES_ERROR,
             )
         ]
 

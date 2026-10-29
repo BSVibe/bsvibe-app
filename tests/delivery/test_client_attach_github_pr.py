@@ -210,15 +210,17 @@ async def test_a_run_that_pushed_nothing_opens_no_pull_request() -> None:
             content={"summary": "Nothing to do"},
         )
 
-    assert actions[0].succeeded is True, "a run that changed nothing is not a delivery FAILURE"
+    assert actions[0].succeeded is False, (
+        "a verified run that changed nothing is a delivery FAILURE"
+    )
     assert "open_pr" not in runner.actions
-    assert actions[0].output == {"skipped": True, "reason": "no_changes"}
+    assert "no changes" in (actions[0].error or "")
 
 
 async def test_a_branch_level_with_base_opens_no_pull_request() -> None:
     """Present but not ahead: github answers ``open_pr`` with 422 "No commits
-    between", which would surface as a delivery failure for a run that simply
-    had nothing to add."""
+    between", which would surface as an opaque failure; the empty branch is reported
+    as a clear no-changes delivery failure instead."""
     cipher = _RoundtripCipher()
     runner = _Runner(ahead_by=0)
     async with shared_file_sessionmaker() as sf:
@@ -232,7 +234,7 @@ async def test_a_branch_level_with_base_opens_no_pull_request() -> None:
             content={"summary": "s"},
         )
 
-    assert actions[0].succeeded is True
+    assert actions[0].succeeded is False, "no PR opened for a verified change is a failure"
     assert "open_pr" not in runner.actions
 
 
