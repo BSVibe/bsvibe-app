@@ -241,6 +241,11 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
   next `counterfactual_skipped` log line carries the count.
 * **The ledger judge read the head of long diffs**, then nothing at all for a single 5,900-char hunk — "unclear" items
   turned `Closes` into `Refs` (#1204, #1255 had to be closed by hand).
+* **Intake logged nothing for ~14 h** (10-28 10:41Z deploy → 10-29 01:10Z, 43 webhooks `202`, no intake verdict,
+  no worker error). After `docker restart bsvibe-prod-worker-1` a probe comment was `filter_rejected` at once. Cause
+  unknown — if a run does not start after an issue, check `intake_worker_*` in the worker log first.
+* **An approved delivery can open no PR and still count as dispatched** (#1259 run `686d3874`: `dispatched_count: 1`,
+  no PR, no branch, no `delivery_failed`, compensation handles stored). Shipped by hand as #1262; tracked as an issue.
 * **The auto-mode classifier blocks `gh pr merge` on a bare "응" and issue writes it cannot tie to an explicit ask.**
   Ask 형님 for an explicit "N 머지해" / "닫아".
 
