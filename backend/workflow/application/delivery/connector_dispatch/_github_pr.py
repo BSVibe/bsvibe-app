@@ -164,13 +164,9 @@ async def _open_pr_and_settle(
     #    the founder-set config; head is the run branch; title/body from content.
     plugin = deps.plugins_by_name.get("github")
     if plugin is None:
-        return [
-            ActionResult(
-                action=action_prefix,
-                succeeded=False,
-                error="github plugin not loaded",
-            )
-        ]
+        logger.warning("github_delivery_plugin_not_loaded", run_id=str(run_id))
+        error = "github plugin not loaded"
+        return [ActionResult(action=action_prefix, succeeded=False, error=error)]
     ctx = _build_context(
         credentials={"token": token},
         config=dict(binding.account.delivery_config),
@@ -193,6 +189,7 @@ async def _open_pr_and_settle(
             "github_delivery_open_pr_failed",
             workspace_id=str(workspace_id),
             deliverable_id=str(deliverable_id),
+            run_id=str(run_id),
             error=str(exc),
         )
         return [ActionResult(action=action_prefix, succeeded=False, error=str(exc))]
