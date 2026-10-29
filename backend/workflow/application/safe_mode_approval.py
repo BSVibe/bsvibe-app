@@ -133,7 +133,6 @@ async def _dispatch_best_effort(
     # 지연 import — ``connectors.approval_callback`` 이 이 모듈을 타고 들어와도
     # ``backend.api.webhooks`` 가 ``plugin.*`` 정적 엣지를 얻지 않게 한다 (R2c).
     from backend.workflow.infrastructure.workers.delivery_worker import (  # noqa: PLC0415
-        _delivery_succeeded,
         dispatch_delivery,
         persist_compensation_handles,
     )
@@ -161,7 +160,8 @@ async def _dispatch_best_effort(
     # Handles are persisted even when part of the delivery failed: a PR that did open (or a
     # message that did go out) must stay retractable. Only successful actions carry handles.
     await persist_compensation_handles(session, deliverable_id=deliverable_id, result=result)
-    if not _delivery_succeeded(result):
+    # No bindings → no actions: nothing was attempted, which is not a failure.
+    if result.error is not None or not all(a.succeeded for a in result.actions):
         # ``dispatch_delivery`` already raised the ``delivery_failed`` Decision; here the
         # item is simply not counted as dispatched.
         logger.warning(
