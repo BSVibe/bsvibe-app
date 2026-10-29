@@ -24,6 +24,10 @@ node_modules/
 .turbo/
 out/
 pnpm-debug.log*
+# pnpm's store lands at the mount root when the checkout is its own filesystem (the
+# verification sandbox) — committed once by `git add -A`, 18,750 files.
+# Guard: tests/test_tool_stores_cannot_be_committed.py
+.pnpm-store/
 npm-debug.log*
 
 # Env — secrets are ignored by default; only key-listing templates are committed.
