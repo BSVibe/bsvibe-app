@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from typing import Protocol, runtime_checkable
 
-from backend.workflow.infrastructure.db import ExecutionRun
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
 
 @runtime_checkable
@@ -29,12 +29,20 @@ class RunRepository(Protocol):
         """Return the run with this id, or ``None`` if it doesn't exist."""
 
     async def list_by_workspace(
-        self, workspace_id: uuid.UUID, *, limit: int = 50
+        self, workspace_id: uuid.UUID, *, limit: int = 50, status: RunStatus | None = None
     ) -> list[ExecutionRun]:
-        """Return recent runs in this workspace, newest-first (created_at desc)."""
+        """Return recent runs in this workspace, newest-first (created_at desc).
+
+        ``status`` narrows in the query, so ``limit`` counts only matching runs.
+        """
 
     async def list_by_product(
-        self, workspace_id: uuid.UUID, product_id: uuid.UUID, *, limit: int = 10
+        self,
+        workspace_id: uuid.UUID,
+        product_id: uuid.UUID,
+        *,
+        limit: int = 10,
+        status: RunStatus | None = None,
     ) -> list[ExecutionRun]:
         """Return recent runs for one product, newest-first (created_at desc).
 

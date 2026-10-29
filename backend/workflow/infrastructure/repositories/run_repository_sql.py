@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.workflow.infrastructure.db import ExecutionRun
+from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 
 
 class SqlAlchemyRunRepository:
@@ -32,27 +32,31 @@ class SqlAlchemyRunRepository:
         return await self._session.get(ExecutionRun, run_id)
 
     async def list_by_workspace(
-        self, workspace_id: uuid.UUID, *, limit: int = 50
+        self, workspace_id: uuid.UUID, *, limit: int = 50, status: RunStatus | None = None
     ) -> list[ExecutionRun]:
-        stmt = (
-            select(ExecutionRun)
-            .where(ExecutionRun.workspace_id == workspace_id)
-            .order_by(ExecutionRun.created_at.desc())
-            .limit(limit)
-        )
+        stmt = select(ExecutionRun).where(ExecutionRun.workspace_id == workspace_id)
+        if status is not None:
+            stmt = stmt.where(ExecutionRun.status == status)
+        stmt = stmt.order_by(ExecutionRun.created_at.desc()).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
     async def list_by_product(
-        self, workspace_id: uuid.UUID, product_id: uuid.UUID, *, limit: int = 10
+        self,
+        workspace_id: uuid.UUID,
+        product_id: uuid.UUID,
+        *,
+        limit: int = 10,
+        status: RunStatus | None = None,
     ) -> list[ExecutionRun]:
         stmt = (
             select(ExecutionRun)
             .where(ExecutionRun.workspace_id == workspace_id)
             .where(ExecutionRun.product_id == product_id)
-            .order_by(ExecutionRun.created_at.desc())
-            .limit(limit)
         )
+        if status is not None:
+            stmt = stmt.where(ExecutionRun.status == status)
+        stmt = stmt.order_by(ExecutionRun.created_at.desc()).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
