@@ -1,9 +1,10 @@
 """승인한 코드 산출물이 PR 을 못 열었는데 "배달 성공" 으로 세어지던 결함 (#1259 런 686d3874).
 
-``approve_run_and_dispatch`` 는 예외만 없으면 ``dispatched`` 로 셌고, ``deliver_github`` 는
+승인 경로는 예외만 없으면 ``dispatched_count`` 에 넣었고, GitHub 배달은
 체크아웃이 없거나 커밋할 게 없을 때 PR 없이 끝났다. 이 테스트는 **실제**
-``approve_run_and_dispatch`` 와 **실제** ``deliver_github`` 를 이어서 부른다 — 어댑터만 얇게
-감싼 디스패처로 — 그래서 한쪽을 mock 으로 바꿔 놓고 통과하는 일이 없다.
+``approve_run_and_dispatch`` 와 **실제** 배달 함수를 이어서 부른다 — 어댑터만 얇게
+감싼 전달자로 — 그래서 한쪽을 mock 으로 바꿔 놓고 통과하는 일이 없다.
+실패한 배달도 보상 핸들(compensation)은 남고 ``delivery_failed`` Decision 이 하나 생긴다.
 """
 
 from __future__ import annotations
@@ -100,7 +101,7 @@ class _Runner:
 
 
 class _RealGithubDispatcher:
-    """``dispatch_delivery`` 가 부르는 자리에서 실제 ``deliver_github`` 를 돌린다."""
+    """배달 전달 자리에서 실제 GitHub 배달 함수를 돌린다."""
 
     def __init__(self, sf_, root: Path, *, committed: bool, also_failing: bool = False) -> None:
         self._sf = sf_
