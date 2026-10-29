@@ -24,6 +24,7 @@ from backend.workflow.application.product_secrets import sealed_product_metadata
 from backend.workflow.domain.execution_target import read_execution_target
 from backend.workflow.domain.verified_deliverable import diff_of
 from backend.workflow.domain.verify_secrets import redact_secrets
+from backend.workflow.infrastructure.db import RunStatus
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyDecisionRepository,
     SqlAlchemyDeliverableRepository,
@@ -71,23 +72,50 @@ def _product_to_dict(row: ProductRow) -> dict[str, Any]:
     }
 
 
-def _run_to_dict(row: Any) -> dict[str, Any]:
+_RUN_TITLE_MAX = 120
+_RUN_INTENT_PREVIEW_MAX = 300
+
+
+def _run_intent(row: Any) -> str | None:
     payload = row.payload or {}
-    intent: str | None = None
     if isinstance(payload, dict):
         candidate = payload.get("intent_text") or payload.get("text")
         if isinstance(candidate, str):
-            intent = candidate
-    return {
+            return candidate
+    return None
+
+
+def _intent_title(intent: str | None) -> str | None:
+    """The first non-blank line of the intent, capped — enough to recognise a run."""
+    if not intent:
+        return None
+    for line in intent.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:_RUN_TITLE_MAX]
+    return None
+
+
+def _run_to_dict(row: Any, *, full_intent: bool = True) -> dict[str, Any]:
+    """Serialize a run. ``full_intent=False`` is the list shape: an issue-born
+    run's intent is the whole issue body, so a list carries a preview instead."""
+    intent = _run_intent(row)
+    out: dict[str, Any] = {
         "id": str(row.id),
         "workspace_id": str(row.workspace_id),
         "product_id": str(row.product_id) if row.product_id else None,
         "request_id": str(row.request_id) if row.request_id else None,
         "status": getattr(row.status, "value", str(row.status)),
-        "intent": intent,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "title": _intent_title(intent),
     }
+    if full_intent:
+        out["intent"] = intent
+    else:
+        out["intent_preview"] = intent[:_RUN_INTENT_PREVIEW_MAX] if intent is not None else None
+        out["intent_truncated"] = intent is not None and len(intent) > _RUN_INTENT_PREVIEW_MAX
+    out["created_at"] = row.created_at.isoformat() if row.created_at else None
+    out["updated_at"] = row.updated_at.isoformat() if row.updated_at else None
+    return out
 
 
 def _deliverable_to_dict(row: Any) -> dict[str, Any]:
@@ -452,10 +480,22 @@ async def _h_products_set_metadata(args: ProductsSetMetadataInput, ctx: ToolCont
 class RunsListInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     product_slug_or_id: str | None = Field(default=None, max_length=64)
+    status: str | None = Field(
+        default=None,
+        description="Only runs in this status: " + " | ".join(s.value for s in RunStatus) + ".",
+    )
     limit: int = Field(50, ge=1, le=200)
 
 
 async def _h_runs_list(args: RunsListInput, ctx: ToolContext) -> Any:
+    status: RunStatus | None = None
+    if args.status is not None:
+        try:
+            status = RunStatus(args.status)
+        except ValueError:
+            valid = ", ".join(s.value for s in RunStatus)
+            raise ToolError(f"unknown status {args.status!r}; expected one of: {valid}") from None
+
     # The product axis is a *query* filter, not a post-filter on a
     # workspace-wide page: narrowing after the limit made the answer depend on
     # how busy the rest of the workspace had been, so a product whose runs were
@@ -464,11 +504,13 @@ async def _h_runs_list(args: RunsListInput, ctx: ToolContext) -> Any:
     if args.product_slug_or_id:
         product = await _resolve_product(ctx, args.product_slug_or_id)
         rows = await runs_repo.list_by_product(
-            ctx.principal.workspace_id, product.id, limit=args.limit
+            ctx.principal.workspace_id, product.id, limit=args.limit, status=status
         )
     else:
-        rows = await runs_repo.list_by_workspace(ctx.principal.workspace_id, limit=args.limit)
-    return _Envelope([_run_to_dict(r) for r in rows])
+        rows = await runs_repo.list_by_workspace(
+            ctx.principal.workspace_id, limit=args.limit, status=status
+        )
+    return _Envelope([_run_to_dict(r, full_intent=False) for r in rows])
 
 
 # ---------------------------------------------------------------------------
@@ -910,7 +952,10 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             name="bsvibe_runs_list",
             description=(
                 "List recent ExecutionRuns in the active workspace, newest first. "
-                "Pass `product_slug_or_id` to narrow to one product."
+                "Pass `product_slug_or_id` to narrow to one product and `status` to "
+                "one run status (applied before `limit`). Each item carries a `title` "
+                "and a 300-char `intent_preview` (`intent_truncated` says if it was "
+                "cut), not the full intent — the full text is in `bsvibe_runs_show`."
             ),
             input_schema=RunsListInput,
             output_schema=_Envelope,
@@ -921,7 +966,10 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
     registry.register(
         Tool(
             name="bsvibe_runs_show",
-            description="Show one ExecutionRun by id, scoped to the active workspace.",
+            description=(
+                "Show one ExecutionRun by id, scoped to the active workspace, with its "
+                "full `intent` and `title`."
+            ),
             input_schema=RunsShowInput,
             output_schema=_Envelope,
             handler=_h_runs_show,

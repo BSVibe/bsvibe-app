@@ -209,7 +209,10 @@ async def test_runs_list_and_show(db, workspace_id, user_id, registry, seeded) -
         shown = await registry.call_tool("bsvibe_runs_show", {"run_id": str(run_id)}, ctx)
     assert len(listed) == 1
     assert listed[0]["id"] == str(run_id)
-    assert listed[0]["intent"] == "ship a thing"
+    assert "intent" not in listed[0]
+    assert listed[0]["title"] == "ship a thing"
+    assert listed[0]["intent_preview"] == "ship a thing"
+    assert listed[0]["intent_truncated"] is False
     assert shown["id"] == str(run_id)
 
 
@@ -1130,3 +1133,91 @@ async def test_deliverables_artifacts_reports_binary_without_the_bytes(
     assert out["binary"] is True
     assert "\x00" not in out["content"]
     assert "bytes" in out["content"]
+
+
+async def _seed_runs(db, workspace_id, specs) -> list[uuid.UUID]:
+    """Store runs ``(status, intent)`` with strictly decreasing recency."""
+    base = datetime.now(UTC)
+    ids: list[uuid.UUID] = []
+    async with scoped_session(db, workspace_id) as s:
+        for i, (status, intent) in enumerate(specs):
+            run_id = uuid.uuid4()
+            ids.append(run_id)
+            s.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    status=status,
+                    payload={"intent_text": intent},
+                    created_at=base - timedelta(minutes=i),
+                    updated_at=base - timedelta(minutes=i),
+                )
+            )
+        await s.commit()
+    return ids
+
+
+def _read_ctx(s, workspace_id, user_id) -> ToolContext:
+    return ToolContext(
+        principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read",)),
+        session=s,
+    )
+
+
+async def test_runs_list_omits_intent_and_stays_small(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    import json
+
+    intents = [f"# Issue {i}\n" + "x" * 10_000 for i in range(20)]
+    ids = await _seed_runs(db, workspace_id, [(RunStatus.RUNNING, t) for t in intents])
+
+    async with db() as s:
+        ctx = _read_ctx(s, workspace_id, user_id)
+        listed = await registry.call_tool("bsvibe_runs_list", {"limit": 20}, ctx)
+        shown = await registry.call_tool("bsvibe_runs_show", {"run_id": str(ids[3])}, ctx)
+
+    assert len(listed) == 20
+    assert len(json.dumps(listed)) < 20_000
+    for item in listed:
+        assert "intent" not in item
+        assert item["intent_truncated"] is True
+        assert len(item["intent_preview"]) == 300
+    assert listed[3]["title"] == "# Issue 3"
+    assert shown["intent"] == intents[3]
+    assert shown["title"] == "# Issue 3"
+
+
+async def test_run_title_is_first_content_line(db, workspace_id, user_id, registry, seeded) -> None:
+    long_line = "y" * 500
+    await _seed_runs(
+        db,
+        workspace_id,
+        [(RunStatus.RUNNING, "\n\n   \n  Fix the login  \nbody"), (RunStatus.RUNNING, long_line)],
+    )
+    async with db() as s:
+        listed = await registry.call_tool(
+            "bsvibe_runs_list", {}, _read_ctx(s, workspace_id, user_id)
+        )
+    assert [r["title"] for r in listed] == ["Fix the login", "y" * 120]
+
+
+async def test_runs_list_status_filter_applies_before_limit(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    # Newest 10 are not shipped; the 3 shipped runs are older than all of them.
+    specs = [(RunStatus.RUNNING, "r")] * 10 + [(RunStatus.SHIPPED, "s")] * 3
+    ids = await _seed_runs(db, workspace_id, specs)
+
+    async with db() as s:
+        ctx = _read_ctx(s, workspace_id, user_id)
+        two = await registry.call_tool("bsvibe_runs_list", {"status": "shipped", "limit": 2}, ctx)
+        all_shipped = await registry.call_tool(
+            "bsvibe_runs_list", {"status": "shipped", "limit": 50}, ctx
+        )
+        with pytest.raises(ToolError, match="unknown status"):
+            await registry.call_tool("bsvibe_runs_list", {"status": "bogus"}, ctx)
+
+    assert [r["id"] for r in two] == [str(i) for i in ids[10:12]]
+    assert {r["status"] for r in all_shipped} == {"shipped"}
+    assert len(all_shipped) == 3
