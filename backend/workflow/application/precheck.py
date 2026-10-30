@@ -21,6 +21,7 @@ from backend.workflow.application.gate_commands import (
     run_gate_commands,
 )
 from backend.workflow.application.sandbox_provisioning import ensure_sandbox_ready
+from backend.workflow.application.verification_leftovers import leftovers_excluded
 from backend.workflow.domain.verification_feedback import render_failed_commands
 from backend.workflow.infrastructure.sandbox import SandboxSession
 
@@ -36,12 +37,13 @@ async def precheck_messages(
     if not commands:
         return []
     venv_ready = await ensure_sandbox_ready(box)
-    results = await run_gate_commands(
-        box,
-        [(c, "precheck") for c in commands],
-        venv_bin=f"{box.workspace_mount}/.venv/bin" if venv_ready else None,
-        timeout_s=get_settings().verify_gate_command_timeout_s,
-    )
+    async with leftovers_excluded(box):  # #1267 — the checks' leftovers are not the work
+        results = await run_gate_commands(
+            box,
+            [(c, "precheck") for c in commands],
+            venv_bin=f"{box.workspace_mount}/.venv/bin" if venv_ready else None,
+            timeout_s=get_settings().verify_gate_command_timeout_s,
+        )
     if not any_failed(results):
         return []
     return [
