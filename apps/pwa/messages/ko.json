@@ -1109,7 +1109,7 @@
       "exitCode": "종료 코드 {code}",
       "requirements": "요구사항 {total}개 중 {done}개 완료, {deferred}개 보류"
     },
-    "ledger": {
+    "requirements": {
       "attentionGroup": "확인이 필요한 항목",
       "doneGroup": "완료",
       "otherGroup": "보류·기타",

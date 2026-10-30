@@ -1109,7 +1109,7 @@
       "exitCode": "exit {code}",
       "requirements": "Requirements: {done} of {total} done, {deferred} deferred"
     },
-    "ledger": {
+    "requirements": {
       "attentionGroup": "Needs attention",
       "doneGroup": "Done",
       "otherGroup": "Deferred and other",

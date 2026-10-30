@@ -566,15 +566,19 @@ function RequirementsLedger({ items }: { items: RunRequirement[] }) {
   const groups = [
     {
       key: "attention",
-      label: t("ledger.attentionGroup"),
+      label: t("requirements.attentionGroup"),
       items: items.filter((r) => ATTENTION_STATUSES.has(r.status)),
     },
     {
       key: "other",
-      label: t("ledger.otherGroup"),
+      label: t("requirements.otherGroup"),
       items: items.filter((r) => !ATTENTION_STATUSES.has(r.status) && r.status !== "done"),
     },
-    { key: "done", label: t("ledger.doneGroup"), items: items.filter((r) => r.status === "done") },
+    {
+      key: "done",
+      label: t("requirements.doneGroup"),
+      items: items.filter((r) => r.status === "done"),
+    },
   ].filter((g) => g.items.length > 0);
 
   return (
@@ -591,12 +595,12 @@ function RequirementsLedger({ items }: { items: RunRequirement[] }) {
               >
                 <strong>{r.id}</strong> <span>{r.text}</span>{" "}
                 <span className="run-verification__requirement-status">
-                  {t(`ledger.status.${r.status}`)}
+                  {t(`requirements.status.${r.status}`)}
                 </span>
                 {r.counterfactual === "vacuous" ? (
-                  <span className="run-verification__vacuous" title={t("ledger.vacuous")}>
+                  <span className="run-verification__vacuous" title={t("requirements.vacuous")}>
                     {" "}
-                    ⚠ {t("ledger.vacuous")}
+                    ⚠ {t("requirements.vacuous")}
                   </span>
                 ) : null}
                 {r.note ? <p className="run-verification__requirement-note">{r.note}</p> : null}
