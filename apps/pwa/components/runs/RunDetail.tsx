@@ -8,6 +8,7 @@ import type {
   RunDecision,
   RunDetail as RunDetailModel,
   RunPartialDeliverable,
+  RunRequirement,
   RunStatus,
   RunVerification,
 } from "@/lib/api/types";
@@ -549,6 +550,65 @@ function VerificationChecks({ verification }: { verification: RunVerification })
           })}
         </p>
       ) : null}
+      <RequirementsLedger items={verification.requirements ?? []} />
+    </>
+  );
+}
+
+const ATTENTION_STATUSES = new Set(["rejected", "missing", "unclear"]);
+
+/** The ledger's items grouped by verdict: what failed or could not be confirmed
+ *  first, then the rest, `done` last. A `vacuous` item (passes without the
+ *  change) carries a ⚠. A run with no ledger renders nothing. */
+function RequirementsLedger({ items }: { items: RunRequirement[] }) {
+  const t = useTranslations("run");
+  if (items.length === 0) return null;
+  const groups = [
+    {
+      key: "attention",
+      label: t("requirements.attentionGroup"),
+      items: items.filter((r) => ATTENTION_STATUSES.has(r.status)),
+    },
+    {
+      key: "other",
+      label: t("requirements.otherGroup"),
+      items: items.filter((r) => !ATTENTION_STATUSES.has(r.status) && r.status !== "done"),
+    },
+    {
+      key: "done",
+      label: t("requirements.doneGroup"),
+      items: items.filter((r) => r.status === "done"),
+    },
+  ].filter((g) => g.items.length > 0);
+
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.key} className="run-verification__group" data-ledger-group={g.key}>
+          <h3 className="run-verification__group-label">{g.label}</h3>
+          <ul className="run-verification__ledger">
+            {g.items.map((r) => (
+              <li
+                key={r.id}
+                className={`run-verification__requirement run-verification__requirement--${r.status}`}
+                data-requirement={r.id}
+              >
+                <strong>{r.id}</strong> <span>{r.text}</span>{" "}
+                <span className="run-verification__requirement-status">
+                  {t(`requirements.status.${r.status}`)}
+                </span>
+                {r.counterfactual === "vacuous" ? (
+                  <span className="run-verification__vacuous" title={t("requirements.vacuous")}>
+                    {" "}
+                    ⚠ {t("requirements.vacuous")}
+                  </span>
+                ) : null}
+                {r.note ? <p className="run-verification__requirement-note">{r.note}</p> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
     </>
   );
 }
