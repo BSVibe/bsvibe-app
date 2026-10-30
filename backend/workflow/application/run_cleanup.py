@@ -474,6 +474,14 @@ async def _cancel(session: AsyncSession, run: ExecutionRun, *, reason: str) -> b
         from_status=from_status.value,
         reason=reason,
     )
+    if from_status is RunStatus.RUNNING:
+        # A drive loop is live on this run; it stops at its next checkpoint.
+        logger.warning(
+            "run_cancelled_while_running",
+            run_id=str(run.id),
+            workspace_id=str(run.workspace_id),
+            reason=reason,
+        )
     return True
 
 

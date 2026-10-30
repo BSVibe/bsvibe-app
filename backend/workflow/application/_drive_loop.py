@@ -16,6 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 from backend.workflow.application._loop_context import (
     _consume_merge_conflict,
     _initial_user_message,
@@ -99,6 +101,8 @@ from backend.workflow.infrastructure.sandbox import SandboxSession
 if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult, RunOrchestrator
 
+logger = structlog.get_logger(__name__)
+
 
 async def _pending_question(session: Any, run: ExecutionRun) -> Decision | None:
     """A question the agent asked the founder OUT OF BAND — i.e. not via a tool call the loop
@@ -117,6 +121,29 @@ async def _pending_question(session: Any, run: ExecutionRun) -> Decision | None:
         )
     )
     return rows.scalars().first()  # type: ignore[no-any-return]
+
+
+async def _stop_cancelled(
+    orch: RunOrchestrator,
+    run: ExecutionRun,
+    work_step: WorkStep,
+    attempt: RunAttempt,
+    written_paths: list[str],
+    final_text: str,
+    checkpoint: str,
+    cycle: int,
+) -> LoopResult:
+    """End a drive whose run was cancelled / discarded under it — no more work, no artifacts."""
+    logger.warning(
+        "drive_loop_stopped_run_cancelled",
+        run_id=str(run.id),
+        checkpoint=checkpoint,
+        cycle=cycle,
+    )
+    await orch._audit(
+        run, attempt, LoopTerminal, {"outcome": "cancelled", "cycle": cycle, "at": checkpoint}
+    )
+    return orch._cancelled_result(run, work_step, attempt, written_paths, final_text)
 
 
 async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle body
@@ -465,6 +492,21 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         # the post-verify write). Commit instead; ``claimed_at`` is a heartbeat for long verifies.
         run.claimed_at = datetime.now(UTC)
         await orch._session.commit()
+        # A cancel that landed during the turn must not start minutes of verification.
+        cancelled = await orch._run_cancelled(run)
+        # Commit again: the read's transaction must not stay open across the external work.
+        await orch._session.commit()
+        if cancelled:
+            return await _stop_cancelled(
+                orch,
+                run,
+                work_step,
+                attempt,
+                written_paths,
+                final_text,
+                "before_verify",
+                this_cycle,
+            )
         contract = await orch._assemble_contract(registry, written_paths, final_text)
         if contract is None:
             settled = await settle_undeclared_verification(
@@ -493,6 +535,12 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             final_text=final_text,
             baseline=round_baseline,
         )
+        # Verification takes minutes; the cancel most likely lands inside it.
+        await orch._session.commit()
+        if await orch._run_cancelled(run):
+            return await _stop_cancelled(
+                orch, run, work_step, attempt, written_paths, final_text, "after_verify", this_cycle
+            )
         await orch._audit(
             run,
             attempt,

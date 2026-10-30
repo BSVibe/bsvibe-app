@@ -32,6 +32,7 @@ from typing import Any
 import structlog
 
 from backend.workflow.domain.client_worktree import worktree_branch
+from backend.workflow.domain.verified_deliverable import RunCancelledError
 from backend.workflow.infrastructure.db import Deliverable
 
 logger = structlog.get_logger(__name__)
@@ -238,20 +239,25 @@ async def land_client_attach_deliverable(
         land_verified_artifacts,
     )
 
-    deliverable = await land_verified_artifacts(
-        session,
-        run=run,
-        attempt_id=attempt_id,
-        written_paths=changed_paths,
-        final_text=final_text,
-        # The in-place gate's own record, in the shape the summary composer
-        # reads. ``None`` when the repo declared no toolchain — legitimately
-        # gateless, so the summary says nothing about a proof rather than
-        # implying one.
-        verdict_result={"derived_gate": gate} if gate is not None else None,
-        redis_client=redis_client,
-        settings=settings,
-    )
+    try:
+        deliverable = await land_verified_artifacts(
+            session,
+            run=run,
+            attempt_id=attempt_id,
+            written_paths=changed_paths,
+            final_text=final_text,
+            # The in-place gate's own record, in the shape the summary composer
+            # reads. ``None`` when the repo declared no toolchain — legitimately
+            # gateless, so the summary says nothing about a proof rather than
+            # implying one.
+            verdict_result={"derived_gate": gate} if gate is not None else None,
+            redis_client=redis_client,
+            settings=settings,
+        )
+    except RunCancelledError:
+        # Cancelled / discarded mid-drive: a cancelled run gets no approval item.
+        logger.info("client_attach_no_deliverable_run_cancelled", run_id=str(run.id))
+        return None
     logger.info(
         "client_attach_deliverable_landed",
         run_id=str(run.id),
