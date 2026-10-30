@@ -192,6 +192,42 @@ describe("Delivery Report (R3)", () => {
     expect(within(lead).getByText(/getRelatedPosts helper to blog\.ts/i)).toBeInTheDocument();
   });
 
+  it("warns and lists the busiest directories when the report is a large_change", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        changed_files: 250,
+        large_change: true,
+        large_change_warning: "큰 변경",
+        top_dirs: [
+          { dir: ".pnpm-store", count: 240 },
+          { dir: "src", count: 10 },
+        ],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/large change/i);
+    expect(within(alert).getByText(".pnpm-store (240)")).toBeInTheDocument();
+    expect(screen.getByText("250 files changed")).toBeInTheDocument();
+  });
+
+  it("shows the file count but no warning on a small report", async () => {
+    installFetch({
+      report: () => ({
+        ...REPORT,
+        changed_files: 3,
+        large_change: false,
+        top_dirs: [{ dir: "src", count: 3 }],
+      }),
+    });
+    render(<DeliveryReport deliverableId="d1" />);
+
+    expect(await screen.findByText("3 files changed")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("renders the verification checklist (knowledge excluded) with passed tags", async () => {
     installFetch();
     render(<DeliveryReport deliverableId="d1" />);

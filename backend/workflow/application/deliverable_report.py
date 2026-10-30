@@ -20,6 +20,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.application.change_footprint import footprint_of_payload
 from backend.workflow.application.deliverable_narrative import (
     NarrativeGenerator,
     held_delivery_item_for,
@@ -124,6 +125,7 @@ async def build_deliverable_report(
         requirements=ledger,
         requirements_table=render_ledger_table(ledger) if ledger else None,
         ledger_counts=ledger_counts(ledger) if ledger else {},
+        **footprint_of_payload(row.payload).model_dump(),
     )
 
 

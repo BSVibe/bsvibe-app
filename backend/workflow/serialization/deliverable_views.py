@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from backend.workflow.application.deliverable_references import ReferenceOut
+from backend.workflow.domain.change_footprint import TopDir
 from backend.workflow.infrastructure.db import (
     Deliverable,
     DeliverableType,
@@ -109,6 +110,14 @@ class DeliverableReportResponse(BaseModel):
     requirements: list[dict[str, Any]] = []
     requirements_table: str | None = None
     ledger_counts: dict[str, int] = {}
+    # How many files this deliverable changes (its ``artifact_refs``), the busiest
+    # top-level dirs, and — past the configured threshold — ``large_change`` with a
+    # human-readable warning. ``changed_files`` is ``None`` (and no warning) for a
+    # deliverable that declared no ``artifact_refs``.
+    changed_files: int | None = None
+    top_dirs: list[TopDir] = []
+    large_change: bool = False
+    large_change_warning: str | None = None
 
 
 class DeliverableDiffResponse(BaseModel):

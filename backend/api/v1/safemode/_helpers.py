@@ -13,6 +13,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import _get_session_factory
+from backend.workflow.domain.change_footprint import ChangeFootprint
 from backend.workflow.domain.delivery import ArtifactType
 from backend.workflow.infrastructure.db import Deliverable
 from backend.workflow.infrastructure.workers.delivery_worker import PluginDispatchAdapter
@@ -42,10 +43,13 @@ async def get_delivery_dispatcher() -> PluginDispatchAdapter:
     return await build_delivery_adapter(session_factory=_get_session_factory())
 
 
-def _to_item_response(item: object) -> SafeModeItemResponse:
+def _to_item_response(
+    item: object, footprint: ChangeFootprint | None = None
+) -> SafeModeItemResponse:
     """Map a :class:`SafeModeQueueItemRow` to the response shape (B12a — also
-    threads ``run_id`` through)."""
+    threads ``run_id`` through). ``footprint`` adds the changed-file count + warning."""
     return SafeModeItemResponse(
+        **(footprint.model_dump() if footprint is not None else {}),
         id=item.id,  # type: ignore[attr-defined]
         workspace_id=item.workspace_id,  # type: ignore[attr-defined]
         deliverable_id=item.deliverable_id,  # type: ignore[attr-defined]

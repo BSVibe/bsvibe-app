@@ -1,5 +1,6 @@
 "use client";
 
+import ChangeFootprint from "@/components/deliverables/ChangeFootprint";
 import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import type { PendingDelivery } from "@/lib/api/types";
 import { useTranslations } from "next-intl";
@@ -75,6 +76,7 @@ export default function DeliveryRow({
       </div>
       {/* The held-delivery context becomes the card body when a title leads. */}
       {item.title && <p className="need-card__body">{t("deliveryQuestion")}</p>}
+      <ChangeFootprint footprint={item.change} />
       <div className="need-card__actions tap-card__above">
         <button
           type="button"

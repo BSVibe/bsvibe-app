@@ -1,6 +1,7 @@
 "use client";
 
 import { relativeTime } from "@/components/decisions/relative-time";
+import ChangeFootprint from "@/components/deliverables/ChangeFootprint";
 import { ApiError } from "@/lib/api/client";
 import {
   getDeliverableArtifact,
@@ -373,6 +374,8 @@ function ReportDocument({
           <span className="report-doc__meta-time">{relativeTime(deliverable.created_at, t)}</span>
         </div>
       </header>
+
+      <ChangeFootprint footprint={report} />
 
       {lead && (
         <section className="report-doc__section" aria-label={t("whatThisDid")}>

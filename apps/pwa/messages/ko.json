@@ -1225,5 +1225,13 @@
     "errorLoadFailed": "지금은 코드를 확인하지 못했어요. 다시 시도해 주세요.",
     "errorSubmit": "결정을 기록하지 못했어요. 다시 시도해 주세요.",
     "tryAnotherCode": "다른 코드 입력하기"
+  },
+  "changeFootprint": {
+    "files": "파일 {count}개 변경",
+    "warningTitle": "큰 변경",
+    "warningBody": "파일 {count}개를 바꿉니다 — 평소보다 많습니다. 승인하기 전에 의도한 변경인지 확인하세요.",
+    "topDirs": "파일이 가장 많은 디렉터리",
+    "dirEntry": "{dir} ({count})",
+    "rootDir": "(저장소 루트)"
   }
 }

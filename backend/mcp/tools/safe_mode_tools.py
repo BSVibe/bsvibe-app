@@ -20,11 +20,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
+from backend.workflow.application.change_footprint import footprints_for
 from backend.workflow.application.safe_mode_approval import (
     approve_and_dispatch,
     approve_run_and_dispatch,
 )
 from backend.workflow.application.safe_mode_queue import DenyKind, SafeModeQueue
+from backend.workflow.domain.change_footprint import ChangeFootprint, TopDir
 
 logger = structlog.get_logger(__name__)
 
@@ -49,6 +51,12 @@ class SafeModeItem(_Output):
     expires_at: str | None = None
     extension_count: int = 0
     created_at: str | None = None
+    #: How big the held change is; ``changed_files`` is ``None`` when the deliverable
+    #: declared no artifact_refs (then there is no warning either).
+    changed_files: int | None = None
+    top_dirs: list[TopDir] = []
+    large_change: bool = False
+    large_change_warning: str | None = None
 
 
 class SafeModeListPendingOutput(_Output):
@@ -56,8 +64,9 @@ class SafeModeListPendingOutput(_Output):
     items: list[SafeModeItem]
 
 
-def _item_to_dict(item: Any) -> SafeModeItem:
+def _item_to_dict(item: Any, footprint: ChangeFootprint | None = None) -> SafeModeItem:
     return SafeModeItem(
+        **(footprint.model_dump() if footprint is not None else {}),
         id=str(item.id),
         deliverable_id=str(item.deliverable_id),
         run_id=str(item.run_id) if item.run_id else None,
@@ -76,9 +85,14 @@ async def _h_list_pending(args: SafeModeListPendingInput, ctx: ToolContext) -> A
         )
     else:
         items = await queue.list_pending(workspace_id=ctx.principal.workspace_id)
+    footprints = await footprints_for(
+        ctx.session,
+        workspace_id=ctx.principal.workspace_id,
+        deliverable_ids=[i.deliverable_id for i in items],
+    )
     return SafeModeListPendingOutput(
         total=len(items),
-        items=[_item_to_dict(i) for i in items],
+        items=[_item_to_dict(i, footprints.get(i.deliverable_id)) for i in items],
     )
 
 

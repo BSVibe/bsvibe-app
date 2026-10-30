@@ -12,6 +12,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.workflow.application.safe_mode_queue import DenyKind
+from backend.workflow.domain.change_footprint import TopDir
 
 
 class SafeModeItemResponse(BaseModel):
@@ -28,6 +29,12 @@ class SafeModeItemResponse(BaseModel):
     expires_at: datetime
     extension_count: int
     created_at: datetime
+    # How big the held change is — see ``backend.workflow.domain.change_footprint``.
+    # ``changed_files`` is ``None`` when the deliverable declared no artifact_refs.
+    changed_files: int | None = None
+    top_dirs: list[TopDir] = []
+    large_change: bool = False
+    large_change_warning: str | None = None
 
 
 class SafeModeRunGroupResponse(BaseModel):
