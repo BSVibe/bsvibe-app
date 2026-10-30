@@ -185,6 +185,15 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
     (working tree, so uncommitted edits show), or the file head when git has nothing."""
 
     async def _excerpt(row: Mapping[str, Any]) -> str:
+        # The cited tests and the agent's note come FIRST and are never cut by the paths'
+        # diffs: the shared budget used to be spent on two long diffs before a test body was
+        # reached (#1275). The paths fill what is left.
+        lead: list[str] = []
+        for test in row.get("tests") or []:
+            body = await _cited_body(box, test)
+            lead.append(f"--- test {test}: passed at the gate" + (f"\n{body}" if body else ""))
+        if row.get("note"):
+            lead.append(f"--- agent's note: {row['note']}")
         parts: list[str] = []
         for path in row.get("paths") or []:
             text = ""
@@ -215,14 +224,10 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
             about = f"{row.get('text', '')} {row.get('note', '')} {cited}"
             clipped = relevant_hunks(text, about, budget=_PATH_EXCERPT_CHARS)
             parts.append(f"--- {path}\n{clipped}")
-        for test in row.get("tests") or []:
-            # The test itself, as its file defines it — a diff hunk is cut to a budget and
-            # the cited test is rarely at its head (#1269).
-            body = await _cited_body(box, test)
-            parts.append(f"--- test {test}: passed at the gate" + (f"\n{body}" if body else ""))
-        if row.get("note"):
-            parts.append(f"--- agent's note: {row['note']}")
-        return "\n\n".join(parts)[:_EVIDENCE_CHARS]
+        head = "\n\n".join(lead)
+        room = max(_EVIDENCE_CHARS - len(head), 0)
+        tail = "\n\n".join(parts)[:room]
+        return "\n\n".join(x for x in (head, tail) if x)
 
     return _excerpt
 

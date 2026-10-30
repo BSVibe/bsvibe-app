@@ -196,3 +196,27 @@ async def test_verification_rejects_a_cited_test_that_is_not_there() -> None:
     rows = {r["id"]: r for r in vr.result[LEDGER_RESULT_KEY]}
     assert rows["R2"]["status"] == "rejected"
     assert "test_nope" in rows["R2"]["note"]
+
+
+# ── the cited test is never what the budget cuts ─────────────────────────────
+#
+# Prod #1275 (run 35f3ac0f, 2026-10-30): three items still came back unclear, "the test body is
+# cut off". The excerpt listed the cited paths' diffs FIRST and the test bodies after, then cut
+# the whole thing to its budget — two 5,000-char diffs left nothing for the tests.
+
+
+class _BigDiffBox(_Box):
+    async def exec(self, command: str, **_k: Any) -> SandboxResult:
+        hunk = "@@ -1,1 +1,400 @@\n" + "".join(f"+line {i}\n" for i in range(800))
+        return SandboxResult(
+            exit_code=0, stdout="diff --git a/x b/x\n" + hunk, stderr="", timed_out=False
+        )
+
+
+async def test_the_cited_test_body_survives_long_diffs_and_comes_first() -> None:
+    box = _BigDiffBox({"tests/glue/test_cancel.py": _PY})
+    row = {**_ROW, "paths": ["backend/a.py", "backend/b.py", "backend/c.py"]}
+    shown = await diff_excerpt(box, "base")(row)  # type: ignore[arg-type]
+
+    assert 'assert result.outcome == "cancelled"' in shown
+    assert shown.index("async def test_alpha") < shown.index("--- backend/a.py")
