@@ -1109,6 +1109,22 @@
       "exitCode": "종료 코드 {code}",
       "requirements": "요구사항 {total}개 중 {done}개 완료, {deferred}개 보류"
     },
+    "ledger": {
+      "attentionGroup": "확인이 필요한 항목",
+      "doneGroup": "완료",
+      "otherGroup": "보류·기타",
+      "vacuous": "변경 없이도 통과해요",
+      "status": {
+        "done": "완료",
+        "deferred": "보류",
+        "unclear": "확인 못 함",
+        "rejected": "거절됨",
+        "missing": "근거 없음",
+        "withdrawn": "철회됨",
+        "noted": "참고",
+        "pending": "대기 중"
+      }
+    },
     "deliverable": "전달됨",
     "viewReport": "전달 리포트 보기",
     "timeline": "진행한 일",

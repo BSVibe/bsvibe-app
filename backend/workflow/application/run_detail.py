@@ -42,6 +42,7 @@ from backend.workflow.serialization.run_views import (
     RunDecision,
     RunDetailResponse,
     RunPartialDeliverable,
+    RunRequirement,
     RunTriggerContext,
     RunVerification,
     RunVerificationCheck,
@@ -356,6 +357,34 @@ def _verification_checks(result: dict[str, Any]) -> list[RunVerificationCheck]:
     return checks
 
 
+_REQUIREMENT_TEXT_CHARS = 200
+_REQUIREMENT_NOTE_CHARS = 300
+_REQUIREMENT_STATUSES = frozenset(
+    {"done", "deferred", "unclear", "rejected", "missing", "withdrawn", "noted", "pending"}
+)
+_COUNTERFACTUALS = frozenset({"holds", "vacuous", "unknown"})
+
+
+def _requirement_rows(rows: list[dict[str, Any]]) -> list[RunRequirement]:
+    """The ledger items, text and note truncated. Tolerant of sparse rows."""
+    items: list[RunRequirement] = []
+    for r in rows:
+        status = r.get("status")
+        counterfactual = r.get("counterfactual")
+        note = _opt_str(r.get("note"))
+        items.append(
+            RunRequirement(
+                id=str(r.get("id") or ""),
+                text=str(r.get("text") or "")[:_REQUIREMENT_TEXT_CHARS],
+                kind=str(r.get("kind") or "do"),
+                status=status if status in _REQUIREMENT_STATUSES else "pending",
+                note=note[:_REQUIREMENT_NOTE_CHARS] if note else None,
+                counterfactual=counterfactual if counterfactual in _COUNTERFACTUALS else None,
+            )
+        )
+    return items
+
+
 def _run_verification(row: VerificationResult) -> RunVerification:
     result = row.result if isinstance(row.result, dict) else {}
     ledger = result.get("requirements")
@@ -373,6 +402,7 @@ def _run_verification(row: VerificationResult) -> RunVerification:
         created_at=row.created_at,
         failure=_verification_failure(row),
         checks=_verification_checks(result),
+        requirements=_requirement_rows(rows),
         **tally,
     )
 

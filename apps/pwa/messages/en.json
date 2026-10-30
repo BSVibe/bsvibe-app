@@ -1109,6 +1109,22 @@
       "exitCode": "exit {code}",
       "requirements": "Requirements: {done} of {total} done, {deferred} deferred"
     },
+    "ledger": {
+      "attentionGroup": "Needs attention",
+      "doneGroup": "Done",
+      "otherGroup": "Deferred and other",
+      "vacuous": "Passes even without the change",
+      "status": {
+        "done": "Done",
+        "deferred": "Deferred",
+        "unclear": "Couldn’t confirm",
+        "rejected": "Rejected",
+        "missing": "Missing",
+        "withdrawn": "Withdrawn",
+        "noted": "Noted",
+        "pending": "Pending"
+      }
+    },
     "deliverable": "Delivered",
     "viewReport": "View delivery report",
     "timeline": "What I did",

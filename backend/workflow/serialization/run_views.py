@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SerializerFunctionWrapHandler, model_serializer
 
 from backend.workflow.infrastructure.db import (
     DecisionStatus,
@@ -97,6 +98,29 @@ class RunVerificationCheck(BaseModel):
     exit_code: int | None = None
 
 
+class RunRequirement(BaseModel):
+    """One requirements-ledger item and its verdict — the row, not the whole report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    text: str
+    kind: str
+    status: str
+    note: str | None = None
+    # ``holds`` · ``vacuous`` · ``unknown``; omitted (``None``) when never probed.
+    counterfactual: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_missing_counterfactual(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if data.get("counterfactual") is None:
+            data.pop("counterfactual", None)
+        return data
+
+
 class RunVerification(BaseModel):
     """The latest VerificationResult outcome for the run, if any."""
 
@@ -115,6 +139,8 @@ class RunVerification(BaseModel):
     requirements_total: int | None = None
     requirements_done: int | None = None
     requirements_deferred: int | None = None
+    # The ledger's items, one per row; empty for a run that has no ledger.
+    requirements: list[RunRequirement] = []
 
 
 class RunActivity(BaseModel):
@@ -228,6 +254,7 @@ __all__ = [
     "RunDecision",
     "RunDetailResponse",
     "RunPartialDeliverable",
+    "RunRequirement",
     "RunResponse",
     "RunRetryResponse",
     "RunTriggerContext",

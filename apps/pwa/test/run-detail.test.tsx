@@ -124,6 +124,49 @@ describe("Run-detail surface (Triggered)", () => {
     expect(within(region).getByText(/2 of 3 done, 1 deferred/)).toBeInTheDocument();
   });
 
+  it("lists failing requirements first and flags vacuous ones with ⚠", async () => {
+    const detail: RunDetailModel = {
+      ...REVIEW_READY,
+      verification: {
+        id: "v3",
+        outcome: "failed",
+        created_at: NOW,
+        requirements_total: 3,
+        requirements_done: 1,
+        requirements_deferred: 0,
+        requirements: [
+          { id: "R1", text: "ship it", kind: "do", status: "done", counterfactual: "vacuous" },
+          { id: "R2", text: "guard it", kind: "guard", status: "rejected", note: "no test" },
+          { id: "R3", text: "document it", kind: "do", status: "unclear" },
+        ],
+      },
+    };
+    global.fetch = vi.fn(async () => json(detail)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const region = await screen.findByRole("region", { name: /verification|checked/i });
+    const groups = Array.from(region.querySelectorAll("[data-ledger-group]"));
+    expect(groups.map((g) => g.getAttribute("data-ledger-group"))).toEqual(["attention", "done"]);
+    const attention = within(groups[0] as HTMLElement);
+    expect(attention.getByText("R2")).toBeInTheDocument();
+    expect(attention.getByText("R3")).toBeInTheDocument();
+    expect(attention.getByText("no test")).toBeInTheDocument();
+    expect(attention.queryByText(/⚠/)).not.toBeInTheDocument();
+    const done = within(groups[1] as HTMLElement);
+    expect(done.getByText("R1")).toBeInTheDocument();
+    expect(done.getByText(/⚠/)).toBeInTheDocument();
+  });
+
+  it("renders no ledger block for a run without requirements", async () => {
+    global.fetch = vi.fn(async () => json(REVIEW_READY)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const region = await screen.findByRole("region", { name: /verification|checked/i });
+    expect(region.querySelector("[data-ledger-group]")).toBeNull();
+  });
+
   it("renders the trigger context, status, decision, verification, and report link", async () => {
     global.fetch = vi.fn(async () => json(TRIGGERED)) as unknown as typeof fetch;
 

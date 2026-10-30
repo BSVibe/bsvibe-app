@@ -266,6 +266,29 @@ export interface RunVerification {
   requirements_total?: number | null;
   requirements_done?: number | null;
   requirements_deferred?: number | null;
+  /** The ledger's items, one per row; empty/absent when the run has no ledger. */
+  requirements?: RunRequirement[];
+}
+
+export type RunRequirementStatus =
+  | "done"
+  | "deferred"
+  | "unclear"
+  | "rejected"
+  | "missing"
+  | "withdrawn"
+  | "noted"
+  | "pending";
+
+/** One requirements-ledger item and its verdict (backend RunRequirement). */
+export interface RunRequirement {
+  id: string;
+  text: string;
+  kind: string;
+  status: RunRequirementStatus;
+  note?: string | null;
+  /** Omitted when the item was never probed. */
+  counterfactual?: "holds" | "vacuous" | "unknown";
 }
 
 export type RunCheckKind = "quality" | "test" | "surface" | "floor" | "final" | "declared";

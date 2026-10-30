@@ -713,6 +713,83 @@ async def test_runs_detail_lists_floor_and_final_checks(db, workspace_id, seeded
     assert (v.requirements_total, v.requirements_done, v.requirements_deferred) == (3, 2, 1)
 
 
+async def test_runs_detail_lists_requirement_rows(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    from backend.workflow.infrastructure.db import VerificationOutcome  # noqa: PLC0415
+
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    await _seed_verification(
+        db,
+        workspace_id,
+        run_id,
+        VerificationOutcome.FAILED,
+        {
+            "requirements": [
+                {
+                    "id": "R1",
+                    "text": "do it",
+                    "kind": "do",
+                    "status": "rejected",
+                    "note": "wrong file",
+                    "counterfactual": "vacuous",
+                },
+                {"id": "R2", "text": "guard", "kind": "guard", "status": "done"},
+            ]
+        },
+    )
+
+    detail = await _detail_via_builder(db, workspace_id, run_id)
+
+    assert detail is not None and detail.verification is not None
+    r1, r2 = detail.verification.requirements
+    assert (r1.id, r1.text, r1.kind, r1.status) == ("R1", "do it", "do", "rejected")
+    assert (r1.note, r1.counterfactual) == ("wrong file", "vacuous")
+    assert (r2.status, r2.note, r2.counterfactual) == ("done", None, None)
+
+    async with db() as s:
+        out = await registry.call_tool(
+            "bsvibe_runs_detail", {"run_id": str(run_id)}, _read_ctx(s, workspace_id, user_id)
+        )
+    mcp_r1, mcp_r2 = out["verification"]["requirements"]
+    assert (mcp_r1["status"], mcp_r1["note"], mcp_r1["counterfactual"]) == (
+        "rejected",
+        "wrong file",
+        "vacuous",
+    )
+    assert "counterfactual" not in mcp_r2
+
+
+async def test_runs_detail_truncates_requirement_text_and_note(db, workspace_id, seeded) -> None:
+    from backend.workflow.infrastructure.db import VerificationOutcome  # noqa: PLC0415
+
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    await _seed_verification(
+        db,
+        workspace_id,
+        run_id,
+        VerificationOutcome.FAILED,
+        {
+            "requirements": [
+                {
+                    "id": "R1",
+                    "text": "t" * 500,
+                    "kind": "do",
+                    "status": "missing",
+                    "note": "n" * 900,
+                }
+            ]
+        },
+    )
+
+    detail = await _detail_via_builder(db, workspace_id, run_id)
+
+    assert detail is not None and detail.verification is not None
+    (item,) = detail.verification.requirements
+    assert len(item.text) == 200
+    assert item.note is not None and len(item.note) == 300
+
+
 async def test_runs_detail_checks_carry_no_output_and_truncate_commands(
     db, workspace_id, user_id, registry, seeded
 ) -> None:
@@ -771,6 +848,7 @@ async def test_runs_detail_tolerates_legacy_and_missing_verification(
     assert detail is not None and detail.verification is not None
     assert detail.verification.checks == []
     assert detail.verification.requirements_total is None
+    assert detail.verification.requirements == []
 
 
 async def test_runs_detail_other_workspace_is_not_found(
