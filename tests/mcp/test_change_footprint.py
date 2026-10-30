@@ -112,7 +112,8 @@ async def _read(db, registry, workspace_id, user_id, deliverable_id):
             "bsvibe_deliverables_report", {"deliverable_id": str(deliverable_id)}, ctx
         )
         pending = await registry.call_tool("bsvibe_safe_mode_list_pending", {}, ctx)
-    return report, pending["items"][0]
+    item = next(i for i in pending["items"] if i["deliverable_id"] == str(deliverable_id))
+    return report, item
 
 
 async def test_large_change_is_reported_on_report_and_pending_item(db, registry) -> None:
