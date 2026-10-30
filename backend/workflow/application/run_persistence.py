@@ -39,7 +39,10 @@ from backend.workflow.application._verified_summary import (
     _compose_verified_summary,
 )
 from backend.workflow.application.audit_events import LoopTerminal
-from backend.workflow.domain.verified_deliverable import write_verified_deliverable
+from backend.workflow.domain.verified_deliverable import (
+    RunCancelledError,
+    write_verified_deliverable,
+)
 from backend.workflow.infrastructure.db import (
     Decision,
     Deliverable,
@@ -314,23 +317,36 @@ async def finish_verified(
         LoopResult,
     )
 
+    try:
+        await land_verified_artifacts(
+            session,
+            run=run,
+            attempt_id=attempt.id,
+            written_paths=written_paths,
+            final_text=final_text,
+            verdict_result=verdict.result if isinstance(verdict.result, Mapping) else None,
+            redis_client=redis_client,
+            settings=settings,
+            knowledge=knowledge,
+            round_budget=round_budget,
+        )
+    except RunCancelledError:
+        # Cancelled / discarded while the drive was still running: nothing was written
+        # (``write_verified_deliverable`` refuses first), and the run is not "verified".
+        logger.warning("run_orchestrator_verified_but_cancelled", run_id=str(run.id))
+        return LoopResult(
+            outcome="needs_decision",
+            run_id=run.id,
+            work_step_id=work_step.id,
+            run_attempt_id=attempt.id,
+            written_paths=written_paths,
+            summary="Run cancelled — no artifact written.",
+        )
+
     work_step.status = WorkStepStatus.VERIFIED
     work_step.proof_state = ProofState.PROVED
     attempt.phase = RunAttemptPhase.COMPLETED
     attempt.finished_at = utcnow()
-
-    await land_verified_artifacts(
-        session,
-        run=run,
-        attempt_id=attempt.id,
-        written_paths=written_paths,
-        final_text=final_text,
-        verdict_result=verdict.result if isinstance(verdict.result, Mapping) else None,
-        redis_client=redis_client,
-        settings=settings,
-        knowledge=knowledge,
-        round_budget=round_budget,
-    )
 
     logger.info(
         "run_orchestrator_verified",

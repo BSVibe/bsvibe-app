@@ -38,9 +38,29 @@ from backend.workflow.infrastructure.db import (
     DeliverableType,
     ExecutionRun,
     ExecutionRunActivity,
+    RunStatus,
 )
 
 logger = structlog.get_logger(__name__)
+
+
+class RunCancelledError(Exception):
+    """The run was cancelled / discarded, so no artifact may be written for it."""
+
+
+async def ensure_run_not_cancelled(session: AsyncSession, run: ExecutionRun) -> None:
+    """The last line of defence against a cancelled run producing artifacts.
+
+    The drive loop's ``run`` object was loaded when the attempt began, and a cancel /
+    discard is committed by a DIFFERENT session, so the status is re-read from the DB
+    (a column-level scalar select bypasses the identity map). Raises
+    :class:`RunCancelledError` when the run is CANCELLED.
+    """
+    current = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run.id))
+    if current is RunStatus.CANCELLED:
+        logger.warning("artifact_write_refused_run_cancelled", run_id=str(run.id))
+        raise RunCancelledError(str(run.id))
+
 
 #: How much of a deliverable summary is kept. The cap exists to bound row size,
 #: but it must clear a REAL artifact: at 500 the M5 weekly report was cut mid
@@ -315,6 +335,7 @@ async def write_verified_deliverable(
     event + settle payloads (matching the native path); the Deliverable itself
     keeps the full summary.
     """
+    await ensure_run_not_cancelled(session, run)
     # Lift 2a: capture the run's real old↔new diff while the worktree is still
     # alive (verify-time, before auto-ship cleanup) so the report can render
     # GitHub-style red/green. Best-effort + product-run only; a missing diff
@@ -698,7 +719,9 @@ def diff_of(payload: dict[str, Any]) -> tuple[str | None, bool]:
 __all__ = [
     "ANSWER_DELIVERABLE_KIND",
     "PARTIAL_DELIVERABLE_KIND",
+    "RunCancelledError",
     "diff_of",
+    "ensure_run_not_cancelled",
     "settle_run_context",
     "write_answer_deliverable",
     "write_partial_deliverable",

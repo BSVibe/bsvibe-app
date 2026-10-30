@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from backend.workflow.application._drive_loop import _pending_question
+from backend.workflow.application._drive_cancel import pending_question as _pending_question
 
 pytestmark = pytest.mark.asyncio
 
