@@ -1225,5 +1225,13 @@
     "errorLoadFailed": "Couldn't check that code just now. Please try again.",
     "errorSubmit": "Couldn't record your decision. Please try again.",
     "tryAnotherCode": "Enter a different code"
+  },
+  "changeFootprint": {
+    "files": "{count, plural, one {# file changed} other {# files changed}}",
+    "warningTitle": "Large change",
+    "warningBody": "This changes {count} files — more than usual. Check it is what you intended before approving.",
+    "topDirs": "Most files in",
+    "dirEntry": "{dir} ({count})",
+    "rootDir": "(repo root)"
   }
 }

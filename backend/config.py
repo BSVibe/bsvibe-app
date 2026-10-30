@@ -357,6 +357,11 @@ class Settings(BaseSettings):
     # nothing distinguished them from it.
     execution_work_round_budget: int = 48
 
+    # A deliverable that changes MORE files than this is flagged ``large_change`` on the
+    # report and the Safe Mode queue, so the founder sees "18,752 files" before approving
+    # rather than after the PR exists (run 14e222a1 shipped a sandbox ``.pnpm-store/``).
+    large_change_file_threshold: int = 200
+
     # Executor-pool dispatch (executor-pool Lift 5b). A run whose resolved
     # ModelAccount is ``provider='executor'`` dispatches a task to an external
     # CLI worker instead of running the native LLM loop; this is how long the

@@ -1035,6 +1035,27 @@ main.login {
   color: var(--amber-ink);
 }
 
+/* ── Change footprint: how many files a deliverable changes; loud when large ── */
+.change-footprint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary, inherit);
+}
+.change-footprint__warning {
+  border: 1px solid var(--amber-dot);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--amber-ink);
+  font-weight: 500;
+}
+.change-footprint__dirs {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-weight: 400;
+}
+
 /* ── Shipped (collapsed, count + View all) (R4) ───────────────────────────── */
 .shipped {
   display: flex;

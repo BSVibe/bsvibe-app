@@ -394,6 +394,23 @@ export interface Deliverable {
  *  declared verification contract against a run. */
 export type VerificationOutcome = "passed" | "failed" | "inconclusive";
 
+/** One of the busiest top-level directories of a change (backend TopDir). */
+export interface TopDir {
+  dir: string;
+  count: number;
+}
+
+/** How big a deliverable's change is — on the report and on Safe Mode queue items.
+ *  `changed_files` is null/absent when the deliverable declared no artifact_refs; then
+ *  there is no warning either. `large_change_warning` is the backend's Korean sentence;
+ *  the PWA renders its own localized copy from the numbers. */
+export interface ChangeFootprintFields {
+  changed_files?: number | null;
+  top_dirs?: TopDir[];
+  large_change?: boolean;
+  large_change_warning?: string | null;
+}
+
 /** One `VerificationResult` in a delivery report (backend VerificationReport).
  *  `contract` is the work LLM's declared checks (the checks BSVibe promised to
  *  run) and `result` is the execution outcome of running them — both free-form
@@ -409,7 +426,7 @@ export interface VerificationReportItem {
 /** `GET /api/v1/deliverables/{id}/report` body (backend
  *  DeliverableReportResponse) — the glass-box proof for one shipped
  *  deliverable: the artifact plus the verification(s) recorded for its run. */
-export interface DeliverableReport {
+export interface DeliverableReport extends ChangeFootprintFields {
   deliverable: Deliverable;
   /** The founder's Direction that led to this work (from the producing run's
    *  payload); `null` when the run carries no recorded intent. */
@@ -678,6 +695,8 @@ export interface PendingDelivery {
   title?: string | null;
   productSlug?: string;
   detailHref?: string | null;
+  /** How many files the held change touches, from the queue item. */
+  change?: ChangeFootprintFields;
   createdAt: string;
 }
 
@@ -739,7 +758,7 @@ export interface PendingRead {
 }
 
 /** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
-export interface SafeModeItem {
+export interface SafeModeItem extends ChangeFootprintFields {
   id: string;
   workspace_id: string;
   deliverable_id: string;

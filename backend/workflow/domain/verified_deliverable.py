@@ -287,6 +287,17 @@ async def _capture_product_run_diff(
     return _truncate_diff_preserving_artifacts(diff, artifact_refs, _MAX_DIFF_CHARS)
 
 
+async def _capture_product_run_worktree_change(run: ExecutionRun) -> dict[str, Any] | None:
+    """The run worktree's change count + busiest dirs, or ``None`` (non-product / unknown)."""
+    if run.product_id is None:
+        return None
+    from backend.storage.product_workspace import (
+        capture_run_worktree_change,  # noqa: PLC0415 — lazy, cross-layer
+    )
+
+    return await capture_run_worktree_change(run.product_id, run.id)
+
+
 async def settle_run_context(session: AsyncSession, run: ExecutionRun) -> dict[str, Any]:
     """Resolve the run's stable settle-clustering context.
 
@@ -350,6 +361,12 @@ async def write_verified_deliverable(
             payload["diff_truncated"] = True
             if diff_truncated_detail is not None:
                 payload["diff_truncated_detail"] = diff_truncated_detail
+
+    # What delivery will actually commit — ``artifact_refs`` only lists files written through
+    # the work tools, so it cannot see a package store swept into the worktree.
+    worktree_change = await _capture_product_run_worktree_change(run)
+    if worktree_change is not None:
+        payload["worktree_change"] = worktree_change
 
     deliverable = Deliverable(
         id=uuid.uuid4(),

@@ -75,6 +75,12 @@ export function toPendingDecisions(
       title: ctx?.title ?? null,
       productSlug: ctx?.productSlug,
       detailHref: ctx?.detailHref ?? null,
+      change: {
+        changed_files: d.changed_files,
+        top_dirs: d.top_dirs,
+        large_change: d.large_change,
+        large_change_warning: d.large_change_warning,
+      },
       createdAt: d.created_at,
     });
   }
