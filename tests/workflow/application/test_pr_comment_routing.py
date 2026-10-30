@@ -254,7 +254,7 @@ async def test_trusted_comment_is_routed(association: str) -> None:
         assert (await _run(sf, run_id, ws)).status is RunStatus.OPEN
 
 
-async def _worker_scene(*, filters: dict, association: str = "COLLABORATOR"):  # noqa: ANN202
+async def _worker_scene(*, filters: dict, association: str = "COLLABORATOR", repo_permission=None):  # noqa: ANN001, ANN202
     """A watched PR run + a github comment trigger on a binding with ``filters``."""
     sf = async_sessionmaker(_ENGINE[0], expire_on_commit=False)
     ws, product_id, account_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
@@ -300,7 +300,9 @@ async def _worker_scene(*, filters: dict, association: str = "COLLABORATOR"):  #
             )
         )
         await s.commit()
-    await IntakeWorker(session_factory=sf, config=IntakeWorkerConfig()).drain_once()
+    await IntakeWorker(
+        session_factory=sf, config=IntakeWorkerConfig(), repo_permission=repo_permission
+    ).drain_once()
     async with sf() as s, workspace_session_scope(s, ws):
         requests = list((await s.execute(select(RequestRow))).scalars().all())
     return await _run(sf, run_id, ws), requests

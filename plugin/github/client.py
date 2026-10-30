@@ -79,6 +79,26 @@ class GithubClient:
         body: dict[str, Any] = resp.json()
         return body
 
+    # ── access ─────────────────────────────────────────────────────────────
+
+    async def repo_permission(self, owner: str, repo: str, username: str) -> str | None:
+        """``username``'s permission on the repo — ``admin`` / ``maintain`` / ``write`` /
+        ``triage`` / ``read`` / ``none`` — or ``None`` when GitHub knows no such collaborator.
+
+        ``permission`` folds ``maintain`` into ``write``; ``role_name`` keeps it."""
+        resp = await self._request(
+            "GET", f"/repos/{owner}/{repo}/collaborators/{quote(username, safe='')}/permission"
+        )
+        if resp.status_code == 404:
+            return None
+        data = self._json(resp)
+        role = str(data.get("role_name") or "")
+        return (
+            role
+            if role in {"admin", "maintain", "write", "triage", "read"}
+            else (str(data.get("permission") or "") or None)
+        )
+
     # ── pull requests ──────────────────────────────────────────────────────
 
     async def open_pr(

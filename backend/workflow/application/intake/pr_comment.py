@@ -3,7 +3,8 @@
 This runs in the intake worker, AFTER Receive's binding filter and the workspace
 budget/run-cap gate: every path that puts an instruction on a run passes the same
 doors (filter, budget, author). The repo is public, so only an OWNER / MEMBER /
-COLLABORATOR comment is an instruction; anyone else's is logged and not routed.
+COLLABORATOR comment — or one by someone with write access to the repo (:mod:`.trust`) — is
+an instruction; anyone else's is logged and not routed.
 
 A review comment ("fix this") on a PR the merge watch is tracking is an
 instruction for THAT run — same branch, same PR (pushed force-with-lease). Landing
@@ -24,6 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data.rls import workspace_session_scope
+from backend.workflow.application.intake.trust import RepoPermission, is_trusted
 from backend.workflow.application.run_status import move_run_status
 from backend.workflow.domain.pr_review import COMMENT_RECEIVED_AT_KEY, record_comment
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
@@ -45,10 +47,6 @@ _LIVE_WATCH = (
 #: the founder's own stop — neither is revived by a comment.
 _APPEND_ONLY = (RunStatus.OPEN, RunStatus.RUNNING)
 _REOPEN = (RunStatus.REVIEW_READY, RunStatus.FAILED)
-
-#: ``comment.author_association`` values that may instruct a run. Anything else
-#: (NONE, CONTRIBUTOR, FIRST_TIMER, ...) is a stranger on a public repo.
-_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 def pr_comment_of(payload: dict[str, Any]) -> tuple[str, int, str] | None:
@@ -82,6 +80,7 @@ async def route_pr_comment_to_run(
     *,
     workspace_id: uuid.UUID,
     payload: dict[str, Any],
+    permission_of: RepoPermission | None = None,
 ) -> uuid.UUID | None:
     """Hand a PR comment to the run that opened the PR; its id, or ``None``.
 
@@ -95,7 +94,10 @@ async def route_pr_comment_to_run(
         return None
     repo, pr_number, text = parsed
     author, association = _comment_author(payload)
-    if association not in _TRUSTED_ASSOCIATIONS:
+    # A private org member shows as CONTRIBUTOR; ``permission_of`` asks GitHub (#1279).
+    if not await is_trusted(
+        association, login=author, repo=repo, workspace_id=workspace_id, permission_of=permission_of
+    ):
         logger.info(
             "pr_comment_not_routed_untrusted_author",
             repo=repo,
