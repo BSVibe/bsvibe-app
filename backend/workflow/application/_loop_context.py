@@ -201,17 +201,15 @@ async def knowledge_seed_message(run: ExecutionRun, *, retriever: Any) -> dict[s
 
 
 def ledger_messages(run: ExecutionRun) -> list[dict[str, Any]]:
-    """The requirements ledger as turn context (empty for a run that has none).
-
-    Seeded at the start of every drive, beside the resumption context, so a run resumed
-    after a Decision still knows what it owes."""
+    """Issue edits routed to this run (#1268, told once), then the requirements ledger — seeded
+    at the start of every drive, so a resumed run still knows what it owes."""
+    from backend.workflow.application.intake.issue_edit import issue_edit_messages  # noqa: PLC0415
     from backend.workflow.application.requirements_ledger import run_requirements  # noqa: PLC0415
     from backend.workflow.domain.requirements import ledger_prompt  # noqa: PLC0415
 
     requirements = run_requirements(run)
-    if not requirements:
-        return []
-    return [{"role": "user", "content": ledger_prompt(requirements)}]
+    ledger = [{"role": "user", "content": ledger_prompt(requirements)}] if requirements else []
+    return [*issue_edit_messages(run), *ledger]
 
 
 def _is_ask(run: ExecutionRun) -> bool:
