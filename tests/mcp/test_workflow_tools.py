@@ -760,6 +760,60 @@ async def test_runs_detail_lists_requirement_rows(
     assert "counterfactual" not in mcp_r2
 
 
+async def test_build_run_detail_reads_a_stored_verification_result_ledger(
+    db, workspace_id, seeded
+) -> None:
+    from backend.workflow.application.run_detail import build_run_detail  # noqa: PLC0415
+    from backend.workflow.infrastructure.db import (  # noqa: PLC0415
+        VerificationOutcome,
+        VerificationResult,
+    )
+    from backend.workflow.infrastructure.repositories import (  # noqa: PLC0415
+        SqlAlchemyDecisionRepository,
+        SqlAlchemyDeliverableRepository,
+        SqlAlchemyRunRepository,
+    )
+
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    async with scoped_session(db, workspace_id) as s:
+        s.add(
+            VerificationResult(
+                run_id=run_id,
+                workspace_id=workspace_id,
+                outcome=VerificationOutcome.FAILED,
+                contract={},
+                result={
+                    "requirements": [
+                        {
+                            "id": "R1",
+                            "text": "x" * 400,
+                            "kind": "do",
+                            "status": "unclear",
+                            "note": "y" * 400,
+                            "counterfactual": "unknown",
+                        }
+                    ]
+                },
+            )
+        )
+        await s.commit()
+
+    async with db() as s:
+        detail = await build_run_detail(
+            run_id=run_id,
+            workspace_id=workspace_id,
+            session=s,
+            runs=SqlAlchemyRunRepository(s),
+            decisions=SqlAlchemyDecisionRepository(s),
+            deliverables=SqlAlchemyDeliverableRepository(s),
+        )
+
+    assert detail is not None and detail.verification is not None
+    (item,) = detail.verification.requirements
+    assert (item.id, item.status, item.counterfactual) == ("R1", "unclear", "unknown")
+    assert len(item.text) == 200 and item.note is not None and len(item.note) == 300
+
+
 async def test_runs_detail_truncates_requirement_text_and_note(db, workspace_id, seeded) -> None:
     from backend.workflow.infrastructure.db import VerificationOutcome  # noqa: PLC0415
 
