@@ -66,6 +66,7 @@ from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
     WORK_TOOLS,
 )
+from backend.workflow.application.verification_leftovers import leftovers_excluded
 from backend.workflow.application.verification_service import VerificationService
 from backend.workflow.domain.emit_deliverable import (
     EMIT_DELIVERABLE_NAME,
@@ -437,16 +438,18 @@ class RunOrchestrator:
         final_text: str,
         baseline: str | None = None,
     ) -> VerificationResult:
-        return await self._verifier().verify(
-            baseline=baseline,
-            run=run,
-            work_step=work_step,
-            attempt=attempt,
-            contract=contract,
-            box=box,
-            written_paths=written_paths,
-            final_text=final_text,
-        )
+        # #1267 — what the checks leave in the checkout stays out of the run's commits.
+        async with leftovers_excluded(box, keep=written_paths):
+            return await self._verifier().verify(
+                baseline=baseline,
+                run=run,
+                work_step=work_step,
+                attempt=attempt,
+                contract=contract,
+                box=box,
+                written_paths=written_paths,
+                final_text=final_text,
+            )
 
     async def _assemble_contract(
         self, registry: ToolRegistry, written_paths: list[str], final_text: str
