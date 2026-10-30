@@ -342,7 +342,10 @@ def check_ledger(
             "note": "",
         }
         entry = by_id.get(str(item["id"]))
-        if row["kind"] not in OWED_KINDS:
+        if item.get("withdrawn"):
+            # The request no longer asks for it (#1268) — owed nothing, shown as withdrawn.
+            row["status"] = "withdrawn"
+        elif row["kind"] not in OWED_KINDS:
             row["status"] = "noted"
         elif entry is not None and entry.get("status") == "deferred":
             row["note"] = str(entry.get("note") or "")
@@ -368,12 +371,14 @@ def check_ledger(
 def ledger_passed(rows: Sequence[Mapping[str, Any]]) -> bool:
     """Every owed item is ``done``, ``unclear`` (judge could not tell) or ``deferred`` with a
     reason. ``missing``, ``rejected`` and an unjudged ``pending`` fail."""
-    return all(r.get("status") in {"done", "unclear", "deferred", "noted"} for r in rows)
+    return all(
+        r.get("status") in {"done", "unclear", "deferred", "noted", "withdrawn"} for r in rows
+    )
 
 
 def ledger_closes(rows: Sequence[Mapping[str, Any]]) -> bool:
     """The PR may close its issue only when every owed item is ``done``."""
-    return all(r.get("status") in {"done", "noted"} for r in rows)
+    return all(r.get("status") in {"done", "noted", "withdrawn"} for r in rows)
 
 
 def ledger_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
@@ -397,6 +402,11 @@ def ledger_prompt(requirements: Sequence[Mapping[str, Any]]) -> str:
         "",
     ]
     for item in requirements:
+        if item.get("withdrawn"):
+            lines.append(
+                f"- {item['id']} (withdrawn — no longer asked; send nothing) {item['text']}"
+            )
+            continue
         lines.append(f"- {item['id']} [{item.get('kind', 'do')}] {item['text']}")
     lines += [
         "",
@@ -407,7 +417,9 @@ def ledger_prompt(requirements: Sequence[Mapping[str, Any]]) -> str:
         "ran it. If an item genuinely cannot be done here, send "
         '`{"requirement_id": "R3", "status": "deferred", "note": "<why>"}` — the pull request '
         "will then reference the issue instead of closing it. Constraints [constraint] need no "
-        "entry: they are shown to the reviewer.",
+        "entry: they are shown to the reviewer. If a founder decision shown in this "
+        "conversation overrides an item, follow the decision and defer that item with a note "
+        "quoting it.",
     ]
     return "\n".join(lines)
 
@@ -515,12 +527,50 @@ def cited_test_body(text: str, name: str, *, limit: int = 4000) -> str | None:
     return "\n".join(body).rstrip()[:limit]
 
 
+_ITEM_ID = re.compile(r"^R(\d+)$")
+
+
+def refresh_ledger(
+    old: Sequence[Mapping[str, Any]], new: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """The ledger after the request was edited (#1268).
+
+    An item whose text is unchanged keeps its id — evidence and cached verdicts stay with
+    it. An item that is gone stays, marked ``withdrawn`` (owed nothing, shown as such), so an
+    id never comes to mean a different item. A new item gets the next free id."""
+    old_by_text = {str(i["text"]): i for i in old}
+    numbers = [int(m.group(1)) for i in old if (m := _ITEM_ID.match(str(i.get("id"))))]
+    next_number = max(numbers, default=0) + 1
+    kept: set[str] = set()
+    refreshed: list[dict[str, Any]] = []
+    for item in new:
+        prior = old_by_text.get(str(item["text"]))
+        if prior is not None and str(prior["id"]) not in kept:
+            entry = {k: v for k, v in item.items() if k != "withdrawn"}
+            refreshed.append({**entry, "id": prior["id"]})
+            kept.add(str(prior["id"]))
+        else:
+            refreshed.append({**item, "id": f"R{next_number}"})
+            next_number += 1
+    refreshed += [{**i, "withdrawn": True} for i in old if str(i["id"]) not in kept]
+
+    def order(item: Mapping[str, Any]) -> int:
+        m = _ITEM_ID.match(str(item.get("id")))
+        return int(m.group(1)) if m else 1_000_000
+
+    return sorted(refreshed, key=order)
+
+
 def unevidenced(
     requirements: Sequence[Mapping[str, Any]], evidence: Sequence[Mapping[str, Any]]
 ) -> list[Mapping[str, Any]]:
     """Owed items the declaration has no entry for — not even a deferral."""
     named = {str(e.get("requirement_id")) for e in evidence}
-    return [i for i in requirements if i.get("kind") in OWED_KINDS and i["id"] not in named]
+    return [
+        i
+        for i in requirements
+        if i.get("kind") in OWED_KINDS and not i.get("withdrawn") and i["id"] not in named
+    ]
 
 
 def evidence_reminder(items: Sequence[Mapping[str, Any]]) -> str:
@@ -594,6 +644,7 @@ def public_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 __all__ = [
     "evidence_reminder",
+    "refresh_ledger",
     "split_test_id",
     "cited_test_body",
     "relevant_hunks",

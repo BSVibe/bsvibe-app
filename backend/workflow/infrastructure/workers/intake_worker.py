@@ -39,6 +39,7 @@ from backend.notifications.copy import (
 from backend.notifications.emit import emit_notification
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
+from backend.workflow.application.intake.issue_edit import route_issue_edit_to_run
 from backend.workflow.application.intake.pr_comment import route_pr_comment_to_run
 from backend.workflow.application.intake_gate import (
     IntakeVerdict,
@@ -230,6 +231,11 @@ class IntakeWorker(BaseWorker):
                     # budget/run-cap gate above, so a paused filter stops it too.
                     if trig.source == "github":
                         routed_run_id = await route_pr_comment_to_run(
+                            session,
+                            workspace_id=trig.workspace_id,
+                            payload=dict(trig.payload or {}),
+                        ) or await route_issue_edit_to_run(
+                            # #1268 — an edit to an issue whose run is in flight goes to it.
                             session,
                             workspace_id=trig.workspace_id,
                             payload=dict(trig.payload or {}),
