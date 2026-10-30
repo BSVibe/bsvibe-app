@@ -1182,6 +1182,42 @@ async def capture_run_changed_paths(product_id: uuid.UUID, run_id: uuid.UUID) ->
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+async def capture_run_worktree_change(
+    product_id: uuid.UUID, run_id: uuid.UUID
+) -> dict[str, object] | None:
+    """How many files delivery will commit from this run's worktree, or ``None`` if unknown.
+
+    Counts ``git diff --name-only <branch point>`` (commits plus uncommitted edits to tracked
+    files) and the untracked, non-ignored files — the set ``commit_all`` would commit — so a
+    package store swept into the worktree is counted even though no work tool wrote it.
+    Returns ``{"changed_files": N, "top_dirs": [{"dir", "count"}, ...]}`` (never the full list:
+    it can be tens of thousands of paths). Best-effort: never raises.
+    """
+    from backend.workflow.domain.change_footprint import top_dirs_of  # noqa: PLC0415
+
+    worktree = run_worktree_path(run_id)
+    if not (worktree / ".git").exists():
+        return None
+    try:
+        base = await _run_branch_point(worktree)
+        if base is None:
+            return None
+        diff = await _git("diff", "--name-only", base, cwd=worktree, check=False)
+        untracked = await _git(
+            "ls-files", "--others", "--exclude-standard", cwd=worktree, check=False
+        )
+    except (ProductWorkspaceError, OSError):
+        return None
+    if diff.returncode != 0 or untracked.returncode != 0:
+        return None
+    paths = {line.strip() for line in diff.stdout.splitlines() if line.strip()}
+    paths |= {line.strip() for line in untracked.stdout.splitlines() if line.strip()}
+    return {
+        "changed_files": len(paths),
+        "top_dirs": [d.model_dump() for d in top_dirs_of(paths)],
+    }
+
+
 async def merge_main_into_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> MergeOutcome:
     """Pull ``main`` into the run worktree.
 
@@ -1513,6 +1549,7 @@ async def search_product_tree(
 
 __all__ = [
     "capture_run_changed_paths",
+    "capture_run_worktree_change",
     "MergeOutcome",
     "ProductWorkspaceBusy",
     "ProductWorkspaceError",

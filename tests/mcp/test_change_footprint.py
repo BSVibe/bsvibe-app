@@ -133,6 +133,27 @@ async def test_large_change_is_reported_on_report_and_pending_item(db, registry)
         assert BIG_DIR in view["large_change_warning"]
 
 
+async def test_worktree_count_wins_over_small_artifact_refs(db, registry) -> None:
+    """Run 14e222a1: 7 artifact_refs, yet delivery committed 18,752 files (.pnpm-store)."""
+    workspace_id, user_id = uuid.uuid4(), uuid.uuid4()
+    payload = {
+        "artifact_refs": [f"src/mod{i}.py" for i in range(7)],
+        "worktree_change": {
+            "changed_files": 18752,
+            "top_dirs": [{"dir": BIG_DIR, "count": 18745}, {"dir": "src", "count": 7}],
+        },
+    }
+    deliverable_id = await _store(db, workspace_id, user_id, payload)
+
+    report, item = await _read(db, registry, workspace_id, user_id, deliverable_id)
+
+    for view in (report, item):
+        assert view["changed_files"] == 18752
+        assert view["large_change"] is True
+        assert view["top_dirs"][0] == {"dir": BIG_DIR, "count": 18745}
+        assert BIG_DIR in view["large_change_warning"]
+
+
 async def test_small_change_has_no_warning(db, registry) -> None:
     workspace_id, user_id = uuid.uuid4(), uuid.uuid4()
     refs = ["src/a.py", "src/b.py", "README.md"]
