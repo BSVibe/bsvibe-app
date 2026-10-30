@@ -75,6 +75,11 @@ def record_requirements(run: ExecutionRun, request: RequestRow) -> None:
         run.payload = {**(run.payload or {}), REQUIREMENTS_KEY: ledger}
 
 
+def live_ledger_texts(run: Any) -> tuple[str, ...]:
+    """The ledger items still asked for (not withdrawn), as plain text — for the deriver."""
+    return tuple(str(i["text"]) for i in run_requirements(run) if not i.get("withdrawn"))
+
+
 def run_requirements(run: ExecutionRun) -> list[dict[str, Any]]:
     """The ledger stored on the run (``[]`` for a run with none)."""
     payload = run.payload if isinstance(run.payload, dict) else {}
