@@ -43,6 +43,7 @@ from backend.workflow.application.gate_commands import (
     run_gate_commands,
 )
 from backend.workflow.application.requirements_ledger import (
+    cited_tests,
     diff_excerpt,
     gate_facts,
     judge_ledger,
@@ -1004,6 +1005,7 @@ class VerificationService:
             complete=complete,
             prior_rows=prior,
             judge=judge,
+            missing_tests=cited_tests(box),
         )
         if judge and baseline:
             # R4, report-only: does each cited guard test fail with the change taken away?

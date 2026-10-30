@@ -33,7 +33,9 @@ from backend.workflow.domain.requirements import (
     GateFacts,
     build_ledger,
     check_ledger,
+    cited_test_body,
     relevant_hunks,
+    split_test_id,
 )
 
 if TYPE_CHECKING:
@@ -134,6 +136,50 @@ async def gate_facts(
     )
 
 
+#: How much of a cited test file is read to find the test in it.
+_TEST_FILE_BYTES = 512 * 1024
+
+
+async def _test_file(box: SandboxSession, path: str) -> str | None:
+    try:
+        return (await box.read_file(path, _TEST_FILE_BYTES)).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 — an unreadable file says nothing either way
+        return None
+
+
+async def _cited_body(box: SandboxSession, test: str) -> str | None:
+    split = split_test_id(test)
+    if split is None:
+        return None
+    text = await _test_file(box, split[0])
+    return cited_test_body(text, split[1]) if text is not None else None
+
+
+MissingTests = Callable[[Mapping[str, Any]], Awaitable[list[str]]]
+
+
+def cited_tests(box: SandboxSession) -> MissingTests:
+    """The cited ``file::name`` tests that the file does not define.
+
+    A name that is not there is a defect the agent can fix by citing the right one — not an
+    "unclear" for the judge to guess at (#1269 cited a file's name, and a test that did not
+    exist, and both passed as evidence). A file that cannot be read proves nothing either way
+    and is not reported."""
+
+    async def _missing(row: Mapping[str, Any]) -> list[str]:
+        missing: list[str] = []
+        for test in row.get("tests") or []:
+            split = split_test_id(str(test))
+            if split is None:
+                continue
+            text = await _test_file(box, split[0])
+            if text is not None and cited_test_body(text, split[1]) is None:
+                missing.append(str(test))
+        return missing
+
+    return _missing
+
+
 def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
     """The judge's view of a row: the diff of each cited path against the run's baseline
     (working tree, so uncommitted edits show), or the file head when git has nothing."""
@@ -170,7 +216,10 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
             clipped = relevant_hunks(text, about, budget=_PATH_EXCERPT_CHARS)
             parts.append(f"--- {path}\n{clipped}")
         for test in row.get("tests") or []:
-            parts.append(f"--- test {test}: passed at the gate")
+            # The test itself, as its file defines it — a diff hunk is cut to a budget and
+            # the cited test is rarely at its head (#1269).
+            body = await _cited_body(box, test)
+            parts.append(f"--- test {test}: passed at the gate" + (f"\n{body}" if body else ""))
         if row.get("note"):
             parts.append(f"--- agent's note: {row['note']}")
         return "\n\n".join(parts)[:_EVIDENCE_CHARS]
@@ -222,6 +271,7 @@ async def judge_ledger(
     complete: Complete,
     prior_rows: Sequence[Mapping[str, Any]] = (),
     judge: bool = True,
+    missing_tests: MissingTests | None = None,
 ) -> list[dict[str, Any]]:
     """Verdict rows. ``judge=False`` (another check already failed) leaves grounded rows
     ``pending`` — the run fails anyway, and judging work that is about to change is waste."""
@@ -234,6 +284,14 @@ async def judge_ledger(
     gate = asyncio.Semaphore(_JUDGE_CONCURRENCY)
 
     async def _one(row: dict[str, Any]) -> None:
+        missing = await missing_tests(row) if missing_tests is not None else []
+        if missing:
+            row["status"] = "rejected"
+            row["note"] = (
+                f"cited test(s) not found in their file: {', '.join(missing)} — cite the test "
+                "by the name it is defined with"
+            )
+            return
         shown = await excerpt(row)
         row["excerpt_hash"] = _hash(f"{row['text']}\n{shown}")
         cached = prior.get((str(row["id"]), row["excerpt_hash"]))

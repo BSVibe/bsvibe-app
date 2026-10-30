@@ -477,6 +477,44 @@ def relevant_hunks(diff: str, about: str, *, budget: int) -> str:
     return shown + (f"\n[... {omitted} other hunk(s) omitted ...]" if omitted else "")
 
 
+_CLOSERS = ("}", ")", "]")
+
+
+def split_test_id(test: str) -> tuple[str, str] | None:
+    """``file::[Class::]name[params]`` → ``(file, name)``; ``None`` for a bare name."""
+    file_part, sep, rest = test.partition("::")
+    if not sep or not rest:
+        return None
+    name = rest.rsplit("::", 1)[-1].split("[", 1)[0].strip()
+    return (_norm_path(file_part), name) if name else None
+
+
+def cited_test_body(text: str, name: str, *, limit: int = 4000) -> str | None:
+    """The cited test as defined in its file — from its definition to the next one.
+
+    Found by how tests are DEFINED, not by language: a ``def``/``fn``/``func``/``function``
+    named ``name``, or a ``it``/``test``/``describe`` call titled ``name``. A mere mention (a
+    docstring, a call) is not a definition. The body ends at the next line indented no deeper
+    than the definition (a closing bracket at that depth belongs to it). ``None`` when nothing
+    in the file defines ``name``."""
+    esc = re.escape(name)
+    defined = re.compile(rf"^\s*(?:async\s+)?(?:def|fn|func|function)\s+{esc}\b")
+    titled = re.compile(rf"""^\s*(?:it|test|describe|specify)\s*\(\s*['"`]{esc}['"`]""")
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines) if defined.search(ln) or titled.search(ln)), None)
+    if start is None:
+        return None
+    depth = len(lines[start]) - len(lines[start].lstrip())
+    body = [lines[start]]
+    for line in lines[start + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) <= depth:
+            if line.strip().startswith(_CLOSERS):
+                body.append(line)
+            break
+        body.append(line)
+    return "\n".join(body).rstrip()[:limit]
+
+
 def unevidenced(
     requirements: Sequence[Mapping[str, Any]], evidence: Sequence[Mapping[str, Any]]
 ) -> list[Mapping[str, Any]]:
@@ -556,6 +594,8 @@ def public_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 __all__ = [
     "evidence_reminder",
+    "split_test_id",
+    "cited_test_body",
     "relevant_hunks",
     "unevidenced",
     "LEDGER_RESULT_KEY",
