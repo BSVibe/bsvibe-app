@@ -18,6 +18,10 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from backend.workflow.application._drive_cancel import (
+    pending_question,
+    stop_if_cancelled,
+)
 from backend.workflow.application._loop_context import (
     _consume_merge_conflict,
     _initial_user_message,
@@ -88,8 +92,6 @@ from backend.workflow.domain.verification_feedback import (
     render_verification_failure,
 )
 from backend.workflow.infrastructure.db import (
-    Decision,
-    DecisionStatus,
     ExecutionRun,
     RunAttempt,
     RunAttemptPhase,
@@ -102,48 +104,6 @@ if TYPE_CHECKING:
     from backend.workflow.application.agent_loop import LoopResult, RunOrchestrator
 
 logger = structlog.get_logger(__name__)
-
-
-async def _pending_question(session: Any, run: ExecutionRun) -> Decision | None:
-    """A question the agent asked the founder OUT OF BAND — i.e. not via a tool call the loop
-    could see, but by calling the MCP work tool, which records the Decision server-side.
-
-    That is the only way an executor's CLI can ask anything (parity audit #20: no tool call
-    other than ``declare_verification`` can come back from an executor), so without this the
-    run would keep working while the founder's question sat pending, unanswered."""
-    from sqlalchemy import select  # noqa: PLC0415
-
-    rows = await session.execute(
-        select(Decision).where(
-            Decision.run_id == run.id,
-            Decision.decision == "ask_user_question",
-            Decision.status == DecisionStatus.PENDING,
-        )
-    )
-    return rows.scalars().first()  # type: ignore[no-any-return]
-
-
-async def _stop_cancelled(
-    orch: RunOrchestrator,
-    run: ExecutionRun,
-    work_step: WorkStep,
-    attempt: RunAttempt,
-    written_paths: list[str],
-    final_text: str,
-    checkpoint: str,
-    cycle: int,
-) -> LoopResult:
-    """End a drive whose run was cancelled / discarded under it — no more work, no artifacts."""
-    logger.warning(
-        "drive_loop_stopped_run_cancelled",
-        run_id=str(run.id),
-        checkpoint=checkpoint,
-        cycle=cycle,
-    )
-    await orch._audit(
-        run, attempt, LoopTerminal, {"outcome": "cancelled", "cycle": cycle, "at": checkpoint}
-    )
-    return orch._cancelled_result(run, work_step, attempt, written_paths, final_text)
 
 
 async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle body
@@ -320,7 +280,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         # which records the Decision server-side. Nothing in ``turn.tool_calls`` says so.
         # The pause is therefore owned by the SERVER: ask the run, do not trust the agent to
         # stop (a coding CLI trusts its own tools over anything the prompt says — measured).
-        out_of_band = await _pending_question(orch._session, run)
+        out_of_band = await pending_question(orch._session, run)
         if out_of_band is not None:
             await orch._audit(
                 run,
@@ -493,20 +453,10 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         run.claimed_at = datetime.now(UTC)
         await orch._session.commit()
         # A cancel that landed during the turn must not start minutes of verification.
-        cancelled = await orch._run_cancelled(run)
-        # Commit again: the read's transaction must not stay open across the external work.
-        await orch._session.commit()
-        if cancelled:
-            return await _stop_cancelled(
-                orch,
-                run,
-                work_step,
-                attempt,
-                written_paths,
-                final_text,
-                "before_verify",
-                this_cycle,
-            )
+        if stopped := await stop_if_cancelled(
+            orch, run, work_step, attempt, written_paths, final_text, "before_verify", this_cycle
+        ):
+            return stopped
         contract = await orch._assemble_contract(registry, written_paths, final_text)
         if contract is None:
             settled = await settle_undeclared_verification(
@@ -536,11 +486,10 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             baseline=round_baseline,
         )
         # Verification takes minutes; the cancel most likely lands inside it.
-        await orch._session.commit()
-        if await orch._run_cancelled(run):
-            return await _stop_cancelled(
-                orch, run, work_step, attempt, written_paths, final_text, "after_verify", this_cycle
-            )
+        if stopped := await stop_if_cancelled(
+            orch, run, work_step, attempt, written_paths, final_text, "after_verify", this_cycle
+        ):
+            return stopped
         await orch._audit(
             run,
             attempt,
