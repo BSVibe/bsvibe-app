@@ -80,4 +80,44 @@ async def product_declared_checks(
     return read_declared_checks(row[0] if row else None)
 
 
-__all__ = ["any_failed", "product_declared_checks", "run_gate_commands"]
+#: The kinds the DERIVER wrote — never the product's floor/final or the agent's declared ones.
+_DERIVED_KINDS = frozenset({"quality", "test", "surface"})
+
+
+async def latest_derived_commands(
+    session: AsyncSession, run_id: uuid.UUID | None
+) -> tuple[str, ...]:
+    """The commands the deriver produced for this run's latest verification (``()`` if none).
+
+    Shown to the next round's deriver so it re-emits them instead of re-wording them (#1275)."""
+    if run_id is None:
+        return ()
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from backend.workflow.infrastructure.db import VerificationResult  # noqa: PLC0415
+
+    result = (
+        await session.execute(
+            select(VerificationResult.result)
+            .where(VerificationResult.run_id == run_id)
+            .order_by(VerificationResult.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    gate = result.get("derived_gate") if isinstance(result, dict) else None
+    commands = gate.get("commands") if isinstance(gate, dict) else None
+    if not isinstance(commands, list):
+        return ()
+    return tuple(
+        str(c["command"])
+        for c in commands
+        if isinstance(c, dict) and c.get("kind") in _DERIVED_KINDS and c.get("command")
+    )
+
+
+__all__ = [
+    "any_failed",
+    "latest_derived_commands",
+    "product_declared_checks",
+    "run_gate_commands",
+]

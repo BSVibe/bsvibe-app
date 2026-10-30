@@ -39,6 +39,7 @@ from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
 from backend.workflow.application.counterfactual_check import check_guards
 from backend.workflow.application.gate_commands import (
     any_failed,
+    latest_derived_commands,
     product_declared_checks,
     run_gate_commands,
 )
@@ -48,6 +49,7 @@ from backend.workflow.application.requirements_ledger import (
     gate_facts,
     judge_ledger,
     latest_ledger_rows,
+    live_ledger_texts,
     run_requirements,
 )
 from backend.workflow.application.sandbox_provisioning import ensure_sandbox_ready
@@ -623,6 +625,7 @@ class VerificationService:
         merge_conflict_paths: list[str] = []
         # Read while the connection is still held: what the PRODUCT requires checked.
         declared = await product_declared_checks(self._session, run.product_id)
+        previous = await latest_derived_commands(self._session, run.id)
         # Every step from here to the final persist is external work (git,
         # sandbox, LLM) that touches no DB — so hold no connection across it.
         # See :meth:`_release_connection` for the failure this prevents (#686).
@@ -790,7 +793,13 @@ class VerificationService:
         #                              a toolchain manifest this fails CLOSED.
         await self._release_connection(run)
         gate_outcome = await self._run_derived_gate(
-            run, box, written_paths, baseline, floor=declared.floor, final=declared.final
+            run,
+            box,
+            written_paths,
+            baseline,
+            floor=declared.floor,
+            final=declared.final,
+            previous=previous,
         )
         derived_gate = gate_outcome.blob if isinstance(gate_outcome, DerivedGateOk) else None
         deriver_failed = isinstance(gate_outcome, DerivedGateFailed)
@@ -1211,6 +1220,8 @@ class VerificationService:
         ci_declarations: dict[str, str] | None = None,
         *,
         product_checks: tuple[str, ...] = (),
+        ledger_items: tuple[str, ...] = (),
+        previous_commands: tuple[str, ...] = (),
     ) -> DerivedGate | DerivedGateFailed:
         """Ask the independent deriver for this repo's verification commands,
         grounded in its manifests. Bounded — a hung executor CLI must never stall
@@ -1236,6 +1247,8 @@ class VerificationService:
                         # that is not passed here binds only the agent (f7c5b4d1).
                         founder_decisions=founder_decisions_from_payload(run.payload),
                         product_checks=product_checks,
+                        ledger_items=ledger_items,
+                        previous_commands=previous_commands,
                     ),
                 ),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
@@ -1275,6 +1288,7 @@ class VerificationService:
         *,
         floor: tuple[str, ...] = (),
         final: tuple[str, ...] = (),
+        previous: tuple[str, ...] = (),
     ) -> DerivedGateOutcome:
         """I1′ — the repo's OWN verification gate, DERIVED by an LLM grounded in
         the repo's declarations (not a per-stack detector list nor a hardcoded
@@ -1309,6 +1323,10 @@ class VerificationService:
             ci_declarations,
             # Only when declared: what the product already runs is not the deriver's to repeat.
             **({"product_checks": (*floor, *final)} if floor or final else {}),
+            # The ledger checks the request's items; the deriver must not re-check them by
+            # text search, and must not re-word last round's commands (#1275).
+            **({"ledger_items": ledger} if (ledger := live_ledger_texts(run)) else {}),
+            **({"previous_commands": previous} if previous else {}),
         )
         if isinstance(gate, DerivedGateFailed):
             return gate

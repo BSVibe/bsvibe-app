@@ -171,6 +171,15 @@ _DERIVATION_SYSTEM_PROMPT = (
     "script the repo itself defines for that purpose; its name or description usually "
     "says so. NEVER invent one: if the repo declares no such check, emit none, because "
     "a fabricated end-to-end command proves nothing and fails for the wrong reason.\n"
+    "LEDGER ITEMS, when given, are the request's own items and are checked SEPARATELY — "
+    "each needs evidence the agent cites and a judge who reads it. NEVER emit a command "
+    "that checks a ledger item by text search (looking for a name, a word or a key in a "
+    "file or a diff): it is a weaker copy of that check and fails on wording, not on "
+    "behaviour. Constraint commands are for what the intent says NOT to do.\n"
+    "PREVIOUS ROUND, when given, lists the commands the previous verification of this "
+    "same work ran. Re-emit each of them VERBATIM unless the change since then made it "
+    "wrong (a path renamed or removed); never make a command that passed stricter. Add a "
+    "command only for what the change newly needs.\n"
     "CONSTRAINTS: the task intent often states not only what to build but what NOT "
     "to do. Every such constraint is verifiable and must become its own command "
     "whose EXIT CODE decides whether it held — exit 0 when the constraint was "
@@ -222,6 +231,8 @@ def derivation_planner_messages(
     ci_declarations: dict[str, str] | None = None,
     founder_decisions: Sequence[Mapping[str, str]] | None = None,
     product_checks: Sequence[str] = (),
+    ledger_items: Sequence[str] = (),
+    previous_commands: Sequence[str] = (),
 ) -> list[dict[str, str]]:
     """Build the (system, user) message pair grounding the deriver in the repo.
 
@@ -276,6 +287,18 @@ def derivation_planner_messages(
         if product_checks
         else ""
     )
+    ledger_block = (
+        "\n\nLedger items (checked separately — do not re-check them by text search):\n"
+        + "\n".join(f"- {item}" for item in ledger_items)
+        if ledger_items
+        else ""
+    )
+    previous_block = (
+        "\n\nCommands the previous verification ran (re-emit unless the change made one "
+        "wrong):\n" + "\n".join(f"- {c}" for c in previous_commands)
+        if previous_commands
+        else ""
+    )
     user = (
         f"Task intent:\n{intent}\n\n"
         f"{decisions_block}"
@@ -284,6 +307,8 @@ def derivation_planner_messages(
         f"The repository's own declarations:\n{manifest_block}"
         f"{ci_block}"
         f"{product_block}"
+        f"{ledger_block}"
+        f"{previous_block}"
     )
     return [
         {"role": "system", "content": _DERIVATION_SYSTEM_PROMPT},
