@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-28
+# BSVibe session handoff — 2026-10-30
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,9 +21,9 @@
 
 ---
 
-## §0 — One line: **Verification now checks what was asked, the way CI checks it — #1255 passed in round 1**
+## §0 — One line: **Verification now checks what was asked, the way CI checks it — #1255 passed in round 1; real issue runs found and closed nine harness holes**
 
-10-26 → 10-28. Reliability work was done **by hand** (형님 10-26: pushing BSVibe through its own verification gaps was
+10-26 → 10-30. Reliability work was done **by hand** (형님 10-26: pushing BSVibe through its own verification gaps was
 not converging). Plan R1–R6; R1–R4 shipped, each proven on a real BSVibe run afterwards.
 
 | PR | What | Proven on |
@@ -34,14 +34,25 @@ not converging). Plan R1–R6; R1–R4 shipped, each proven on a real BSVibe run
 | #1254 | the loop asks once for missing ledger evidence before verifying · the deriver is shown floor/final and does not repeat them · the item judge sees the hunks its item names | #1255 run `cf897406` — **round-1 pass** |
 | #1256 | an oversized hunk is shown as a window around the cited test; `requirements_unclear` counted apart from done | — |
 | #1258 · #1260 | **R4 counterfactual (report-only)** — each guard item done on cited tests: non-test commits put back to the baseline, the test run alone, `HEAD` restored; row `counterfactual` = holds / vacuous / unknown, ⚠ in the PR table. #1260: it never raises (it once ended a run as `system_error`), and takes away only `baseline..HEAD`, ≤ 200 paths | #1259 run `686d3874` — 4/4 `holds` |
-| this PR | **`verify_precheck`** — the product's quick checks run when the agent says done; a failure is a turn, not a round (≤ 3 per drive) | — |
+| #1261 | **`verify_precheck`** — the product's quick checks run when the agent says done; a failure is a turn, not a round (≤ 3 per drive) | #1263 run `14e222a1` |
+| #1262 | #1259's verified diff, opened by hand — its approved delivery opened no PR (→ #1266) | — |
+| #1265 | `.gitignore` `.pnpm-store/` — the sandbox's `pnpm install` put its store at the checkout root and `git add -A` committed 18,745 files onto a run branch; this was the 10-28 `Argument list too long` crash | — |
+| #1266 (BSVibe, #1263) | an approved delivery whose action failed or opened no PR is **not** dispatched and raises `delivery_failed`; compensation handles of the actions that did succeed are still stored | PR #1266 opened on approval |
+| #1270 | **verification leftovers** — untracked entries that appear during verification go, anchored, into the checkout's `.git/info/exclude` (never deleted, never the repo's `.gitignore`, never the founder's machine); a path the agent writes later is released. Layer 1 of #1267 | — |
+| #1271 (BSVibe, #1269) | a run cancelled / discarded under a live drive stops before and after verification, and `write_verified_deliverable` refuses a cancelled run | — |
+| #1272 | the item judge reads the **cited test's body** from its file; a cited `file::name` the file does not define fails the item with a reason | — |
+| #1273 | **`issues.edited` by the trusted author goes to the unfinished run that issue started** (not a second run); its intent and ledger are refreshed — same item keeps its id, a removed one is `withdrawn` (owed nothing), a new one gets the next id | — |
 
 Issues worked through BSVibe in the same window: #1204 (token rotation, PR #1253), #1255 (run detail shows the checks,
-PR #1257), #1259 (runs_list carries a title/preview, not the whole intent). #1244 is the ledger issue itself.
+PR #1257), #1259 (runs_list carries a title/preview, not the whole intent; shipped by hand as #1262), #1263 (#1266),
+#1269 (#1271). #1244 is the ledger issue itself; #1267 / #1268 were filed record-only and done by hand (#1270, #1273).
+Rounds per issue run: #1255 1 · #1259 2 (+1 crash) · #1263 5 (one discard) · #1269 3 — every failed round was a real
+defect (type error, broken existing test, a wrong requirement, the 600-line cap, a collection error).
 
 **bsvibe-app product metadata (set 10-27):** `verify_floor` = lint-imports + `tests/architecture` +
 `test_h2a_decomposition` + `test_every_decision_has_a_way_out` (~5 s) · `verify_final` = ruff check / format --check,
-mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 (~11 min). `verify_precheck` is not set yet.
+mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 and `--store-dir /tmp/pnpm-store` (~11 min) ·
+`verify_precheck` = ruff check, ruff format --check, mypy backend/, lint-imports (~1.5 min, set 10-28).
 
 ## §0-b — previous session (10-24 → 10-26): **The merge watch and Safe Mode now agree on what "still being fixed" means; 7 issues fixed through BSVibe, the weekly report is back**
 
@@ -72,7 +83,7 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
 - The `product_bundle_publish_skipped_shallow` warning stopped after that run (0 in the first 400 s of the 03:35Z container).
 - `safe_mode_approved_delivered` ran on deploy (10-26 02:14Z). How many rows it moved is not logged — unknown.
 
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28 · 10-29 · 10-30)
 
 | | |
 |---|---|
@@ -96,6 +107,8 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
 | **Reliability work by hand** (10-26) | The verification harness (R1–R6) is written here, not through BSVibe — an exception to "BSVibe fixes BSVibe" while the harness is what is being fixed. Product issues still go through BSVibe |
 | **The goal is a round-1 pass** (10-26) | "실제 프로덕션까지 가려면 1라운드만에 요청한게 통과해야 해" — judged on real issue runs, stack- and deliverable-agnostic (no Python-only fix) |
 | **R4 is report-only** (10-28) | A guard test that passes with the change taken away is marked, never failed — regression tests of existing behaviour pass legitimately. Gate it only after its false-positive rate is measured (R6) |
+| **Harness issues are filed record-only, fixed by hand** (10-29) | A verification-harness defect found on a run goes up with the binding filter paused and is implemented here; a product defect goes up as a normal issue for BSVibe |
+| **Leftovers are excluded, not deleted** (10-30) | What verification leaves in a checkout goes into that checkout's `.git/info/exclude`; the model-derived layer 2 of #1267 waits until layer 1's logs have been seen |
 
 ## §Ⅱ — What this session found that the issues had wrong
 
@@ -225,7 +238,7 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
 * **A missing cwd makes the host executor's exec fail with no output** — "could not provision this run's worktree: " with
   nothing after the colon means look at the path first.
 
-## §Ⅱ-i — What 10-26/28 found
+## §Ⅱ-i — What 10-26/30 found
 
 * **Verification passed what was not asked and failed on what no work could fix.** #1204's first run did one of five
   items and passed; its re-run failed 8 rounds on the sandbox lacking `CI=true` (pnpm aborts without a TTY). Both were
@@ -249,17 +262,29 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
 * **The auto-mode classifier blocks `gh pr merge` on a bare "응" and issue writes it cannot tie to an explicit ask.**
   Ask 형님 for an explicit "N 머지해" / "닫아".
 
+* **The 10-28 "Argument list too long" crash was the pnpm store.** `pnpm install` in the sandbox puts its store at the
+  mount root, inside the checkout; the next round's `git add -A` committed it (18,745 files). A tool's store location
+  depends on the machine, not the stack — that is why #1270 excludes by observation, not by tool name.
+* **Discarding a run did not stop its live drive** — a minute after `runs_discard` the run verified and made a new
+  deliverable and Safe Mode card (fixed by #1271). Clear such a card with `queue_cleanup`.
+* **Every "unclear" in the ledger had a mechanical cause**: a test body past the excerpt budget, or a cited test name
+  that does not exist (a file's name, a never-written test). #1272 reads the body and fails missing names.
+* **An issue edit started a second run for the same issue** (fixed by #1273). Before #1273, editing an issue with a
+  live run needed the filter paused.
+* **A plain "응" does not clear the auto-mode classifier for `gh pr merge` / issue writes**; "N 머지해" / "N 닫아" does.
+
 ## §Ⅲ — Next
 
-1. **Set bsvibe-app's `verify_precheck`** after this PR deploys (proposed: ruff check, ruff format --check, mypy
-   backend/, lint-imports — ~1.5 min), then run one more medium issue to see a round-1 pass with it.
-2. **R5 independent reviewer**, **R6 metrics** (round-1 pass rate, rounds per run, vacuous-guard rate) — open.
-3. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
-   (`docs/runbook/vault-to-postgres.md` §"A second box"). `/app/var/vault` may go after 10-29.
-4. **#930** — 2M tuning still has no sample.
-5. ⏳ 형님's batch: codex live run (#1183) · #1046 live taps · #937 outside the repo.
-6. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md` (C live, B, D),
-   `ci-parity-checklist.md` (B failing-final, D, E), `counterfactual-guard-checklist.md` (B, C).
+1. **Run more real issues** and record rounds per run — the round-1 pass rate is the measure (R6 makes it a metric).
+2. **R5 independent reviewer**, **R6 metrics** (round-1 pass rate, rounds per run, unclear / vacuous rates) — open.
+3. **#1267 layer 2** (the deriver names the stack's cache paths up front) — only after `verification_leftovers_excluded`
+   logs have been seen on real runs.
+4. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
+   (`docs/runbook/vault-to-postgres.md` §"A second box"). `/app/var/vault` may go now (kept until 10-29).
+5. **#930** — 2M tuning still has no sample.
+6. ⏳ 형님's batch: codex live run (#1183) · #1046 live taps · #937 outside the repo.
+7. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md`, `ci-parity-checklist.md` (B failing-final,
+   D, E, F), `counterfactual-guard-checklist.md` (B, C).
 
 ## §Ⅳ — Discipline that paid off
 
