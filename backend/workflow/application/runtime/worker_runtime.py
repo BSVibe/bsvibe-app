@@ -45,6 +45,9 @@ from backend.schedule.infrastructure.workers.schedule_worker import (
 from backend.workers.base import BaseWorker
 from backend.workers.relays import build_relay
 from backend.workflow.application.run_persistence import create_decision
+from backend.workflow.application.runtime.intake_trust_runtime import (
+    build_repo_permission_lookup,
+)
 from backend.workflow.application.runtime.merge_watch_runtime import build_merge_watch_workers
 from backend.workflow.application.runtime.settle_runtime import (
     build_concept_framer,
@@ -202,6 +205,7 @@ def build_worker_runtime(
             session_factory=session_factory,
             redis_client=redis_client,
             settings=settings,
+            repo_permission=build_repo_permission_lookup(session_factory=session_factory),
         ),
         AgentWorker(session_factory=session_factory, execution=execution),
         DeliveryWorker(session_factory=session_factory, dispatcher=delivery_adapter),

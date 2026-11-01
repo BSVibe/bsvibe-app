@@ -41,6 +41,7 @@ from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
 from backend.workflow.application.intake.issue_edit import route_issue_edit_to_run
 from backend.workflow.application.intake.pr_comment import route_pr_comment_to_run
+from backend.workflow.application.intake.trust import RepoPermission
 from backend.workflow.application.intake_gate import (
     IntakeVerdict,
     gate_webhook_work,
@@ -99,6 +100,7 @@ class IntakeWorker(BaseWorker):
         config: IntakeWorkerConfig | None = None,
         redis_client: object | None = None,
         settings: Settings | None = None,
+        repo_permission: RepoPermission | None = None,
     ) -> None:
         self._cfg = config or IntakeWorkerConfig()
         super().__init__(name="intake_worker", poll_interval_s=self._cfg.poll_interval_s)
@@ -108,6 +110,9 @@ class IntakeWorker(BaseWorker):
         # unaffected.
         self._redis_client = redis_client
         self._settings = settings or get_settings()
+        # Asks GitHub whether a CONTRIBUTOR-reported author has write access — a private org
+        # member shows as CONTRIBUTOR (#1279). ``None`` trusts the association alone.
+        self._repo_permission = repo_permission
 
     async def _record_request_original(
         self,
@@ -234,11 +239,13 @@ class IntakeWorker(BaseWorker):
                             session,
                             workspace_id=trig.workspace_id,
                             payload=dict(trig.payload or {}),
+                            permission_of=self._repo_permission,
                         ) or await route_issue_edit_to_run(
                             # #1268 — an edit to an issue whose run is in flight goes to it.
                             session,
                             workspace_id=trig.workspace_id,
                             payload=dict(trig.payload or {}),
+                            permission_of=self._repo_permission,
                         )
                         if routed_run_id is not None:
                             trig.payload = {

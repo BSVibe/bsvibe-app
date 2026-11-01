@@ -11,7 +11,8 @@ for review. Two differences:
 
 * **Who may edit.** An ``issues`` delivery carries the issue AUTHOR's association, never the
   editor's. So an edit is routed only when the editor IS the author and that author is OWNER /
-  MEMBER / COLLABORATOR. Anyone else's edit falls through to a new request, exactly as before —
+  MEMBER / COLLABORATOR — or, since a private org member shows as CONTRIBUTOR, has write access
+  to the repo (:mod:`.trust`). Anyone else's edit falls through to a new request, exactly as before —
   on a public repo a stranger does not get to rewrite a running job.
 * **What changes.** The run's ``intent_text`` becomes the edited issue, and its ledger is
   refreshed (:func:`~backend.workflow.domain.requirements.refresh_ledger`: same item, same id;
@@ -29,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data.rls import workspace_session_scope
+from backend.workflow.application.intake.trust import RepoPermission, is_trusted
 from backend.workflow.application.run_status import move_run_status
 from backend.workflow.domain.requirements import REQUIREMENTS_KEY, build_ledger, refresh_ledger
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
@@ -40,7 +42,6 @@ ISSUE_EDITS_KEY = "issue_edits"
 
 _APPEND_ONLY = (RunStatus.OPEN, RunStatus.RUNNING)
 _REOPEN = (RunStatus.REVIEW_READY, RunStatus.FAILED)
-_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 def _issue(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -49,8 +50,9 @@ def _issue(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return issue if isinstance(issue, Mapping) else None
 
 
-def issue_edit_of(payload: Mapping[str, Any]) -> tuple[str, int] | None:
-    """``(repo, issue_number)`` when this is a trusted author's edit of an issue body."""
+def issue_edit_of(payload: Mapping[str, Any]) -> tuple[str, int, str, str] | None:
+    """``(repo, issue_number, author, author_association)`` when the issue's own author edited
+    its body — whether that author may steer the run is :func:`.trust.is_trusted`'s call."""
     if payload.get("github_event") != "issues" or payload.get("action") != "edited":
         return None
     issue = _issue(payload)
@@ -64,17 +66,21 @@ def issue_edit_of(payload: Mapping[str, Any]) -> tuple[str, int] | None:
     author_map = issue.get("user")
     author = str(author_map.get("login") or "") if isinstance(author_map, Mapping) else ""
     association = str(issue.get("author_association") or "").upper()
-    if not editor or editor != author or association not in _TRUSTED_ASSOCIATIONS:
-        logger.info(
-            "issue_edit_not_routed_untrusted_editor",
-            repo=repo,
-            issue_number=number,
-            editor=editor or None,
-            author=author or None,
-            author_association=association or None,
-        )
+    if not editor or editor != author:
+        _not_routed(repo, number, editor, author, association)
         return None
-    return str(repo), number
+    return str(repo), number, author, association
+
+
+def _not_routed(repo: object, number: int, editor: str, author: str, association: str) -> None:
+    logger.info(
+        "issue_edit_not_routed_untrusted_editor",
+        repo=repo,
+        issue_number=number,
+        editor=editor or None,
+        author=author or None,
+        author_association=association or None,
+    )
 
 
 def _same_issue(request_payload: Any, repo: str, number: int) -> bool:
@@ -111,6 +117,7 @@ async def route_issue_edit_to_run(
     *,
     workspace_id: uuid.UUID,
     payload: dict[str, Any],
+    permission_of: RepoPermission | None = None,
 ) -> uuid.UUID | None:
     """Hand an issue edit to the run that issue started; its id, or ``None``.
 
@@ -120,7 +127,12 @@ async def route_issue_edit_to_run(
     parsed = issue_edit_of(payload)
     if parsed is None:
         return None
-    repo, number = parsed
+    repo, number, author, association = parsed
+    if not await is_trusted(
+        association, login=author, repo=repo, workspace_id=workspace_id, permission_of=permission_of
+    ):
+        _not_routed(repo, number, author, author, association)
+        return None
     async with workspace_session_scope(session, workspace_id):
         run = await _run_for_issue(session, workspace_id, repo, number)
         if run is None:
