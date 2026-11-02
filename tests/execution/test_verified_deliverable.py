@@ -228,3 +228,43 @@ async def test_write_verified_deliverable_omits_diff_for_non_product_run() -> No
         )
         assert "diff" not in deliverable.payload
         assert deliverable.payload == {"artifact_refs": ["note.md"], "summary": "done"}
+
+
+async def test_the_footprint_counts_what_delivery_commits_not_the_written_files(
+    _isolate_workspace_roots,
+) -> None:
+    """#1279: run 14e222a1's deliverable had 7 ``artifact_refs`` while its PR changed 18,752
+    files — a package store swept into the worktree. The verify-time write records the
+    worktree's change, and the card's footprint is read from THAT, not from the refs."""
+    from backend.workflow.application.change_footprint import footprint_of_payload
+
+    product_id, run_id = uuid.uuid4(), uuid.uuid4()
+    await init_product_workspace(product_id)
+    worktree = await add_run_worktree(product_id, run_id)
+    (worktree / "src").mkdir()
+    (worktree / "src" / "foo.py").write_text("def foo():\n    return 1\n")
+    await commit_worktree(product_id, run_id, message="agent: foo()")
+    store = worktree / ".pnpm-store" / "v3"
+    store.mkdir(parents=True)
+    for i in range(250):
+        (store / f"f{i:03}").write_text(str(i))
+
+    async with memory_session() as s:
+        run = ExecutionRun(
+            id=run_id,
+            workspace_id=uuid.uuid4(),
+            product_id=product_id,
+            request_id=uuid.uuid4(),
+            status=RunStatus.RUNNING,
+            payload={"intent_text": "build foo"},
+        )
+        s.add(run)
+        await s.flush()
+        deliverable = await write_verified_deliverable(
+            s, run, attempt_id=uuid.uuid4(), artifact_refs=["src/foo.py"], summary="added foo"
+        )
+
+    footprint = footprint_of_payload(deliverable.payload)
+    assert footprint.changed_files == 251
+    assert footprint.large_change is True
+    assert footprint.top_dirs[0].dir == ".pnpm-store"
