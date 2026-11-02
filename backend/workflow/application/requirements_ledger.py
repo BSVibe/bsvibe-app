@@ -54,6 +54,10 @@ _JUDGE_CONCURRENCY = 3
 #: What the judge reads of the cited evidence, per path and in total.
 _PATH_EXCERPT_CHARS = 5000
 _EVIDENCE_CHARS = 10000
+#: How much of a cited file with no diff is read to find what the item names.
+_FILE_READ_BYTES = 200_000
+#: Lines per chunk of such a file — the unit ``relevant_hunks`` ranks and keeps.
+_FILE_CHUNK_LINES = 30
 #: Below this a path's share is too small to show anything useful — it is named as cut.
 _MIN_PATH_CHARS = 600
 
@@ -189,7 +193,7 @@ def cited_tests(box: SandboxSession) -> MissingTests:
 
 def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
     """The judge's view of a row: the diff of each cited path against the run's baseline
-    (working tree, so uncommitted edits show), or the file head when git has nothing."""
+    (working tree, so uncommitted edits show), or the file itself when git has nothing."""
 
     async def _excerpt(row: Mapping[str, Any]) -> str:
         # The cited tests and the agent's note come FIRST and are never cut by the paths'
@@ -246,12 +250,25 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
         if text.strip():
             return text
         try:
-            data = await box.read_file(path, _PATH_EXCERPT_CHARS)
+            data = await box.read_file(path, _FILE_READ_BYTES)
         except Exception:  # noqa: BLE001
             return "(could not read this file)"
-        return f"(new or unreadable diff — file head)\n{data.decode('utf-8', 'replace')}"
+        return file_as_hunks(data.decode("utf-8", "replace"))
 
     return _excerpt
+
+
+def file_as_hunks(text: str) -> str:
+    """A cited file with no diff (unchanged by this run, or new and untracked) as chunks
+    :func:`relevant_hunks` can rank — so the judge sees the lines the item names, not the
+    file's head. Prod #1046 re-run: the cited function sat past the first 5,000 chars."""
+    lines = text.splitlines()
+    chunks = []
+    for start in range(0, len(lines), _FILE_CHUNK_LINES):
+        part = lines[start : start + _FILE_CHUNK_LINES]
+        end = start + len(part)
+        chunks.append(f"@@ lines {start + 1}-{end} @@\n" + "".join(f" {ln}\n" for ln in part))
+    return "(no diff against the baseline — the file as it stands)\n" + "".join(chunks)
 
 
 def judge_messages(row: Mapping[str, Any], excerpt: str) -> list[dict[str, str]]:
