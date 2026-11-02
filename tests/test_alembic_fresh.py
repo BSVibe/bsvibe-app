@@ -1065,3 +1065,7 @@ def test_telegram_allowlist_seeds_existing_accounts_without_clobbering():
     restored = asyncio.run(_read())
     assert restored[legacy] == {"chat_id": 4242}
     assert restored[slack] == {"chat_id": 4242}
+
+    # 공유 DB 를 head 로 되돌려 둔다 — 안 그러면 뒤에 도는 테스트들이 옛 스키마
+    # (예: workspaces.plan 없음)를 만난다.
+    _alembic(["upgrade", "head"], env_extra=env_extra)
