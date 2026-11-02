@@ -54,6 +54,8 @@ _JUDGE_CONCURRENCY = 3
 #: What the judge reads of the cited evidence, per path and in total.
 _PATH_EXCERPT_CHARS = 5000
 _EVIDENCE_CHARS = 10000
+#: Below this a path's share is too small to show anything useful — it is named as cut.
+_MIN_PATH_CHARS = 600
 
 _JUDGE_SYSTEM = (
     "You check ONE requirement against the evidence a coding agent cited for it. Answer with "
@@ -199,40 +201,55 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
             lead.append(f"--- test {test}: passed at the gate" + (f"\n{body}" if body else ""))
         if row.get("note"):
             lead.append(f"--- agent's note: {row['note']}")
-        parts: list[str] = []
-        for path in row.get("paths") or []:
-            text = ""
-            if baseline:
-                try:
-                    # S604: the sandbox Protocol's own flag, not a subprocess; every part
-                    # of the command is quoted.
-                    result = await box.exec(  # noqa: S604
-                        f"git -C {shlex.quote(box.workspace_mount)} diff {shlex.quote(baseline)}"
-                        f" -- {shlex.quote(path)}",
-                        timeout_s=10.0,
-                        shell=True,
-                    )
-                    if result.exit_code == 0 and not result.timed_out:
-                        text = result.stdout or ""
-                except Exception:  # noqa: BLE001 — an unreadable diff falls back to the file
-                    text = ""
-            if not text.strip():
-                try:
-                    data = await box.read_file(path, _PATH_EXCERPT_CHARS)
-                    text = (
-                        f"(new or unreadable diff — file head)\n{data.decode('utf-8', 'replace')}"
-                    )
-                except Exception:  # noqa: BLE001
-                    text = "(could not read this file)"
-            # Cut around what the item names — the head of a long diff is rarely it.
-            cited = " ".join(f"`{t}`" for t in row.get("tests") or [])
-            about = f"{row.get('text', '')} {row.get('note', '')} {cited}"
-            clipped = relevant_hunks(text, about, budget=_PATH_EXCERPT_CHARS)
-            parts.append(f"--- {path}\n{clipped}")
         head = "\n\n".join(lead)
+        # The paths SHARE what the lead leaves: each gets an even slice of what is still
+        # free (a short diff's unused share rolls over), clipped around what the item names.
+        # One path clipped to 5,000 chars and the join head-cut used to spend the budget on
+        # the first paths and drop the rest without a mark (#1279).
+        paths = [str(p) for p in row.get("paths") or []]
+        cited = " ".join(f"`{t}`" for t in row.get("tests") or [])
+        about = f"{row.get('text', '')} {row.get('note', '')} {cited}"
         room = max(_EVIDENCE_CHARS - len(head), 0)
-        tail = "\n\n".join(parts)[:room]
-        return "\n\n".join(x for x in (head, tail) if x)
+        parts: list[str] = []
+        not_shown: list[str] = []
+        for n, path in enumerate(paths):
+            share = min(room // (len(paths) - n), _PATH_EXCERPT_CHARS)
+            label = f"--- {path}\n"
+            if share - len(label) < _MIN_PATH_CHARS:
+                not_shown = paths[n:]
+                break
+            text = await _path_diff(path)
+            part = label + relevant_hunks(text, about, budget=share - len(label))
+            parts.append(part)
+            room -= len(part) + 2
+        if not_shown:
+            parts.append(f"[... not shown, out of room: {', '.join(not_shown)} ...]")
+        return "\n\n".join(x for x in (head, "\n\n".join(parts)) if x)
+
+    async def _path_diff(path: str) -> str:
+        """``path`` against the baseline (working tree), or its head when git has nothing."""
+        text = ""
+        if baseline:
+            try:
+                # S604: the sandbox Protocol's own flag, not a subprocess; every part of the
+                # command is quoted.
+                result = await box.exec(  # noqa: S604
+                    f"git -C {shlex.quote(box.workspace_mount)} diff {shlex.quote(baseline)}"
+                    f" -- {shlex.quote(path)}",
+                    timeout_s=10.0,
+                    shell=True,
+                )
+                if result.exit_code == 0 and not result.timed_out:
+                    text = result.stdout or ""
+            except Exception:  # noqa: BLE001 — an unreadable diff falls back to the file
+                text = ""
+        if text.strip():
+            return text
+        try:
+            data = await box.read_file(path, _PATH_EXCERPT_CHARS)
+        except Exception:  # noqa: BLE001
+            return "(could not read this file)"
+        return f"(new or unreadable diff — file head)\n{data.decode('utf-8', 'replace')}"
 
     return _excerpt
 
