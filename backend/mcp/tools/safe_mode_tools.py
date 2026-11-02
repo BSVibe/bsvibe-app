@@ -25,6 +25,11 @@ from backend.workflow.application.safe_mode_approval import (
     approve_and_dispatch,
     approve_run_and_dispatch,
 )
+from backend.workflow.application.safe_mode_ledger import (
+    LedgerAttentionItem,
+    RunLedger,
+    ledgers_for_runs,
+)
 from backend.workflow.application.safe_mode_queue import DenyKind, SafeModeQueue
 from backend.workflow.domain.change_footprint import ChangeFootprint, TopDir
 
@@ -57,6 +62,10 @@ class SafeModeItem(_Output):
     top_dirs: list[TopDir] = []
     large_change: bool = False
     large_change_warning: str | None = None
+    #: The run's requirements-ledger verdict (same counts as the deliverable report; ``{}``
+    #: without a ledger) and the unclear / deferred items to read before approving.
+    ledger_counts: dict[str, int] = {}
+    ledger_attention: list[LedgerAttentionItem] = []
 
 
 class SafeModeListPendingOutput(_Output):
@@ -64,9 +73,13 @@ class SafeModeListPendingOutput(_Output):
     items: list[SafeModeItem]
 
 
-def _item_to_dict(item: Any, footprint: ChangeFootprint | None = None) -> SafeModeItem:
+def _item_to_dict(
+    item: Any, footprint: ChangeFootprint | None = None, ledger: RunLedger | None = None
+) -> SafeModeItem:
     return SafeModeItem(
         **(footprint.model_dump() if footprint is not None else {}),
+        ledger_counts=ledger.counts if ledger is not None else {},
+        ledger_attention=ledger.attention if ledger is not None else [],
         id=str(item.id),
         deliverable_id=str(item.deliverable_id),
         run_id=str(item.run_id) if item.run_id else None,
@@ -90,9 +103,21 @@ async def _h_list_pending(args: SafeModeListPendingInput, ctx: ToolContext) -> A
         workspace_id=ctx.principal.workspace_id,
         deliverable_ids=[i.deliverable_id for i in items],
     )
+    ledgers = await ledgers_for_runs(
+        ctx.session,
+        workspace_id=ctx.principal.workspace_id,
+        run_ids=[i.run_id for i in items],
+    )
     return SafeModeListPendingOutput(
         total=len(items),
-        items=[_item_to_dict(i, footprints.get(i.deliverable_id)) for i in items],
+        items=[
+            _item_to_dict(
+                i,
+                footprints.get(i.deliverable_id),
+                ledgers.get(i.run_id) if i.run_id is not None else None,
+            )
+            for i in items
+        ],
     )
 
 

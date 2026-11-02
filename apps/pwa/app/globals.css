@@ -1056,6 +1056,27 @@ main.login {
   font-weight: 400;
 }
 
+/* ── Ledger status: requirements confirmed; loud for unclear / deferred ── */
+.ledger-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary, inherit);
+}
+.ledger-status__warning {
+  border: 1px solid var(--amber-dot);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--amber-ink);
+  font-weight: 500;
+}
+.ledger-status__items {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-weight: 400;
+}
+
 /* ── Shipped (collapsed, count + View all) (R4) ───────────────────────────── */
 .shipped {
   display: flex;

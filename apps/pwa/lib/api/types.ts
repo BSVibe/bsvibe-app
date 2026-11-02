@@ -411,6 +411,19 @@ export interface ChangeFootprintFields {
   large_change_warning?: string | null;
 }
 
+/** The run's requirements-ledger verdict on a Safe Mode queue item. `ledger_counts` is
+ *  the report's own (`{}` when the run has no ledger); `ledger_attention` lists the
+ *  `unclear` / `deferred` items the founder should read before approving. */
+export interface LedgerFields {
+  ledger_counts?: {
+    requirements_total?: number;
+    requirements_done?: number;
+    requirements_deferred?: number;
+    requirements_unclear?: number;
+  };
+  ledger_attention?: { id: string; text: string }[];
+}
+
 /** One `VerificationResult` in a delivery report (backend VerificationReport).
  *  `contract` is the work LLM's declared checks (the checks BSVibe promised to
  *  run) and `result` is the execution outcome of running them — both free-form
@@ -697,6 +710,8 @@ export interface PendingDelivery {
   detailHref?: string | null;
   /** How many files the held change touches, from the queue item. */
   change?: ChangeFootprintFields;
+  /** The run's requirements-ledger verdict, from the queue item. */
+  ledger?: LedgerFields;
   createdAt: string;
 }
 
@@ -758,7 +773,7 @@ export interface PendingRead {
 }
 
 /** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
-export interface SafeModeItem extends ChangeFootprintFields {
+export interface SafeModeItem extends ChangeFootprintFields, LedgerFields {
   id: string;
   workspace_id: string;
   deliverable_id: string;

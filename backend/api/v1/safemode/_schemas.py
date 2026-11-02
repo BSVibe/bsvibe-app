@@ -11,6 +11,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.workflow.application.safe_mode_ledger import LedgerAttentionItem
 from backend.workflow.application.safe_mode_queue import DenyKind
 from backend.workflow.domain.change_footprint import TopDir
 
@@ -35,6 +36,10 @@ class SafeModeItemResponse(BaseModel):
     top_dirs: list[TopDir] = []
     large_change: bool = False
     large_change_warning: str | None = None
+    # The run's requirements-ledger verdict — same counts as the deliverable report;
+    # empty when the run has no ledger. ``ledger_attention`` = unclear + deferred items.
+    ledger_counts: dict[str, int] = {}
+    ledger_attention: list[LedgerAttentionItem] = []
 
 
 class SafeModeRunGroupResponse(BaseModel):

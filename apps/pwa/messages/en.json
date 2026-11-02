@@ -1233,5 +1233,9 @@
     "topDirs": "Most files in",
     "dirEntry": "{dir} ({count})",
     "rootDir": "(repo root)"
+  },
+  "ledgerStatus": {
+    "confirmed": "{done} of {total} requirements confirmed",
+    "attentionTitle": "Not confirmed — read before approving"
   }
 }
