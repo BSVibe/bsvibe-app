@@ -10,9 +10,12 @@ trusts no one beyond the association.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any
 
 import structlog
+
+from backend.workflow.domain.requirements import COMMENT_TRUSTED_KEY
 
 logger = structlog.get_logger(__name__)
 
@@ -49,4 +52,37 @@ async def is_trusted(
     return (permission or "").lower() in WRITE_PERMISSIONS
 
 
-__all__ = ["TRUSTED_ASSOCIATIONS", "WRITE_PERMISSIONS", "RepoPermission", "is_trusted"]
+async def stamp_comment_trust(
+    payload: Mapping[str, Any],
+    *,
+    workspace_id: uuid.UUID,
+    permission_of: RepoPermission | None,
+) -> dict[str, Any]:
+    """``payload`` with :data:`COMMENT_TRUSTED_KEY` set when it is an issue comment whose
+    author the association alone does not trust but who has write access to the repo — so
+    the ledger counts a private org member's checklist comment. Anything else: unchanged."""
+    out = dict(payload)
+    body = payload.get("body")
+    comment = body.get("comment") if isinstance(body, Mapping) else None
+    if payload.get("github_event") != "issue_comment" or not isinstance(comment, Mapping):
+        return out
+    association = str(comment.get("author_association") or "").upper()
+    if association in TRUSTED_ASSOCIATIONS:
+        return out
+    user = comment.get("user")
+    login = str(user.get("login") or "") if isinstance(user, Mapping) else ""
+    repo = str(payload.get("repo") or "")
+    if repo and await is_trusted(
+        association, login=login, repo=repo, workspace_id=workspace_id, permission_of=permission_of
+    ):
+        out[COMMENT_TRUSTED_KEY] = True
+    return out
+
+
+__all__ = [
+    "TRUSTED_ASSOCIATIONS",
+    "WRITE_PERMISSIONS",
+    "RepoPermission",
+    "is_trusted",
+    "stamp_comment_trust",
+]

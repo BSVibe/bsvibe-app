@@ -41,7 +41,7 @@ from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
 from backend.workflow.application.intake.issue_edit import route_issue_edit_to_run
 from backend.workflow.application.intake.pr_comment import route_pr_comment_to_run
-from backend.workflow.application.intake.trust import RepoPermission
+from backend.workflow.application.intake.trust import RepoPermission, stamp_comment_trust
 from backend.workflow.application.intake_gate import (
     IntakeVerdict,
     gate_webhook_work,
@@ -266,6 +266,13 @@ class IntakeWorker(BaseWorker):
                     # The Request row carries it forward so AgentRunner can mint
                     # the ExecutionRun with the same binding — no more NULL run.
                     request_id = uuid.uuid4()
+                    # The ledger reads a comment only from a trusted author; a private org
+                    # member shows as CONTRIBUTOR, so intake asks GitHub and records it.
+                    request_payload = await stamp_comment_trust(
+                        outcome.request_payload,
+                        workspace_id=trig.workspace_id,
+                        permission_of=self._repo_permission,
+                    )
                     request_repo = SqlAlchemyRequestRepository(session)
                     await request_repo.enqueue(
                         RequestRow(
@@ -274,7 +281,7 @@ class IntakeWorker(BaseWorker):
                             trigger_event_id=trig.id,
                             product_id=outcome.product_id,
                             status=RequestStatus.OPEN,
-                            payload=dict(outcome.request_payload),
+                            payload=request_payload,
                             created_at=now,
                             updated_at=now,
                         ),

@@ -34,6 +34,9 @@ OWED_KINDS = frozenset({"do", "guard", "done"})
 
 #: Comment authors whose words are instructions on a public repo.
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+#: Set by intake on an ``issue_comment`` request whose author GitHub reports as untrusted
+#: (a private org member shows as CONTRIBUTOR) but who has write access to the repo.
+COMMENT_TRUSTED_KEY = "comment_author_trusted"
 
 _ITEM_MAX_CHARS = 300
 _MAX_ITEMS = 40
@@ -158,7 +161,8 @@ def request_texts(payload: Mapping[str, Any]) -> list[tuple[str, str]]:
     A comment on an issue (``issue_comment``) re-requests that ISSUE's work, and its
     checklist lives in the issue body — so the ledger reads the webhook where it carries
     them: ``body.issue.body`` and ``body.comment``. The comment counts only from a trusted
-    author (OWNER / MEMBER / COLLABORATOR): on a public repo a stranger's comment is not an
+    author (OWNER / MEMBER / COLLABORATOR, or one intake found has write access —
+    :data:`COMMENT_TRUSTED_KEY`): on a public repo a stranger's comment is not an
     instruction. ``intent_text`` is not used here — it is the issue title plus the comment,
     whoever wrote it. Every other request is its own directive.
     """
@@ -174,7 +178,8 @@ def request_texts(payload: Mapping[str, Any]) -> list[tuple[str, str]]:
             texts.append(("issue", issue_text))
         association = str(comment_map.get("author_association") or "").upper()
         comment_text = str(comment_map.get("body") or "").strip()
-        if association in TRUSTED_ASSOCIATIONS and comment_text:
+        trusted = association in TRUSTED_ASSOCIATIONS or payload.get(COMMENT_TRUSTED_KEY) is True
+        if trusted and comment_text:
             texts.append(("comment", comment_text))
         return texts
     directive = str(payload.get("intent_text") or payload.get("text") or "").strip()
@@ -655,6 +660,7 @@ __all__ = [
     "REQUIREMENT_EVIDENCE_SCHEMA",
     "REQUIREMENT_KINDS",
     "TRUSTED_ASSOCIATIONS",
+    "COMMENT_TRUSTED_KEY",
     "GateFacts",
     "build_ledger",
     "check_ledger",
