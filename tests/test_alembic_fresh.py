@@ -988,3 +988,84 @@ def test_telegram_chat_id_is_seeded_into_the_approval_allowlist():
 
     _alembic(["upgrade", "head"], env_extra=env_extra)
     assert '"authorized_user_ids": ["8242700007"]' in asyncio.run(_configs())[0][1]
+
+
+def test_telegram_allowlist_seeds_existing_accounts_without_clobbering():
+    """기존 텔레그램 계정이 배포 순간 승인 불능이 되지 않는다 (#1046).
+
+    부모 리비전에서 prod 모양의 행을 심고 한 칸 올린다: ``chat_id`` 만 있는
+    텔레그램 계정은 ``authorized_user_ids=[chat_id]`` 를 받고, 이미 허용목록이
+    있는 계정과 다른 커넥터는 그대로다. 다운그레이드는 심은 키를 지운다.
+    """
+    import json as _json
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    url = _skip_if_no_pg()
+    env_extra = {"BSVIBE_MIGRATION_DATABASE_URL": url}
+
+    asyncio.run(_drop_everything(url))
+    _alembic(["upgrade", "trigger_default_no_dead_key"], env_extra=env_extra)
+
+    legacy = _uuid.uuid4()
+    curated = _uuid.uuid4()
+    slack = _uuid.uuid4()
+    configs = {
+        legacy: ("telegram", {"chat_id": 4242}),
+        curated: ("telegram", {"chat_id": 4242, "authorized_user_ids": [7, 8]}),
+        slack: ("slack", {"chat_id": 4242}),
+    }
+
+    async def _seed() -> None:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                for row_id, (connector, cfg) in configs.items():
+                    await conn.execute(
+                        text(
+                            "INSERT INTO connector_accounts "
+                            "(id, workspace_id, connector, webhook_token, "
+                            " signing_secret_ciphertext, delivery_config, "
+                            " is_active, created_at) "
+                            "VALUES (:id, :ws, :c, :tok, 'x', CAST(:cfg AS JSON), "
+                            " true, :now)"
+                        ),
+                        {
+                            "id": row_id,
+                            "ws": _uuid.uuid4(),
+                            "c": connector,
+                            "tok": str(row_id),
+                            "cfg": _json.dumps(cfg),
+                            "now": datetime.now(UTC),
+                        },
+                    )
+        finally:
+            await engine.dispose()
+
+    async def _read() -> dict:
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(text("SELECT id, delivery_config FROM connector_accounts"))
+                ).all()
+                return {r[0]: r[1] for r in rows}
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_seed())
+    _alembic(["upgrade", "telegram_approval_allowlist"], env_extra=env_extra)
+    after = asyncio.run(_read())
+
+    assert after[legacy] == {"chat_id": 4242, "authorized_user_ids": [4242]}
+    assert after[curated] == {"chat_id": 4242, "authorized_user_ids": [7, 8]}
+    assert after[slack] == {"chat_id": 4242}
+
+    _alembic(["downgrade", "trigger_default_no_dead_key"], env_extra=env_extra)
+    restored = asyncio.run(_read())
+    assert restored[legacy] == {"chat_id": 4242}
+    assert restored[slack] == {"chat_id": 4242}
+
+    # 공유 DB 를 head 로 되돌려 둔다 — 안 그러면 뒤에 도는 테스트들이 옛 스키마
+    # (예: workspaces.plan 없음)를 만난다.
+    _alembic(["upgrade", "head"], env_extra=env_extra)
