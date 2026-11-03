@@ -497,6 +497,12 @@ def relevant_hunks(diff: str, about: str, *, budget: int) -> str:
 _CLOSERS = ("}", ")", "]")
 
 
+def _opens_body(line: str) -> bool:
+    """A closer that ENDS a wrapped signature (``) -> None:``, ``) {``) rather than the
+    definition (``});``) — the body comes after it (prod #1290)."""
+    return line.rstrip().endswith((":", "{"))
+
+
 def split_test_id(test: str) -> tuple[str, str] | None:
     """``file::[Class::]name[params]`` → ``(file, name)``; ``None`` for a bare name."""
     file_part, sep, rest = test.partition("::")
@@ -527,6 +533,8 @@ def cited_test_body(text: str, name: str, *, limit: int = 4000) -> str | None:
         if line.strip() and len(line) - len(line.lstrip()) <= depth:
             if line.strip().startswith(_CLOSERS):
                 body.append(line)
+                if _opens_body(line):
+                    continue  # a wrapped signature's ``) -> None:`` — the body follows
             break
         body.append(line)
     return "\n".join(body).rstrip()[:limit]
@@ -555,6 +563,8 @@ def _top_level_definition(lines: list[str], name: str) -> str | None:
         if line.strip() and not line[0].isspace():
             if line.strip().startswith(_CLOSERS):
                 block.append(line)
+                if _opens_body(line):
+                    continue
             break
         block.append(line)
     return "\n".join(block).rstrip()
