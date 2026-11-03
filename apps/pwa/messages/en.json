@@ -1093,6 +1093,7 @@
       "inconclusive": "Verification inconclusive"
     },
     "noVerification": "No verification recorded for this run yet.",
+    "passedOnRound": "Passed on verification {round}",
     "checks": {
       "failedGroup": "Failed checks",
       "productGroup": "Product checks",

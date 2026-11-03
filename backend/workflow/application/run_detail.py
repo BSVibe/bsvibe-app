@@ -14,9 +14,9 @@ creating exactly the drift that guard exists to catch.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -407,6 +407,47 @@ def _run_verification(row: VerificationResult) -> RunVerification:
     )
 
 
+class VerificationRounds(NamedTuple):
+    """How many verifications a run needed: how many were recorded, and the
+    1-based round on which it first passed (``None`` while it has not)."""
+
+    rounds: int
+    passed_on_round: int | None
+
+
+NO_VERIFICATION_ROUNDS = VerificationRounds(rounds=0, passed_on_round=None)
+
+
+async def verification_rounds_by_run(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    run_ids: Sequence[uuid.UUID],
+) -> dict[uuid.UUID, VerificationRounds]:
+    """Verification rounds for many runs in ONE query (a list never asks per run).
+
+    A run with no ``VerificationResult`` is absent from the map; callers read it
+    with ``.get(run_id, NO_VERIFICATION_ROUNDS)``.
+    """
+    if not run_ids:
+        return {}
+    stmt = (
+        select(VerificationResult.run_id, VerificationResult.outcome)
+        .where(
+            VerificationResult.workspace_id == workspace_id,
+            VerificationResult.run_id.in_(list(run_ids)),
+        )
+        .order_by(VerificationResult.created_at.asc(), VerificationResult.id.asc())
+    )
+    rounds: dict[uuid.UUID, int] = {}
+    passed_on: dict[uuid.UUID, int] = {}
+    for run_id, outcome in (await session.execute(stmt)).all():
+        n = rounds.get(run_id, 0) + 1
+        rounds[run_id] = n
+        if outcome is VerificationOutcome.PASSED and run_id not in passed_on:
+            passed_on[run_id] = n
+    return {rid: VerificationRounds(n, passed_on.get(rid)) for rid, n in rounds.items()}
+
+
 async def build_run_detail(
     *,
     run_id: uuid.UUID,
@@ -445,6 +486,9 @@ async def build_run_detail(
         .limit(1)
     )
     verification_row = (await session.execute(latest_verification_stmt)).scalars().first()
+    verification_rounds = (await verification_rounds_by_run(session, workspace_id, [run_id])).get(
+        run_id, NO_VERIFICATION_ROUNDS
+    )
 
     # D6 — Deliverables for this run: the verified-final + any mid-loop partials.
     # We load all rows once and split by ``payload["kind"] == PARTIAL_DELIVERABLE_KIND``
@@ -531,6 +575,8 @@ async def build_run_detail(
         verification=(
             _run_verification(verification_row) if verification_row is not None else None
         ),
+        verification_rounds=verification_rounds.rounds,
+        passed_on_round=verification_rounds.passed_on_round,
         deliverable_id=deliverable_id,
         partial_deliverables=partial_deliverables,
         activities=activities,
@@ -540,6 +586,9 @@ async def build_run_detail(
 
 
 __all__ = [
+    "NO_VERIFICATION_ROUNDS",
+    "VerificationRounds",
+    "verification_rounds_by_run",
     "_activity_label",
     "build_run_detail",
     "_build_timeline",

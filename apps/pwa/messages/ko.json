@@ -1093,6 +1093,7 @@
       "inconclusive": "검증이 불확실해요"
     },
     "noVerification": "아직 이 실행에 대한 검증 기록이 없어요.",
+    "passedOnRound": "{round}번째 검증에서 통과했어요",
     "checks": {
       "failedGroup": "실패한 검사",
       "productGroup": "제품 검사",
