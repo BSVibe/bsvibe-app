@@ -200,6 +200,40 @@ def _verify_label(payload: dict[str, Any], language: str) -> str | None:
     return _VERIFY_FALLBACK[lang]
 
 
+_INBOX_FALLBACK = {"en": "Received a message from the founder", "ko": "메시지를 받았어요"}
+
+
+def _inbox_label(payload: dict[str, Any], language: str) -> str | None:
+    """The founder's issue edit / comment arriving in the run's inbox, in one line.
+
+    A row we cannot read (no kind, no issue number) degrades to a calm generic
+    line rather than dropping out or 500ing — the arrival still happened.
+    """
+    ko = _lang(language) == "ko"
+    kind = payload.get("kind")
+    number = payload.get("issue_number")
+    if isinstance(number, bool) or not isinstance(number, int | str) or not str(number).strip():
+        return _INBOX_FALLBACK[_lang(language)]
+    number = str(number).strip().lstrip("#")
+    if kind == "issue_edit":
+        return f"이슈 #{number} 수정을 받았어요" if ko else f"Received an edit to issue #{number}"
+    if kind == "issue_comment":
+        author = _opt_str(payload.get("author"))
+        if author is None:
+            return (
+                f"이슈 #{number} 댓글을 받았어요"
+                if ko
+                else f"Received a comment on issue #{number}"
+            )
+        author = author.lstrip("@")
+        return (
+            f"@{author} 의 이슈 #{number} 댓글을 받았어요"
+            if ko
+            else f"Received @{author}'s comment on issue #{number}"
+        )
+    return _INBOX_FALLBACK[_lang(language)]
+
+
 # Types whose label needs the payload, and types whose label is a constant.
 # A dict rather than an if-chain so adding the next activity type is one line
 # and never re-trips the return-count lint.
@@ -207,6 +241,7 @@ _LABEL_BUILDERS: dict[str, Callable[[dict[str, Any], str], str | None]] = {
     "tool_call": _tool_call_label,
     "verify": _verify_label,
     "routing_decision": _routing_decision_label,
+    "founder_inbox": _inbox_label,
 }
 
 
