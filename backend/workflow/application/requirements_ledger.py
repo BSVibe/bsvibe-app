@@ -34,6 +34,7 @@ from backend.workflow.domain.requirements import (
     build_ledger,
     check_ledger,
     cited_test_body,
+    cited_test_helpers,
     relevant_hunks,
     split_test_id,
 )
@@ -163,7 +164,15 @@ async def _cited_body(box: SandboxSession, test: str) -> str | None:
     if split is None:
         return None
     text = await _test_file(box, split[0])
-    return cited_test_body(text, split[1]) if text is not None else None
+    if text is None:
+        return None
+    body = cited_test_body(text, split[1])
+    if body is None:
+        return None
+    # The same-file helpers and fixtures the test names — without them a test that stores
+    # rows through ``_hold(db, MIXED)`` shows the judge nothing it can check (#1287).
+    helpers = cited_test_helpers(text, body)
+    return f"{body}\n\n--- defined in the same file, used above:\n{helpers}" if helpers else body
 
 
 MissingTests = Callable[[Mapping[str, Any]], Awaitable[list[str]]]
