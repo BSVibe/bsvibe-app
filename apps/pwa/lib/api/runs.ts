@@ -2,7 +2,7 @@
  *  Read-only: ExecutionRun rows for the active workspace, newest first. */
 
 import { apiFetch } from "./client";
-import type { Run, RunCancel, RunDetail, RunRetry } from "./types";
+import type { FirstRoundPassRate, Run, RunCancel, RunDetail, RunRetry } from "./types";
 
 /** Recent ExecutionRun rows for the active workspace (newest first).
  *  `productId` narrows to one product server-side — the backend filters in the
@@ -11,6 +11,14 @@ import type { Run, RunCancel, RunDetail, RunRetry } from "./types";
 export function listRuns(limit = 50, productId?: string): Promise<Run[]> {
   const scope = productId ? `&product_id=${encodeURIComponent(productId)}` : "";
   return apiFetch<Run[]>(`/api/v1/runs?limit=${limit}${scope}`);
+}
+
+/** How often the latest finished runs passed verification on round 1.
+ *  `productId` narrows to one product. REAL backend
+ *  `GET /api/v1/runs/first-round-pass-rate`. */
+export function getFirstRoundPassRate(limit = 30, productId?: string): Promise<FirstRoundPassRate> {
+  const scope = productId ? `&product_id=${encodeURIComponent(productId)}` : "";
+  return apiFetch<FirstRoundPassRate>(`/api/v1/runs/first-round-pass-rate?limit=${limit}${scope}`);
 }
 
 /** The inspectable run-detail surface for one run — trigger context, paused-run

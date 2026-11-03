@@ -62,6 +62,8 @@ def _tool_name_for(family: str, path: str) -> str:
     else:
         # ``{ref:path}`` converters keep their converter suffix in the raw path.
         suffix = literals[-1].split(":")[0]
+    # URL segments are kebab-case; MCP tool names are snake_case.
+    suffix = suffix.replace("-", "_")
     return f"bsvibe_{family}_{suffix}"
 
 

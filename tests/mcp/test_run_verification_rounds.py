@@ -177,3 +177,85 @@ async def test_first_round_pass_rate_is_null_when_nothing_was_verified(
     out = await _call(db, registry, workspace_id, "bsvibe_runs_first_round_pass_rate", {})
 
     assert (out["passed_first_round"], out["runs_verified"], out["pass_rate"]) == (0, 0, None)
+
+
+async def test_rest_and_mcp_first_round_pass_rate_agree_and_product_filter_is_scoped(
+    db, workspace_id, registry, seeded
+) -> None:
+    import httpx
+
+    from backend.api.deps import get_current_user, get_db_session, get_workspace_id
+    from backend.api.main import create_app
+
+    from .._support import fake_current_user, publishing_workspace
+
+    mine, theirs = uuid.uuid4(), uuid.uuid4()
+    first = await _seed_run(db, workspace_id, [P], age=0)
+    second = await _seed_run(db, workspace_id, [F, P], age=1)
+    other_product = await _seed_run(db, workspace_id, [P], age=2)
+    await _seed_run(db, workspace_id, [], age=3)
+    async with scoped_session(db, workspace_id) as s:
+        for rid, pid in ((first, mine), (second, mine), (other_product, theirs)):
+            run = await s.get(ExecutionRun, rid)
+            run.product_id = pid
+        await s.commit()
+
+    mcp = await _call(db, registry, workspace_id, "bsvibe_runs_first_round_pass_rate", {})
+
+    app = create_app()
+
+    async def _session():
+        async with db() as s:
+            yield s
+
+    app.dependency_overrides[get_current_user] = fake_current_user()
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
+    app.dependency_overrides[get_db_session] = _session
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        rest = (await c.get("/api/v1/runs/first-round-pass-rate?limit=20")).json()
+        scoped = (await c.get(f"/api/v1/runs/first-round-pass-rate?product_id={mine}")).json()
+
+    assert rest == mcp
+    assert (rest["passed_first_round"], rest["runs_verified"]) == (2, 3)
+    # the other product's first-round pass is not counted
+    assert (scoped["passed_first_round"], scoped["runs_verified"]) == (1, 2)
+    assert scoped["runs_considered"] == 2
+
+
+async def test_first_round_pass_rate_defaults_to_30_runs_on_rest_and_mcp(
+    db, workspace_id, registry, seeded
+) -> None:
+    import httpx
+
+    from backend.api.deps import get_current_user, get_db_session, get_workspace_id
+    from backend.api.main import create_app
+
+    from .._support import fake_current_user, publishing_workspace
+
+    for age in range(31):
+        await _seed_run(db, workspace_id, [P], age=age)
+
+    mcp = await _call(db, registry, workspace_id, "bsvibe_runs_first_round_pass_rate", {})
+
+    app = create_app()
+
+    async def _session():
+        async with db() as s:
+            yield s
+
+    app.dependency_overrides[get_current_user] = fake_current_user()
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
+    app.dependency_overrides[get_db_session] = _session
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        rest = (await c.get("/api/v1/runs/first-round-pass-rate")).json()
+        too_big = await c.get("/api/v1/runs/first-round-pass-rate?limit=201")
+        zero = await c.get("/api/v1/runs/first-round-pass-rate?limit=0")
+
+    assert rest["runs_considered"] == 30
+    assert mcp["runs_considered"] == 30
+    assert too_big.status_code == 422
+    assert zero.status_code == 422

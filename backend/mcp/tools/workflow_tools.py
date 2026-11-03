@@ -23,12 +23,13 @@ from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.workflow.application.product_secrets import sealed_product_metadata
 from backend.workflow.application.run_detail import (
     NO_VERIFICATION_ROUNDS,
+    first_round_pass_rate,
     verification_rounds_by_run,
 )
 from backend.workflow.domain.execution_target import read_execution_target
 from backend.workflow.domain.verified_deliverable import diff_of
 from backend.workflow.domain.verify_secrets import redact_secrets
-from backend.workflow.infrastructure.db import TERMINAL_RUN_STATUSES, ExecutionRun, RunStatus
+from backend.workflow.infrastructure.db import RunStatus
 from backend.workflow.infrastructure.repositories import (
     SqlAlchemyDecisionRepository,
     SqlAlchemyDeliverableRepository,
@@ -644,34 +645,12 @@ async def _h_runs_detail(args: RunsDetailInput, ctx: ToolContext) -> Any:
 # ---------------------------------------------------------------------------
 class RunsFirstRoundPassRateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    limit: int = Field(20, ge=1, le=200)
+    limit: int = Field(30, ge=1, le=200)
 
 
 async def _h_runs_first_round_pass_rate(args: RunsFirstRoundPassRateInput, ctx: ToolContext) -> Any:
-    workspace_id = ctx.principal.workspace_id
-    stmt = (
-        select(ExecutionRun.id)
-        .where(
-            ExecutionRun.workspace_id == workspace_id,
-            ExecutionRun.status.in_(TERMINAL_RUN_STATUSES),
-        )
-        .order_by(ExecutionRun.created_at.desc())
-        .limit(args.limit)
-    )
-    run_ids = list((await ctx.session.execute(stmt)).scalars().all())
-    rounds = await verification_rounds_by_run(ctx.session, workspace_id, run_ids)
-    # A run that was never verified says nothing about passing first time, so it is
-    # out of the denominator rather than counted as a miss.
-    verified = [r for r in rounds.values() if r.rounds > 0]
-    first_round = sum(1 for r in verified if r.passed_on_round == 1)
-    return _Envelope(
-        {
-            "runs_considered": len(run_ids),
-            "runs_verified": len(verified),
-            "passed_first_round": first_round,
-            "pass_rate": first_round / len(verified) if verified else None,
-        }
-    )
+    rate = await first_round_pass_rate(ctx.session, ctx.principal.workspace_id, limit=args.limit)
+    return _Envelope(rate.as_dict())
 
 
 # ---------------------------------------------------------------------------
@@ -1085,7 +1064,7 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_runs_first_round_pass_rate",
             description=(
-                "Of the workspace's most recent `limit` (default 20) FINISHED runs "
+                "Of the workspace's most recent `limit` (default 30) FINISHED runs "
                 "(shipped, failed or cancelled), the share that passed verification on "
                 "round 1. Returns `passed_first_round` (numerator), `runs_verified` "
                 "(denominator: finished runs with at least one verification), "
