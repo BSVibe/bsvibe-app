@@ -29,8 +29,10 @@ from backend.workflow.domain.repositories import (
 )
 from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIND
 from backend.workflow.infrastructure.db import (
+    TERMINAL_RUN_STATUSES,
     Decision,
     Deliverable,
+    ExecutionRun,
     ExecutionRunActivity,
     ExecutionRunHistory,
     RunStatus,
@@ -446,6 +448,48 @@ async def verification_rounds_by_run(
         if outcome is VerificationOutcome.PASSED and run_id not in passed_on:
             passed_on[run_id] = n
     return {rid: VerificationRounds(n, passed_on.get(rid)) for rid, n in rounds.items()}
+
+
+class FirstRoundPassRate(NamedTuple):
+    runs_considered: int
+    runs_verified: int
+    passed_first_round: int
+    pass_rate: float | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return self._asdict()
+
+
+async def first_round_pass_rate(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    limit: int = 30,
+    product_id: uuid.UUID | None = None,
+) -> FirstRoundPassRate:
+    """How often the latest ``limit`` finished runs passed verification first time.
+
+    The one calculation behind both the REST route and the MCP tool, so the two
+    can never disagree. A run that was never verified says nothing about passing
+    first time, so it is out of the denominator rather than counted as a miss.
+    """
+    stmt = select(ExecutionRun.id).where(
+        ExecutionRun.workspace_id == workspace_id,
+        ExecutionRun.status.in_(TERMINAL_RUN_STATUSES),
+    )
+    if product_id is not None:
+        stmt = stmt.where(ExecutionRun.product_id == product_id)
+    stmt = stmt.order_by(ExecutionRun.created_at.desc()).limit(limit)
+    run_ids = list((await session.execute(stmt)).scalars().all())
+    rounds = await verification_rounds_by_run(session, workspace_id, run_ids)
+    verified = [r for r in rounds.values() if r.rounds > 0]
+    first_round = sum(1 for r in verified if r.passed_on_round == 1)
+    return FirstRoundPassRate(
+        runs_considered=len(run_ids),
+        runs_verified=len(verified),
+        passed_first_round=first_round,
+        pass_rate=first_round / len(verified) if verified else None,
+    )
 
 
 async def build_run_detail(

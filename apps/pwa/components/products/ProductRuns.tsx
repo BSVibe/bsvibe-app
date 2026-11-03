@@ -18,6 +18,16 @@ function formatDate(dateKey: string): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/** 검증 회차 문구의 i18n 키·값. 검증이 없으면 null — 아무것도 그리지 않는다. */
+function roundsLabel(run: ProductDetailRun): { key: string; values: { count: number } } | null {
+  const rounds = run.verificationRounds ?? 0;
+  if (rounds <= 0) return null;
+  const passedOn = run.passedOnRound ?? null;
+  if (passedOn === 1) return { key: "passedFirstRound", values: { count: 1 } };
+  if (passedOn !== null) return { key: "passedOnRound", values: { count: passedOn } };
+  return { key: "verifiedTimes", values: { count: rounds } };
+}
+
 /**
  * "활동" — 이 제품이 한 일. **많은 걸 전제로** 그린다 (#1042).
  *
@@ -43,6 +53,7 @@ export default function ProductRuns({ runs }: { runs: ProductDetailRun[] }) {
 
   const renderRow = (row: ActivityRow) => {
     const { run, count } = row;
+    const rounds = roundsLabel(run);
     const body = (
       <>
         <span className={`product-run__status product-run__status--${run.tone}`}>
@@ -54,6 +65,7 @@ export default function ProductRuns({ runs }: { runs: ProductDetailRun[] }) {
           <span className="product-run__title product-run__title--none">{t("untitledRun")}</span>
         )}
         {count > 1 && <span className="product-run__repeat">{t("repeatedTimes", { count })}</span>}
+        {rounds && <span className="product-run__rounds">{t(rounds.key, rounds.values)}</span>}
         <span className="product-run__when">{formatTime(run.updatedAt)}</span>
       </>
     );

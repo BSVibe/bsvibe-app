@@ -19,6 +19,7 @@ const TONE_CLASS: Record<ActivityTone, string> = {
  */
 export default function ProductHeader({ view }: { view: ProductDetailView }) {
   const t = useTranslations("products");
+  const rate = view.firstRoundPassRate;
   return (
     <header className="product-head">
       <div className="product-head__row">
@@ -28,6 +29,11 @@ export default function ProductHeader({ view }: { view: ProductDetailView }) {
         <h1 className="product-head__name">{view.name}</h1>
       </div>
       <p className="product-head__status">{t(view.currentStatusKey)}</p>
+      {rate && rate.runs_verified > 0 && (
+        <p className="product-head__pass-rate">
+          {t("firstRoundPassRate", { total: rate.runs_verified, passed: rate.passed_first_round })}
+        </p>
+      )}
     </header>
   );
 }
