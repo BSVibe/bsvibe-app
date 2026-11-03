@@ -39,7 +39,10 @@ from backend.notifications.copy import (
 from backend.notifications.emit import emit_notification
 from backend.workers.base import BaseWorker
 from backend.workers.emit import STREAM_AGENT, emit_stream_notification
-from backend.workflow.application.intake.issue_edit import route_issue_edit_to_run
+from backend.workflow.application.intake.issue_edit import (
+    route_issue_comment_to_run,
+    route_issue_edit_to_run,
+)
 from backend.workflow.application.intake.pr_comment import route_pr_comment_to_run
 from backend.workflow.application.intake.trust import RepoPermission, stamp_comment_trust
 from backend.workflow.application.intake_gate import (
@@ -235,17 +238,27 @@ class IntakeWorker(BaseWorker):
                     # it — no new run. Routed HERE, past the binding filter and the
                     # budget/run-cap gate above, so a paused filter stops it too.
                     if trig.source == "github":
-                        routed_run_id = await route_pr_comment_to_run(
-                            session,
-                            workspace_id=trig.workspace_id,
-                            payload=dict(trig.payload or {}),
-                            permission_of=self._repo_permission,
-                        ) or await route_issue_edit_to_run(
-                            # #1268 — an edit to an issue whose run is in flight goes to it.
-                            session,
-                            workspace_id=trig.workspace_id,
-                            payload=dict(trig.payload or {}),
-                            permission_of=self._repo_permission,
+                        routed_run_id = (
+                            await route_pr_comment_to_run(
+                                session,
+                                workspace_id=trig.workspace_id,
+                                payload=dict(trig.payload or {}),
+                                permission_of=self._repo_permission,
+                            )
+                            or await route_issue_edit_to_run(
+                                # #1268 — an edit to an issue whose run is in flight goes to it.
+                                session,
+                                workspace_id=trig.workspace_id,
+                                payload=dict(trig.payload or {}),
+                                permission_of=self._repo_permission,
+                            )
+                            or await route_issue_comment_to_run(
+                                # …and so does a trusted comment on it (no second run, #1279).
+                                session,
+                                workspace_id=trig.workspace_id,
+                                payload=dict(trig.payload or {}),
+                                permission_of=self._repo_permission,
+                            )
                         )
                         if routed_run_id is not None:
                             trig.payload = {

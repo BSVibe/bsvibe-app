@@ -61,6 +61,7 @@ from backend.workflow.application.round_budget import (
     round_budget_stats,
     should_continue_round,
 )
+from backend.workflow.application.run_inbox import apply_inbox
 from backend.workflow.application.token_budget import account_and_enforce_token_cap
 from backend.workflow.application.tool_registry import (
     ASK_USER_QUESTION_TOOL,
@@ -169,6 +170,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         messages.append(skill_hint)
     # Resumption context (founder-resolved prior questions).
     messages.extend(_resumption_messages(run))
+    messages.extend(await apply_inbox(orch._session, run))  # what the founder sent (#1293)
     messages.extend(ledger_messages(run))  # what the request asked for, item by item
     # PR7 — a re-dispatched merge conflict: surface the conflict to the agent
     # BEFORE its turn, then consume the one-shot key so a later resume does not
@@ -223,6 +225,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     while await should_continue_round(orch, run, attempt, registry, tracker, messages, _cycle):
         this_cycle = _cycle
         _cycle += 1
+        messages.extend(await apply_inbox(orch._session, run))  # sent since the last turn
         turn = await take_turn(orch, run, messages, tools_schema)
         if turn is None:  # cancelled — between turns, or mid-turn (#1106)
             await orch._audit(

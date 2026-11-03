@@ -23,10 +23,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.data import Base
 from backend.data.rls import workspace_session_scope
-from backend.workflow.application.intake.issue_edit import (
-    issue_edit_messages,
-    route_issue_edit_to_run,
-)
+from backend.workflow.application.intake.issue_edit import route_issue_edit_to_run
+from backend.workflow.application.run_inbox import apply_inbox
 from backend.workflow.domain.requirements import (
     REQUIREMENTS_KEY,
     build_ledger,
@@ -153,6 +151,18 @@ async def _route(sf: async_sessionmaker, ws: uuid.UUID, payload: dict[str, Any])
     return routed
 
 
+async def _applied(
+    sf: async_sessionmaker, ws: uuid.UUID, run_id: uuid.UUID
+) -> tuple[ExecutionRun, list[dict[str, Any]]]:
+    """What the drive does at its start / between turns: apply the run's inbox."""
+    async with sf() as session, workspace_session_scope(session, ws):
+        run = await session.get(ExecutionRun, run_id)
+        assert run is not None
+        told = await apply_inbox(session, run)
+        await session.commit()
+        return run, told
+
+
 async def _run(sf: async_sessionmaker, ws: uuid.UUID, run_id: uuid.UUID) -> ExecutionRun:
     async with sf() as session, workspace_session_scope(session, ws):
         run = await session.get(ExecutionRun, run_id)
@@ -203,7 +213,7 @@ async def test_an_edit_goes_to_the_in_flight_run(status: RunStatus) -> None:
         sf = async_sessionmaker(engine, expire_on_commit=False)
         ws, run_id = await _seed(sf, status=status)
         routed = await _route(sf, ws, _event(_BODY_V2))
-        run = await _run(sf, ws, run_id)
+        run, _told = await _applied(sf, ws, run_id)
 
     assert routed == run_id
     assert run.status is status
@@ -276,13 +286,13 @@ async def test_the_next_drive_is_told_once() -> None:
         sf = async_sessionmaker(engine, expire_on_commit=False)
         ws, run_id = await _seed(sf, status=RunStatus.RUNNING)
         await _route(sf, ws, _event(_BODY_V2))
-        run = await _run(sf, ws, run_id)
+        _run_row, [message] = await _applied(sf, ws, run_id)
+        _again, told_again = await _applied(sf, ws, run_id)
 
-    [message] = issue_edit_messages(run)
     assert "edited the issue" in message["content"]
     assert "항상 저장한다" in message["content"]
     assert "withdrawn" in message["content"]
-    assert issue_edit_messages(run) == []  # consumed
+    assert told_again == []  # told once
 
 
 async def test_the_intake_worker_routes_the_edit_instead_of_queueing_a_new_run() -> None:
@@ -343,7 +353,7 @@ async def test_the_intake_worker_routes_the_edit_instead_of_queueing_a_new_run()
         await IntakeWorker(session_factory=sf, config=IntakeWorkerConfig()).drain_once()
         async with sf() as s, workspace_session_scope(s, ws):
             requests = list((await s.execute(select(RequestRow))).scalars().all())
-        run = await _run(sf, ws, run_id)
+        run, _told = await _applied(sf, ws, run_id)
 
     assert len(requests) == 1  # only the run's own: the edit did not become a second run
     assert "항상 저장한다" in run.payload["intent_text"]
@@ -357,10 +367,9 @@ async def test_the_drive_seeds_the_edit_before_the_refreshed_ledger() -> None:
         sf = async_sessionmaker(engine, expire_on_commit=False)
         ws, run_id = await _seed(sf, status=RunStatus.RUNNING)
         await _route(sf, ws, _event(_BODY_V2))
-        run = await _run(sf, ws, run_id)
+        run, [told] = await _applied(sf, ws, run_id)
 
-    first, second = ledger_messages(run)
-    assert "edited the issue" in first["content"]
-    assert "REQUIREMENTS LEDGER" in second["content"]
-    assert "withdrawn" in second["content"]
-    assert len(ledger_messages(run)) == 1  # the edit was told once; the ledger stays
+    assert "edited the issue" in told["content"]
+    [ledger] = ledger_messages(run)  # seeded AFTER the inbox: it shows the refreshed ledger
+    assert "REQUIREMENTS LEDGER" in ledger["content"]
+    assert "withdrawn" in ledger["content"]

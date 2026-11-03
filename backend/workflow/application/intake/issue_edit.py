@@ -5,18 +5,20 @@ same issue, while the first run kept the body (and the requirements ledger) it s
 Prod #1263 (2026-10-29): R3 was wrong, the issue was corrected, the run never saw it, deferred
 R3, and its PR said ``Refs``.
 
-The same shape as :mod:`.pr_comment`: run in the intake worker AFTER the binding filter and
-the budget/run-cap gate, write the edit onto the run's payload, re-open a run that was waiting
-for review. Two differences:
+Run in the intake worker AFTER the binding filter and the budget/run-cap gate. The edit — and,
+the same way, a trusted COMMENT on the issue (which used to queue a second run for the same
+issue: prod #1279, ``b9d0039c``) — goes to the run's inbox (:mod:`..run_inbox`), never onto the
+run row: the drive holds its own copy of the run and wrote a routed edit over (prod #1293). A
+run that was waiting for review is re-opened. Two rules:
 
 * **Who may edit.** An ``issues`` delivery carries the issue AUTHOR's association, never the
   editor's. So an edit is routed only when the editor IS the author and that author is OWNER /
   MEMBER / COLLABORATOR — or, since a private org member shows as CONTRIBUTOR, has write access
   to the repo (:mod:`.trust`). Anyone else's edit falls through to a new request, exactly as before —
   on a public repo a stranger does not get to rewrite a running job.
-* **What changes.** The run's ``intent_text`` becomes the edited issue, and its ledger is
-  refreshed (:func:`~backend.workflow.domain.requirements.refresh_ledger`: same item, same id;
-  a removed item is ``withdrawn``; a new item gets the next id).
+* **What changes** (applied by the drive): an edit makes the edited issue the run's
+  ``intent_text`` and refreshes its ledger (same item, same id; a removed item is
+  ``withdrawn``; a new item gets the next id); a comment's checklist items join the ledger.
 """
 
 from __future__ import annotations
@@ -31,14 +33,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data.rls import workspace_session_scope
 from backend.workflow.application.intake.trust import RepoPermission, is_trusted
+from backend.workflow.application.run_inbox import ISSUE_COMMENT, ISSUE_EDIT, post_to_inbox
 from backend.workflow.application.run_status import move_run_status
-from backend.workflow.domain.requirements import REQUIREMENTS_KEY, build_ledger, refresh_ledger
+from backend.workflow.domain.requirements import (
+    build_ledger,
+    extract_requirements,
+    number_requirements,
+)
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.intake.db import RequestRow
 
 logger = structlog.get_logger(__name__)
-
-ISSUE_EDITS_KEY = "issue_edits"
 
 _APPEND_ONLY = (RunStatus.OPEN, RunStatus.RUNNING)
 _REOPEN = (RunStatus.REVIEW_READY, RunStatus.FAILED)
@@ -112,6 +117,36 @@ async def _run_for_issue(
     return None
 
 
+async def _deliver(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    repo: str,
+    number: int,
+    kind: str,
+    data: dict[str, Any],
+) -> uuid.UUID | None:
+    """Post ``data`` to the inbox of the unfinished run issue ``number`` started; its id."""
+    async with workspace_session_scope(session, workspace_id):
+        run = await _run_for_issue(session, workspace_id, repo, number)
+        if run is None:
+            return None
+        await post_to_inbox(session, run, kind, {"issue_number": number, **data})
+        if run.status in _REOPEN:
+            await move_run_status(
+                session, run, RunStatus.OPEN, reason=f"issue #{number}: {kind.replace('_', ' ')}"
+            )
+        await session.flush()
+    logger.info(
+        f"{kind}_routed_to_run",
+        run_id=str(run.id),
+        repo=repo,
+        issue_number=number,
+        run_status=run.status.value,
+    )
+    return run.id
+
+
 async def route_issue_edit_to_run(
     session: AsyncSession,
     *,
@@ -133,84 +168,57 @@ async def route_issue_edit_to_run(
     ):
         _not_routed(repo, number, author, author, association)
         return None
-    async with workspace_session_scope(session, workspace_id):
-        run = await _run_for_issue(session, workspace_id, repo, number)
-        if run is None:
-            return None
-        run_payload = dict(run.payload or {})
-        added: list[str] = []
-        withdrawn: list[str] = []
-        old_ledger = run_payload.get(REQUIREMENTS_KEY)
-        if isinstance(old_ledger, list) and old_ledger:
-            refreshed = refresh_ledger(old_ledger, build_ledger(payload))
-            old_ids = {str(i.get("id")) for i in old_ledger}
-            was_withdrawn = {str(i.get("id")) for i in old_ledger if i.get("withdrawn")}
-            added = [f"{i['id']} {i['text']}" for i in refreshed if str(i["id"]) not in old_ids]
-            withdrawn = [
-                f"{i['id']} {i['text']}"
-                for i in refreshed
-                if i.get("withdrawn") and str(i["id"]) not in was_withdrawn
-            ]
-            run_payload[REQUIREMENTS_KEY] = refreshed
-        intent = str(payload.get("intent_text") or "").strip()
-        if intent:
-            run_payload["intent_text"] = intent
-        edits = list(run_payload.get(ISSUE_EDITS_KEY) or [])
-        edits.append(
-            {"issue_number": number, "text": intent, "added": added, "withdrawn": withdrawn}
-        )
-        run_payload[ISSUE_EDITS_KEY] = edits
-        run.payload = run_payload
-        if run.status in _REOPEN:
-            await move_run_status(
-                session, run, RunStatus.OPEN, reason=f"issue #{number} was edited"
-            )
-        await session.flush()
-    logger.info(
-        "issue_edit_routed_to_run",
-        run_id=str(run.id),
-        repo=repo,
-        issue_number=number,
-        run_status=run.status.value,
-        added=len(added),
-        withdrawn=len(withdrawn),
+    data = {
+        "intent_text": str(payload.get("intent_text") or "").strip(),
+        "ledger": build_ledger(payload),
+    }
+    return await _deliver(
+        session, workspace_id=workspace_id, repo=repo, number=number, kind=ISSUE_EDIT, data=data
     )
-    return run.id
 
 
-def issue_edit_messages(run: ExecutionRun) -> list[dict[str, Any]]:
-    """The queued edits as turn context — and consumed: each is told once."""
-    payload = dict(run.payload or {})
-    edits = payload.get(ISSUE_EDITS_KEY)
-    if not isinstance(edits, list) or not edits:
-        return []
-    messages: list[dict[str, Any]] = []
-    for edit in edits:
-        if not isinstance(edit, Mapping):
-            continue
-        lines = [
-            f"The founder edited the issue (#{edit.get('issue_number')}) this run is working on. "
-            "The edited text is now the request; where it differs from what you were doing, "
-            "the edit wins.",
-        ]
-        if edit.get("added"):
-            lines.append("New ledger items: " + "; ".join(map(str, edit["added"])))
-        if edit.get("withdrawn"):
-            lines.append(
-                "Items withdrawn (no longer asked — send no evidence for them): "
-                + "; ".join(map(str, edit["withdrawn"]))
-            )
-        if edit.get("text"):
-            lines.append(f"The issue now reads:\n\n{edit['text']}")
-        messages.append({"role": "user", "content": "\n".join(lines)})
-    payload.pop(ISSUE_EDITS_KEY, None)
-    run.payload = payload
-    return messages
+async def route_issue_comment_to_run(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    payload: dict[str, Any],
+    permission_of: RepoPermission | None = None,
+) -> uuid.UUID | None:
+    """Hand a trusted comment on an issue to the run that issue started; its id, or ``None``.
+
+    ``None`` — not a comment on an issue (a PR's is :mod:`.pr_comment`'s), an untrusted
+    author, no unfinished run — means the caller lands it as a new request, as before."""
+    if payload.get("github_event") != "issue_comment":
+        return None
+    issue = _issue(payload)
+    body = payload.get("body")
+    comment = body.get("comment") if isinstance(body, Mapping) else None
+    repo = str(payload.get("repo") or "")
+    number = issue.get("number") if issue is not None else None
+    if issue is None or issue.get("pull_request") or not isinstance(number, int) or not repo:
+        return None
+    if not isinstance(comment, Mapping):
+        return None
+    text = str(comment.get("body") or "").strip()
+    user = comment.get("user")
+    login = str(user.get("login") or "") if isinstance(user, Mapping) else ""
+    association = str(comment.get("author_association") or "").upper()
+    if not text or not await is_trusted(
+        association, login=login, repo=repo, workspace_id=workspace_id, permission_of=permission_of
+    ):
+        return None
+    data = {
+        "text": text,
+        "author": login,
+        "ledger": number_requirements(extract_requirements(text, source="comment")),
+    }
+    return await _deliver(
+        session, workspace_id=workspace_id, repo=repo, number=number, kind=ISSUE_COMMENT, data=data
+    )
 
 
 __all__ = [
-    "ISSUE_EDITS_KEY",
-    "issue_edit_messages",
     "issue_edit_of",
+    "route_issue_comment_to_run",
     "route_issue_edit_to_run",
 ]
