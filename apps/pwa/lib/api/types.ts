@@ -1326,6 +1326,18 @@ export interface ProductDetailRun {
   /** Where the row links — the deliverable proof when one exists, else the run.
    *  Makes "Needs your review" rows openable instead of a dead status line. */
   detailHref: string | null;
+  /** Verifications recorded for the run (0/absent when none). */
+  verificationRounds?: number;
+  /** The 1-based round the run first passed on; `null` while it has not. */
+  passedOnRound?: number | null;
+}
+
+/** `GET /api/v1/runs/first-round-pass-rate` — same numbers as the MCP tool. */
+export interface FirstRoundPassRate {
+  runs_considered: number;
+  runs_verified: number;
+  passed_first_round: number;
+  pass_rate: number | null;
 }
 
 /** The focused per-product view-model (the `/products/[slug]` surface). Composed
@@ -1350,6 +1362,8 @@ export interface ProductDetailView {
   currentTone: ActivityTone;
   runs: ProductDetailRun[];
   shipped: ShippedItem[];
+  /** First-round pass rate over this product's runs; null when unavailable. */
+  firstRoundPassRate?: FirstRoundPassRate | null;
 }
 
 /** The whole Glance surface.

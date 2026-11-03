@@ -10,9 +10,9 @@ lives in :mod:`.detail`.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
@@ -23,6 +23,7 @@ from backend.workflow.application.run_detail import (
     _frame_field,
     _intent_of,
     _restarted_at_of,
+    first_round_pass_rate,
     verification_rounds_by_run,
 )
 from backend.workflow.domain.repositories import RunRepository
@@ -73,6 +74,22 @@ async def list_runs(
     # One query for every row's rounds — never one per run.
     rounds = await verification_rounds_by_run(session, workspace_id, [r.id for r in rows])
     return [_run_response(row, rounds.get(row.id, NO_VERIFICATION_ROUNDS)) for row in rows]
+
+
+@router.get("/first-round-pass-rate")
+async def get_first_round_pass_rate(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+    product_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """Share of the latest finished runs that passed verification on round 1.
+
+    Same function as the ``bsvibe_runs_first_round_pass_rate`` MCP tool.
+    ``product_id`` narrows the runs counted to one product.
+    """
+    rate = await first_round_pass_rate(session, workspace_id, limit=limit, product_id=product_id)
+    return rate.as_dict()
 
 
 @router.get("/{run_id}")

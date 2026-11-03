@@ -30,7 +30,7 @@ import { conciseSummary } from "../text/summary";
 import { listDeliverables } from "./deliverables";
 import { listProducts } from "./products";
 import { type ReviewLookup, buildReviewLookup } from "./review-context";
-import { listRuns } from "./runs";
+import { getFirstRoundPassRate, listRuns } from "./runs";
 import type {
   ActivityTone,
   ArtifactType,
@@ -157,6 +157,8 @@ function toDetailRun(run: Run, lookup: ReviewLookup): ProductDetailRun {
     shipped: run.status === "shipped",
     title: ctx.title,
     detailHref: ctx.detailHref,
+    verificationRounds: run.verification_rounds ?? 0,
+    passedOnRound: run.passed_on_round ?? null,
   };
 }
 
@@ -215,6 +217,9 @@ export async function getProductDetail(
   const lookup = buildReviewLookup(productRuns, deliverables, products);
   const detailRuns = productRuns.map((r) => toDetailRun(r, lookup));
 
+  // A failed rate read only hides the summary line; it never blanks the view.
+  const firstRoundPassRate = await getFirstRoundPassRate(20, product.id).catch(() => null);
+
   return {
     id: product.id,
     slug: product.slug,
@@ -224,5 +229,6 @@ export async function getProductDetail(
     currentTone,
     runs: detailRuns,
     shipped,
+    firstRoundPassRate,
   };
 }
