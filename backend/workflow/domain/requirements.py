@@ -532,6 +532,65 @@ def cited_test_body(text: str, name: str, *, limit: int = 4000) -> str | None:
     return "\n".join(body).rstrip()[:limit]
 
 
+_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+#: Names looked up per level — a long test names many; each lookup scans the file.
+_MAX_HELPER_NAMES = 200
+
+
+def _top_level_definition(lines: list[str], name: str) -> str | None:
+    """The module-level definition of ``name`` (decorators included), or ``None``."""
+    esc = re.escape(name)
+    head = re.compile(
+        rf"^(?:export\s+)?(?:async\s+def|def|class|function|const|let|var|fn|func)\s+{esc}\b"
+        rf"|^{esc}\s*(?::[^=]*)?=(?!=)"
+    )
+    start = next((i for i, ln in enumerate(lines) if head.search(ln)), None)
+    if start is None:
+        return None
+    first = start
+    while first > 0 and lines[first - 1].startswith("@"):
+        first -= 1
+    block = lines[first : start + 1]
+    for line in lines[start + 1 :]:
+        if line.strip() and not line[0].isspace():
+            if line.strip().startswith(_CLOSERS):
+                block.append(line)
+            break
+        block.append(line)
+    return "\n".join(block).rstrip()
+
+
+def cited_test_helpers(text: str, body: str, *, limit: int = 3000) -> str:
+    """The module-level helpers and fixtures a cited test names, from its own file.
+
+    A test that stores rows through ``_hold(db, MIXED)`` proves nothing to a judge who cannot
+    see ``_hold`` or ``MIXED`` (prod #1287). Names the body uses that the file defines at the
+    top level are shown, in the order the body names them, then — still within ``limit`` —
+    the names those definitions use, one level down. The test itself is not repeated."""
+    lines = text.splitlines()
+    shown: list[str] = []
+    seen: set[str] = set()
+    used = 0
+    queue = list(dict.fromkeys(_NAME.findall(body)))[:_MAX_HELPER_NAMES]
+    for depth in range(2):
+        next_queue: list[str] = []
+        for name in queue:
+            if name in seen:
+                continue
+            seen.add(name)
+            definition = _top_level_definition(lines, name)
+            if definition is None or definition in body:
+                continue
+            if used + len(definition) > limit:
+                continue
+            shown.append(definition)
+            used += len(definition) + 2
+            if depth == 0:
+                next_queue.extend(_NAME.findall(definition))
+        queue = list(dict.fromkeys(next_queue))[:_MAX_HELPER_NAMES]
+    return "\n\n".join(shown)
+
+
 _ITEM_ID = re.compile(r"^R(\d+)$")
 
 
@@ -652,6 +711,7 @@ __all__ = [
     "refresh_ledger",
     "split_test_id",
     "cited_test_body",
+    "cited_test_helpers",
     "relevant_hunks",
     "unevidenced",
     "LEDGER_RESULT_KEY",
