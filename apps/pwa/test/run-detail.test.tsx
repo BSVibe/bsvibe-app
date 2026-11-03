@@ -16,8 +16,10 @@
 import RunDetail from "@/components/runs/RunDetail";
 import type { RunDetail as RunDetailModel } from "@/lib/api/types";
 import { type Session, clearSession, setSession } from "@/lib/auth/session";
+import koMessages from "@/messages/ko.json";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NextIntlClientProvider } from "next-intl";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const SESSION: Session = {
@@ -156,6 +158,48 @@ describe("Run-detail surface (Triggered)", () => {
     const done = within(groups[1] as HTMLElement);
     expect(done.getByText("R1")).toBeInTheDocument();
     expect(done.getByText(/⚠/)).toBeInTheDocument();
+  });
+
+  it("says which verification a run passed on (3rd, after two failures)", async () => {
+    const detail: RunDetailModel = {
+      ...REVIEW_READY,
+      verification_rounds: 3,
+      passed_on_round: 3,
+    };
+    global.fetch = vi.fn(async () => json(detail)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const region = await screen.findByRole("region", { name: /verification|checked/i });
+    expect(within(region).getByText("Passed on verification 3")).toBeInTheDocument();
+  });
+
+  it("says it in Korean too", async () => {
+    const detail: RunDetailModel = { ...REVIEW_READY, verification_rounds: 3, passed_on_round: 3 };
+    global.fetch = vi.fn(async () => json(detail)) as unknown as typeof fetch;
+
+    render(
+      <NextIntlClientProvider locale="ko" messages={koMessages}>
+        <RunDetail runId="rr" />
+      </NextIntlClientProvider>,
+    );
+
+    expect(await screen.findByText("3번째 검증에서 통과했어요")).toBeInTheDocument();
+  });
+
+  it("shows no 'passed on' line while the run has not passed", async () => {
+    const detail: RunDetailModel = {
+      ...REVIEW_READY,
+      verification: { id: "v9", outcome: "failed", created_at: NOW },
+      verification_rounds: 2,
+      passed_on_round: null,
+    };
+    global.fetch = vi.fn(async () => json(detail)) as unknown as typeof fetch;
+
+    render(<RunDetail runId="rr" />);
+
+    const region = await screen.findByRole("region", { name: /verification|checked/i });
+    expect(within(region).queryByText(/passed on verification/i)).not.toBeInTheDocument();
   });
 
   it("renders no ledger block for a run without requirements", async () => {

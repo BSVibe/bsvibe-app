@@ -45,6 +45,10 @@ class RunResponse(BaseModel):
     # surface counts from here instead of ``created_at`` so a retried run's clock
     # resets. ``None`` for a run that has never been retried.
     restarted_at: datetime | None = None
+    # How many verifications the run needed: the count of its VerificationResult rows, and the
+    # 1-based round on which it first passed (``None`` until it has).
+    verification_rounds: int = 0
+    passed_on_round: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -213,6 +217,9 @@ class RunDetailResponse(BaseModel):
     trigger: RunTriggerContext
     decisions: list[RunDecision] = []
     verification: RunVerification | None = None
+    # Count of the run's VerificationResult rows, and the 1-based round it first passed on.
+    verification_rounds: int = 0
+    passed_on_round: int | None = None
     deliverable_id: uuid.UUID | None = None
     partial_deliverables: list[RunPartialDeliverable] = []
     activities: list[RunActivity] = []

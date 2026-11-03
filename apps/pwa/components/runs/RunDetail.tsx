@@ -197,7 +197,7 @@ function DetailBody({
         <DecisionBlock key={decision.id} decision={decision} onResolved={onResolved} />
       ))}
 
-      <VerificationBlock verification={verification} />
+      <VerificationBlock verification={verification} passedOnRound={detail.passed_on_round} />
 
       <DeliverablesBlock partials={partials} verifiedFinalId={deliverable_id} />
     </article>
@@ -613,7 +613,10 @@ function RequirementsLedger({ items }: { items: RunRequirement[] }) {
   );
 }
 
-function VerificationBlock({ verification }: { verification: RunVerification | null }) {
+function VerificationBlock({
+  verification,
+  passedOnRound,
+}: { verification: RunVerification | null; passedOnRound?: number | null }) {
   const t = useTranslations("run");
   return (
     <section className="run-verification" aria-label={t("verification")}>
@@ -625,6 +628,11 @@ function VerificationBlock({ verification }: { verification: RunVerification | n
           >
             {t(`verdictLabel.${verification.outcome}`)}
           </span>
+          {passedOnRound ? (
+            <p className="run-verification__rounds">
+              {t("passedOnRound", { round: passedOnRound })}
+            </p>
+          ) : null}
           <VerificationChecks verification={verification} />
         </>
       ) : (

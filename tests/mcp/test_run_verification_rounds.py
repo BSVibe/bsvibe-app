@@ -1,0 +1,179 @@
+"""``verification_rounds`` / ``passed_on_round`` on the MCP run tools, and the
+first-round pass-rate tool. Real rows, real handlers (through the registry)."""
+
+from __future__ import annotations
+
+import base64
+import uuid
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
+
+import pytest
+import pytest_asyncio
+
+import backend.identity.db  # noqa: F401
+import backend.identity.workspaces_db  # noqa: F401
+from backend.config import get_settings
+from backend.identity.workspaces_db import WorkspaceRow
+from backend.mcp.api import McpPrincipal, ToolContext, ToolRegistry
+from backend.mcp.tools import register_all_tools
+from backend.workflow.infrastructure.db import (
+    ExecutionRun,
+    RunStatus,
+    VerificationOutcome,
+    VerificationResult,
+)
+
+from .._support import db_engine
+from ._rls import scoped_session
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("dispatch_publishes_workspace")]
+
+F, P = VerificationOutcome.FAILED, VerificationOutcome.PASSED
+
+
+@pytest_asyncio.fixture
+async def db(monkeypatch) -> AsyncIterator:
+    monkeypatch.setenv("BSVIBE_GATEWAY_KMS_KEY_B64", base64.urlsafe_b64encode(b"0" * 32).decode())
+    get_settings.cache_clear()
+    async with db_engine() as (engine, _is_pg):
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def workspace_id() -> uuid.UUID:
+    return uuid.uuid4()
+
+
+@pytest_asyncio.fixture
+async def registry() -> ToolRegistry:
+    reg = ToolRegistry()
+    register_all_tools(reg)
+    return reg
+
+
+@pytest_asyncio.fixture
+async def seeded(db, workspace_id) -> None:
+    async with scoped_session(db, workspace_id) as s:
+        s.add(WorkspaceRow(id=workspace_id, name="ws"))
+        await s.commit()
+
+
+def _ctx(s, workspace_id) -> ToolContext:
+    principal = McpPrincipal(
+        user_id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        client_id="dcr-test",
+        scopes=frozenset({"mcp:read"}),
+        jti=uuid.uuid4(),
+    )
+    return ToolContext(principal=principal, session=s)
+
+
+async def _seed_run(db, workspace_id, outcomes, *, status=RunStatus.SHIPPED, age=0) -> uuid.UUID:
+    run_id = uuid.uuid4()
+    base = datetime.now(UTC) - timedelta(hours=age)
+    async with scoped_session(db, workspace_id) as s:
+        s.add(
+            ExecutionRun(
+                id=run_id,
+                workspace_id=workspace_id,
+                status=status,
+                payload={},
+                created_at=base,
+                updated_at=base,
+            )
+        )
+        await s.flush()
+        for i, outcome in enumerate(outcomes):
+            s.add(
+                VerificationResult(
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    outcome=outcome,
+                    contract={},
+                    result={},
+                    created_at=base + timedelta(minutes=i),
+                )
+            )
+        await s.commit()
+    return run_id
+
+
+async def _call(db, registry, workspace_id, tool, args):
+    async with db() as s:
+        return await registry.call_tool(tool, args, _ctx(s, workspace_id))
+
+
+async def test_failed_failed_passed_reads_three_rounds_passed_on_third(
+    db, workspace_id, registry, seeded
+) -> None:
+    run_id = await _seed_run(db, workspace_id, [F, F, P])
+
+    listed = await _call(db, registry, workspace_id, "bsvibe_runs_list", {})
+    detail = await _call(db, registry, workspace_id, "bsvibe_runs_detail", {"run_id": str(run_id)})
+
+    assert [(r["verification_rounds"], r["passed_on_round"]) for r in listed] == [(3, 3)]
+    assert (detail["verification_rounds"], detail["passed_on_round"]) == (3, 3)
+
+
+async def test_run_without_verification_reads_zero_rounds_and_null(
+    db, workspace_id, registry, seeded
+) -> None:
+    run_id = await _seed_run(db, workspace_id, [])
+
+    listed = await _call(db, registry, workspace_id, "bsvibe_runs_list", {})
+    detail = await _call(db, registry, workspace_id, "bsvibe_runs_detail", {"run_id": str(run_id)})
+
+    assert (listed[0]["verification_rounds"], listed[0]["passed_on_round"]) == (0, None)
+    assert (detail["verification_rounds"], detail["passed_on_round"]) == (0, None)
+
+
+async def test_first_round_pass_rate_counts_only_this_workspaces_verified_runs(
+    db, workspace_id, registry, seeded
+) -> None:
+    other = uuid.uuid4()
+    async with scoped_session(db, other) as s:
+        s.add(WorkspaceRow(id=other, name="other"))
+        await s.commit()
+
+    await _seed_run(db, workspace_id, [P], age=0)  # first round
+    await _seed_run(db, workspace_id, [P], age=1)  # first round
+    await _seed_run(db, workspace_id, [F, F, P], age=2)  # third round
+    await _seed_run(db, workspace_id, [F], status=RunStatus.FAILED, age=3)  # never passed
+    await _seed_run(db, workspace_id, [], age=4)  # never verified
+    await _seed_run(db, workspace_id, [P], status=RunStatus.RUNNING, age=5)  # not finished
+    await _seed_run(db, other, [P], age=0)  # someone else's
+    await _seed_run(db, other, [P], age=1)
+
+    out = await _call(db, registry, workspace_id, "bsvibe_runs_first_round_pass_rate", {})
+
+    assert out["passed_first_round"] == 2
+    assert out["runs_verified"] == 4
+    assert out["runs_considered"] == 5
+    assert out["pass_rate"] == 0.5
+
+
+async def test_first_round_pass_rate_looks_only_at_the_latest_n_runs(
+    db, workspace_id, registry, seeded
+) -> None:
+    await _seed_run(db, workspace_id, [F, P], age=0)
+    await _seed_run(db, workspace_id, [P], age=1)
+    await _seed_run(db, workspace_id, [P], age=2)
+
+    out = await _call(db, registry, workspace_id, "bsvibe_runs_first_round_pass_rate", {"limit": 2})
+
+    assert (out["passed_first_round"], out["runs_verified"]) == (1, 2)
+
+
+async def test_first_round_pass_rate_is_null_when_nothing_was_verified(
+    db, workspace_id, registry, seeded
+) -> None:
+    await _seed_run(db, workspace_id, [])
+
+    out = await _call(db, registry, workspace_id, "bsvibe_runs_first_round_pass_rate", {})
+
+    assert (out["passed_first_round"], out["runs_verified"], out["pass_rate"]) == (0, 0, None)

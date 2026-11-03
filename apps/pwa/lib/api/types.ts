@@ -221,6 +221,9 @@ export interface Run {
    *  surface counts from here instead of `created_at` so a retried run's clock
    *  resets. `null`/absent for a run that has never been retried. */
   restarted_at?: string | null;
+  /** Verifications recorded for the run, and the 1-based round it first passed on. */
+  verification_rounds?: number;
+  passed_on_round?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -348,6 +351,11 @@ export interface RunDetail {
   trigger: RunTriggerContext;
   decisions: RunDecision[];
   verification: RunVerification | null;
+  /** How many verifications were recorded for the run (0 when none). Optional on
+   *  the wire so older fixtures keep validating. */
+  verification_rounds?: number;
+  /** The 1-based verification round the run first passed on; `null` while it has not. */
+  passed_on_round?: number | null;
   deliverable_id: string | null;
   partial_deliverables: RunPartialDeliverable[];
   activities: RunActivity[];
