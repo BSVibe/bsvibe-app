@@ -113,7 +113,7 @@ async def test_the_founders_issue_edit_reaches_the_run_when_github_says_contribu
                 permission_of=_lookup("admin", calls),
             )
             await session.commit()
-        run = await edits._run(sf, ws, run_id)
+        run, _told = await edits._applied(sf, ws, run_id)
 
     assert routed == run_id
     assert "항상 저장한다" in run.payload["intent_text"]
@@ -247,7 +247,7 @@ async def test_the_intake_worker_hands_its_permission_lookup_to_the_routes(monke
         ).drain_once()
         async with sf() as s, workspace_session_scope(s, ws):
             requests = list((await s.execute(select(RequestRow))).scalars().all())
-        run = await edits._run(sf, ws, run_id)
+        run, _told = await edits._applied(sf, ws, run_id)
 
     assert calls  # asked GitHub, since the association alone said CONTRIBUTOR
     assert len(requests) == 1  # only the run's own: the edit did not become a second run
