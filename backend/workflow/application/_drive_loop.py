@@ -376,17 +376,17 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
 
             await tracker.sync(orch, run, attempt, registry)
 
-            # The model called tools, so it is not done — keep looping.
-            #
-            # T3 — there is no longer a SYNTHETIC executor tool call to special-case here.
-            # An executor turn now comes back with NO tool_calls (its real calls went to the
-            # MCP work tools, server-side), so it falls straight through to the "model is done"
-            # branch below — where the state this loop synced from the run (its declared
-            # contract, the paths it wrote) is what proves the work happened.
+            # The model called tools, so it is not done — keep looping. (T3: an executor turn
+            # comes back with NO tool_calls — its calls went to the MCP work tools — so it falls
+            # through to the "done" branch, where the state synced from the run proves the work.)
             continue
 
         # No tool calls (or the single-shot executor just declared): the model
-        # believes the step is done.
+        # believes the step is done. First: what the founder sent while the turn ran — an
+        # executor works in ONE long turn, so this is its only chance to hear it (#1296).
+        if late := await apply_inbox(orch._session, run):
+            messages.extend([{"role": "assistant", "content": turn.content or "(done)"}, *late])
+            continue
         if client_attach:
             # #692 — a client_attach run settles on its own terms: the in-place
             # gate decides, and only a failure the agent can actually fix sends
