@@ -80,7 +80,7 @@ async def list_runs(
 async def get_first_round_pass_rate(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+    limit: Annotated[int, Query(ge=1, le=200)] = 30,
     product_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Share of the latest finished runs that passed verification on round 1.

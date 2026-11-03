@@ -218,7 +218,7 @@ export async function getProductDetail(
   const detailRuns = productRuns.map((r) => toDetailRun(r, lookup));
 
   // A failed rate read only hides the summary line; it never blanks the view.
-  const firstRoundPassRate = await getFirstRoundPassRate(20, product.id).catch(() => null);
+  const firstRoundPassRate = await getFirstRoundPassRate(30, product.id).catch(() => null);
 
   return {
     id: product.id,

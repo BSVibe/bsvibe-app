@@ -645,7 +645,7 @@ async def _h_runs_detail(args: RunsDetailInput, ctx: ToolContext) -> Any:
 # ---------------------------------------------------------------------------
 class RunsFirstRoundPassRateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    limit: int = Field(20, ge=1, le=200)
+    limit: int = Field(30, ge=1, le=200)
 
 
 async def _h_runs_first_round_pass_rate(args: RunsFirstRoundPassRateInput, ctx: ToolContext) -> Any:
@@ -1064,7 +1064,7 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_runs_first_round_pass_rate",
             description=(
-                "Of the workspace's most recent `limit` (default 20) FINISHED runs "
+                "Of the workspace's most recent `limit` (default 30) FINISHED runs "
                 "(shipped, failed or cancelled), the share that passed verification on "
                 "round 1. Returns `passed_first_round` (numerator), `runs_verified` "
                 "(denominator: finished runs with at least one verification), "

@@ -16,7 +16,7 @@ export function listRuns(limit = 50, productId?: string): Promise<Run[]> {
 /** How often the latest finished runs passed verification on round 1.
  *  `productId` narrows to one product. REAL backend
  *  `GET /api/v1/runs/first-round-pass-rate`. */
-export function getFirstRoundPassRate(limit = 20, productId?: string): Promise<FirstRoundPassRate> {
+export function getFirstRoundPassRate(limit = 30, productId?: string): Promise<FirstRoundPassRate> {
   const scope = productId ? `&product_id=${encodeURIComponent(productId)}` : "";
   return apiFetch<FirstRoundPassRate>(`/api/v1/runs/first-round-pass-rate?limit=${limit}${scope}`);
 }

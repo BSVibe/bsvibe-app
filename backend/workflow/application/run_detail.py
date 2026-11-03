@@ -464,7 +464,7 @@ async def first_round_pass_rate(
     session: AsyncSession,
     workspace_id: uuid.UUID,
     *,
-    limit: int = 20,
+    limit: int = 30,
     product_id: uuid.UUID | None = None,
 ) -> FirstRoundPassRate:
     """How often the latest ``limit`` finished runs passed verification first time.
