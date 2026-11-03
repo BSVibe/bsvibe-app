@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
 from backend.workflow.application.change_footprint import footprints_for
+from backend.workflow.application.safe_mode_ledger import ledgers_for_runs
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
 
 from ._helpers import _to_item_response
@@ -36,7 +37,17 @@ async def list_queue(
     footprints = await footprints_for(
         session, workspace_id=workspace_id, deliverable_ids=[i.deliverable_id for i in items]
     )
-    return [_to_item_response(item, footprints.get(item.deliverable_id)) for item in items]
+    ledgers = await ledgers_for_runs(
+        session, workspace_id=workspace_id, run_ids=[i.run_id for i in items]
+    )
+    return [
+        _to_item_response(
+            item,
+            footprints.get(item.deliverable_id),
+            ledgers.get(item.run_id) if item.run_id is not None else None,
+        )
+        for item in items
+    ]
 
 
 @router.get("/queue/by-run")
@@ -57,6 +68,9 @@ async def list_queue_by_run(
     footprints = await footprints_for(
         session, workspace_id=workspace_id, deliverable_ids=[i.deliverable_id for i in items]
     )
+    ledgers = await ledgers_for_runs(
+        session, workspace_id=workspace_id, run_ids=[i.run_id for i in items]
+    )
     by_run: dict[uuid.UUID | None, list[SafeModeItemResponse]] = {}
     order: list[uuid.UUID | None] = []
     for item in items:
@@ -64,5 +78,11 @@ async def list_queue_by_run(
         if key not in by_run:
             by_run[key] = []
             order.append(key)
-        by_run[key].append(_to_item_response(item, footprints.get(item.deliverable_id)))
+        by_run[key].append(
+            _to_item_response(
+                item,
+                footprints.get(item.deliverable_id),
+                ledgers.get(item.run_id) if item.run_id is not None else None,
+            )
+        )
     return [SafeModeRunGroupResponse(run_id=k, items=by_run[k]) for k in order]

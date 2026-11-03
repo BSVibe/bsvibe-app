@@ -21,7 +21,7 @@ import asyncio
 import hashlib
 import json
 import shlex
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -363,6 +363,13 @@ async def judge_ledger(
     return rows
 
 
+def _ledger_of(result: Any) -> list[dict[str, Any]]:
+    ledger = result.get(LEDGER_RESULT_KEY) if isinstance(result, dict) else None
+    if isinstance(ledger, list) and ledger:
+        return [r for r in ledger if isinstance(r, dict)]
+    return []
+
+
 async def latest_ledger_rows(session: AsyncSession, run_id: Any) -> list[dict[str, Any]]:
     """The ledger verdict of the run's newest verification that has one (``[]`` if none)."""
     from backend.workflow.infrastructure.db import VerificationResult  # noqa: PLC0415
@@ -376,10 +383,39 @@ async def latest_ledger_rows(session: AsyncSession, run_id: Any) -> list[dict[st
         )
     ).scalars()
     for result in rows:
-        ledger = (result or {}).get(LEDGER_RESULT_KEY) if isinstance(result, dict) else None
-        if isinstance(ledger, list) and ledger:
-            return [r for r in ledger if isinstance(r, dict)]
+        ledger = _ledger_of(result)
+        if ledger:
+            return ledger
     return []
+
+
+async def ledger_rows_for_runs(
+    session: AsyncSession, run_ids: Iterable[Any], *, workspace_id: Any
+) -> dict[Any, list[dict[str, Any]]]:
+    """:func:`latest_ledger_rows` for many runs in ONE query (a run with no ledger is absent)."""
+    from backend.workflow.infrastructure.db import VerificationResult  # noqa: PLC0415
+
+    ids = set(run_ids)
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(VerificationResult.run_id, VerificationResult.result)
+            .where(
+                VerificationResult.run_id.in_(ids),
+                VerificationResult.workspace_id == workspace_id,
+            )
+            .order_by(VerificationResult.created_at.desc())
+        )
+    ).all()
+    found: dict[Any, list[dict[str, Any]]] = {}
+    for run_id, result in rows:
+        if run_id in found:
+            continue
+        ledger = _ledger_of(result)
+        if ledger:
+            found[run_id] = ledger
+    return found
 
 
 __all__ = [
@@ -388,6 +424,7 @@ __all__ = [
     "judge_ledger",
     "judge_messages",
     "latest_ledger_rows",
+    "ledger_rows_for_runs",
     "record_requirements",
     "run_requirements",
 ]

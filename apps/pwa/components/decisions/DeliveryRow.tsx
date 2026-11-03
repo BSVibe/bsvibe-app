@@ -1,5 +1,6 @@
 "use client";
 
+import LedgerStatus from "@/components/decisions/LedgerStatus";
 import ChangeFootprint from "@/components/deliverables/ChangeFootprint";
 import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import type { PendingDelivery } from "@/lib/api/types";
@@ -77,6 +78,7 @@ export default function DeliveryRow({
       {/* The held-delivery context becomes the card body when a title leads. */}
       {item.title && <p className="need-card__body">{t("deliveryQuestion")}</p>}
       <ChangeFootprint footprint={item.change} />
+      <LedgerStatus ledger={item.ledger} />
       <div className="need-card__actions tap-card__above">
         <button
           type="button"
