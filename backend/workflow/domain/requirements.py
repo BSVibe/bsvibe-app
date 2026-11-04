@@ -570,6 +570,89 @@ def _top_level_definition(lines: list[str], name: str) -> str | None:
     return "\n".join(block).rstrip()
 
 
+def definition_in(text: str, name: str) -> str | None:
+    """The module-level definition of ``name`` in ``text`` (decorators included), or ``None``."""
+    return _top_level_definition(text.splitlines(), name)
+
+
+_PY_FROM = re.compile(r"^from\s+([.\w]+)\s+import\s+(\([^)]*\)|[^\n#]+)", re.M)
+_PY_IMPORT = re.compile(r"^import\s+([\w.]+)(?:\s+as\s+(\w+))?", re.M)
+_TS_NAMED = re.compile(r"^import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+[\"']([^\"']+)[\"']", re.M)
+_TS_STAR = re.compile(r"^import\s+\*\s+as\s+(\w+)\s+from\s+[\"']([^\"']+)[\"']", re.M)
+_TS_EXTS = (".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.tsx", "/index.js")
+_MAX_IMPORTED = 20
+
+
+def _py_module_path(module: str, test_path: str) -> str:
+    """``a.b`` → ``a/b``; ``.x`` / ``..x`` relative to the test file's package."""
+    if not module.startswith("."):
+        return module.replace(".", "/")
+    dots = len(module) - len(module.lstrip("."))
+    parts = test_path.split("/")[:-1]
+    base = parts[: len(parts) - (dots - 1)] if dots > 1 else parts
+    rest = module.lstrip(".")
+    return "/".join([*base, *([rest.replace(".", "/")] if rest else [])])
+
+
+def _ts_paths(spec: str, test_path: str) -> tuple[str, ...]:
+    if not spec.startswith("."):
+        return ()  # a package or a path alias: not this repo's file to read
+    parts = test_path.split("/")[:-1]
+    for seg in spec.split("/"):
+        if seg == "..":
+            parts = parts[:-1]
+        elif seg not in ("", "."):
+            parts.append(seg)
+    stem = "/".join(parts)
+    return tuple(stem + ext for ext in _TS_EXTS)
+
+
+def imported_helper_sources(
+    text: str, test_path: str, used: str
+) -> list[tuple[tuple[str, ...], str]]:
+    """``(candidate files, name)`` for each imported name ``used`` relies on.
+
+    A test that seeds through ``issue_t._seed`` (``issue_t`` an imported module) or calls an
+    imported ``make_card`` is as opaque to the judge as one with same-file helpers (#1302).
+    Python ``from … import`` / ``import … as`` and JS/TS ``import { … }`` / ``import * as``
+    are read; a name imported but not used is skipped. The files are candidates — the caller
+    reads the first that exists."""
+    out: list[tuple[tuple[str, ...], str]] = []
+
+    def attrs(alias: str) -> list[str]:
+        return list(dict.fromkeys(re.findall(rf"\b{re.escape(alias)}\.([A-Za-z_]\w*)", used)))
+
+    def bare(name: str) -> bool:
+        return re.search(rf"(?<![.\w]){re.escape(name)}\b(?!\.)", used) is not None
+
+    for module, names in _PY_FROM.findall(text):
+        base = _py_module_path(module, test_path)
+        for raw in names.strip("() \n").split(","):
+            name, _, alias = raw.strip().partition(" as ")
+            name, alias = name.strip(), (alias.strip() or name.strip())
+            if not name or name == "*":
+                continue
+            for attr in attrs(alias):  # ``from pkg import mod as m`` … ``m.attr``
+                out.append(((f"{base}/{name}.py",), attr))
+            if bare(alias):  # ``from mod import name`` … ``name(...)``
+                out.append(((f"{base}.py", f"{base}/__init__.py"), name))
+    for module, alias in _PY_IMPORT.findall(text):
+        for attr in attrs(alias or module):
+            out.append(((module.replace(".", "/") + ".py",), attr))
+    for names, spec in _TS_NAMED.findall(text):
+        paths = _ts_paths(spec, test_path)
+        for raw in names.split(","):
+            name, _, alias = raw.strip().partition(" as ")
+            name, alias = name.strip(), (alias.strip() or name.strip())
+            if paths and name and bare(alias):
+                out.append((paths, name))
+    for alias, spec in _TS_STAR.findall(text):
+        paths = _ts_paths(spec, test_path)
+        for attr in attrs(alias) if paths else []:
+            out.append((paths, attr))
+    return list(dict.fromkeys(out))[:_MAX_IMPORTED]
+
+
 def cited_test_helpers(text: str, body: str, *, limit: int = 3000) -> str:
     """The module-level helpers and fixtures a cited test names, from its own file.
 
@@ -722,6 +805,8 @@ __all__ = [
     "split_test_id",
     "cited_test_body",
     "cited_test_helpers",
+    "definition_in",
+    "imported_helper_sources",
     "relevant_hunks",
     "unevidenced",
     "LEDGER_RESULT_KEY",
