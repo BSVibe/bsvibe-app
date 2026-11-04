@@ -20,13 +20,9 @@ from backend.data import Base
 from backend.data.rls import workspace_session_scope
 from backend.identity.infrastructure.repositories import SqlAlchemyResourceBindingRepository
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow
-from backend.workflow.application.intake.pr_comment import (
-    consume_pr_comments,
-    pr_comment_messages,
-    route_pr_comment_to_run,
-)
-from backend.workflow.domain.pr_review import comment_received_at
-from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+from backend.workflow.application.intake.pr_comment import route_pr_comment_to_run
+from backend.workflow.application.run_inbox import INBOX_ACTIVITY
+from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunActivity, RunStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow, TriggerKind
 from backend.workflow.infrastructure.workers.intake_worker import (
@@ -108,6 +104,19 @@ async def _run(sf, run_id, ws) -> ExecutionRun:  # noqa: ANN001
         return run
 
 
+async def _inbox(sf, run_id, ws) -> list[dict]:  # noqa: ANN001
+    async with sf() as session, workspace_session_scope(session, ws):
+        rows = await session.execute(
+            select(ExecutionRunActivity.payload)
+            .where(
+                ExecutionRunActivity.run_id == run_id,
+                ExecutionRunActivity.activity_type == INBOX_ACTIVITY,
+            )
+            .order_by(ExecutionRunActivity.created_at, ExecutionRunActivity.id)
+        )
+        return [r for (r,) in rows.all()]
+
+
 @pytest.mark.parametrize("status", [RunStatus.REVIEW_READY, RunStatus.FAILED])
 async def test_comment_on_watched_pr_reopens_original_run(status: RunStatus) -> None:
     async with db_engine(Base) as (engine, _pg):
@@ -119,9 +128,13 @@ async def test_comment_on_watched_pr_reopens_original_run(status: RunStatus) -> 
         assert routed == run_id
         run = await _run(sf, run_id, ws)
         assert run.status is RunStatus.OPEN
-        assert run.payload["pr_comments"] == [
-            {"pr_number": 1218, "body": "fix the lint", "author": "blasin"}
-        ]
+        (row,) = await _inbox(sf, run_id, ws)
+        assert (row["kind"], row["pr_number"], row["body"], row["author"]) == (
+            "pr_comment",
+            1218,
+            "fix the lint",
+            "blasin",
+        )
 
 
 async def test_comment_on_running_run_is_queued_without_second_run() -> None:
@@ -134,7 +147,7 @@ async def test_comment_on_running_run_is_queued_without_second_run() -> None:
             await session.commit()
         run = await _run(sf, run_id, ws)
         assert run.status is RunStatus.RUNNING
-        assert [c["body"] for c in run.payload["pr_comments"]] == ["a", "b"]
+        assert [r["body"] for r in await _inbox(sf, run_id, ws)] == ["a", "b"]
 
 
 async def test_unwatched_or_finished_pr_is_not_routed() -> None:
@@ -168,36 +181,6 @@ async def test_unwatched_or_finished_pr_is_not_routed() -> None:
             )
         assert (await _run(sf, run_id, ws)).status is RunStatus.REVIEW_READY
         assert "pr_comments" not in (await _run(sf, merged_run, merged_ws)).payload
-
-
-async def test_the_arrival_of_a_comment_outlives_the_consumed_queue() -> None:
-    """``pr_comments`` is cleared when the drive starts; the record that a comment came is not."""
-    async with db_engine(Base) as (engine, _pg):
-        sf = async_sessionmaker(engine, expire_on_commit=False)
-        run_id, ws = await _seed(
-            sf, run_status=RunStatus.FAILED, watch_status=MergeWatchStatus.FAILED
-        )
-        async with sf() as session:
-            await route_pr_comment_to_run(session, workspace_id=ws, payload=_payload())
-            await session.commit()
-        run = await _run(sf, run_id, ws)
-        consume_pr_comments(run)
-        assert "pr_comments" not in run.payload
-        assert comment_received_at(run.payload) is not None
-
-
-async def test_drive_loop_reads_comment_once() -> None:
-    run = ExecutionRun(
-        id=uuid.uuid4(),
-        workspace_id=uuid.uuid4(),
-        status=RunStatus.OPEN,
-        payload={"pr_comments": [{"pr_number": 3, "body": "rename it", "author": "blasin"}]},
-    )
-    (message,) = pr_comment_messages(run)
-    assert "rename it" in message["content"] and "#3" in message["content"]
-    assert "blasin" in message["content"] and "founder" not in message["content"]
-    consume_pr_comments(run)
-    assert pr_comment_messages(run) == []
 
 
 def _delivery(text: str, *, sender: str = "User") -> bytes:
@@ -329,7 +312,8 @@ async def test_paused_filter_binding_leaves_the_run_alone(_engine) -> None:  # n
 async def test_open_binding_routes_collaborator_comment_to_run(_engine) -> None:  # noqa: ANN001
     run, requests = await _worker_scene(filters={"action": "created"})
     assert run.status is RunStatus.OPEN
-    assert [c["body"] for c in run.payload["pr_comments"]] == ["fix the lint"]
+    sf = async_sessionmaker(_ENGINE[0], expire_on_commit=False)
+    assert [r["body"] for r in await _inbox(sf, run.id, run.workspace_id)] == ["fix the lint"]
     assert requests == []
 
 

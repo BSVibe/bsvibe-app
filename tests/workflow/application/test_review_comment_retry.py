@@ -88,14 +88,14 @@ async def _seed(sf_, *, reason: str, run_status: RunStatus, payload_extra: dict 
 
 
 async def test_retry_puts_the_reviewers_comment_back_not_a_ci_failure(sf) -> None:
-    from backend.workflow.application.intake.pr_comment import pr_comment_messages
+    from backend.workflow.application.run_inbox import apply_inbox
     from backend.workflow.domain.pr_review import COMMENT_RECEIVED_AT_KEY
 
     workspace_id, run_id, decision_id = await _seed(
         sf,
         reason="review_comment_unaddressed",
         run_status=RunStatus.FAILED,
-        # 소비되지 않는 기록: 코멘트가 도착한 때 + 본문 (``pr_comments`` 는 드라이브가 비웠다).
+        # 소비되지 않는 기록: 코멘트가 도착한 때 + 본문 (수신함 행은 드라이브가 이미 반영했다).
         payload_extra={
             COMMENT_RECEIVED_AT_KEY: datetime.now(tz=UTC).isoformat(),
             "pr_comment_record": [_COMMENT],
@@ -118,8 +118,9 @@ async def test_retry_puts_the_reviewers_comment_back_not_a_ci_failure(sf) -> Non
     assert run is not None
     assert "ci_failure" not in run.payload
     assert run.status is RunStatus.OPEN
-    assert run.payload["pr_comments"] == [_COMMENT]
-    assert _COMMENT["body"] in pr_comment_messages(run)[0]["content"]
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        (message,) = await apply_inbox(s, run)
+    assert _COMMENT["body"] in message["content"]
     assert watch.status is MergeWatchStatus.PENDING_CI
 
 

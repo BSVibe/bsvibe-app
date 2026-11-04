@@ -211,6 +211,13 @@ def _inbox_label(payload: dict[str, Any], language: str) -> str | None:
     """
     ko = _lang(language) == "ko"
     kind = payload.get("kind")
+    pr_number = str(payload.get("pr_number") or "").strip().lstrip("#")
+    if kind == "pr_comment" and pr_number:
+        return (
+            f"PR #{pr_number} 리뷰 댓글을 받았어요"
+            if ko
+            else f"Received a review comment on PR #{pr_number}"
+        )
     number = payload.get("issue_number")
     if isinstance(number, bool) or not isinstance(number, int | str) or not str(number).strip():
         return _INBOX_FALLBACK[_lang(language)]

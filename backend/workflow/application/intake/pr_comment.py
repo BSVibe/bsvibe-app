@@ -10,7 +10,7 @@ A review comment ("fix this") on a PR the merge watch is tracking is an
 instruction for THAT run — same branch, same PR (pushed force-with-lease). Landing
 it as a fresh request would fork a second run off main and a second PR per review
 (live: PR #1218 → #1219). The merge-conflict redispatch already does the right
-thing — writes the instruction on the original run's payload and re-opens it —
+thing — hands the instruction to the original run's inbox and re-opens it —
 and this is the same shape for a comment.
 """
 
@@ -26,8 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data.rls import workspace_session_scope
 from backend.workflow.application.intake.trust import RepoPermission, is_trusted
+from backend.workflow.application.run_inbox import PR_COMMENT, post_to_inbox
 from backend.workflow.application.run_status import move_run_status
-from backend.workflow.domain.pr_review import COMMENT_RECEIVED_AT_KEY, record_comment
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 
@@ -86,8 +86,8 @@ async def route_pr_comment_to_run(
 
     ``None`` means "not ours to route" (no comment on a PR, an author who is not
     OWNER / MEMBER / COLLABORATOR, no live watch, a finished run) and the caller lands the delivery as a new request, as before.
-    A run that is already ``open`` / ``running`` only gets the instruction queued
-    — the next turn reads it; no second run is created. The caller commits.
+    A run that is already ``open`` / ``running`` only gets the instruction queued in its
+    inbox — the drive applies it between turns; no second run is created. The caller commits.
     """
     parsed = pr_comment_of(payload)
     if parsed is None:
@@ -124,18 +124,18 @@ async def route_pr_comment_to_run(
         if run is None or run.status not in (*_APPEND_ONLY, *_REOPEN):
             return None
 
-        run_payload = dict(run.payload or {})
-        comments = list(run_payload.get("pr_comments") or [])
-        comments.append({"pr_number": pr_number, "body": text, "author": author})
-        run_payload["pr_comments"] = comments
-        # The queue above is cleared when the drive loop injects it; this stays, so a run
-        # that later fails can still be told apart from one that never heard the reviewer.
-        received_at = datetime.now(tz=UTC)
-        run_payload[COMMENT_RECEIVED_AT_KEY] = received_at.isoformat()
-        record_comment(
-            run_payload, pr_number=pr_number, body=text, author=author, received_at=received_at
+        # The drive owns ``run.payload``; the comment only goes to the run's inbox.
+        await post_to_inbox(
+            session,
+            run,
+            PR_COMMENT,
+            {
+                "pr_number": pr_number,
+                "body": text,
+                "author": author,
+                "received_at": datetime.now(tz=UTC).isoformat(),
+            },
         )
-        run.payload = run_payload
         if run.status in _REOPEN:
             await move_run_status(
                 session, run, RunStatus.OPEN, reason=f"review comment on PR #{pr_number}"
@@ -152,50 +152,7 @@ async def route_pr_comment_to_run(
     return run.id
 
 
-# ── the reading side: the drive loop turns the queued comments into turn context ──
-
-
-def pr_comment_messages(run: ExecutionRun) -> list[dict[str, Any]]:
-    """Review comments left on this run's PR, as turn-context messages.
-
-    ``run.payload["pr_comments"]`` is a list of ``{pr_number, body, author}``
-    intake appends (:func:`route_pr_comment_to_run`). Each becomes a user message telling the
-    agent to fix the SAME branch/PR — never to open a new one."""
-    payload = run.payload if isinstance(run.payload, dict) else {}
-    comments = payload.get("pr_comments")
-    if not isinstance(comments, list):
-        return []
-    messages: list[dict[str, Any]] = []
-    for entry in comments:
-        if not isinstance(entry, dict) or not str(entry.get("body") or "").strip():
-            continue
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    f"{entry.get('author') or 'A reviewer'} left a review comment on "
-                    f"your pull request #{entry.get('pr_number')}:\n\n{entry['body']}\n\n"
-                    "Address it on the SAME branch so the result is pushed to the "
-                    "same pull request. Do not open a new pull request."
-                ),
-            }
-        )
-    return messages
-
-
-def consume_pr_comments(run: ExecutionRun) -> None:
-    """Clear the one-shot ``pr_comments`` key once injected (re-assigns the payload
-    so SQLAlchemy sees the JSON change)."""
-    payload = dict(run.payload or {})
-    if "pr_comments" not in payload:
-        return
-    payload.pop("pr_comments", None)
-    run.payload = payload
-
-
 __all__ = [
-    "consume_pr_comments",
-    "pr_comment_messages",
     "pr_comment_of",
     "route_pr_comment_to_run",
 ]
