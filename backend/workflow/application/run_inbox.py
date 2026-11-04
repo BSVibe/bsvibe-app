@@ -17,12 +17,15 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.workflow.domain.pr_review import COMMENT_RECEIVED_AT_KEY, record_comment
 from backend.workflow.domain.requirements import REQUIREMENTS_KEY, refresh_ledger
 from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunActivity
+
+logger = structlog.get_logger(__name__)
 
 INBOX_ACTIVITY = "founder_inbox"
 #: Ids of the inbox rows the drive has applied — on the run payload, written by the drive only.
@@ -156,10 +159,22 @@ async def apply_inbox(session: AsyncSession, run: ExecutionRun) -> list[dict[str
         return []
     messages: list[dict[str, Any]] = []
     for row_id, data in fresh:
-        apply = _APPLY.get(str((data or {}).get("kind")))
-        if apply is not None and isinstance(data, Mapping):
-            messages.append({"role": "user", "content": apply(payload, data)})
-        applied.add(row_id)
+        applied.add(row_id)  # told once — and a row that cannot be read is not retried
+        apply = _APPLY.get(str(data.get("kind"))) if isinstance(data, Mapping) else None
+        if apply is None:
+            continue
+        # On a copy: a row that cannot be read leaves no half-applied change, and never
+        # stops the drive this runs inside (start, every turn, before every verification).
+        trial = dict(payload)
+        try:
+            content = apply(trial, data)
+        except Exception:  # noqa: BLE001 — skipped, logged; the rows around it still apply
+            logger.warning(
+                "run_inbox_row_skipped", run_id=str(run.id), row_id=row_id, exc_info=True
+            )
+            continue
+        payload = trial
+        messages.append({"role": "user", "content": content})
     payload[APPLIED_KEY] = sorted(applied)
     run.payload = payload
     await session.flush()

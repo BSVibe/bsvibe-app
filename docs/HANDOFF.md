@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-10-30
+# BSVibe session handoff — 2026-11-04
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,7 +21,33 @@
 
 ---
 
-## §0 — One line: **Verification now checks what was asked, the way CI checks it — #1255 passed in round 1; real issue runs found and closed nine harness holes**
+## §0 — One line: **Four of the last five issue runs passed on round 1; what the founder sends a running run now reaches it**
+
+10-30 → 11-04. Harness work by hand (§Ⅰ), each fix proven on the next real issue run. The round-1 pass rate is now
+read from the product (`bsvibe_runs_first_round_pass_rate`, run list / detail `passed_on_round`).
+
+| PR | What | Proven on |
+|---|---|---|
+| #1278 | the gate deriver is shown the ledger items (never re-checks them by text search) and last round's commands (re-emits them verbatim) | #1279 — no grep checks |
+| #1281 | **intake trusts by repo permission** — GitHub reports a private org member as `CONTRIBUTOR`; when the association is not trusted, intake asks GitHub (`admin`/`maintain`/`write` trusted, a failed lookup trusts no one). Issue-edit and PR-comment routing | #1293 edit routed |
+| #1283 | the ledger judge's evidence room is shared across every cited path (each clipped around what the item names); a path that does not fit is named as cut | — |
+| #1285 | a cited path with no diff (unchanged, or new and untracked) is shown as the file around what the item names, not its first 5,000 chars | — |
+| #1286 | a founder's checklist **comment** reaches the ledger when GitHub calls them `CONTRIBUTOR` (intake stamps `comment_author_trusted`) | — |
+| #1289 | the judge reads the same-file helpers and fixtures a cited test uses (`cited_test_helpers`, one level down, ≤ 3,000 chars) | — |
+| #1292 | a cited test with a wrapped signature (`) -> None:`) is read past its signature | — |
+| #1294 | **the run inbox** — intake never writes `run.payload` for an issue edit / issue comment; it appends a `founder_inbox` row to `execution_run_activities` (insert-only), and the drive — the payload's one writer — applies new rows at drive start and between every turn. A trusted comment on an issue with an unfinished run goes to that run, not a second run | #1296, #1299 |
+| #1298 | the drive's "done" branch reads the inbox **first** (before nudges, reminders, verification) — an executor works in ONE long turn, this is its only chance to hear a mid-run message | #1299 — edit R9 + comment R10 in the ledger |
+| this PR | a malformed inbox row is skipped and logged, never stops the drive (each row applied on a copy) | — |
+
+Issues worked through BSVibe: #1279 (change footprint on the card + report, PR #1280, and its worktree-count follow-up
+#1282 by hand), #1046 (already done by #1047 — the run added one migration test, PR #1284), #1287 (ledger verdict on
+the Safe Mode card, PR #1288), #1290 (verification rounds + first-round pass rate, PR #1291), #1293 (pass rate on the
+product screen, PR #1295), #1296 (inbox lines in the run timeline, PR #1297), #1299 (PR comments through the inbox,
+PR #1300).
+Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #1287 **1** · #1290 **1** · #1293 2 then 1 ·
+#1296 **1** · #1299 **1**.
+
+## §0-b — previous session (10-26 → 10-30): **Verification now checks what was asked, the way CI checks it — #1255 passed in round 1; real issue runs found and closed nine harness holes**
 
 10-26 → 10-30. Reliability work was done **by hand** (형님 10-26: pushing BSVibe through its own verification gaps was
 not converging). Plan R1–R6; R1–R4 shipped, each proven on a real BSVibe run afterwards.
@@ -54,36 +80,7 @@ defect (type error, broken existing test, a wrong requirement, the 600-line cap,
 mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 and `--store-dir /tmp/pnpm-store` (~11 min) ·
 `verify_precheck` = ruff check, ruff format --check, mypy backend/, lint-imports (~1.5 min, set 10-28).
 
-## §0-b — previous session (10-24 → 10-26): **The merge watch and Safe Mode now agree on what "still being fixed" means; 7 issues fixed through BSVibe, the weekly report is back**
-
-10-24 → 10-26. Every code change was written by BSVibe from an issue filed here, reviewed here (3 denials with a
-reason, 2 review comments), approved in Safe Mode after 형님's go-ahead, and merged by the merge watch — except
-#1239 (merged by hand, see §Ⅱ-h).
-
-| PR | Issue | What | |
-|---|---|---|---|
-| #1231 | #1229 | a red CI hand-back carries the Actions job-log excerpt (pytest `FAILED`, ruff/mypy lines; else the tail), fetched only when handing back or giving up; manifest asks `actions: read` | ✅ |
-| #1232 | #1230 | a missing App `issues: write` raises one `github_app_permission_missing` report Decision per workspace (the row is the memory, not the process) | ✅ — its review fix was lost, see §Ⅱ-h |
-| #1235 | #1233 | report Decisions (`backend/common/decision_kinds.py`) no longer hold a delivered run in `review_ready` | ✅ |
-| #1236 | #1234 | the merge watch does not merge while the run is still fixing: run `open`/`running`, or its **latest** deliverable pending in Safe Mode / approved but not delivered | ✅ |
-| #1239 | #1238 | a successful delivery moves the Safe Mode item `approved → delivered`; migration `safe_mode_approved_delivered` moves the old ones | ✅ merged by hand |
-| #1240 | #1237 | a run re-opened by a review comment that then fails is not merged — `review_comment_unaddressed` Decision whose "fix it again" re-sends the reviewer's words (`pr_comment_record`); a merge that ships a run with a held item records it and tells 형님 | ✅ |
-| #1242 | #1241 | the CI-deadline and red-again give-ups wait while the fix is still pending approval | ✅ |
-
-Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
-
-**Operational state, 10-26:**
-- **GitHub App Actions: Read-only** granted by 형님 on both installations (10-25). Proven live: PR #1239's red CI went back
-  at 16:25Z and the run fixed exactly the two failing tests at the logged lines two minutes later.
-- **BStockReport's client path is now `~/Works/BStockReport/main`** (`products.metadata.client_workspace_path`; the old
-  `~/Works/BStockReport-client` was gone, last used 10-19). The 10-26 weekly run failed on it at 00:30Z
-  (`could not provision this run's worktree:` with an empty detail — a missing cwd prints nothing), was retried at 02:15Z
-  and shipped; the report went out through Telegram connector `a5fb238c` at 02:18Z. The `.git` there is a file, so the
-  provisioner cannot write `.git/info/exclude` — run worktrees may show as untracked in that checkout; harmless.
-- The `product_bundle_publish_skipped_shallow` warning stopped after that run (0 in the first 400 s of the 03:35Z container).
-- `safe_mode_approved_delivered` ran on deploy (10-26 02:14Z). How many rows it moved is not logged — unknown.
-
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28 · 10-29 · 10-30)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28 · 10-29 · 10-30 · 11-03)
 
 | | |
 |---|---|
@@ -108,6 +105,7 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
 | **The goal is a round-1 pass** (10-26) | "실제 프로덕션까지 가려면 1라운드만에 요청한게 통과해야 해" — judged on real issue runs, stack- and deliverable-agnostic (no Python-only fix) |
 | **R4 is report-only** (10-28) | A guard test that passes with the change taken away is marked, never failed — regression tests of existing behaviour pass legitimately. Gate it only after its false-positive rate is measured (R6) |
 | **Harness issues are filed record-only, fixed by hand** (10-29) | A verification-harness defect found on a run goes up with the binding filter paused and is implemented here; a product defect goes up as a normal issue for BSVibe |
+| **The run payload has one writer: the drive** (11-03) | Anything sent to a running run (issue edit, issue comment, PR comment) goes to its inbox (`run_inbox.post_to_inbox`); never write `run.payload` from intake or any path that runs beside a live drive |
 | **Leftovers are excluded, not deleted** (10-30) | What verification leaves in a checkout goes into that checkout's `.git/info/exclude`; the model-derived layer 2 of #1267 waits until layer 1's logs have been seen |
 
 ## §Ⅱ — What this session found that the issues had wrong
@@ -273,18 +271,43 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
   live run needed the filter paused.
 * **A plain "응" does not clear the auto-mode classifier for `gh pr merge` / issue writes**; "N 머지해" / "N 닫아" does.
 
+## §Ⅱ-j — What 10-30/11-04 found
+
+* **The issue text was wrong, twice, not the agent.** #1279 asked to count `artifact_refs`, which lists only files
+  written through the work tools (run 14e222a1: 7 refs, 18,752 files in the PR). Check what a field really holds
+  before writing it into an issue — the run implements the issue exactly.
+* **A private org member is `CONTRIBUTOR` in GitHub's webhooks.** Every trust check on `author_association` refused
+  the founder: issue edits (#1281), PR comments (#1281), checklist comments in the ledger (#1286).
+* **Intake wrote `run.payload` while the drive held its own copy** — two routed edits on #1293 were written over,
+  one by framing's copy, one by the drive's; the drive also read routed edits only at drive start. The inbox (#1294)
+  makes the drive the payload's only writer.
+* **An executor works in ONE long turn.** A per-turn hook never fires inside it; a comment that lands during it was
+  never told — the turn ended "done" and verification went straight on (#1296). The "done" branch reads the inbox
+  first (#1298).
+* **Every remaining "unclear" had a mechanical cause again**: several cited paths sharing one head-cut budget
+  (#1283), cited code the run did not change (#1285), helpers and fixtures defined above the cited test (#1289), a
+  wrapped test signature read as the end of the test (#1292).
+* **Re-opening a run does not clear its pending Safe Mode card** — resolve the card before sending a re-opening
+  comment, or a stale card stays.
+* **A comment on an issue with a live run used to queue a second run** (#1279's `b9d0039c`, discarded by hand) —
+  fixed by #1294.
+* **I picked an issue that was already done (#1046 → #1047).** Check `git log -S` / the code on main before filing
+  or re-running an issue.
+
 ## §Ⅲ — Next
 
-1. **Run more real issues** and record rounds per run — the round-1 pass rate is the measure (R6 makes it a metric).
-2. **R5 independent reviewer**, **R6 metrics** (round-1 pass rate, rounds per run, unclear / vacuous rates) — open.
-3. **#1267 layer 2** (the deriver names the stack's cache paths up front) — only after `verification_leftovers_excluded`
+1. **Keep running real issues**; read `bsvibe_runs_first_round_pass_rate` instead of counting log lines.
+2. **R5 independent reviewer**, **R6 metrics** beyond the pass rate (rounds per run, unclear / vacuous rates) — open.
+3. **"Evidence missing" still costs a round** — #1046's run failed twice on `ledger_missing` alone before the
+   evidence reminder caught it; why the reminder did not fire first is not yet known.
+4. **#1267 layer 2** (the deriver names the stack's cache paths up front) — only after `verification_leftovers_excluded`
    logs have been seen on real runs.
-4. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
+5. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
    (`docs/runbook/vault-to-postgres.md` §"A second box"). `/app/var/vault` may go now (kept until 10-29).
-5. **#930** — 2M tuning still has no sample.
-6. ⏳ 형님's batch: codex live run (#1183) · #1046 live taps · #937 outside the repo.
-7. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md`, `ci-parity-checklist.md` (B failing-final,
-   D, E, F), `counterfactual-guard-checklist.md` (B, C).
+6. **#930** — 2M tuning still has no sample.
+7. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap (code shipped by #1047) · #937 outside the repo.
+8. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md`, `ci-parity-checklist.md` (B failing-final,
+   D, E, F), `counterfactual-guard-checklist.md` (B, C), `intake-trust-by-repo-permission-checklist.md` (live items).
 
 ## §Ⅳ — Discipline that paid off
 
@@ -322,7 +345,7 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
 * **🐳 The default docker context is now prod (`colima`) — `colima-palworld` is gone (seen 10-23).** Always pass
   `--context colima` explicitly, never `docker context use`, and do not start throwaway containers on this box: there
   is no non-prod docker here any more. Verify on Postgres through CI.
-* **📏 `_drive_loop.py` is at 581 / 600** (`test_h2a_decomposition`). New loop logic goes to `_loop_turn.py`.
+* **📏 `_drive_loop.py` is at 598 / 600** (`test_h2a_decomposition`). New loop logic goes to its own module (`run_inbox.py` is the shape).
 * **🔪⭐ Never wire-cut while a suite runs in the background.** Cuts rewrite source files; a background run
   imports whatever is on disk at that moment. Stop it, cut, restore, then rerun.
 * **🧪⭐ A failure only in a wide run is pollution until shown otherwise.** Bisect by file pairs, then
@@ -340,3 +363,11 @@ Also: #1201 closed as a duplicate of #1207 (fixed by #1226).
   function: `P(){ docker --context colima exec -i pg psql "$@"; }`. Happened twice this session.
 * **🖥 For a signed-in screen, use the live suite, not jsdom** — answer only the list reads a fresh stack
   cannot (`page.route`), keep the rest real, assert computed styles, look at the screenshots.
+* **📺⭐ A Monitor pipeline must not end in `cut`.** `grep --line-buffered … | cut -c1-300` buffers until exit — a
+  30-minute watch delivered nothing while the run started and finished (#1290). Use `grep -o` or no trailing filter.
+* **🧾⭐ `… | tail -1` hides pytest's exit status.** A gate "passed" with `1 failed` in its last line and a commit
+  followed. Capture `pytest`'s own `$?`, then print the tail.
+* **🐚 Never name a shell function after a command.** A `cut()` helper shadowed `/usr/bin/cut` later in the same
+  shell and wrote a stray copy of a source file.
+* **🧷⭐ A test that passes before the fix is measuring something else.** #1298's first test stayed green without the
+  fix — another `continue` path (the no-work nudge) caught the edit. Make the test hold production's exact shape.
