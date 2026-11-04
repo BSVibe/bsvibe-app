@@ -28,6 +28,7 @@ from backend.workflow.infrastructure.db import (
     ExecutionRun,
     RunStatus,
 )
+from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 
 from ..._support import db_engine
@@ -122,6 +123,51 @@ async def test_retry_puts_the_reviewers_comment_back_not_a_ci_failure(sf) -> Non
         (message,) = await apply_inbox(s, run)
     assert _COMMENT["body"] in message["content"]
     assert watch.status is MergeWatchStatus.PENDING_CI
+
+
+async def test_retry_clears_the_waiting_card_and_reopens_the_run(sf) -> None:
+    from backend.workflow.domain.pr_review import COMMENT_RECEIVED_AT_KEY
+
+    workspace_id, run_id, decision_id = await _seed(
+        sf,
+        reason="review_comment_unaddressed",
+        run_status=RunStatus.FAILED,
+        payload_extra={
+            COMMENT_RECEIVED_AT_KEY: datetime.now(tz=UTC).isoformat(),
+            "pr_comment_record": [_COMMENT],
+        },
+    )
+    item_id = uuid.uuid4()
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        s.add(
+            SafeModeQueueItemRow(
+                id=item_id,
+                workspace_id=workspace_id,
+                deliverable_id=uuid.uuid4(),
+                run_id=run_id,
+                status=SafeModeStatus.PENDING,
+                expires_at=datetime.now(tz=UTC) + timedelta(days=30),
+            )
+        )
+        await s.commit()
+
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        await resolve_checkpoint(
+            s,
+            workspace_id=workspace_id,
+            checkpoint_id=decision_id,
+            action_key="retry",
+            actor_id=uuid.uuid4(),
+        )
+        await s.commit()
+
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        run = await s.get(ExecutionRun, run_id)
+        item = await s.get(SafeModeQueueItemRow, item_id)
+    assert run is not None
+    assert run.status is RunStatus.OPEN
+    assert item is not None
+    assert item.status is not SafeModeStatus.PENDING
 
 
 async def test_shipped_with_waiting_offers_only_acknowledge() -> None:

@@ -259,3 +259,49 @@ async def test_first_round_pass_rate_defaults_to_30_runs_on_rest_and_mcp(
     assert mcp["runs_considered"] == 30
     assert too_big.status_code == 422
     assert zero.status_code == 422
+
+
+async def test_rest_and_mcp_agree_for_the_same_product_id(
+    db, workspace_id, registry, seeded
+) -> None:
+    import httpx
+
+    from backend.api.deps import get_current_user, get_db_session, get_workspace_id
+    from backend.api.main import create_app
+
+    from .._support import fake_current_user, publishing_workspace
+
+    mine, theirs = uuid.uuid4(), uuid.uuid4()
+    a = await _seed_run(db, workspace_id, [P], age=0)
+    b = await _seed_run(db, workspace_id, [F, P], age=1)
+    c = await _seed_run(db, workspace_id, [F, F, P], age=2)
+    d = await _seed_run(db, workspace_id, [P], age=3)
+    async with scoped_session(db, workspace_id) as s:
+        for rid, pid in ((a, mine), (b, mine), (c, mine), (d, theirs)):
+            run = await s.get(ExecutionRun, rid)
+            run.product_id = pid
+        await s.commit()
+
+    mcp = await _call(
+        db, registry, workspace_id, "bsvibe_runs_first_round_pass_rate", {"product_id": str(mine)}
+    )
+    whole = await _call(db, registry, workspace_id, "bsvibe_runs_first_round_pass_rate", {})
+
+    app = create_app()
+
+    async def _session():
+        async with db() as s:
+            yield s
+
+    app.dependency_overrides[get_current_user] = fake_current_user()
+    app.dependency_overrides[get_workspace_id] = publishing_workspace(workspace_id)
+    app.dependency_overrides[get_db_session] = _session
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        rest = (await client.get(f"/api/v1/runs/first-round-pass-rate?product_id={mine}")).json()
+
+    assert rest == mcp
+    assert (mcp["passed_first_round"], mcp["runs_verified"]) == (1, 3)
+    # without product_id the whole workspace is counted
+    assert (whole["passed_first_round"], whole["runs_verified"]) == (2, 4)

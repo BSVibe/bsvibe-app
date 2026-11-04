@@ -818,8 +818,11 @@ async def _send_review_comments_back(
     from backend.workflow.application.intake.ci_failure import (  # noqa: PLC0415
         revive_merge_watch,
     )
-    from backend.workflow.application.run_inbox import PR_COMMENT, post_to_inbox  # noqa: PLC0415
-    from backend.workflow.application.run_status import move_run_status  # noqa: PLC0415
+    from backend.workflow.application.run_inbox import (  # noqa: PLC0415
+        PR_COMMENT,
+        post_to_inbox,
+        reopen_run,
+    )
     from backend.workflow.domain.pr_review import unaddressed_comments  # noqa: PLC0415
 
     if run.status is not RunStatus.FAILED:
@@ -833,9 +836,7 @@ async def _send_review_comments_back(
     for comment in comments:
         # ``resend``: already on the record — the drive tells the run again, nothing more.
         await post_to_inbox(session, run, PR_COMMENT, {**comment, "resend": True})
-    await move_run_status(
-        session, run, RunStatus.OPEN, reason=f"review comment on PR #{pr_number} sent back"
-    )
+    await reopen_run(session, run, reason=f"review comment on PR #{pr_number} sent back")
     await revive_merge_watch(
         session,
         run,
