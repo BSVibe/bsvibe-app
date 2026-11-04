@@ -318,3 +318,54 @@ async def test_a_cited_test_is_left_to_the_gate(tmp_path: Path, monkeypatch: Any
 
     assert _reminders(llm) == []
     assert len(verified) == 1
+
+
+async def test_a_cited_test_its_file_does_not_define_is_asked_about_before_verifying(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Prod #1308 (run c8269be9, 2026-11-04): every item cited
+    ``tests/mcp/test_verification_quality.py::test_verification_quality_matches_hand_count``,
+    the file defined no such test, and all nine came back ``rejected`` — a whole round lost to
+    a name the loop could read before verifying."""
+    wrong_name = [
+        {"requirement_id": "R1", "paths": ["a.py"], "tests": ["test_a.py::test_nope"]},
+        {"requirement_id": "R2", "status": "deferred", "note": "needs the founder"},
+    ]
+    turns = [
+        LoopTurn(
+            content="declare + write",
+            tool_calls=(
+                _tool(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "true"}],
+                    requirement_evidence=wrong_name,
+                ),
+                _tool("file_write", path="a.py", content="x = 1\n"),
+                _tool("file_write", path="test_a.py", content="def test_real():\n    pass\n"),
+            ),
+        ),
+        LoopTurn(content="done", tool_calls=()),
+        LoopTurn(
+            content="fixed the name",
+            tool_calls=(
+                _tool(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "true"}],
+                    requirement_evidence=[
+                        {
+                            "requirement_id": "R1",
+                            "paths": ["a.py"],
+                            "tests": ["test_a.py::test_real"],
+                        },
+                        wrong_name[1],
+                    ],
+                ),
+            ),
+        ),
+        LoopTurn(content="done", tool_calls=()),
+    ]
+    llm, verified = await _drive(tmp_path, monkeypatch, turns)
+
+    [reminder] = _reminders(llm)
+    assert "R1" in reminder and "test_nope" in reminder
+    assert len(verified) == 1
