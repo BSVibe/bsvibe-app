@@ -108,27 +108,51 @@ def _passed_commands(
     return tuple(c for c in out if c)
 
 
-def evidence_owed_messages(
-    run: ExecutionRun, declared_contract: Mapping[str, Any] | None, turn_text: str | None
-) -> list[dict[str, Any]]:
-    """The turn that asks for missing ledger evidence — ``[]`` when nothing is owed.
+class EvidenceReminder:
+    """The turn that asks for ledger evidence verification would find missing — before a
+    round is spent on it.
 
-    Asked before verifying: a declaration that names none of an owed item is a failed round
-    already, and the loop can see that without spending one."""
-    from backend.workflow.domain.requirements import (  # noqa: PLC0415
-        evidence_reminder,
-        parse_requirement_evidence,
-        unevidenced,
-    )
+    Asked again whenever the set of gaps CHANGES (the agent fixed some, others remain or
+    appeared); never twice for the same set, so a run that ignores it is verified and the
+    gate decides (#1046 re-run: two rounds lost to ``ledger_missing`` alone)."""
 
-    evidence = parse_requirement_evidence((declared_contract or {}).get("requirement_evidence"))
-    owed = unevidenced(run_requirements(run), evidence)
-    if not owed:
-        return []
-    return [
-        {"role": "assistant", "content": turn_text or "(done)"},
-        {"role": "user", "content": evidence_reminder(owed)},
-    ]
+    def __init__(self) -> None:
+        self._asked: frozenset[str] = frozenset()
+
+    async def ask(
+        self,
+        run: ExecutionRun,
+        declared_contract: Mapping[str, Any] | None,
+        turn_text: str | None,
+        box: SandboxSession,
+        baseline: str | None,
+        written_paths: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        from backend.workflow.application.inplace_gate import changed_paths  # noqa: PLC0415
+        from backend.workflow.domain.requirements import (  # noqa: PLC0415
+            evidence_reminder,
+            owed_before_verify,
+            parse_requirement_evidence,
+        )
+
+        evidence = parse_requirement_evidence((declared_contract or {}).get("requirement_evidence"))
+        requirements = run_requirements(run)
+        if not requirements:
+            return []
+        try:
+            changed = set(await changed_paths(box, baseline))
+        except Exception:  # noqa: BLE001 — no diff to read: decide on the declaration alone
+            changed = set()
+        diff = frozenset(p for p in changed | {w.strip("/") for w in written_paths} if p)
+        owed = owed_before_verify(requirements, evidence, diff)
+        key = frozenset(f"{item['id']}:{why}" for item, why in owed)
+        if not owed or key == self._asked:
+            return []
+        self._asked = key
+        return [
+            {"role": "assistant", "content": turn_text or "(done)"},
+            {"role": "user", "content": evidence_reminder(owed)},
+        ]
 
 
 async def gate_facts(
@@ -457,6 +481,7 @@ async def ledger_rows_for_runs(
 
 
 __all__ = [
+    "EvidenceReminder",
     "diff_excerpt",
     "gate_facts",
     "judge_ledger",

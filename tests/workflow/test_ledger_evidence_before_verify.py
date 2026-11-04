@@ -198,3 +198,123 @@ async def test_a_run_whose_evidence_is_complete_is_not_reminded(
 
     assert _reminders(llm) == []
     assert len(verified) == 1
+
+
+# ── evidence that names an item but cannot ground it (#1046 re-run, 2026-11-02) ────────────
+#
+# Run 815740af failed two rounds on ``ledger_missing`` alone: R2 cited a migration that was
+# already on main (no diff), and round 2 had a different set of gaps — but the loop asked
+# only once, and only about items with no entry at all. Both rounds were knowable for free.
+
+
+async def test_evidence_citing_only_an_unchanged_path_is_asked_for_before_verifying(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    unchanged = [
+        {"requirement_id": "R1", "paths": ["README.md"]},  # in the repo, not changed by this run
+        {"requirement_id": "R2", "status": "deferred", "note": "needs the founder"},
+    ]
+    turns = [
+        LoopTurn(
+            content="declare + write",
+            tool_calls=(
+                _tool(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "true"}],
+                    requirement_evidence=unchanged,
+                ),
+                _tool("file_write", path="a.py", content="x = 1\n"),
+            ),
+        ),
+        LoopTurn(content="done", tool_calls=()),
+        LoopTurn(
+            content="evidence",
+            tool_calls=(
+                _tool(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "true"}],
+                    requirement_evidence=_EVIDENCE,
+                ),
+            ),
+        ),
+        LoopTurn(content="done", tool_calls=()),
+    ]
+    llm, verified = await _drive(tmp_path, monkeypatch, turns)
+
+    [reminder] = _reminders(llm)
+    assert "R1" in reminder and "README.md" in reminder  # says WHY: that path did not change
+    assert "R2" not in reminder  # a deferral with a note is evidence
+    assert len(verified) == 1
+
+
+async def test_a_new_gap_after_a_reminder_is_asked_about_too(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    turns = [
+        LoopTurn(
+            content="declare + write",
+            tool_calls=(
+                _tool("declare_verification", checks=[{"kind": "command", "command": "true"}]),
+                _tool("file_write", path="a.py", content="x = 1\n"),
+            ),
+        ),
+        LoopTurn(content="done", tool_calls=()),  # → asked about R1 and R2
+        LoopTurn(
+            content="half",
+            tool_calls=(
+                _tool(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "true"}],
+                    requirement_evidence=[{"requirement_id": "R1", "paths": ["a.py"]}],
+                ),
+            ),
+        ),
+        LoopTurn(content="done", tool_calls=()),  # → asked again, about R2 only
+        LoopTurn(
+            content="rest",
+            tool_calls=(
+                _tool(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "true"}],
+                    requirement_evidence=_EVIDENCE,
+                ),
+            ),
+        ),
+        LoopTurn(content="done", tool_calls=()),
+    ]
+    llm, verified = await _drive(tmp_path, monkeypatch, turns)
+
+    asked = [
+        str(m.get("content"))
+        for m in llm.seen[-1]
+        if m.get("role") == "user" and "REQUIREMENT EVIDENCE MISSING" in str(m.get("content"))
+    ]
+    assert len(asked) == 2
+    assert "R1" not in asked[1] and "R2" in asked[1]
+    assert len(verified) == 1
+
+
+async def test_a_cited_test_is_left_to_the_gate(tmp_path: Path, monkeypatch: Any) -> None:
+    """A test whose file did not change may still be run — and grounded — by the gate."""
+    by_test = [
+        {"requirement_id": "R1", "tests": ["tests/test_rotate.py::test_rotate"]},
+        {"requirement_id": "R2", "status": "deferred", "note": "needs the founder"},
+    ]
+    turns = [
+        LoopTurn(
+            content="declare + write",
+            tool_calls=(
+                _tool(
+                    "declare_verification",
+                    checks=[{"kind": "command", "command": "true"}],
+                    requirement_evidence=by_test,
+                ),
+                _tool("file_write", path="a.py", content="x = 1\n"),
+            ),
+        ),
+        LoopTurn(content="done", tool_calls=()),
+    ]
+    llm, verified = await _drive(tmp_path, monkeypatch, turns)
+
+    assert _reminders(llm) == []
+    assert len(verified) == 1
