@@ -35,6 +35,8 @@ from backend.workflow.domain.requirements import (
     check_ledger,
     cited_test_body,
     cited_test_helpers,
+    definition_in,
+    imported_helper_sources,
     relevant_hunks,
     split_test_id,
 )
@@ -172,7 +174,34 @@ async def _cited_body(box: SandboxSession, test: str) -> str | None:
     # The same-file helpers and fixtures the test names — without them a test that stores
     # rows through ``_hold(db, MIXED)`` shows the judge nothing it can check (#1287).
     helpers = cited_test_helpers(text, body)
-    return f"{body}\n\n--- defined in the same file, used above:\n{helpers}" if helpers else body
+    parts = [body]
+    if helpers:
+        parts.append(f"--- defined in the same file, used above:\n{helpers}")
+    # …and the ones it imports from another file (#1302: ``issue_t._seed`` from a sibling test).
+    parts += await _imported_helpers(box, text, split[0], f"{body}\n{helpers}")
+    return "\n\n".join(parts)
+
+
+async def _imported_helpers(
+    box: SandboxSession, text: str, test_path: str, used: str, *, limit: int = 3000
+) -> list[str]:
+    shown: list[str] = []
+    room = limit
+    files: dict[str, str | None] = {}
+    for paths, name in imported_helper_sources(text, test_path, used):
+        for path in paths:
+            if path not in files:
+                files[path] = await _test_file(box, path)
+            source = files[path]
+            definition = definition_in(source, name) if source is not None else None
+            if definition is None:
+                continue
+            part = f"--- defined in {path}, used above:\n{definition}"
+            if len(part) <= room:
+                shown.append(part)
+                room -= len(part)
+            break
+    return shown
 
 
 MissingTests = Callable[[Mapping[str, Any]], Awaitable[list[str]]]
