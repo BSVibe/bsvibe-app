@@ -533,7 +533,9 @@ async def _resolve_pending_decisions(
     return resolved
 
 
-async def resolve_pending_safe_mode_items(session: AsyncSession, run: ExecutionRun) -> list[str]:
+async def resolve_pending_safe_mode_items(
+    session: AsyncSession, run: ExecutionRun, *, reason: str | None = None
+) -> list[str]:
     """Deny a run's PENDING safe-mode approval items.
 
     A cancelled run's deliverables will never be delivered, so their approval
@@ -557,6 +559,8 @@ async def resolve_pending_safe_mode_items(session: AsyncSession, run: ExecutionR
     for item in await queue.list_pending_for_run(workspace_id=run.workspace_id, run_id=run.id):
         item.status = SafeModeStatus.DENIED
         item.decided_at = now
+        if reason:
+            item.deny_reason = reason
         resolved.append(str(item.id))
     if resolved:
         await session.flush()

@@ -26,8 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data.rls import workspace_session_scope
 from backend.workflow.application.intake.trust import RepoPermission, is_trusted
-from backend.workflow.application.run_inbox import PR_COMMENT, post_to_inbox
-from backend.workflow.application.run_status import move_run_status
+from backend.workflow.application.run_inbox import PR_COMMENT, post_to_inbox, reopen_run
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.github.db import GithubMergeWatchRow, MergeWatchStatus
 
@@ -137,9 +136,7 @@ async def route_pr_comment_to_run(
             },
         )
         if run.status in _REOPEN:
-            await move_run_status(
-                session, run, RunStatus.OPEN, reason=f"review comment on PR #{pr_number}"
-            )
+            await reopen_run(session, run, reason=f"review comment on PR #{pr_number}")
         await session.flush()
 
     logger.info(

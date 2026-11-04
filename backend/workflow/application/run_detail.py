@@ -140,6 +140,10 @@ _VERIFY_FALLBACK = {"en": "Ran verification", "ko": "검증을 실행했어요"}
 _STATIC_LABELS = {
     "settle": {"en": "Settled into knowledge", "ko": "지식으로 정리했어요"},
     "error": {"en": "Hit a problem", "ko": "문제가 생겼어요"},
+    "safe_mode_cleared": {
+        "en": "Reopened and cleared the waiting cards",
+        "ko": "다시 열려 대기 카드를 정리했어요",
+    },
 }
 
 _ROUTING_SOURCE_REASONS = {

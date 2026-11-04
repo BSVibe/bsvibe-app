@@ -33,8 +33,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data.rls import workspace_session_scope
 from backend.workflow.application.intake.trust import RepoPermission, is_trusted
-from backend.workflow.application.run_inbox import ISSUE_COMMENT, ISSUE_EDIT, post_to_inbox
-from backend.workflow.application.run_status import move_run_status
+from backend.workflow.application.run_inbox import (
+    ISSUE_COMMENT,
+    ISSUE_EDIT,
+    post_to_inbox,
+    reopen_run,
+)
 from backend.workflow.domain.requirements import (
     build_ledger,
     extract_requirements,
@@ -133,9 +137,7 @@ async def _deliver(
             return None
         await post_to_inbox(session, run, kind, {"issue_number": number, **data})
         if run.status in _REOPEN:
-            await move_run_status(
-                session, run, RunStatus.OPEN, reason=f"issue #{number}: {kind.replace('_', ' ')}"
-            )
+            await reopen_run(session, run, reason=f"issue #{number}: {kind.replace('_', ' ')}")
         await session.flush()
     logger.info(
         f"{kind}_routed_to_run",

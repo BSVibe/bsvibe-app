@@ -51,6 +51,44 @@ async def post_to_inbox(
     await session.flush()
 
 
+#: Activity row the run's timeline reads as "reopened; waiting cards cleared".
+SAFE_MODE_CLEARED_ACTIVITY = "safe_mode_cleared"
+#: Why a waiting card was denied — read by a person on the card.
+REOPEN_DENY_REASON = (
+    "런이 다시 열려 새 산출물로 대체됨 (run reopened; superseded by a new deliverable)"
+)
+
+
+async def reopen_run(session: AsyncSession, run: ExecutionRun, *, reason: str) -> bool:
+    """Reopen a ``review_ready`` / ``failed`` run for the founder's message.
+
+    The run will make a fresh deliverable and a fresh card, so its PENDING cards are denied
+    now — an old card approved later would deliver work without what the founder just asked
+    for. They are written directly, not through ``SafeModeQueue.deny``: that would read as
+    "rework this" and tell the run a rejection reason it already has the message for.
+    """
+    from backend.workflow.application.run_cleanup import (  # noqa: PLC0415
+        resolve_pending_safe_mode_items,
+    )
+    from backend.workflow.application.run_status import move_run_status  # noqa: PLC0415
+    from backend.workflow.infrastructure.db import RunStatus  # noqa: PLC0415
+
+    if not await move_run_status(session, run, RunStatus.OPEN, reason=reason):
+        return False
+    cleared = await resolve_pending_safe_mode_items(session, run, reason=REOPEN_DENY_REASON)
+    if cleared:
+        session.add(
+            ExecutionRunActivity(
+                run_id=run.id,
+                workspace_id=run.workspace_id,
+                activity_type=SAFE_MODE_CLEARED_ACTIVITY,
+                payload={"safe_mode_item_ids": cleared},
+            )
+        )
+    await session.flush()
+    return True
+
+
 def _live(ledger: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     return [i for i in ledger if not i.get("withdrawn")]
 
@@ -187,6 +225,9 @@ __all__ = [
     "ISSUE_COMMENT",
     "ISSUE_EDIT",
     "PR_COMMENT",
+    "REOPEN_DENY_REASON",
+    "SAFE_MODE_CLEARED_ACTIVITY",
     "apply_inbox",
     "post_to_inbox",
+    "reopen_run",
 ]
