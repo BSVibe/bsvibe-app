@@ -145,6 +145,7 @@ class EvidenceReminder:
             changed = set()
         diff = frozenset(p for p in changed | {w.strip("/") for w in written_paths} if p)
         owed = owed_before_verify(requirements, evidence, diff)
+        owed += await self._undefined_tests(box, requirements, evidence, {i["id"] for i, _ in owed})
         key = frozenset(f"{item['id']}:{why}" for item, why in owed)
         if not owed or key == self._asked:
             return []
@@ -153,6 +154,35 @@ class EvidenceReminder:
             {"role": "assistant", "content": turn_text or "(done)"},
             {"role": "user", "content": evidence_reminder(owed)},
         ]
+
+    @staticmethod
+    async def _undefined_tests(
+        box: SandboxSession,
+        requirements: Sequence[Mapping[str, Any]],
+        evidence: Sequence[Mapping[str, Any]],
+        already: set[Any],
+    ) -> list[tuple[Mapping[str, Any], str]]:
+        """Items citing a ``file::name`` test their file does not define — verification
+        rejects those (#1272), so ask first (#1308: all nine items cited a missing name)."""
+        from backend.workflow.domain.requirements import OWED_KINDS  # noqa: PLC0415
+
+        by_id = {str(e.get("requirement_id")): e for e in evidence}
+        missing_tests = cited_tests(box)
+        out: list[tuple[Mapping[str, Any], str]] = []
+        for item in requirements:
+            entry = by_id.get(str(item["id"]))
+            if (
+                item["id"] in already
+                or entry is None
+                or item.get("kind") not in OWED_KINDS
+                or item.get("withdrawn")
+                or entry.get("status") == "deferred"
+            ):
+                continue
+            missing = await missing_tests({"tests": entry.get("tests") or []})
+            if missing:
+                out.append((item, "cited test not defined in its file: " + ", ".join(missing)))
+        return out
 
 
 async def gate_facts(
