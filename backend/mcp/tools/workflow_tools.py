@@ -646,10 +646,13 @@ async def _h_runs_detail(args: RunsDetailInput, ctx: ToolContext) -> Any:
 class RunsFirstRoundPassRateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     limit: int = Field(30, ge=1, le=200)
+    product_id: uuid.UUID | None = None
 
 
 async def _h_runs_first_round_pass_rate(args: RunsFirstRoundPassRateInput, ctx: ToolContext) -> Any:
-    rate = await first_round_pass_rate(ctx.session, ctx.principal.workspace_id, limit=args.limit)
+    rate = await first_round_pass_rate(
+        ctx.session, ctx.principal.workspace_id, limit=args.limit, product_id=args.product_id
+    )
     return _Envelope(rate.as_dict())
 
 
@@ -1068,7 +1071,9 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
                 "(shipped, failed or cancelled), the share that passed verification on "
                 "round 1. Returns `passed_first_round` (numerator), `runs_verified` "
                 "(denominator: finished runs with at least one verification), "
-                "`runs_considered` and `pass_rate` (`null` when nothing was verified)."
+                "`runs_considered` and `pass_rate` (`null` when nothing was verified). "
+                "Optional `product_id` counts only that product's runs; omit it to count "
+                "the whole workspace."
             ),
             input_schema=RunsFirstRoundPassRateInput,
             output_schema=_Envelope,
