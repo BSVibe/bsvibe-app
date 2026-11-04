@@ -538,6 +538,126 @@ async def first_round_pass_rate(
     )
 
 
+def _ratio(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+class VerificationQuality(NamedTuple):
+    """How good the verification harness is, over the latest finished runs.
+
+    Every figure carries its numerator and denominator so a reader can tell a
+    rate over three items from one over three hundred.
+    """
+
+    runs_considered: int
+    runs_verified: int
+    verification_rounds: int
+    avg_verification_rounds: float | None
+    ledger_items: int
+    ledger_unclear: int
+    ledger_unclear_rate: float | None
+    counterfactual_checked: int
+    counterfactual_vacuous: int
+    counterfactual_vacuous_rate: float | None
+    failed_rounds: int
+    ledger_only_failures: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return self._asdict()
+
+
+def _ledger_rows(result: Any) -> list[dict[str, Any]]:
+    ledger = result.get("requirements") if isinstance(result, dict) else None
+    return [r for r in ledger if isinstance(r, dict)] if isinstance(ledger, list) else []
+
+
+def _has_failed_command(result: Any) -> bool:
+    from backend.workflow.domain.verification_feedback import _failed  # noqa: PLC0415
+
+    if not isinstance(result, dict):
+        return False
+    gate = result.get("derived_gate")
+    gate_commands = gate.get("commands") if isinstance(gate, dict) else None
+    commands = [
+        *(gate_commands if isinstance(gate_commands, list) else []),
+        *(result.get("command_results") or []),
+    ]
+    return bool(_failed(commands))
+
+
+def _is_ledger_only_failure(row: Any) -> bool:
+    """A failed round whose only cause is a ``missing`` / ``rejected`` ledger item."""
+    if row.outcome is not VerificationOutcome.FAILED or _has_failed_command(row.result):
+        return False
+    return any(r.get("status") in {"missing", "rejected"} for r in _ledger_rows(row.result))
+
+
+async def verification_quality(
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    limit: int = 30,
+    product_id: uuid.UUID | None = None,
+) -> VerificationQuality:
+    """Verification-quality figures over the same runs :func:`first_round_pass_rate` reads.
+
+    The one calculation behind the REST route and the MCP tool. A run without a
+    verification is out of every denominator; a zero denominator reads ``None``.
+    Ledger figures read each run's LAST verification — the state it shipped or
+    failed with — not every intermediate round.
+    """
+    stmt = select(ExecutionRun.id).where(
+        ExecutionRun.workspace_id == workspace_id,
+        ExecutionRun.status.in_(TERMINAL_RUN_STATUSES),
+    )
+    if product_id is not None:
+        stmt = stmt.where(ExecutionRun.product_id == product_id)
+    stmt = stmt.order_by(ExecutionRun.created_at.desc()).limit(limit)
+    run_ids = list((await session.execute(stmt)).scalars().all())
+    by_run: dict[uuid.UUID, list[VerificationResult]] = {}
+    if run_ids:
+        rows_stmt = (
+            select(VerificationResult)
+            .where(
+                VerificationResult.workspace_id == workspace_id,
+                VerificationResult.run_id.in_(run_ids),
+            )
+            .order_by(VerificationResult.created_at.asc(), VerificationResult.id.asc())
+        )
+        for row in (await session.execute(rows_stmt)).scalars().all():
+            by_run.setdefault(row.run_id, []).append(row)
+
+    rounds = sum(len(v) for v in by_run.values())
+    items = unclear = checked = vacuous = failed = ledger_only = 0
+    for verifications in by_run.values():
+        ledger = [
+            r for r in _ledger_rows(verifications[-1].result) if r.get("status") != "withdrawn"
+        ]
+        items += len(ledger)
+        unclear += sum(1 for r in ledger if r.get("status") == "unclear")
+        counterfactuals = [r.get("counterfactual") for r in ledger if r.get("counterfactual")]
+        checked += len(counterfactuals)
+        vacuous += sum(1 for c in counterfactuals if c == "vacuous")
+        for v in verifications:
+            if v.outcome is VerificationOutcome.FAILED:
+                failed += 1
+                ledger_only += _is_ledger_only_failure(v)
+    return VerificationQuality(
+        runs_considered=len(run_ids),
+        runs_verified=len(by_run),
+        verification_rounds=rounds,
+        avg_verification_rounds=_ratio(rounds, len(by_run)),
+        ledger_items=items,
+        ledger_unclear=unclear,
+        ledger_unclear_rate=_ratio(unclear, items),
+        counterfactual_checked=checked,
+        counterfactual_vacuous=vacuous,
+        counterfactual_vacuous_rate=_ratio(vacuous, checked),
+        failed_rounds=failed,
+        ledger_only_failures=ledger_only,
+    )
+
+
 async def build_run_detail(
     *,
     run_id: uuid.UUID,
