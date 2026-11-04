@@ -74,18 +74,27 @@ class _ActLlm:
         self,
         sf: async_sessionmaker[AsyncSession] | None = None,
         workspace_id: uuid.UUID | None = None,
+        *,
+        done_on_first_turn: bool = False,
     ) -> None:
-        self._sf, self._ws = sf, workspace_id
+        self._sf, self._ws, self._done_first = sf, workspace_id, done_on_first_turn
         self.turns: list[list[str]] = []
 
     async def complete(self, *, messages: list[dict[str, Any]], tools: Any) -> LoopTurn:
         self.turns.append([str(m.get("content") or "") for m in messages if isinstance(m, dict)])
-        if self._sf is not None and len(self.turns) == 1:
+        n = len(self.turns)
+        # ``done_on_first_turn``: turn 1 works (a tool call); turn 2 is the long turn the edit
+        # lands in, and it ends "done" — an executor's one-session shape.
+        edit_turn = 2 if self._done_first else 1
+        if self._sf is not None and n == edit_turn:
             async with self._sf() as session:
                 await route_issue_edit_to_run(
                     session, workspace_id=self._ws, payload=_issue_event(_V2, "edited")
                 )
                 await session.commit()
+            if self._done_first:
+                return LoopTurn(content="done", tool_calls=())
+        if n == 1:
             return LoopTurn(
                 content="",
                 tool_calls=(LoopToolCall(id="t1", name="no_such_tool", arguments={}),),
@@ -120,7 +129,9 @@ class _EditingFrameLlm:
         return TextCompletion(text=body, usage_prompt_tokens=1, usage_completion_tokens=1)
 
 
-async def _drive(tmp_path: Path, *, edit_while_framing: bool) -> tuple[_ActLlm, dict[str, Any]]:
+async def _drive(
+    tmp_path: Path, *, edit_while_framing: bool, done_on_first_turn: bool = False
+) -> tuple[_ActLlm, dict[str, Any]]:
     async with db_engine() as (engine, _pg):
         sf = async_sessionmaker(engine, expire_on_commit=False)
         ws = uuid.uuid4()
@@ -153,7 +164,11 @@ async def _drive(tmp_path: Path, *, edit_while_framing: bool) -> tuple[_ActLlm, 
             loader.load_all()
             return loader
 
-        act = _ActLlm() if edit_while_framing else _ActLlm(sf, ws)
+        act = (
+            _ActLlm()
+            if edit_while_framing
+            else _ActLlm(sf, ws, done_on_first_turn=done_on_first_turn)
+        )
         agent = AgentWorker(
             session_factory=sf,
             execution=AgentExecutionDeps(
@@ -196,4 +211,23 @@ async def test_an_edit_sent_mid_drive_reaches_the_next_turn(tmp_path: Path) -> N
     assert not any("edited the issue" in m for m in act.turns[0])
     assert any("edited the issue" in m for m in act.turns[1])
     assert "30" in payload["intent_text"]
+    assert _live(payload) == ["통과율 기본값은 30 이다"]
+
+
+async def test_an_edit_sent_during_a_turn_that_ends_done_is_told_before_verifying(
+    tmp_path: Path,
+) -> None:
+    """Prod #1296 (run 17df4e07): an executor works in ONE long turn. A comment landed in it,
+    the turn ended "done", and the drive went straight to verification — the comment was never
+    applied, its checklist item never reached the ledger. The drive now looks at the inbox
+    before verifying, and gives the agent another turn when something new is there."""
+    act, payload = await _drive(tmp_path, edit_while_framing=False, done_on_first_turn=True)
+
+    assert len(act.turns) >= 3
+    after_done = act.turns[2]
+    assert any("edited the issue" in m for m in after_done)
+    # The inbox is read FIRST: no nudge, no evidence reminder, no verification until the agent
+    # has seen what arrived — new ledger items change what is owed.
+    assert not any("REQUIREMENT EVIDENCE MISSING" in m for m in after_done)
+    assert not any("You have not used any tool yet" in m for m in after_done)
     assert _live(payload) == ["통과율 기본값은 30 이다"]
