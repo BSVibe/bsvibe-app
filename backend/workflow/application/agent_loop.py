@@ -439,8 +439,8 @@ class RunOrchestrator:
         baseline: str | None = None,
     ) -> VerificationResult:
         # #1267 — what the checks leave in the checkout stays out of the run's commits.
-        async with leftovers_excluded(box, keep=written_paths):
-            return await self._verifier().verify(
+        async with leftovers_excluded(box, keep=written_paths) as leftovers:
+            verdict = await self._verifier().verify(
                 baseline=baseline,
                 run=run,
                 work_step=work_step,
@@ -450,6 +450,11 @@ class RunOrchestrator:
                 written_paths=written_paths,
                 final_text=final_text,
             )
+        # The log vanishes with the worker on deploy; the verification's own record stays.
+        excluded = leftovers.as_result()
+        if excluded is not None:
+            verdict.result = {**(verdict.result or {}), "leftovers_excluded": excluded}
+        return verdict
 
     async def _assemble_contract(
         self, registry: ToolRegistry, written_paths: list[str], final_text: str

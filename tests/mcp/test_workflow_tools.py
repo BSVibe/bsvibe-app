@@ -760,6 +760,28 @@ async def test_runs_detail_lists_requirement_rows(
     assert "counterfactual" not in mcp_r2
 
 
+async def test_runs_detail_shows_leftovers_excluded(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    from backend.workflow.infrastructure.db import VerificationOutcome  # noqa: PLC0415
+
+    run_id = await _seed_run(db, workspace_id, status=RunStatus.REVIEW_READY)
+    blob = {"count": 3, "dirs": [{"path": "tool-cache", "count": 2}, {"path": ".", "count": 1}]}
+    await _seed_verification(
+        db, workspace_id, run_id, VerificationOutcome.PASSED, {"leftovers_excluded": blob}
+    )
+
+    detail = await _detail_via_builder(db, workspace_id, run_id)
+    assert detail is not None and detail.verification is not None
+    assert detail.verification.leftovers_excluded == blob
+
+    async with db() as s:
+        out = await registry.call_tool(
+            "bsvibe_runs_detail", {"run_id": str(run_id)}, _read_ctx(s, workspace_id, user_id)
+        )
+    assert out["verification"]["leftovers_excluded"] == blob
+
+
 async def test_build_run_detail_reads_a_stored_verification_result_ledger(
     db, workspace_id, seeded
 ) -> None:
