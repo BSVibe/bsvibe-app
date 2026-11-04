@@ -147,10 +147,10 @@ async def test_the_founders_pr_comment_reaches_the_run_when_github_says_contribu
                 permission_of=_lookup("write"),
             )
             await session.commit()
-        run = await comments._run(sf, run_id, ws)
+        inbox = await comments._inbox(sf, run_id, ws)
 
     assert routed == run_id
-    assert [c["body"] for c in run.payload["pr_comments"]] == ["fix the lint"]
+    assert [r["body"] for r in inbox] == ["fix the lint"]
 
 
 async def test_a_read_only_contributors_pr_comment_is_still_not_routed() -> None:
@@ -260,7 +260,10 @@ async def test_the_intake_worker_routes_the_founders_contributor_pr_comment() ->
         filters={"action": "created"}, association="CONTRIBUTOR", repo_permission=_lookup("admin")
     )
     assert run.status is RunStatus.OPEN
-    assert [c["body"] for c in run.payload["pr_comments"]] == ["fix the lint"]
+    sf = async_sessionmaker(comments._ENGINE[0], expire_on_commit=False)
+    assert [r["body"] for r in await comments._inbox(sf, run.id, run.workspace_id)] == [
+        "fix the lint"
+    ]
     assert requests == []
 
 

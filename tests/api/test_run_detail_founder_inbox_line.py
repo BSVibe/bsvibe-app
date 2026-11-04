@@ -21,6 +21,7 @@ from backend.identity.workspaces_db import WorkspaceRow
 from backend.workflow.application.run_inbox import (
     ISSUE_COMMENT,
     ISSUE_EDIT,
+    PR_COMMENT,
     post_to_inbox,
 )
 from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunActivity, RunStatus
@@ -126,3 +127,20 @@ async def test_odd_payloads_do_not_break_detail(configured_client, db, workspace
     labels = [a["label"] for a in r.json()["activities"]]
     assert labels[:3] == ["메시지를 받았어요"] * 3
     assert labels[3] == "이슈 #1296 수정을 받았어요"
+
+
+async def test_pr_comment_shows_in_both_languages(configured_client, db) -> None:
+    for language, expected in (
+        ("en", "Received a review comment on PR #1218"),
+        ("ko", "PR #1218 리뷰 댓글을 받았어요"),
+    ):
+        ws = uuid.uuid4()
+        configured_client._transport.app.dependency_overrides[get_workspace_id] = (  # noqa: SLF001
+            publishing_workspace(ws)
+        )
+        run_id = await _seed_ordered(
+            db, ws, language, [(PR_COMMENT, {"pr_number": 1218, "body": "x", "author": "r"})]
+        )
+        r = await configured_client.get(f"/api/v1/runs/{run_id}/detail")
+        assert r.status_code == 200, r.text
+        assert [a["label"] for a in r.json()["activities"]] == [expected]

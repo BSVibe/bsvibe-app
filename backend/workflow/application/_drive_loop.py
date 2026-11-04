@@ -49,10 +49,6 @@ from backend.workflow.application.inplace_gate import (
     reconcile_written_paths,
 )
 from backend.workflow.application.intake.ci_failure import ci_failure_messages, consume_ci_failure
-from backend.workflow.application.intake.pr_comment import (
-    consume_pr_comments,
-    pr_comment_messages,
-)
 from backend.workflow.application.precheck import MAX_PRECHECKS, precheck_messages
 from backend.workflow.application.requirements_ledger import evidence_owed_messages
 from backend.workflow.application.round_budget import (
@@ -180,10 +176,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     if conflict_directive is not None:
         messages.append(conflict_directive)
         _consume_merge_conflict(run)
-    # A trusted reviewer's comment on this run's PR (intake.pr_comment): read it once, then clear it.
-    if review_comments := pr_comment_messages(run):
-        messages.extend(review_comments)
-        consume_pr_comments(run)
+    # A reviewer's comment on this run's PR arrives through the inbox above (``pr_comment``).
     if ci_messages := ci_failure_messages(run):  # red CI on this run's PR (intake.ci_failure)
         messages.extend(ci_messages)
         consume_ci_failure(run)

@@ -14,11 +14,13 @@ not applied yet: at its start and between every turn (:func:`apply_inbox`).
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.workflow.domain.pr_review import COMMENT_RECEIVED_AT_KEY, record_comment
 from backend.workflow.domain.requirements import REQUIREMENTS_KEY, refresh_ledger
 from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunActivity
 
@@ -28,6 +30,7 @@ APPLIED_KEY = "inbox_applied"
 
 ISSUE_EDIT = "issue_edit"
 ISSUE_COMMENT = "issue_comment"
+PR_COMMENT = "pr_comment"
 
 
 async def post_to_inbox(
@@ -107,7 +110,31 @@ def _apply_comment(payload: dict[str, Any], data: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-_APPLY = {ISSUE_EDIT: _apply_edit, ISSUE_COMMENT: _apply_comment}
+def _apply_pr_comment(payload: dict[str, Any], data: Mapping[str, Any]) -> str:
+    pr_number = int(data.get("pr_number") or 0)
+    body = str(data.get("body") or "")
+    author = str(data.get("author") or "")
+    # ``resend`` is a founder's "fix it again": the comment is already on the record.
+    if not data.get("resend"):
+        try:
+            received_at = datetime.fromisoformat(str(data.get("received_at")))
+        except ValueError:
+            received_at = datetime.now(tz=UTC)
+        # The record stays after delivery, so a run that later fails can still be told apart
+        # from one that never heard the reviewer.
+        payload[COMMENT_RECEIVED_AT_KEY] = received_at.isoformat()
+        record_comment(
+            payload, pr_number=pr_number, body=body, author=author, received_at=received_at
+        )
+    return (
+        f"{author or 'A reviewer'} left a review comment on your pull request "
+        f"#{pr_number}:\n\n{body}\n\n"
+        "Address it on the SAME branch so the result is pushed to the same pull request. "
+        "Do not open a new pull request."
+    )
+
+
+_APPLY = {ISSUE_EDIT: _apply_edit, ISSUE_COMMENT: _apply_comment, PR_COMMENT: _apply_pr_comment}
 
 
 async def apply_inbox(session: AsyncSession, run: ExecutionRun) -> list[dict[str, Any]]:
@@ -144,6 +171,7 @@ __all__ = [
     "INBOX_ACTIVITY",
     "ISSUE_COMMENT",
     "ISSUE_EDIT",
+    "PR_COMMENT",
     "apply_inbox",
     "post_to_inbox",
 ]

@@ -811,14 +811,14 @@ async def _send_review_comments_back(
 ) -> None:
     """``review_comment_unaddressed`` → ``retry``: hand the reviewer's words back to the run.
 
-    The comments come from the run's durable record (the ``pr_comments`` queue was consumed
-    when the failed drive began) and go back the way intake queues them, so the next drive
-    injects them as before. No CI failure is involved. The watch is revived to merge the fix.
+    The comments come from the run's durable record and go back the way intake sends them —
+    through the run's inbox, so the next drive tells them again. No CI failure is involved. The watch is revived to merge the fix.
     """
     from backend.config import get_settings  # noqa: PLC0415
     from backend.workflow.application.intake.ci_failure import (  # noqa: PLC0415
         revive_merge_watch,
     )
+    from backend.workflow.application.run_inbox import PR_COMMENT, post_to_inbox  # noqa: PLC0415
     from backend.workflow.application.run_status import move_run_status  # noqa: PLC0415
     from backend.workflow.domain.pr_review import unaddressed_comments  # noqa: PLC0415
 
@@ -830,9 +830,9 @@ async def _send_review_comments_back(
     comments = unaddressed_comments(run.payload, delivered)
     if not comments:
         raise InvalidAction(f"Run {run.id} has no recorded review comment to send back")
-    payload = dict(run.payload or {})
-    payload["pr_comments"] = [*(payload.get("pr_comments") or []), *comments]
-    run.payload = payload
+    for comment in comments:
+        # ``resend``: already on the record — the drive tells the run again, nothing more.
+        await post_to_inbox(session, run, PR_COMMENT, {**comment, "resend": True})
     await move_run_status(
         session, run, RunStatus.OPEN, reason=f"review comment on PR #{pr_number} sent back"
     )
