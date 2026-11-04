@@ -50,7 +50,7 @@ from backend.workflow.application.inplace_gate import (
 )
 from backend.workflow.application.intake.ci_failure import ci_failure_messages, consume_ci_failure
 from backend.workflow.application.precheck import MAX_PRECHECKS, precheck_messages
-from backend.workflow.application.requirements_ledger import evidence_owed_messages
+from backend.workflow.application.requirements_ledger import EvidenceReminder
 from backend.workflow.application.round_budget import (
     RoundBudgetTracker,
     finalize_round_cap_decision,
@@ -188,7 +188,7 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     no_work_nudges = 0
     fail_streak = 0
     stall = StallTracker()  # failed rounds running that moved nothing (``verify_stall``)
-    evidence_reminded, prechecks = False, 0  # both are asked BEFORE a round is spent
+    evidence, prechecks = EvidenceReminder(), 0  # both are asked BEFORE a round is spent
     # #692 — a client_attach run works in the founder's own directory (server holds no copy
     # of the source) and settles on the in-place gate. Consumed at the "done" branch below.
     client_attach = await is_client_attach_run(orch._session, run)
@@ -426,10 +426,9 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
             )
             continue
 
-        if not evidence_reminded and (
-            owed := evidence_owed_messages(run, registry.declared_contract, turn.content)
+        if owed := await evidence.ask(
+            run, registry.declared_contract, turn.content, box, run_baseline, written_paths
         ):
-            evidence_reminded = True
             messages.extend(owed)
             continue
         if prechecks < MAX_PRECHECKS and (

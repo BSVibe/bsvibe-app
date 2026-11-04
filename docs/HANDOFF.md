@@ -21,7 +21,7 @@
 
 ---
 
-## §0 — One line: **Four of the last five issue runs passed on round 1; what the founder sends a running run now reaches it**
+## §0 — One line: **Five of the last six issue runs passed on round 1; what the founder sends a running run now reaches it**
 
 10-30 → 11-04. Harness work by hand (§Ⅰ), each fix proven on the next real issue run. The round-1 pass rate is now
 read from the product (`bsvibe_runs_first_round_pass_rate`, run list / detail `passed_on_round`).
@@ -37,15 +37,16 @@ read from the product (`bsvibe_runs_first_round_pass_rate`, run list / detail `p
 | #1292 | a cited test with a wrapped signature (`) -> None:`) is read past its signature | — |
 | #1294 | **the run inbox** — intake never writes `run.payload` for an issue edit / issue comment; it appends a `founder_inbox` row to `execution_run_activities` (insert-only), and the drive — the payload's one writer — applies new rows at drive start and between every turn. A trusted comment on an issue with an unfinished run goes to that run, not a second run | #1296, #1299 |
 | #1298 | the drive's "done" branch reads the inbox **first** (before nudges, reminders, verification) — an executor works in ONE long turn, this is its only chance to hear a mid-run message | #1299 — edit R9 + comment R10 in the ledger |
-| this PR | a malformed inbox row is skipped and logged, never stops the drive (each row applied on a copy) | — |
+| #1301 | a malformed inbox row is skipped and logged, never stops the drive (each row applied on a copy) | — |
+| #1304 | the ledger judge also reads the helpers a cited test **imports from other files** (Python `from`/`import`, JS/TS `import { }` / `import * as`; unused imports skipped; ≤ 3,000 chars, 20 names) | — |
 
 Issues worked through BSVibe: #1279 (change footprint on the card + report, PR #1280, and its worktree-count follow-up
 #1282 by hand), #1046 (already done by #1047 — the run added one migration test, PR #1284), #1287 (ledger verdict on
 the Safe Mode card, PR #1288), #1290 (verification rounds + first-round pass rate, PR #1291), #1293 (pass rate on the
 product screen, PR #1295), #1296 (inbox lines in the run timeline, PR #1297), #1299 (PR comments through the inbox,
-PR #1300).
+PR #1300), #1302 (a run re-opened by the founder's message denies its pending Safe Mode cards, PR #1303).
 Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #1287 **1** · #1290 **1** · #1293 2 then 1 ·
-#1296 **1** · #1299 **1**.
+#1296 **1** · #1299 **1** · #1302 **1**.
 
 ## §0-b — previous session (10-26 → 10-30): **Verification now checks what was asked, the way CI checks it — #1255 passed in round 1; real issue runs found and closed nine harness holes**
 
@@ -286,9 +287,9 @@ mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 and `--stor
   first (#1298).
 * **Every remaining "unclear" had a mechanical cause again**: several cited paths sharing one head-cut budget
   (#1283), cited code the run did not change (#1285), helpers and fixtures defined above the cited test (#1289), a
-  wrapped test signature read as the end of the test (#1292).
-* **Re-opening a run does not clear its pending Safe Mode card** — resolve the card before sending a re-opening
-  comment, or a stale card stays.
+  wrapped test signature read as the end of the test (#1292), helpers imported from a sibling test module (#1304).
+* **Re-opening a run did not clear its pending Safe Mode card** — an old card stayed approvable after the founder's
+  message re-opened the run (fixed by #1303: the re-open denies it with a "superseded" reason).
 * **A comment on an issue with a live run used to queue a second run** (#1279's `b9d0039c`, discarded by hand) —
   fixed by #1294.
 * **I picked an issue that was already done (#1046 → #1047).** Check `git log -S` / the code on main before filing
@@ -298,8 +299,10 @@ mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 and `--stor
 
 1. **Keep running real issues**; read `bsvibe_runs_first_round_pass_rate` instead of counting log lines.
 2. **R5 independent reviewer**, **R6 metrics** beyond the pass rate (rounds per run, unclear / vacuous rates) — open.
-3. **"Evidence missing" still costs a round** — #1046's run failed twice on `ledger_missing` alone before the
-   evidence reminder caught it; why the reminder did not fire first is not yet known.
+3. **"Evidence missing" cost rounds** — #1046's run failed twice on `ledger_missing` alone. Cause: the pre-verify
+   reminder checked only items with no entry, and asked once per drive; verification also marks an entry whose cited
+   paths are not in the diff (and that cites no test). Fixed by the PR after #1304 (`EvidenceReminder`); watch the
+   next runs for a `ledger_missing`-only failure.
 4. **#1267 layer 2** (the deriver names the stack's cache paths up front) — only after `verification_leftovers_excluded`
    logs have been seen on real runs.
 5. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine

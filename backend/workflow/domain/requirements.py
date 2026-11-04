@@ -730,8 +730,43 @@ def unevidenced(
     ]
 
 
-def evidence_reminder(items: Sequence[Mapping[str, Any]]) -> str:
-    """Asked once, before verifying, when the run says it is done with items unevidenced."""
+def owed_before_verify(
+    requirements: Sequence[Mapping[str, Any]],
+    evidence: Sequence[Mapping[str, Any]],
+    diff_paths: frozenset[str],
+) -> list[tuple[Mapping[str, Any], str]]:
+    """``(item, why)`` for each owed item verification is certain to mark ``missing``.
+
+    Only what is decidable BEFORE the gate runs: no entry, a deferral without a note, or an
+    entry whose cited paths are none of them in this run's diff and which cites no test. A
+    cited test is left alone — the gate may still run it and ground it (#1046 re-run: R2 cited
+    a migration already on main and cost a round)."""
+    by_id = {str(e.get("requirement_id")): e for e in evidence}
+    out: list[tuple[Mapping[str, Any], str]] = []
+    for item in requirements:
+        if item.get("kind") not in OWED_KINDS or item.get("withdrawn"):
+            continue
+        entry = by_id.get(str(item["id"]))
+        if entry is None:
+            out.append((item, "no evidence named"))
+        elif entry.get("status") == "deferred":
+            if not str(entry.get("note") or "").strip():
+                out.append((item, "deferred without a note saying why"))
+        elif not (entry.get("tests") or []):
+            paths = [str(p) for p in entry.get("paths") or []]
+            if not any(_in_diff(p, diff_paths) for p in paths):
+                why = (
+                    "none of the cited paths changed in this run: " + ", ".join(paths)
+                    if paths
+                    else "the entry cites no path and no test"
+                )
+                out.append((item, why))
+    return out
+
+
+def evidence_reminder(items: Sequence[Mapping[str, Any] | tuple[Mapping[str, Any], str]]) -> str:
+    """Asked before verifying, when the run says it is done with items verification would
+    mark ``missing`` — each with the reason, when there is one."""
     lines = [
         "REQUIREMENT EVIDENCE MISSING — you are about to be verified, and your "
         "declare_verification names no evidence for these ledger items. Verification FAILS "
@@ -740,7 +775,10 @@ def evidence_reminder(items: Sequence[Mapping[str, Any]]) -> str:
         "then finish.",
         "",
     ]
-    lines += [f"- {i['id']} [{i.get('kind', 'do')}] {i['text']}" for i in items]
+    for entry in items:
+        item, why = entry if isinstance(entry, tuple) else (entry, "")
+        tail = f" — {why}" if why else ""
+        lines.append(f"- {item['id']} [{item.get('kind', 'do')}] {item['text']}{tail}")
     return "\n".join(lines)
 
 
@@ -801,6 +839,7 @@ def public_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 __all__ = [
     "evidence_reminder",
+    "owed_before_verify",
     "refresh_ledger",
     "split_test_id",
     "cited_test_body",
