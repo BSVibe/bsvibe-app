@@ -24,6 +24,7 @@ from backend.workflow.application.product_secrets import sealed_product_metadata
 from backend.workflow.application.run_detail import (
     NO_VERIFICATION_ROUNDS,
     first_round_pass_rate,
+    verification_quality,
     verification_rounds_by_run,
 )
 from backend.workflow.domain.execution_target import read_execution_target
@@ -657,6 +658,16 @@ async def _h_runs_first_round_pass_rate(args: RunsFirstRoundPassRateInput, ctx: 
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_runs_verification_quality — rounds, unclear, vacuous, ledger-only failures
+# ---------------------------------------------------------------------------
+async def _h_runs_verification_quality(args: RunsFirstRoundPassRateInput, ctx: ToolContext) -> Any:
+    quality = await verification_quality(
+        ctx.session, ctx.principal.workspace_id, limit=args.limit, product_id=args.product_id
+    )
+    return _Envelope(quality.as_dict())
+
+
+# ---------------------------------------------------------------------------
 # bsvibe_deliverables_list
 # ---------------------------------------------------------------------------
 class DeliverablesListInput(BaseModel):
@@ -1078,6 +1089,25 @@ def register_workflow_tools(registry: ToolRegistry) -> None:
             input_schema=RunsFirstRoundPassRateInput,
             output_schema=_Envelope,
             handler=_h_runs_first_round_pass_rate,
+            required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_runs_verification_quality",
+            description=(
+                "Verification quality over the workspace's most recent `limit` (default "
+                "30) FINISHED runs: `avg_verification_rounds` (runs with a verification), "
+                "`ledger_unclear_rate` (unclear items in each run's last ledger, "
+                "withdrawn excluded), `counterfactual_vacuous_rate` (vacuous among "
+                "counterfactual-checked items) and `ledger_only_failures` (failed rounds "
+                "with no failed command, caused only by missing/rejected ledger items). "
+                "Each carries its numerator and denominator; a rate is `null` when its "
+                "denominator is 0. Optional `product_id` narrows to one product."
+            ),
+            input_schema=RunsFirstRoundPassRateInput,
+            output_schema=_Envelope,
+            handler=_h_runs_verification_quality,
             required_scopes=("mcp:read",),
         )
     )

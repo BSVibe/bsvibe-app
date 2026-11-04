@@ -39,6 +39,7 @@ EXPECTED_ROUTES: dict[str, set[tuple[str, str]]] = {
         ("GET", ""),
         # #1290 follow-up — 1라운드 통과율 (MCP twin: bsvibe_runs_first_round_pass_rate).
         ("GET", "/first-round-pass-rate"),
+        ("GET", "/verification-quality"),
         ("GET", "/{run_id}"),
         ("GET", "/{run_id}/detail"),
         # L2 (#9) — the one founder-initiated mutation: re-open a terminal-failed
