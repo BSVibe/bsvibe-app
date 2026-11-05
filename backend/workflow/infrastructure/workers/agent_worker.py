@@ -43,6 +43,7 @@ status-map). No split needed.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import time
 import uuid
@@ -300,6 +301,9 @@ class AgentWorker(BaseWorker):
         # a listdir + one query + a few rmtrees is cheap, but there's no reason to
         # do it hundreds of times a minute. ``-inf`` forces the first tick to run.
         self._last_workspace_reap_monotonic = float("-inf")
+        # Drives in flight, each its own task. ``_tick`` starts them and moves on, so
+        # opening requests as runs never waits for a drive; ``stop`` drains them.
+        self._drives: set[asyncio.Task[bool]] = set()
 
     @property
     def _stale_claim_lease_s(self) -> float:
@@ -316,14 +320,26 @@ class AgentWorker(BaseWorker):
         from this one settings knob."""
         return 2.0 * self._settings.executor_task_timeout_s
 
+    @property
+    def drive_concurrency(self) -> int:
+        """Most drives in flight at once: ``agent_drive_concurrency``, else ``sandbox_max_concurrent``."""
+        limit = self._settings.agent_drive_concurrency or self._settings.sandbox_max_concurrent
+        return max(1, limit)
+
+    async def stop(self) -> None:
+        """Stop the poll loop, then wait for the drives still in flight."""
+        await super().stop()
+        if self._drives:
+            await asyncio.gather(*self._drives, return_exceptions=True)
+
     async def _tick(self) -> int:
         # 게이트 3 후속 — apply chat answers BEFORE driving. A queued answer flips
         # its run RUNNING → OPEN, so applying first lets the same tick pick the
         # run up instead of waiting a full interval to notice it.
         answered = await self.apply_queued_answers()
         claimed = await self.claim_once()
-        driven = await self.drive_once()
-        return answered + claimed + driven
+        started = len(await self._start_drives())
+        return answered + claimed + started
 
     async def apply_queued_answers(self) -> int:
         """Apply ``needs_you`` answers a chat tap queued. Returns the count.
@@ -394,24 +410,61 @@ class AgentWorker(BaseWorker):
            commits at every turn boundary so NO connection is held across the
            executor await. ``claimed_at`` is cleared on every drive exit.
         """
+        drives = await self._start_drives()
+        if not drives:
+            return 0
+        results = await asyncio.gather(*drives, return_exceptions=True)
+        return sum(1 for r in results if r is True)
+
+    async def _start_drives(self) -> list[asyncio.Task[bool]]:
+        """Reap, claim only as many runs as there are free drive slots, and start
+        each as its own task. Returns the started tasks without awaiting them.
+
+        A run with no free slot is never claimed, so it stays OPEN for a later
+        tick instead of sitting RUNNING while it waits.
+        """
         execution = self._execution
         if execution is None:
-            return 0
+            return []
         await self._reap_stale_claims()
         await self._reap_terminal_run_workspaces()
-        claimed = await self._claim_runs_for_drive()
-        count = 0
+        free = self.drive_concurrency - len(self._drives)
+        if free <= 0:
+            return []
+        claimed = await self._claim_runs_for_drive(limit=min(self._cfg.batch_size, free))
+        tasks: list[asyncio.Task[bool]] = []
         for run_id, workspace_id in claimed:
+            task = asyncio.create_task(
+                self._drive_task(run_id, workspace_id, execution), name=f"agent_drive_{run_id}"
+            )
+            self._drives.add(task)
+            task.add_done_callback(self._drives.discard)
+            tasks.append(task)
+        return tasks
+
+    async def _drive_task(
+        self, run_id: uuid.UUID, workspace_id: uuid.UUID, execution: AgentExecutionDeps
+    ) -> bool:
+        """One drive, isolated: its own task (own context, so its workspace scope
+        cannot leak into another drive) and its own failure/cancel handling."""
+        try:
             # Everything below belongs to exactly ONE workspace, so publish it:
             # layer 2 (the ORM auto-filter) and layer 3 (the RLS GUC, re-armed
             # per transaction by the ``after_begin`` listener) both engage for
             # the drive AND for the claim-clearing / failure paths that follow
-            # it. The scope is released on the way out — including on a crash —
-            # so the next claim above is unscoped again.
+            # it. The scope is released on the way out, including on a crash.
             with workspace_scope(workspace_id):
-                if await self._drive_one_claimed(run_id, execution):
-                    count += 1
-        return count
+                return await self._drive_one_claimed(run_id, execution)
+        except asyncio.CancelledError:
+            # Cancelled mid-drive: give the claim back so the run is not stranded RUNNING.
+            with workspace_scope(workspace_id):
+                await asyncio.shield(
+                    self._release_claim_to_open(run_id, reason="drive cancelled; claim released")
+                )
+            raise
+        except Exception:  # noqa: BLE001 - one drive's failure never reaches another
+            logger.exception("agent_worker_drive_task_failed", run_id=str(run_id))
+            return False
 
     async def _drive_one_claimed(self, run_id: uuid.UUID, execution: AgentExecutionDeps) -> bool:
         """One claimed run. Returns True when it was genuinely DRIVEN.
@@ -662,7 +715,9 @@ class AgentWorker(BaseWorker):
             await session.commit()
         return len(reaped) + len(reaped_products) + len(reaped_checkpoints)
 
-    async def _claim_runs_for_drive(self) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    async def _claim_runs_for_drive(
+        self, *, limit: int | None = None
+    ) -> list[tuple[uuid.UUID, uuid.UUID]]:
         """Atomically claim a batch of OPEN runs → RUNNING + stamp the claim.
 
         One transaction: ``SELECT id, workspace_id … FOR UPDATE SKIP LOCKED``
@@ -679,7 +734,7 @@ class AgentWorker(BaseWorker):
             select(ExecutionRun.id, ExecutionRun.workspace_id)
             .where(ExecutionRun.status == RunStatus.OPEN)
             .order_by(ExecutionRun.created_at.asc())
-            .limit(self._cfg.batch_size)
+            .limit(self._cfg.batch_size if limit is None else limit)
             .with_for_update(skip_locked=True)
         )
         claimed: list[tuple[uuid.UUID, uuid.UUID]] = []

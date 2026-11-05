@@ -183,6 +183,8 @@ class Settings(BaseSettings):
     sandbox_image: str = "bsvibe-sandbox:latest"
     sandbox_idle_reap_seconds: int = 1800
     sandbox_max_concurrent: int = 2
+    # Runs the agent worker drives at once; 0 = same as ``sandbox_max_concurrent``.
+    agent_drive_concurrency: int = 0
     # Explicit ``--user`` for the per-project sandbox container. The worker
     # writes the run worktree as root (uid 0), so the sandbox image's default
     # uid-1000 user cannot write ``/work`` — set this to ``"0:0"`` to match.
