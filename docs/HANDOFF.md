@@ -21,7 +21,7 @@
 
 ---
 
-## §0 — One line: **Five of the last six issue runs passed on round 1; what the founder sends a running run now reaches it**
+## §0 — One line: **Seven of the last nine issue runs passed on round 1; what the founder sends a running run now reaches it**
 
 10-30 → 11-04. Harness work by hand (§Ⅰ), each fix proven on the next real issue run. The round-1 pass rate is now
 read from the product (`bsvibe_runs_first_round_pass_rate`, run list / detail `passed_on_round`).
@@ -38,15 +38,21 @@ read from the product (`bsvibe_runs_first_round_pass_rate`, run list / detail `p
 | #1294 | **the run inbox** — intake never writes `run.payload` for an issue edit / issue comment; it appends a `founder_inbox` row to `execution_run_activities` (insert-only), and the drive — the payload's one writer — applies new rows at drive start and between every turn. A trusted comment on an issue with an unfinished run goes to that run, not a second run | #1296, #1299 |
 | #1298 | the drive's "done" branch reads the inbox **first** (before nudges, reminders, verification) — an executor works in ONE long turn, this is its only chance to hear a mid-run message | #1299 — edit R9 + comment R10 in the ledger |
 | #1301 | a malformed inbox row is skipped and logged, never stops the drive (each row applied on a copy) | — |
-| #1304 | the ledger judge also reads the helpers a cited test **imports from other files** (Python `from`/`import`, JS/TS `import { }` / `import * as`; unused imports skipped; ≤ 3,000 chars, 20 names) | — |
+| #1304 | the ledger judge also reads the helpers a cited test **imports from other files** (Python `from`/`import`, JS/TS `import { }` / `import * as`; unused imports skipped; ≤ 3,000 chars, 20 names) | #1306 — ledger 5/5, PR said `Closes` |
+| #1305 | **the pre-verify evidence reminder reads the diff** (`EvidenceReminder`): an entry whose cited paths are none changed and that cites no test, or a deferral without a note, is asked about with the reason; asked again whenever the set of gaps changes | — |
+| #1311 | …and checks that each cited `file::name` test exists (`cited_tests`) — verification rejects a missing name (#1272) | #1308's round-1 loss |
 
 Issues worked through BSVibe: #1279 (change footprint on the card + report, PR #1280, and its worktree-count follow-up
 #1282 by hand), #1046 (already done by #1047 — the run added one migration test, PR #1284), #1287 (ledger verdict on
 the Safe Mode card, PR #1288), #1290 (verification rounds + first-round pass rate, PR #1291), #1293 (pass rate on the
 product screen, PR #1295), #1296 (inbox lines in the run timeline, PR #1297), #1299 (PR comments through the inbox,
-PR #1300), #1302 (a run re-opened by the founder's message denies its pending Safe Mode cards, PR #1303).
+PR #1300), #1302 (a run re-opened by the founder's message denies its pending Safe Mode cards, PR #1303), #1306
+(MCP pass-rate `product_id` + the "fix it again" re-open clears cards too, PR #1307 — the first `Closes`), #1308
+(verification-quality metrics `bsvibe_runs_verification_quality` / REST `/runs/verification-quality`, PR #1310), #1309
+(leftovers recorded on the verification, `result["leftovers_excluded"]`).
 Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #1287 **1** · #1290 **1** · #1293 2 then 1 ·
-#1296 **1** · #1299 **1** · #1302 **1**.
+#1296 **1** · #1299 **1** · #1302 **1** · #1306 **1** · #1308 2 (a cited test name its file did not define → #1311) ·
+#1309 **1**.
 
 ## §0-b — previous session (10-26 → 10-30): **Verification now checks what was asked, the way CI checks it — #1255 passed in round 1; real issue runs found and closed nine harness holes**
 
@@ -107,6 +113,7 @@ mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 and `--stor
 | **R4 is report-only** (10-28) | A guard test that passes with the change taken away is marked, never failed — regression tests of existing behaviour pass legitimately. Gate it only after its false-positive rate is measured (R6) |
 | **Harness issues are filed record-only, fixed by hand** (10-29) | A verification-harness defect found on a run goes up with the binding filter paused and is implemented here; a product defect goes up as a normal issue for BSVibe |
 | **The run payload has one writer: the drive** (11-03) | Anything sent to a running run (issue edit, issue comment, PR comment) goes to its inbox (`run_inbox.post_to_inbox`); never write `run.payload` from intake or any path that runs beside a live drive |
+| **Harness items run through BSVibe too** (11-04) | "handoff 내용들을 bsvibe로 돌려서 표본을 늘려보자" — the HANDOFF §Ⅲ items go up as issues for BSVibe, which also grows the round-1 sample. Supersedes "Reliability work by hand" (10-26) for new items; a harness hole a run exposes may still be fixed by hand when it blocks the loop (#1311) |
 | **Leftovers are excluded, not deleted** (10-30) | What verification leaves in a checkout goes into that checkout's `.git/info/exclude`; the model-derived layer 2 of #1267 waits until layer 1's logs have been seen |
 
 ## §Ⅱ — What this session found that the issues had wrong
@@ -292,24 +299,29 @@ mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 and `--stor
   message re-opened the run (fixed by #1303: the re-open denies it with a "superseded" reason).
 * **A comment on an issue with a live run used to queue a second run** (#1279's `b9d0039c`, discarded by hand) —
   fixed by #1294.
+* **The agent worker drives runs one at a time.** `AgentWorker.drive_once` walks its batch serially; "3 concurrent
+  runs" is a cap on open runs, not parallel execution — #1309's run waited 23 min for #1308's to finish (11-04).
+* **Every ledger-only round had a cause the loop could read first**: an unchanged cited path (#1046 re-run → #1305),
+  a cited test name the file did not define (#1308 → #1311).
 * **I picked an issue that was already done (#1046 → #1047).** Check `git log -S` / the code on main before filing
   or re-running an issue.
 
 ## §Ⅲ — Next
 
-1. **Keep running real issues**; read `bsvibe_runs_first_round_pass_rate` instead of counting log lines.
-2. **R5 independent reviewer**, **R6 metrics** beyond the pass rate (rounds per run, unclear / vacuous rates) — open.
-3. **"Evidence missing" cost rounds** — #1046's run failed twice on `ledger_missing` alone. Cause: the pre-verify
-   reminder checked only items with no entry, and asked once per drive; verification also marks an entry whose cited
-   paths are not in the diff (and that cites no test). Fixed by the PR after #1304 (`EvidenceReminder`); watch the
-   next runs for a `ledger_missing`-only failure.
-4. **#1267 layer 2** (the deriver names the stack's cache paths up front) — only after `verification_leftovers_excluded`
-   logs have been seen on real runs.
-5. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
+1. **Run the agent worker's drives concurrently** (up to the run cap) — the serial worker is the biggest limit on the
+   sample rate and on what a founder waits for.
+2. **Confirm `leftovers_excluded` reaches the DB** on a real run (the #1309 test reads the returned object, not the
+   stored row), then use it to decide #1267 layer 2.
+3. **R5 independent reviewer** (report-only first) — open.
+4. Read `bsvibe_runs_verification_quality` (avg rounds, unclear / vacuous rates, ledger-only failures) after each
+   batch of runs; tidy the private `verification_feedback._failed` import it uses.
+5. **#1267 layer 2** (the deriver names the stack's cache paths up front) — only after item 2's records have
+   accumulated on real runs.
+6. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
    (`docs/runbook/vault-to-postgres.md` §"A second box"). `/app/var/vault` may go now (kept until 10-29).
-6. **#930** — 2M tuning still has no sample.
-7. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap (code shipped by #1047) · #937 outside the repo.
-8. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md`, `ci-parity-checklist.md` (B failing-final,
+7. **#930** — 2M tuning still has no sample.
+8. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap (code shipped by #1047) · #937 outside the repo.
+9. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md`, `ci-parity-checklist.md` (B failing-final,
    D, E, F), `counterfactual-guard-checklist.md` (B, C), `intake-trust-by-repo-permission-checklist.md` (live items).
 
 ## §Ⅳ — Discipline that paid off
