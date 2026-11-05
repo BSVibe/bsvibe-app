@@ -42,9 +42,19 @@ class DerivedCommand:
     command: str
     kind: CommandKind = "quality"
     rationale: str = ""
+    #: Ledger commands (verbatim, as the request wrote them) this command is the repo's own
+    #: runnable form of. The ledger item is decided by this command's exit code.
+    covers: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {"command": self.command, "kind": self.kind, "rationale": self.rationale}
+        out: dict[str, Any] = {
+            "command": self.command,
+            "kind": self.kind,
+            "rationale": self.rationale,
+        }
+        if self.covers:
+            out["covers"] = list(self.covers)
+        return out
 
 
 @dataclass(frozen=True)
@@ -79,6 +89,16 @@ def _coerce_kind(raw: Any) -> CommandKind:
     return "quality"
 
 
+def _coerce_covers(raw: Any) -> tuple[str, ...]:
+    values = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+    out: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if text and text not in out:
+            out.append(text)
+    return tuple(out)
+
+
 def parse_derived_gate(raw: Any) -> DerivedGate:
     """Parse the LLM's derivation output tolerantly. Shape:
     ``{"applicable": bool, "commands": [{"command"|"cmd", "kind", "rationale"}]}``.
@@ -95,19 +115,29 @@ def parse_derived_gate(raw: Any) -> DerivedGate:
         # downgrade) unless the LLM explicitly asserted applicability.
         return DerivedGate(applicable=bool(raw.get("applicable", False)), commands=())
     commands: list[DerivedCommand] = []
-    seen: set[str] = set()
+    seen: dict[str, int] = {}
     for item in raw_commands:
         if not isinstance(item, dict):
             continue
         command = str(item.get("command") or item.get("cmd") or "").strip()
-        if not command or command in seen:
+        if not command:
             continue
-        seen.add(command)
+        covers = _coerce_covers(item.get("covers"))
+        if command in seen:
+            # The same command stands for several ledger commands: keep them all.
+            first = commands[seen[command]]
+            merged = (*first.covers, *(c for c in covers if c not in first.covers))
+            commands[seen[command]] = DerivedCommand(
+                command=first.command, kind=first.kind, rationale=first.rationale, covers=merged
+            )
+            continue
+        seen[command] = len(commands)
         commands.append(
             DerivedCommand(
                 command=command,
                 kind=_coerce_kind(item.get("kind")),
                 rationale=str(item.get("rationale") or "").strip(),
+                covers=covers,
             )
         )
     return DerivedGate(
@@ -175,9 +205,15 @@ _DERIVATION_SYSTEM_PROMPT = (
     "each needs evidence the agent cites and a judge who reads it. NEVER emit a command "
     "that checks a ledger item by text search (looking for a name, a word or a key in a "
     "file or a diff): it is a weaker copy of that check and fails on wording, not on "
-    "behaviour. A ledger item that asks for commands to pass has those commands run by the gate "
-    "itself (listed under 'Commands the gate itself runs'): do not emit them again. "
-    "Constraint commands are for what the intent says NOT to do.\n"
+    "behaviour. Constraint commands are for what the intent says NOT to do.\n"
+    "LEDGER COMMANDS, when given, are commands a ledger item requires to PASS, written as the "
+    "request wrote them. They are NOT run as written: the request does not say WHERE or HOW "
+    "this repo runs them (a package may live in a subdirectory, the CI may pin another tool "
+    "version). For each, emit the repo's own runnable form, grounded in the manifests / CI "
+    "(for example the same command prefixed `cd <package dir> && `), and set `covers` to the ledger "
+    "command VERBATIM. One command may cover several; this applies even when a product check "
+    "or another command is similar. If you cannot tell from the repo where or how to run one, "
+    "emit nothing for it - never guess: the item is then left unclear.\n"
     "PREVIOUS ROUND, when given, lists the commands the previous verification of this "
     "same work ran. Re-emit each of them VERBATIM unless the change since then made it "
     "wrong (a path renamed or removed); never make a command that passed stricter. Add a "
@@ -203,7 +239,8 @@ _DERIVATION_SYSTEM_PROMPT = (
     "rejects, relaxes or replaces a check the intent suggests, NEVER emit that check — emit what "
     "the founder chose instead, or nothing if they chose nothing.\\n"
     'Output ONLY a JSON object: {"applicable": bool, "commands": [ {"command": '
-    'str, "kind": "quality"|"test"|"surface", "rationale": str} ]}. No prose.'
+    'str, "kind": "quality"|"test"|"surface", "rationale": str, "covers": [str] (optional, '
+    "ledger commands only)} ]}. No prose."
 )
 
 
@@ -297,7 +334,7 @@ def derivation_planner_messages(
         else ""
     )
     ledger_commands_block = (
-        "\n\nCommands the gate itself runs for ledger items (do not emit these):\n"
+        "\n\nLedger commands (emit the repo's runnable form of each, with `covers`):\n"
         + "\n".join(f"- {c}" for c in ledger_commands)
         if ledger_commands
         else ""

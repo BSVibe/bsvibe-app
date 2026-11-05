@@ -61,7 +61,6 @@ from backend.workflow.domain.gate_derivation import (
     surface_exercised,
 )
 from backend.workflow.domain.ledger_commands import (
-    LEDGER_COMMAND_KIND,
     command_verdicts,
     ledger_command_plan,
     plan_commands,
@@ -1344,25 +1343,23 @@ class VerificationService:
             # The ledger checks the request's items; the deriver must not re-check them by
             # text search, and must not re-word last round's commands (#1275).
             **({"ledger_items": ledger} if (ledger := text_checked_items) else {}),
-            # An item that asks for commands to pass has them run below, by the gate itself.
+            # An item that asks for commands to pass gets the repo's runnable form of them back,
+            # tagged ``covers``, and the item is decided from the exit codes of those.
             **({"ledger_commands": ledger_commands} if ledger_commands else {}),
             **({"previous_commands": previous} if previous else {}),
         )
         if isinstance(gate, DerivedGateFailed):
             return gate
         derived = gate.applicable and not gate.is_empty
-        commands: list[tuple[str, str]] = (
-            [(c.command, c.kind) for c in gate.commands] if derived else []
-        )
+        # A ledger command is never run as the request wrote it (its working directory and
+        # runner are the repo's to say): only the deriver's runnable form, tagged ``covers``,
+        # is. Kept even when the rest of the gate is not applicable.
+        run_list = [c for c in gate.commands if derived or (c.covers and ledger_commands)]
+        commands: list[tuple[str, str]] = [(c.command, c.kind) for c in run_list]
+        covers = {c.command: list(c.covers) for c in run_list if c.covers}
         # The product's floor runs beside whatever was derived — including nothing: it is
         # what the PRODUCT requires of every change, not something a model must remember.
         commands.extend((command, "floor") for command in floor)
-        # A ledger item that asks for commands to pass is decided by their exit codes, so the
-        # gate runs them itself — beside whatever was derived, once each.
-        have = {command for command, _ in commands}
-        commands.extend(
-            (command, LEDGER_COMMAND_KIND) for command in ledger_commands if command not in have
-        )
         if not commands:
             return DerivedGateOk(
                 {
@@ -1379,6 +1376,9 @@ class VerificationService:
             venv_bin=f"{box.workspace_mount}/.venv/bin" if venv_ready else None,
             timeout_s=get_settings().verify_gate_command_timeout_s,
         )
+        for result in results:
+            if tagged := covers.get(str(result.get("command"))):
+                result["covers"] = tagged
         passed = not any_failed(results)
         return DerivedGateOk(
             {
