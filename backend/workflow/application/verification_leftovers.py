@@ -22,8 +22,10 @@ everything as it was. Verification itself is never failed or delayed by this.
 from __future__ import annotations
 
 import shlex
+from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 
@@ -35,6 +37,27 @@ _GIT_TIMEOUT_S = 30.0
 #: Marks the lines this module owns, so ``keep`` never removes a line someone else wrote.
 _MARK = "# bsvibe: left by verification"
 _GLOB_CHARS = ("\\", "*", "?", "[")
+#: How many top-level directories one verification's record names.
+_RECORDED_DIRS = 5
+
+
+class LeftoversReport:
+    """What one verification's leftovers guard excluded — for the verification's own record."""
+
+    def __init__(self) -> None:
+        self.entries: set[str] = set()
+
+    def as_result(self) -> dict[str, Any] | None:
+        """``{"count", "dirs": [{"path", "count"}]}``; ``None`` when nothing was excluded."""
+        if not self.entries:
+            return None
+        # ``dir/`` and ``dir/file`` both belong to ``dir``; a file at the root has no directory.
+        tops = Counter(e.split("/", 1)[0] if "/" in e else "." for e in self.entries)
+        ranked = sorted(tops.items(), key=lambda kv: (-kv[1], kv[0]))[:_RECORDED_DIRS]
+        return {
+            "count": len(self.entries),
+            "dirs": [{"path": path, "count": n} for path, n in ranked],
+        }
 
 
 async def _sh(box: SandboxSession, command: str) -> tuple[int | None, str]:
@@ -116,10 +139,14 @@ async def _exclude(box: SandboxSession, entries: set[str]) -> None:
 @asynccontextmanager
 async def leftovers_excluded(
     box: SandboxSession, *, keep: Sequence[str] = ()
-) -> AsyncIterator[None]:
-    """Around verification: what it leaves behind is excluded from the run's commits."""
+) -> AsyncIterator[LeftoversReport]:
+    """Around verification: what it leaves behind is excluded from the run's commits.
+
+    Yields a :class:`LeftoversReport` that, once the block exits, says what was excluded.
+    """
+    report = LeftoversReport()
     if getattr(box, "runs_in_place", False):
-        yield
+        yield report
         return
     before: set[str] | None = None
     try:
@@ -129,7 +156,7 @@ async def leftovers_excluded(
     except Exception:  # noqa: BLE001 — never in verification's way
         logger.warning("verification_leftovers_snapshot_failed", exc_info=True)
     try:
-        yield
+        yield report
     finally:
         if before is not None:
             try:
@@ -138,6 +165,7 @@ async def leftovers_excluded(
                     new = after - before
                     if new:
                         await _exclude(box, new)
+                        report.entries = set(new)
             except Exception:  # noqa: BLE001 — never in verification's way
                 logger.warning("verification_leftovers_exclude_failed", exc_info=True)
 

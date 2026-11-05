@@ -145,6 +145,9 @@ class RunVerification(BaseModel):
     requirements_deferred: int | None = None
     # The ledger's items, one per row; empty for a run that has no ledger.
     requirements: list[RunRequirement] = []
+    # What this verification's commands left in the checkout and BSVibe kept out of the run's
+    # commits: ``{"count", "dirs": [{"path", "count"}]}``; ``None`` when nothing was left.
+    leftovers_excluded: dict[str, Any] | None = None
 
 
 class RunActivity(BaseModel):
