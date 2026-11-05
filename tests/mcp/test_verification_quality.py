@@ -280,3 +280,82 @@ async def test_rest_and_mcp_give_the_same_values(db, workspace_id, registry, see
     assert await _rest(db, workspace_id, f"?product_id={mine}") == await _mcp(
         db, registry, workspace_id, {"product_id": str(mine)}
     )
+
+
+def _left(**dirs: int) -> dict[str, Any]:
+    return {
+        "leftovers_excluded": {
+            "count": sum(dirs.values()),
+            "dirs": [{"path": p, "count": n} for p, n in dirs.items()],
+        }
+    }
+
+
+async def _seed_leftovers(db, workspace_id, product_id) -> None:
+    await _seed_run(
+        db,
+        workspace_id,
+        [
+            (F, {**_result(_req("missing")), **_left(pycache=3, node_modules=2)}),
+            (P, _result(_req("done"))),
+        ],
+        product_id=product_id,
+    )
+    await _seed_run(
+        db,
+        workspace_id,
+        [(P, {**_result(_req("done")), **_left(pycache=1, dist=4)})],
+        product_id=product_id,
+        age=1,
+    )
+    await _seed_run(db, workspace_id, [(P, _result(_req("done")))], product_id=product_id, age=2)
+
+
+async def test_leftover_rounds_and_dirs_match_a_hand_count(
+    db, workspace_id, registry, seeded
+) -> None:
+    mine = uuid.uuid4()
+    await _seed_leftovers(db, workspace_id, mine)
+
+    out = await _mcp(db, registry, workspace_id, {"product_id": str(mine)})
+
+    # 2 of 4 rounds left files; pycache 3+1, dist 4, node_modules 2 (ties by path)
+    assert (out["rounds_with_leftovers"], out["verification_rounds"]) == (2, 4)
+    assert out["leftover_dirs"] == [
+        {"path": "dist", "count": 4},
+        {"path": "pycache", "count": 4},
+        {"path": "node_modules", "count": 2},
+    ]
+    assert await _rest(db, workspace_id, f"?product_id={mine}") == out
+
+
+async def test_leftover_dirs_keep_the_ten_biggest(db, workspace_id, registry, seeded) -> None:
+    dirs = {f"d{i:02d}": i + 1 for i in range(12)}
+    await _seed_run(db, workspace_id, [(P, {**_result(_req("done")), **_left(**dirs)})])
+
+    out = await _mcp(db, registry, workspace_id)
+
+    assert [d["path"] for d in out["leftover_dirs"]] == [f"d{i:02d}" for i in range(11, 1, -1)]
+
+
+async def test_leftovers_of_other_workspaces_and_products_are_not_counted(
+    db, workspace_id, registry, seeded
+) -> None:
+    other = uuid.uuid4()
+    async with scoped_session(db, other) as s:
+        s.add(WorkspaceRow(id=other, name="other"))
+        await s.commit()
+    mine, theirs = uuid.uuid4(), uuid.uuid4()
+    await _seed_run(db, workspace_id, [(P, {**_result(), **_left(mine_dir=1)})], product_id=mine)
+    await _seed_run(
+        db, workspace_id, [(P, {**_result(), **_left(theirs_dir=5)})], product_id=theirs, age=1
+    )
+    await _seed_run(db, other, [(P, {**_result(), **_left(other_ws=7)})], age=2)
+
+    scoped = await _mcp(db, registry, workspace_id, {"product_id": str(mine)})
+    whole = await _mcp(db, registry, workspace_id)
+
+    assert scoped["rounds_with_leftovers"] == 1
+    assert scoped["leftover_dirs"] == [{"path": "mine_dir", "count": 1}]
+    assert whole["rounds_with_leftovers"] == 2
+    assert {d["path"] for d in whole["leftover_dirs"]} == {"mine_dir", "theirs_dir"}
