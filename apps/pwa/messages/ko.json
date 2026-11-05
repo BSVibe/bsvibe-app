@@ -1098,6 +1098,7 @@
     },
     "noVerification": "아직 이 실행에 대한 검증 기록이 없어요.",
     "passedOnRound": "{round}번째 검증에서 통과했어요",
+    "leftoversExcluded": "검증이 남긴 파일 {count}개를 커밋에서 뺐습니다",
     "checks": {
       "failedGroup": "실패한 검사",
       "productGroup": "제품 검사",

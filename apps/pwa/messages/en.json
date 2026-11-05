@@ -1098,6 +1098,7 @@
     },
     "noVerification": "No verification recorded for this run yet.",
     "passedOnRound": "Passed on verification {round}",
+    "leftoversExcluded": "Kept {count} files left behind by verification out of the commit",
     "checks": {
       "failedGroup": "Failed checks",
       "productGroup": "Product checks",
