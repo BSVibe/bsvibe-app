@@ -49,7 +49,6 @@ from backend.workflow.application.requirements_ledger import (
     gate_facts,
     judge_ledger,
     latest_ledger_rows,
-    live_ledger_texts,
     run_requirements,
 )
 from backend.workflow.application.sandbox_provisioning import ensure_sandbox_ready
@@ -60,6 +59,12 @@ from backend.workflow.domain.gate_derivation import (
     founder_decisions_from_payload,
     parse_derived_gate,
     surface_exercised,
+)
+from backend.workflow.domain.ledger_commands import (
+    LEDGER_COMMAND_KIND,
+    command_verdicts,
+    ledger_command_plan,
+    plan_commands,
 )
 from backend.workflow.domain.outcome_demonstration import (
     DemonstrationOutcome,
@@ -1015,6 +1020,10 @@ class VerificationService:
             prior_rows=prior,
             judge=judge,
             missing_tests=cited_tests(box),
+            command_verdicts=command_verdicts(
+                ledger_command_plan(requirements),
+                [*((derived_gate or {}).get("commands") or []), *command_results],
+            ),
         )
         if judge and baseline:
             # R4, report-only: does each cited guard test fail with the change taken away?
@@ -1222,6 +1231,7 @@ class VerificationService:
         product_checks: tuple[str, ...] = (),
         ledger_items: tuple[str, ...] = (),
         previous_commands: tuple[str, ...] = (),
+        ledger_commands: tuple[str, ...] = (),
     ) -> DerivedGate | DerivedGateFailed:
         """Ask the independent deriver for this repo's verification commands,
         grounded in its manifests. Bounded — a hung executor CLI must never stall
@@ -1249,6 +1259,7 @@ class VerificationService:
                         product_checks=product_checks,
                         ledger_items=ledger_items,
                         previous_commands=previous_commands,
+                        ledger_commands=ledger_commands,
                     ),
                 ),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
@@ -1314,6 +1325,13 @@ class VerificationService:
         intent = str(payload.get("intent_text") or payload.get("text") or "").strip()
         manifests = await self._read_repo_manifests(box)
         ci_declarations = await self._read_ci_declarations(box)
+        command_items = ledger_command_plan(run_requirements(run))
+        ledger_commands = plan_commands(command_items)
+        text_checked_items = tuple(
+            str(i["text"])
+            for i in run_requirements(run)
+            if not i.get("withdrawn") and str(i["id"]) not in command_items
+        )
         gate = await self._author_derived_gate(
             run,
             intent,
@@ -1325,7 +1343,9 @@ class VerificationService:
             **({"product_checks": (*floor, *final)} if floor or final else {}),
             # The ledger checks the request's items; the deriver must not re-check them by
             # text search, and must not re-word last round's commands (#1275).
-            **({"ledger_items": ledger} if (ledger := live_ledger_texts(run)) else {}),
+            **({"ledger_items": ledger} if (ledger := text_checked_items) else {}),
+            # An item that asks for commands to pass has them run below, by the gate itself.
+            **({"ledger_commands": ledger_commands} if ledger_commands else {}),
             **({"previous_commands": previous} if previous else {}),
         )
         if isinstance(gate, DerivedGateFailed):
@@ -1337,6 +1357,12 @@ class VerificationService:
         # The product's floor runs beside whatever was derived — including nothing: it is
         # what the PRODUCT requires of every change, not something a model must remember.
         commands.extend((command, "floor") for command in floor)
+        # A ledger item that asks for commands to pass is decided by their exit codes, so the
+        # gate runs them itself — beside whatever was derived, once each.
+        have = {command for command, _ in commands}
+        commands.extend(
+            (command, LEDGER_COMMAND_KIND) for command in ledger_commands if command not in have
+        )
         if not commands:
             return DerivedGateOk(
                 {

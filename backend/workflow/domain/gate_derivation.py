@@ -175,7 +175,9 @@ _DERIVATION_SYSTEM_PROMPT = (
     "each needs evidence the agent cites and a judge who reads it. NEVER emit a command "
     "that checks a ledger item by text search (looking for a name, a word or a key in a "
     "file or a diff): it is a weaker copy of that check and fails on wording, not on "
-    "behaviour. Constraint commands are for what the intent says NOT to do.\n"
+    "behaviour. A ledger item that asks for commands to pass has those commands run by the gate "
+    "itself (listed under 'Commands the gate itself runs'): do not emit them again. "
+    "Constraint commands are for what the intent says NOT to do.\n"
     "PREVIOUS ROUND, when given, lists the commands the previous verification of this "
     "same work ran. Re-emit each of them VERBATIM unless the change since then made it "
     "wrong (a path renamed or removed); never make a command that passed stricter. Add a "
@@ -233,6 +235,7 @@ def derivation_planner_messages(
     product_checks: Sequence[str] = (),
     ledger_items: Sequence[str] = (),
     previous_commands: Sequence[str] = (),
+    ledger_commands: Sequence[str] = (),
 ) -> list[dict[str, str]]:
     """Build the (system, user) message pair grounding the deriver in the repo.
 
@@ -293,6 +296,12 @@ def derivation_planner_messages(
         if ledger_items
         else ""
     )
+    ledger_commands_block = (
+        "\n\nCommands the gate itself runs for ledger items (do not emit these):\n"
+        + "\n".join(f"- {c}" for c in ledger_commands)
+        if ledger_commands
+        else ""
+    )
     previous_block = (
         "\n\nCommands the previous verification ran (re-emit unless the change made one "
         "wrong):\n" + "\n".join(f"- {c}" for c in previous_commands)
@@ -308,6 +317,7 @@ def derivation_planner_messages(
         f"{ci_block}"
         f"{product_block}"
         f"{ledger_block}"
+        f"{ledger_commands_block}"
         f"{previous_block}"
     )
     return [
