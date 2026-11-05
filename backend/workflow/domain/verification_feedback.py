@@ -97,7 +97,7 @@ def _command_block(cmd: Mapping[str, Any], *, label: str) -> str:
     return "\n".join(lines)
 
 
-def _failed(commands: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+def failed_commands(commands: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """Commands that FAILED, by either vocabulary.
 
     ``derived_gate`` commands carry ``status``; the agent's own attestation
@@ -157,7 +157,7 @@ def _sections(result: Mapping[str, Any]) -> list[str]:
     #    why it goes first and why nothing else may push it out of the budget.
     gate = result.get("derived_gate")
     if isinstance(gate, Mapping):
-        for cmd in _failed(gate.get("commands") or []):
+        for cmd in failed_commands(gate.get("commands") or []):
             sections.append(_command_block(cmd, label="GATE COMMAND FAILED"))
         if result.get("gate_expected") and not gate.get("commands"):
             sections.append(GATE_DERIVED_EMPTY)
@@ -191,7 +191,7 @@ def _sections(result: Mapping[str, Any]) -> list[str]:
 
     # 5. The agent's own attestation, LAST — advisory once the derived gate has
     #    spoken, and the block whose verbosity used to bury everything above it.
-    for cmd in _failed(result.get("command_results") or []):
+    for cmd in failed_commands(result.get("command_results") or []):
         sections.append(_command_block(cmd, label="YOUR OWN DECLARED COMMAND FAILED"))
 
     return sections
@@ -213,7 +213,7 @@ def render_verification_failure(result: Mapping[str, Any], *, budget: int = FEED
     gate_commands = gate.get("commands") or [] if isinstance(gate, Mapping) else []
     declared = result.get("command_results") or []
     total = len(gate_commands) + len(declared)
-    failed = len(_failed(gate_commands)) + len(_failed(declared))
+    failed = len(failed_commands(gate_commands)) + len(failed_commands(declared))
     note = ""
     if total and failed < total:
         note = f"({total - failed} other command(s) passed; their output is omitted.)"
@@ -229,7 +229,10 @@ def failure_signature(result: Mapping[str, Any]) -> tuple[Any, ...]:
     """
     gate = result.get("derived_gate")
     gate_commands = gate.get("commands") or [] if isinstance(gate, Mapping) else []
-    failed = [*_failed(gate_commands), *_failed(result.get("command_results") or [])]
+    failed = [
+        *failed_commands(gate_commands),
+        *failed_commands(result.get("command_results") or []),
+    ]
     if not failed:
         return ("text", render_verification_failure(result))
     return tuple((c.get("command"), c.get("exit_code")) for c in failed)
@@ -239,7 +242,7 @@ def render_failed_commands(
     commands: Sequence[Mapping[str, Any]], *, budget: int = FEEDBACK_BUDGET
 ) -> str:
     """The same contract for the in-place gate, which reports commands only."""
-    failed = _failed(commands)
+    failed = failed_commands(commands)
     sections = [_command_block(c, label="GATE COMMAND FAILED") for c in failed]
     note = ""
     if commands and len(failed) < len(commands):

@@ -14,6 +14,7 @@ creating exactly the drift that guard exists to catch.
 from __future__ import annotations
 
 import uuid
+from collections import Counter
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, NamedTuple
@@ -27,6 +28,7 @@ from backend.workflow.domain.repositories import (
     DeliverableRepository,
     RunRepository,
 )
+from backend.workflow.domain.verification_feedback import failed_commands
 from backend.workflow.domain.verified_deliverable import PARTIAL_DELIVERABLE_KIND
 from backend.workflow.infrastructure.db import (
     TERMINAL_RUN_STATUSES,
@@ -544,6 +546,9 @@ async def first_round_pass_rate(
     )
 
 
+_LEFTOVER_DIRS_SHOWN = 10
+
+
 def _ratio(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
@@ -567,6 +572,8 @@ class VerificationQuality(NamedTuple):
     counterfactual_vacuous_rate: float | None
     failed_rounds: int
     ledger_only_failures: int
+    rounds_with_leftovers: int
+    leftover_dirs: list[dict[str, Any]]
 
     def as_dict(self) -> dict[str, Any]:
         return self._asdict()
@@ -578,8 +585,6 @@ def _ledger_rows(result: Any) -> list[dict[str, Any]]:
 
 
 def _has_failed_command(result: Any) -> bool:
-    from backend.workflow.domain.verification_feedback import _failed  # noqa: PLC0415
-
     if not isinstance(result, dict):
         return False
     gate = result.get("derived_gate")
@@ -588,7 +593,7 @@ def _has_failed_command(result: Any) -> bool:
         *(gate_commands if isinstance(gate_commands, list) else []),
         *(result.get("command_results") or []),
     ]
-    return bool(_failed(commands))
+    return bool(failed_commands(commands))
 
 
 def _is_ledger_only_failure(row: Any) -> bool:
@@ -634,7 +639,8 @@ async def verification_quality(
             by_run.setdefault(row.run_id, []).append(row)
 
     rounds = sum(len(v) for v in by_run.values())
-    items = unclear = checked = vacuous = failed = ledger_only = 0
+    items = unclear = checked = vacuous = failed = ledger_only = leftover_rounds = 0
+    leftover_dirs: Counter[str] = Counter()
     for verifications in by_run.values():
         ledger = [
             r for r in _ledger_rows(verifications[-1].result) if r.get("status") != "withdrawn"
@@ -648,6 +654,14 @@ async def verification_quality(
             if v.outcome is VerificationOutcome.FAILED:
                 failed += 1
                 ledger_only += _is_ledger_only_failure(v)
+            blob = v.result.get("leftovers_excluded") if isinstance(v.result, dict) else None
+            if isinstance(blob, dict):
+                leftover_rounds += 1
+                for d in blob.get("dirs") or []:
+                    if isinstance(d, dict) and isinstance(d.get("path"), str):
+                        count = d.get("count")
+                        leftover_dirs[d["path"]] += count if isinstance(count, int) else 0
+    top_dirs = sorted(leftover_dirs.items(), key=lambda kv: (-kv[1], kv[0]))[:_LEFTOVER_DIRS_SHOWN]
     return VerificationQuality(
         runs_considered=len(run_ids),
         runs_verified=len(by_run),
@@ -661,6 +675,8 @@ async def verification_quality(
         counterfactual_vacuous_rate=_ratio(vacuous, checked),
         failed_rounds=failed,
         ledger_only_failures=ledger_only,
+        rounds_with_leftovers=leftover_rounds,
+        leftover_dirs=[{"path": path, "count": n} for path, n in top_dirs],
     )
 
 
