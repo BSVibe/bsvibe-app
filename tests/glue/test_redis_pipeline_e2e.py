@@ -29,6 +29,7 @@ real reachable Redis at ``settings.redis_url`` (mirrors PR #53's
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -361,8 +362,17 @@ async def test_full_direct_path_flows_via_redis(
     #    Deliverable + DeliveryEvent + producer XADD on ``deliver`` AND ``settle``.
     deps = _execution_deps(tmp_path, redis_client=redis_client, settings=_REDIS_SETTINGS)
     agent = AgentWorker(session_factory=sf, execution=deps)
+
+    async def _tick_and_finish_drives() -> int:
+        # ``_tick`` starts drives and returns; wait for them so the run is terminal.
+        n = await agent._tick()
+        await asyncio.gather(*list(agent._drives))
+        return n
+
     assert (
-        await _drain_stream(consumer, stream=STREAM_AGENT, group="agent_worker", tick=agent._tick)
+        await _drain_stream(
+            consumer, stream=STREAM_AGENT, group="agent_worker", tick=_tick_and_finish_drives
+        )
         >= 1
     )
     async with sf() as s, workspace_session_scope(s, workspace_id):
