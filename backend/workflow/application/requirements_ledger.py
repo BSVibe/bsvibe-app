@@ -408,10 +408,18 @@ async def judge_ledger(
     prior_rows: Sequence[Mapping[str, Any]] = (),
     judge: bool = True,
     missing_tests: MissingTests | None = None,
+    command_verdicts: Mapping[str, tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Verdict rows. ``judge=False`` (another check already failed) leaves grounded rows
-    ``pending`` — the run fails anyway, and judging work that is about to change is waste."""
+    ``pending`` — the run fails anyway, and judging work that is about to change is waste.
+
+    ``command_verdicts`` maps an item that asks for commands to pass to ``(status, note)``
+    from their exit codes: that decides the item whatever evidence the agent cited."""
     rows = check_ledger(requirements, evidence, facts)
+    for row in rows:
+        verdict = (command_verdicts or {}).get(str(row["id"]))
+        if verdict is not None and row["status"] not in {"withdrawn", "noted"}:
+            row["status"], row["note"] = verdict
     prior = {
         (str(r.get("id")), str(r.get("excerpt_hash"))): r
         for r in prior_rows
