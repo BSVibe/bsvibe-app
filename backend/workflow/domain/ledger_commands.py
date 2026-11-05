@@ -112,6 +112,34 @@ def plan_commands(plan: Mapping[str, LedgerCommands]) -> tuple[str, ...]:
     return tuple(out)
 
 
+#: Launchers and options that say HOW a command is started, not WHAT it is.
+_LAUNCHERS = frozenset(
+    {"npx", "pnpm", "npm", "yarn", "bun", "bunx", "uv", "run", "exec", "python", "python3", "-m"}
+)
+_LAUNCH_OPTIONS = frozenset({"--yes", "-y"})
+
+
+def _core_words(command: str) -> list[str]:
+    words: list[str] = []
+    for token in command.split():
+        if token in _LAUNCH_OPTIONS:
+            continue
+        if token.partition("@")[0] in _LAUNCHERS:
+            continue
+        words.append(token)
+    return words
+
+
+def covers_command(derived: str, ledger_command: str) -> bool:
+    """Whether the runnable form ``derived`` carries the substance of ``ledger_command``.
+
+    The ledger command minus its launcher (``npx``, ``pnpm``, ``uv run`` …), version (``@9``)
+    and ``--yes`` must appear, in order, among the words of the runnable form."""
+    core = _core_words(ledger_command) or ledger_command.split()
+    remaining = iter(derived.split())
+    return all(word in remaining for word in core)
+
+
 def command_verdict(
     required: LedgerCommands, results: Sequence[Mapping[str, object]]
 ) -> tuple[str, str]:
@@ -119,7 +147,9 @@ def command_verdict(
 
     Any command that ran and failed → ``rejected`` naming it; otherwise a command that did not
     run (tool missing, never executed) or could not be expanded → ``unclear`` with the reason;
-    otherwise ``done``."""
+    otherwise ``done``. When NO command found a runnable form and nothing was left
+    unexpanded, the gate has no evidence either way: the status is ``""`` (the judge's verdict
+    stands) and the note says so."""
     # A result counts for a ledger command only when the deriver tagged it as covering it.
     by_command: dict[str, Mapping[str, object]] = {}
     for r in results:
@@ -128,6 +158,14 @@ def command_verdict(
             prior = by_command.get(str(ledger_command))
             if prior is None or prior.get("status") == "passed":
                 by_command[str(ledger_command)] = r
+    if (
+        required.commands
+        and not required.unresolved
+        and not any(c in by_command for c in required.commands)
+    ):
+        return "", "게이트가 실행 형태를 찾지 못함: " + ", ".join(
+            f"`{c}`" for c in required.commands
+        )
     failed: list[str] = []
     not_run: list[str] = []
     for command in required.commands:
@@ -163,6 +201,7 @@ __all__ = [
     "command_verdict",
     "command_verdicts",
     "commands_required",
+    "covers_command",
     "ledger_command_plan",
     "plan_commands",
 ]

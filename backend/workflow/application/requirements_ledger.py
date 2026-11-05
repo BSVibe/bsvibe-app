@@ -416,10 +416,15 @@ async def judge_ledger(
     ``command_verdicts`` maps an item that asks for commands to pass to ``(status, note)``
     from their exit codes: that decides the item whatever evidence the agent cited."""
     rows = check_ledger(requirements, evidence, facts)
+    gate_notes: dict[str, str] = {}
     for row in rows:
         verdict = (command_verdicts or {}).get(str(row["id"]))
-        if verdict is not None and row["status"] not in {"withdrawn", "noted"}:
+        if verdict is None or row["status"] in {"withdrawn", "noted"}:
+            continue
+        if verdict[0]:
             row["status"], row["note"] = verdict
+        else:  # the gate found nothing to run: the judge decides, the note says why
+            gate_notes[str(row["id"])] = verdict[1]
     prior = {
         (str(r.get("id")), str(r.get("excerpt_hash"))): r
         for r in prior_rows
@@ -460,6 +465,9 @@ async def judge_ledger(
             row["note"] = reasoning
 
     await asyncio.gather(*(_one(r) for r in rows if r["status"] == "pending"))
+    for row in rows:
+        if extra := gate_notes.get(str(row["id"])):
+            row["note"] = f"{row['note']} | {extra}" if row.get("note") else extra
     return rows
 
 
