@@ -174,6 +174,57 @@ describe("Run-detail surface (Triggered)", () => {
     expect(within(region).getByText("Passed on verification 3")).toBeInTheDocument();
   });
 
+  describe("leftovers excluded", () => {
+    async function renderWith(leftovers: unknown) {
+      const detail = {
+        ...REVIEW_READY,
+        verification: {
+          id: "v3",
+          outcome: "passed",
+          created_at: NOW,
+          ...(leftovers === undefined ? {} : { leftovers_excluded: leftovers }),
+        },
+      } as RunDetailModel;
+      global.fetch = vi.fn(async () => json(detail)) as unknown as typeof fetch;
+      render(
+        <NextIntlClientProvider locale="ko" messages={koMessages}>
+          <RunDetail runId="rr" />
+        </NextIntlClientProvider>,
+      );
+      return screen.findByRole("region", { name: /어떻게 확인/ });
+    }
+
+    it("shows the count and directories when present", async () => {
+      const region = await renderWith({
+        count: 5,
+        dirs: [
+          { path: "dist", count: 3 },
+          { path: "coverage", count: 2 },
+        ],
+      });
+      expect(
+        within(region).getByText("검증이 남긴 파일 5개를 커밋에서 뺐습니다"),
+      ).toBeInTheDocument();
+      expect(within(region).getByText("dist · 3")).toBeInTheDocument();
+      expect(within(region).getByText("coverage · 2")).toBeInTheDocument();
+    });
+
+    it("draws nothing when absent", async () => {
+      const region = await renderWith(undefined);
+      expect(within(region).queryByText(/커밋에서 뺐습니다/)).not.toBeInTheDocument();
+    });
+
+    it("draws nothing when null", async () => {
+      const region = await renderWith(null);
+      expect(within(region).queryByText(/커밋에서 뺐습니다/)).not.toBeInTheDocument();
+    });
+
+    it("draws nothing when count is zero", async () => {
+      const region = await renderWith({ count: 0, dirs: [] });
+      expect(within(region).queryByText(/커밋에서 뺐습니다/)).not.toBeInTheDocument();
+    });
+  });
+
   it("says it in Korean too", async () => {
     const detail: RunDetailModel = { ...REVIEW_READY, verification_rounds: 3, passed_on_round: 3 };
     global.fetch = vi.fn(async () => json(detail)) as unknown as typeof fetch;
