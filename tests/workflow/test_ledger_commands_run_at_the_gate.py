@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import stat
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,11 @@ from backend.workflow.domain.gate_derivation import (
     DerivedGate,
     derivation_planner_messages,
 )
-from backend.workflow.domain.ledger_commands import command_verdict, commands_required
+from backend.workflow.domain.ledger_commands import (
+    command_verdict,
+    commands_required,
+    covers_command,
+)
 from backend.workflow.domain.requirements import REQUIREMENTS_KEY, build_ledger
 from backend.workflow.domain.verifier_contract import VerificationCheck, VerificationContract
 from backend.workflow.infrastructure.sandbox.noop_manager import NoopSandboxSession
@@ -74,6 +79,7 @@ async def _gate(
     failing: str = "",
     issue: str = _ISSUE,
     runnable_form: bool = True,
+    form: Callable[[str], str] = lambda c: f"cd apps/pwa && {c}",
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     """Run the server gate then the ledger verdict; return (deriver kwargs, gate blob, rows).
 
@@ -93,8 +99,7 @@ async def _gate(
         derived = [DerivedCommand(command="true")]
         if runnable_form:
             derived += [
-                DerivedCommand(command=f"cd apps/pwa && {c}", covers=(c,))
-                for c in kw.get("ledger_commands", ())
+                DerivedCommand(command=form(c), covers=(c,)) for c in kw.get("ledger_commands", ())
             ]
         return DerivedGate(applicable=True, commands=tuple(derived))
 
@@ -199,16 +204,53 @@ async def test_a_failing_command_rejects_the_item_by_name(
     assert blob["passed"] is False
 
 
-async def test_a_command_with_no_runnable_form_is_unclear_not_a_root_failure(
+async def test_a_command_with_no_runnable_form_is_never_run_at_the_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Run as written, ``npx`` fails at the repo root for ever - a failure the agent cannot fix.
-    A deriver that cannot place them leaves the item ``unclear`` and nothing runs at the root."""
+    A deriver that cannot place them runs nothing at the root, and the gate has no verdict:
+    the judge's stands, with a note saying the gate found nothing to run."""
     _, blob, rows = await _gate(tmp_path / "x", monkeypatch, runnable_form=False)
-    assert rows[0]["status"] == "unclear"
+    # The judge's path (``check_ledger`` finds no evidence), not a command verdict.
+    assert rows[0]["status"] == "missing"
+    assert "게이트가 실행 형태를 찾지 못함" in rows[0]["note"]
     assert "npx --yes pnpm@9 lint" in rows[0]["note"]
     assert [c["command"] for c in blob["commands"]] == ["true"]
     assert blob["passed"] is True
+
+
+async def test_a_non_command_span_leaves_the_judges_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue = "- [ ] `failed rounds` 가 0이면 통과\n"
+    _, _, rows = await _gate(tmp_path / "s", monkeypatch, issue=issue, runnable_form=False)
+    assert rows[0]["status"] not in {"unclear", "done", "rejected"}
+    assert "게이트가 실행 형태를 찾지 못함: `failed rounds`" in rows[0]["note"]
+
+
+async def test_a_covers_on_another_command_is_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, blob, rows = await _gate(tmp_path / "e", monkeypatch, form=lambda _c: "echo ok")
+    assert all("covers" not in c for c in blob["commands"])
+    assert rows[0]["status"] != "done"
+
+
+async def test_a_covers_on_the_real_command_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, blob, rows = await _gate(tmp_path / "r", monkeypatch)
+    assert any(c.get("covers") == ["npx --yes pnpm@9 lint"] for c in blob["commands"])
+    assert rows[0]["status"] == "done"
+
+
+def test_covers_command_compares_the_substance_in_order() -> None:
+    assert covers_command("cd apps/pwa && npx --yes pnpm@9 lint", "npx --yes pnpm@9 lint")
+    assert covers_command("pnpm exec tsc --noEmit", "npx --yes pnpm@9 exec tsc --noEmit")
+    assert covers_command("tsc --noEmit", "npx --yes pnpm@9 exec tsc --noEmit")
+    assert covers_command("pnpm run lint", "pnpm lint")
+    assert not covers_command("echo ok", "npx --yes pnpm@9 lint")
+    assert not covers_command("--noEmit tsc", "npx --yes pnpm@9 exec tsc --noEmit")
 
 
 async def test_an_abbreviation_that_would_be_a_guess_stays_unclear(

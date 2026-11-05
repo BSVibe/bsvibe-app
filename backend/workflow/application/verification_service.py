@@ -62,6 +62,7 @@ from backend.workflow.domain.gate_derivation import (
 )
 from backend.workflow.domain.ledger_commands import (
     command_verdicts,
+    covers_command,
     ledger_command_plan,
     plan_commands,
 )
@@ -1354,9 +1355,20 @@ class VerificationService:
         # A ledger command is never run as the request wrote it (its working directory and
         # runner are the repo's to say): only the deriver's runnable form, tagged ``covers``,
         # is. Kept even when the rest of the gate is not applicable.
-        run_list = [c for c in gate.commands if derived or (c.covers and ledger_commands)]
+        # A ``covers`` tag is honoured only when the runnable form carries the ledger command's
+        # substance; ``echo ok`` tagged as ``pnpm lint`` must not decide the item.
+        kept_covers: dict[str, list[str]] = {}
+        for c in gate.commands:
+            kept = [t for t in c.covers if covers_command(c.command, t)]
+            if dropped := [t for t in c.covers if t not in kept]:
+                logger.warning("gate_covers_dropped", command=c.command, covers=dropped)
+            if kept:
+                kept_covers[c.command] = kept
+        run_list = [
+            c for c in gate.commands if derived or (kept_covers.get(c.command) and ledger_commands)
+        ]
         commands: list[tuple[str, str]] = [(c.command, c.kind) for c in run_list]
-        covers = {c.command: list(c.covers) for c in run_list if c.covers}
+        covers = {c.command: kept_covers[c.command] for c in run_list if c.command in kept_covers}
         # The product's floor runs beside whatever was derived — including nothing: it is
         # what the PRODUCT requires of every change, not something a model must remember.
         commands.extend((command, "floor") for command in floor)
