@@ -433,6 +433,11 @@ def _requirement_rows(rows: list[dict[str, Any]]) -> list[RunRequirement]:
     return items
 
 
+def _leftovers_excluded(result: dict[str, Any]) -> dict[str, Any] | None:
+    blob = result.get("leftovers_excluded")
+    return blob if isinstance(blob, dict) and blob.get("count") else None
+
+
 def _run_verification(row: VerificationResult) -> RunVerification:
     result = row.result if isinstance(row.result, dict) else {}
     ledger = result.get("requirements")
@@ -451,6 +456,7 @@ def _run_verification(row: VerificationResult) -> RunVerification:
         failure=_verification_failure(row),
         checks=_verification_checks(result),
         requirements=_requirement_rows(rows),
+        leftovers_excluded=_leftovers_excluded(result),
         **tally,
     )
 

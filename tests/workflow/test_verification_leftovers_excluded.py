@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from backend.workflow.application.verification_leftovers import leftovers_excluded
@@ -155,9 +156,9 @@ async def test_the_orchestrators_verify_excludes_what_verification_left(
     root = _repo(tmp_path)
 
     class _Verifier:
-        async def verify(self, **_kwargs: Any) -> str:
+        async def verify(self, **_kwargs: Any) -> Any:
             _tool_cache(root)
-            return "verdict"
+            return SimpleNamespace(result={})
 
     async with memory_session() as session:
         orch = RunOrchestrator(session=session, llm=object(), sandbox_manager=NoopSandboxManager())
@@ -172,7 +173,7 @@ async def test_the_orchestrators_verify_excludes_what_verification_left(
             final_text="",
         )
 
-    assert verdict == "verdict"
+    assert verdict.result["leftovers_excluded"]["count"] == 2
     assert _staged_after_add_all(root) == set()
 
 
