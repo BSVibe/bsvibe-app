@@ -265,6 +265,8 @@ export interface RunVerification {
   failure?: string | null;
   /** The checks the gate ran — never their output. Absent on older servers. */
   checks?: RunVerificationCheck[];
+  /** Files the verification left in the checkout that the run commit left out. Absent on older servers. */
+  leftovers_excluded?: { count: number; dirs: { path: string; count: number }[] } | null;
   /** Requirements-ledger tally; null/absent when the run has no ledger. */
   requirements_total?: number | null;
   requirements_done?: number | null;

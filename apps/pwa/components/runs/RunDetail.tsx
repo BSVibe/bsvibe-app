@@ -633,6 +633,18 @@ function VerificationBlock({
               {t("passedOnRound", { round: passedOnRound })}
             </p>
           ) : null}
+          {verification.leftovers_excluded && verification.leftovers_excluded.count > 0 ? (
+            <div className="run-verification__leftovers">
+              <p>{t("leftoversExcluded", { count: verification.leftovers_excluded.count })}</p>
+              <ul>
+                {verification.leftovers_excluded.dirs.map((d) => (
+                  <li key={d.path}>
+                    {d.path} · {d.count}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <VerificationChecks verification={verification} />
         </>
       ) : (
