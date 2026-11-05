@@ -24,6 +24,7 @@ from backend.workflow.application.run_detail import (
     _intent_of,
     _restarted_at_of,
     first_round_pass_rate,
+    verification_quality,
     verification_rounds_by_run,
 )
 from backend.workflow.domain.repositories import RunRepository
@@ -90,6 +91,21 @@ async def get_first_round_pass_rate(
     """
     rate = await first_round_pass_rate(session, workspace_id, limit=limit, product_id=product_id)
     return rate.as_dict()
+
+
+@router.get("/verification-quality")
+async def get_verification_quality(
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 30,
+    product_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """Verification-quality figures over the latest finished runs.
+
+    Same function as the ``bsvibe_runs_verification_quality`` MCP tool.
+    """
+    quality = await verification_quality(session, workspace_id, limit=limit, product_id=product_id)
+    return quality.as_dict()
 
 
 @router.get("/{run_id}")
