@@ -77,7 +77,9 @@ async def _seed_run(
                         payload={},
                     )
                 )
-        await session.commit()
+            # Inside the scope: the RLS GUC is cleared when it exits, and an unflushed
+            # row written after that is refused on Postgres.
+            await session.commit()
         return run.id
 
 
