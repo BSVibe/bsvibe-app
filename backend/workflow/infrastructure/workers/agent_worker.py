@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 if TYPE_CHECKING:
@@ -304,6 +304,8 @@ class AgentWorker(BaseWorker):
         # Drives in flight, each its own task. ``_tick`` starts them and moves on, so
         # opening requests as runs never waits for a drive; ``stop`` drains them.
         self._drives: set[asyncio.Task[bool]] = set()
+        # The claims a previous process on this machine left are taken back once, on start.
+        self._orphans_released = False
 
     @property
     def _stale_claim_lease_s(self) -> float:
@@ -327,10 +329,22 @@ class AgentWorker(BaseWorker):
         return max(1, limit)
 
     async def stop(self) -> None:
-        """Stop the poll loop, then wait for the drives still in flight."""
+        """Stop the poll loop, then give the drives in flight back to the queue.
+
+        A deploy stops this process with seconds to spare, and a drive can be an hour into
+        one executor turn. Waiting for it meant the process was killed first and the claim
+        stayed behind for the whole stale-claim lease (prod 2026-11-05, run 04a2a7eb: two
+        hours RUNNING with nobody driving it). Cancelling runs each drive's own cancel path,
+        which releases its claim to OPEN; a drive cancelled before it ever ran has no such
+        path, so whatever this worker still holds afterwards is released here too."""
         await super().stop()
+        for task in list(self._drives):
+            task.cancel()
         if self._drives:
             await asyncio.gather(*self._drives, return_exceptions=True)
+        await self._reset_claims_to_open(
+            ExecutionRun.claimed_by == self._worker_id, event="agent_worker_released_on_stop"
+        )
 
     async def _tick(self) -> int:
         # 게이트 3 후속 — apply chat answers BEFORE driving. A queued answer flips
@@ -426,6 +440,9 @@ class AgentWorker(BaseWorker):
         execution = self._execution
         if execution is None:
             return []
+        if not self._orphans_released:
+            self._orphans_released = True
+            await self._release_orphaned_claims()
         await self._reap_stale_claims()
         await self._reap_terminal_run_workspaces()
         free = self.drive_concurrency - len(self._drives)
@@ -631,36 +648,58 @@ class AgentWorker(BaseWorker):
         """Reset RUNNING runs whose claim went stale (past the lease with no
         pending Decision) back to OPEN so a crashed worker's run is re-driven.
 
+        A healthy in-flight run is excluded by the lease (its ``claimed_at``
+        heartbeat is refreshed each turn boundary); a run paused on a Decision by
+        :meth:`_reset_claims_to_open`'s guards. Returns the number of runs reaped."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=self._stale_claim_lease_s)
+        return await self._reset_claims_to_open(
+            ExecutionRun.claimed_at < cutoff, event="agent_worker_reaped_stale_claims"
+        )
+
+    async def _release_orphaned_claims(self) -> int:
+        """Take back the claims a previous worker process on THIS machine left behind.
+
+        A process that is killed (a deploy's grace period ran out, a crash) cannot release
+        its claims, and the reaper would leave them for the whole lease. On start, every
+        claim on this machine that is not this process's own is such a claim: one agent
+        worker process runs per machine (``machine_id``; empty = single box), so no live
+        drive holds it. Another machine's claims are never touched."""
+        return await self._reset_claims_to_open(
+            or_(ExecutionRun.claimed_by.is_(None), ExecutionRun.claimed_by != self._worker_id),
+            ExecutionRun.home_machine.is_not_distinct_from(self._settings.machine_id or None),
+            event="agent_worker_released_orphaned_claims",
+        )
+
+    async def _reset_claims_to_open(self, *conditions: Any, event: str) -> int:
+        """Give back RUNNING runs whose claim matches ``conditions`` (OPEN, claim cleared).
+
         Double-guarded against re-opening a run that is legitimately paused on a
         founder Decision: such a run has ``claimed_at`` NULL (cleared on the
         pause exit) AND a pending Decision — so BOTH the ``claimed_at IS NOT
         NULL`` predicate and the ``NOT EXISTS pending Decision`` predicate
-        exclude it. A healthy in-flight run is excluded by the lease (its
-        ``claimed_at`` heartbeat is refreshed each turn boundary). One committed
-        short transaction; returns the number of runs reaped."""
-        cutoff = datetime.now(UTC) - timedelta(seconds=self._stale_claim_lease_s)
+        exclude it. One committed short transaction; returns the number of runs reset."""
         pending_decision = exists().where(
             Decision.run_id == ExecutionRun.id,
             Decision.status == DecisionStatus.PENDING,
         )
-        # #959 — find the stale claims across tenants (locking them), then give
+        # #959 — find the claims across tenants (locking them), then give
         # each back in its own tenant's scope: ``WITH CHECK`` refuses a
         # cross-tenant UPDATE. A row another session holds is SKIPPED rather
-        # than waited on — someone is touching it, so it is not stale.
-        stale = (
+        # than waited on — someone is touching it.
+        matching = (
             select(ExecutionRun.id, ExecutionRun.workspace_id)
             .where(
                 ExecutionRun.status == RunStatus.RUNNING,
                 ExecutionRun.claimed_at.is_not(None),
-                ExecutionRun.claimed_at < cutoff,
+                *conditions,
                 ~pending_decision,
             )
             .with_for_update(skip_locked=True, of=ExecutionRun)
         )
-        reaped: list[uuid.UUID] = []
+        reset: list[uuid.UUID] = []
         async with self._session_factory() as session:
             async with cross_tenant_session_read(session):
-                locked = (await session.execute(stale)).all()
+                locked = (await session.execute(matching)).all()
             for run_id, workspace_id in locked:
                 async with workspace_session_scope(session, workspace_id):
                     await session.execute(
@@ -673,11 +712,11 @@ class AgentWorker(BaseWorker):
                             home_machine=None,
                         )
                     )
-                reaped.append(run_id)
+                reset.append(run_id)
             await session.commit()
-        if reaped:
-            logger.info("agent_worker_reaped_stale_claims", count=len(reaped))
-        return len(reaped)
+        if reset:
+            logger.info(event, count=len(reset), run_ids=[str(r) for r in reset])
+        return len(reset)
 
     async def _reap_terminal_run_workspaces(self) -> int:
         """Reclaim finished workspaces so the disk stays bounded to what is live:

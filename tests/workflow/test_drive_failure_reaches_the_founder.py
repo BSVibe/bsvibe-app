@@ -317,6 +317,8 @@ def _worker(sf: Any, *, max_drive_failures: int = 3) -> Any:
 
     worker._reap_stale_claims = _reap  # type: ignore[method-assign]
     worker._reap_terminal_run_workspaces = _reap  # type: ignore[method-assign]
+    # ``_seed_run``'s claim stands for this worker's own, under a made-up worker id.
+    worker._release_orphaned_claims = _reap  # type: ignore[method-assign]
     return worker
 
 
