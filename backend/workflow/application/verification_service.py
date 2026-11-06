@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
+from backend.workflow.application.artifact_review import review_passed_round
 from backend.workflow.application.counterfactual_check import check_guards
 from backend.workflow.application.gate_commands import (
     any_failed,
@@ -901,6 +902,19 @@ class VerificationService:
                 ],
             )
 
+        review = await review_passed_round(
+            passed=passed,
+            session=self._session,
+            release=lambda: self._release_connection(run),
+            complete=self._complete,
+            run=run,
+            box=box,
+            baseline=baseline,
+            ledger=ledger,
+            command_results=command_results,
+            derived_gate=derived_gate,
+        )
+
         vr = VerificationResult(
             id=uuid.uuid4(),
             run_id=run.id,
@@ -909,6 +923,7 @@ class VerificationService:
             outcome=outcome,
             contract=contract.to_dict(),
             result={
+                **review,
                 "command_results": command_results,
                 "derived_gate": derived_gate,
                 "judge": judge_blob,

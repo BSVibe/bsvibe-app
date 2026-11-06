@@ -459,6 +459,7 @@ def _run_verification(row: VerificationResult) -> RunVerification:
         checks=_verification_checks(result),
         requirements=_requirement_rows(rows),
         leftovers_excluded=_leftovers_excluded(result),
+        review=result["review"] if isinstance(result.get("review"), dict) else None,
         **tally,
     )
 

@@ -148,6 +148,9 @@ class RunVerification(BaseModel):
     # What this verification's commands left in the checkout and BSVibe kept out of the run's
     # commits: ``{"count", "dirs": [{"path", "count"}]}``; ``None`` when nothing was left.
     leftovers_excluded: dict[str, Any] | None = None
+    # The independent review of a passed round, as stored: ``{"status": "done", "findings": […]}``
+    # or ``{"status": "unavailable", "reason"}``; ``None`` when no review ran (failed round).
+    review: dict[str, Any] | None = None
 
 
 class RunActivity(BaseModel):
