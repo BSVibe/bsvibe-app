@@ -1076,6 +1076,17 @@ main.login {
   padding-left: 18px;
   font-weight: 400;
 }
+.review-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--text-secondary, inherit);
+}
+.review-status__items {
+  margin: 0;
+  padding-left: 18px;
+}
 
 /* ── Shipped (collapsed, count + View all) (R4) ───────────────────────────── */
 .shipped {

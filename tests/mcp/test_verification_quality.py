@@ -359,3 +359,89 @@ async def test_leftovers_of_other_workspaces_and_products_are_not_counted(
     assert scoped["leftover_dirs"] == [{"path": "mine_dir", "count": 1}]
     assert whole["rounds_with_leftovers"] == 2
     assert {d["path"] for d in whole["leftover_dirs"]} == {"mine_dir", "theirs_dir"}
+
+
+def _review(*severities: str) -> dict[str, Any]:
+    findings = [
+        {"severity": s, "file": "a.py", "line": 1, "claim": "c", "failure_scenario": "f"}
+        for s in severities
+    ]
+    return {"review": {"status": "done", "findings": findings}}
+
+
+_UNAVAILABLE = {"review": {"status": "unavailable", "reason": "timed out"}}
+
+
+async def _seed_reviews(db, workspace_id, product_id) -> None:
+    # A: failed round (no review), then two passed rounds — done (high, low) / unavailable.
+    await _seed_run(
+        db,
+        workspace_id,
+        [
+            (F, _result(_req("missing"))),
+            (P, {**_result(_req("done")), **_review("high", "low")}),
+            (P, {**_result(_req("done")), **_UNAVAILABLE}),
+        ],
+        product_id=product_id,
+    )
+    # B: done with medium only. C: no review at all.
+    await _seed_run(
+        db,
+        workspace_id,
+        [(P, {**_result(_req("done")), **_review("medium", "medium")})],
+        product_id=product_id,
+        age=1,
+    )
+    await _seed_run(db, workspace_id, [(P, _result(_req("done")))], product_id=product_id, age=2)
+    # D: done, a clean review.
+    await _seed_run(
+        db, workspace_id, [(P, {**_result(), **_review()})], product_id=product_id, age=3
+    )
+
+
+async def test_review_figures_match_a_hand_count(db, workspace_id, registry, seeded) -> None:
+    mine = uuid.uuid4()
+    await _seed_reviews(db, workspace_id, mine)
+
+    out = await _mcp(db, registry, workspace_id, {"product_id": str(mine)})
+
+    # 6 rounds (3+1+1+1) in 4 runs; 3 reviews done, 1 unavailable; only run A names a high one
+    assert (out["verification_rounds"], out["runs_verified"]) == (6, 4)
+    assert (out["reviews_done"], out["reviews_unavailable"]) == (3, 1)
+    assert out["review_findings_by_severity"] == {"high": 1, "medium": 2, "low": 1}
+    assert out["runs_reviewed_with_high"] == 1
+    assert await _rest(db, workspace_id, f"?product_id={mine}") == out
+
+
+async def test_reviews_of_other_workspaces_and_products_are_not_counted(
+    db, workspace_id, registry, seeded
+) -> None:
+    other = uuid.uuid4()
+    async with scoped_session(db, other) as s:
+        s.add(WorkspaceRow(id=other, name="other"))
+        await s.commit()
+    mine, theirs = uuid.uuid4(), uuid.uuid4()
+    await _seed_run(db, workspace_id, [(P, _review("low"))], product_id=mine)
+    await _seed_run(db, workspace_id, [(P, _review("high"))], product_id=theirs, age=1)
+    await _seed_run(db, other, [(P, _review("high", "high"))], age=2)
+
+    scoped = await _mcp(db, registry, workspace_id, {"product_id": str(mine)})
+    whole = await _mcp(db, registry, workspace_id)
+
+    assert (scoped["reviews_done"], scoped["runs_reviewed_with_high"]) == (1, 0)
+    assert scoped["review_findings_by_severity"] == {"high": 0, "medium": 0, "low": 1}
+    assert (whole["reviews_done"], whole["runs_reviewed_with_high"]) == (2, 1)
+    assert whole["review_findings_by_severity"] == {"high": 1, "medium": 0, "low": 1}
+
+
+async def test_no_reviews_reads_zero(db, workspace_id, registry, seeded) -> None:
+    await _seed_run(db, workspace_id, [(P, _result(_req("done")))])
+
+    out = await _mcp(db, registry, workspace_id)
+
+    assert (out["reviews_done"], out["reviews_unavailable"], out["runs_reviewed_with_high"]) == (
+        0,
+        0,
+        0,
+    )
+    assert out["review_findings_by_severity"] == {"high": 0, "medium": 0, "low": 0}

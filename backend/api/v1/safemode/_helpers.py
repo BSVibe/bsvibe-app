@@ -56,6 +56,9 @@ def _to_item_response(
         **(footprint.model_dump() if footprint is not None else {}),
         ledger_counts=ledger.counts if ledger is not None else {},
         ledger_attention=ledger.attention if ledger is not None else [],
+        review_status=ledger.review_status if ledger is not None else "none",
+        review_counts=ledger.review_counts if ledger is not None else {},
+        review_findings=ledger.review_findings if ledger is not None else [],
         id=item.id,  # type: ignore[attr-defined]
         workspace_id=item.workspace_id,  # type: ignore[attr-defined]
         deliverable_id=item.deliverable_id,  # type: ignore[attr-defined]

@@ -434,6 +434,20 @@ export interface LedgerFields {
   ledger_attention?: { id: string; text: string }[];
 }
 
+/** The independent review of the run's last passed round on a Safe Mode queue item
+ *  (report-only). `none` = no review ran; `unavailable` = it could not be done. */
+export interface ReviewFields {
+  review_status?: "done" | "unavailable" | "none";
+  review_counts?: { high?: number; medium?: number; low?: number };
+  /** Top 5 by severity. */
+  review_findings?: {
+    severity: "high" | "medium" | "low";
+    file: string | null;
+    line: number | null;
+    claim: string;
+  }[];
+}
+
 /** One `VerificationResult` in a delivery report (backend VerificationReport).
  *  `contract` is the work LLM's declared checks (the checks BSVibe promised to
  *  run) and `result` is the execution outcome of running them — both free-form
@@ -722,6 +736,8 @@ export interface PendingDelivery {
   change?: ChangeFootprintFields;
   /** The run's requirements-ledger verdict, from the queue item. */
   ledger?: LedgerFields;
+  /** The run's independent review, from the queue item. */
+  review?: ReviewFields;
   createdAt: string;
 }
 
@@ -783,7 +799,7 @@ export interface PendingRead {
 }
 
 /** `GET /api/v1/safemode/queue` element (backend SafeModeItemResponse). */
-export interface SafeModeItem extends ChangeFootprintFields, LedgerFields {
+export interface SafeModeItem extends ChangeFootprintFields, LedgerFields, ReviewFields {
   id: string;
   workspace_id: string;
   deliverable_id: string;

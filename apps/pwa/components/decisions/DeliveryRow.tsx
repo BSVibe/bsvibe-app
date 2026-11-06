@@ -1,6 +1,7 @@
 "use client";
 
 import LedgerStatus from "@/components/decisions/LedgerStatus";
+import ReviewStatus from "@/components/decisions/ReviewStatus";
 import ChangeFootprint from "@/components/deliverables/ChangeFootprint";
 import { approveSafeModeItem, denySafeModeItem } from "@/lib/api/safemode";
 import type { PendingDelivery } from "@/lib/api/types";
@@ -79,6 +80,7 @@ export default function DeliveryRow({
       {item.title && <p className="need-card__body">{t("deliveryQuestion")}</p>}
       <ChangeFootprint footprint={item.change} />
       <LedgerStatus ledger={item.ledger} />
+      <ReviewStatus review={item.review} />
       <div className="need-card__actions tap-card__above">
         <button
           type="button"

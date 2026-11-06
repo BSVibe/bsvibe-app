@@ -27,7 +27,13 @@ from backend.workflow.infrastructure.db import ExecutionRun
 from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow
 
 from ._context import _build_context
-from ._github_ledger import _requirements_rows, with_issue_link, with_requirements_ledger
+from ._github_ledger import (
+    _independent_review,
+    _requirements_rows,
+    with_independent_review,
+    with_issue_link,
+    with_requirements_ledger,
+)
 from ._merge_watch import enqueue_merge_watch
 from ._resolver import GithubBinding
 
@@ -156,8 +162,14 @@ async def _open_pr_and_settle(
     except Exception:  # noqa: BLE001 — a missing ledger never blocks the PR
         rows = []
         logger.warning("github_delivery_ledger_failed", run_id=str(run_id), exc_info=True)
+    body = with_requirements_ledger(body, rows)
+    try:
+        review = await _independent_review(deps.session_factory, run_id, workspace_id)
+    except Exception:  # noqa: BLE001 — a missing review never blocks the PR
+        review = None
+        logger.warning("github_delivery_review_failed", run_id=str(run_id), exc_info=True)
     body = with_issue_link(
-        with_requirements_ledger(body, rows), source_issue=source_issue, rows=rows
+        with_independent_review(body, review), source_issue=source_issue, rows=rows
     )
 
     # 4. Open the PR via the github plugin's open_pr action. Routing (repo/base) is
