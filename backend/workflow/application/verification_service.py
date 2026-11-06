@@ -62,7 +62,7 @@ from backend.workflow.domain.gate_derivation import (
 )
 from backend.workflow.domain.ledger_commands import (
     command_verdicts,
-    covers_command,
+    covers_rejection,
     ledger_command_plan,
     plan_commands,
 )
@@ -1359,9 +1359,15 @@ class VerificationService:
         # substance; ``echo ok`` tagged as ``pnpm lint`` must not decide the item.
         kept_covers: dict[str, list[str]] = {}
         for c in gate.commands:
-            kept = [t for t in c.covers if covers_command(c.command, t)]
+            reasons = {t: covers_rejection(c.command, t) for t in c.covers}
+            kept = [t for t in c.covers if reasons[t] is None]
             if dropped := [t for t in c.covers if t not in kept]:
-                logger.warning("gate_covers_dropped", command=c.command, covers=dropped)
+                logger.warning(
+                    "gate_covers_dropped",
+                    command=c.command,
+                    covers=dropped,
+                    reasons=[reasons[t] for t in dropped],
+                )
             if kept:
                 kept_covers[c.command] = kept
         run_list = [

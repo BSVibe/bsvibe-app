@@ -253,6 +253,48 @@ def test_covers_command_compares_the_substance_in_order() -> None:
     assert not covers_command("--noEmit tsc", "npx --yes pnpm@9 exec tsc --noEmit")
 
 
+_LINT = "npx --yes pnpm@9 lint"
+
+
+def test_covers_command_wants_the_core_in_the_command_position() -> None:
+    assert covers_command("cd apps/pwa && npx --yes pnpm@9 lint", _LINT)
+    assert covers_command("pnpm run lint", _LINT)
+    assert covers_command(
+        "cd apps/pwa && pnpm exec tsc --noEmit", "npx --yes pnpm@9 exec tsc --noEmit"
+    )
+    assert covers_command("tsc --noEmit", "npx --yes pnpm@9 exec tsc --noEmit")
+    test = "npx --yes pnpm@9 test"
+    assert not covers_command("echo test", test)
+    assert not covers_command("cd apps/pwa && ls test", test)
+    assert not covers_command("grep lint package.json", _LINT)
+
+
+def test_covers_command_refuses_a_form_that_hides_the_exit_code() -> None:
+    for hidden in (
+        "cd apps/pwa && npx --yes pnpm@9 lint || true",
+        "cd apps/pwa && npx --yes pnpm@9 lint; true",
+        "cd apps/pwa && npx --yes pnpm@9 lint | tee out.txt",
+        "cd apps/pwa && npx --yes pnpm@9 lint && true",
+        "cd apps/pwa && npx --yes pnpm@9 lint && exit 0",
+        "cd apps/pwa && npx --yes pnpm@9 lint && :",
+    ):
+        assert not covers_command(hidden, _LINT), hidden
+    assert covers_command("cd apps/pwa && npx --yes pnpm@9 lint && echo done", _LINT)
+
+
+async def test_a_covers_that_hides_the_failure_is_dropped_at_the_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, blob, rows = await _gate(
+        tmp_path / "h",
+        monkeypatch,
+        failing="lint",
+        form=lambda c: f"cd apps/pwa && {c} || true",
+    )
+    assert all("covers" not in c for c in blob["commands"])
+    assert rows[0]["status"] != "done"
+
+
 async def test_an_abbreviation_that_would_be_a_guess_stays_unclear(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
