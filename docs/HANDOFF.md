@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-11-04
+# BSVibe session handoff — 2026-11-06
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,7 +21,27 @@
 
 ---
 
-## §0 — One line: **Seven of the last nine issue runs passed on round 1; what the founder sends a running run now reaches it**
+## §0 — One line: **The harness items now run through BSVibe — two at a time — and its real runs keep finding the next hole**
+
+11-04 → 11-06. Decision 11-04: HANDOFF §Ⅲ items go up as issues for BSVibe. Each run below was reviewed before its
+Safe Mode card was approved; one was denied with a reason and re-driven.
+
+| Issue → PR | What | Rounds |
+|---|---|---|
+| #1314 → #1315 | **the agent worker drives runs concurrently** (`agent_drive_concurrency`, 0 = `sandbox_max_concurrent`) — proven live 11-05: #1316 and #1317 claimed at the same second and driven side by side | 2 |
+| #1309 → #1312 | `leftovers_excluded` stored on the verification result — **proven in the DB** on #1316's run (`{"count": 1, "dirs": [{"path": "var"}]}`) | 1 |
+| #1317 → #1318 | `verification_quality` counts `rounds_with_leftovers` and the top `leftover_dirs`; `verification_feedback._failed` is public (`failed_commands`) | **1** |
+| #1316 → #1319 | the PWA run detail shows the files verification kept out of the commit | 2 |
+| #1320 → #1321 | **a ledger item that asks for commands to pass is decided by running them** — the deriver returns the repo's runnable form tagged `covers` (`cd apps/pwa && …`); the request's string is never run as written; an unplaceable command is not guessed | 1 (denied once: it ran the string at the repo root, where the PWA commands always fail) |
+| #1322 → #1324 | no runnable form → the judge's verdict stands (with a note); `covers` honoured only when the form carries the command's words | 4 (one orphaned by a deploy, retried) |
+| #1325 → #1326 | `covers` must sit in the command position, and a form that hides the exit code (`\|\| true`, `; true`, a pipe, `&& true`) is refused | **1** |
+| #1327 → #1328 | **the ledger keeps a checklist item's sub-list** (`head — sub1; sub2`, 800 chars, `…` when cut); a sub-checkbox is no longer an item of its own | **1** |
+| by hand → #1323 | **a worker restart gives its drives back**: `stop()` cancels in-flight drives (their cancel path releases the claim), then releases whatever it still holds; on start a worker takes back the claims a previous process left on its own machine | — |
+
+Rounds per issue run this session: #1314 2 · #1316 2 · #1317 **1** · #1320 1 (+ a denial) · #1322 4 · #1325 **1** ·
+#1327 **1**.
+
+## §0-b — previous session (10-30 → 11-04): **Seven of the last nine issue runs passed on round 1; what the founder sends a running run now reaches it**
 
 10-30 → 11-04. Harness work by hand (§Ⅰ), each fix proven on the next real issue run. The round-1 pass rate is now
 read from the product (`bsvibe_runs_first_round_pass_rate`, run list / detail `passed_on_round`).
@@ -53,39 +73,6 @@ PR #1300), #1302 (a run re-opened by the founder's message denies its pending Sa
 Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #1287 **1** · #1290 **1** · #1293 2 then 1 ·
 #1296 **1** · #1299 **1** · #1302 **1** · #1306 **1** · #1308 2 (a cited test name its file did not define → #1311) ·
 #1309 **1**.
-
-## §0-b — previous session (10-26 → 10-30): **Verification now checks what was asked, the way CI checks it — #1255 passed in round 1; real issue runs found and closed nine harness holes**
-
-10-26 → 10-30. Reliability work was done **by hand** (형님 10-26: pushing BSVibe through its own verification gaps was
-not converging). Plan R1–R6; R1–R4 shipped, each proven on a real BSVibe run afterwards.
-
-| PR | What | Proven on |
-|---|---|---|
-| #1245 · #1248 | **R1 requirements ledger** — checkable items extracted from the request (checkboxes, list items under 할 것/가드/완료 기준-style headings); each owed item needs `requirement_evidence` (a changed path, or a test whose file changed / a passing test run covered); per-item judge; PR says `Closes` only when every owed item is `done`, else `Refs` | #1249 → PR #1250 |
-| #1251 | **R2** an unchanged tree between failed verifications counts as a repeat (`tree_fingerprint`), stops at `REPEAT_LIMIT` with a `no_progress` question; `runs_detail.verification.failure` shows why | #1204 stall |
-| #1252 | **R3** every gate command runs with `CI=true`; product metadata `verify_floor` (every verification) and `verify_final` (once, after everything else passed — the CI-equivalent run); deriver told to keep tests/types/CI steps unnarrowed and on CI's pinned versions | #1204 re-run `d8ae99bd` |
-| #1254 | the loop asks once for missing ledger evidence before verifying · the deriver is shown floor/final and does not repeat them · the item judge sees the hunks its item names | #1255 run `cf897406` — **round-1 pass** |
-| #1256 | an oversized hunk is shown as a window around the cited test; `requirements_unclear` counted apart from done | — |
-| #1258 · #1260 | **R4 counterfactual (report-only)** — each guard item done on cited tests: non-test commits put back to the baseline, the test run alone, `HEAD` restored; row `counterfactual` = holds / vacuous / unknown, ⚠ in the PR table. #1260: it never raises (it once ended a run as `system_error`), and takes away only `baseline..HEAD`, ≤ 200 paths | #1259 run `686d3874` — 4/4 `holds` |
-| #1261 | **`verify_precheck`** — the product's quick checks run when the agent says done; a failure is a turn, not a round (≤ 3 per drive) | #1263 run `14e222a1` |
-| #1262 | #1259's verified diff, opened by hand — its approved delivery opened no PR (→ #1266) | — |
-| #1265 | `.gitignore` `.pnpm-store/` — the sandbox's `pnpm install` put its store at the checkout root and `git add -A` committed 18,745 files onto a run branch; this was the 10-28 `Argument list too long` crash | — |
-| #1266 (BSVibe, #1263) | an approved delivery whose action failed or opened no PR is **not** dispatched and raises `delivery_failed`; compensation handles of the actions that did succeed are still stored | PR #1266 opened on approval |
-| #1270 | **verification leftovers** — untracked entries that appear during verification go, anchored, into the checkout's `.git/info/exclude` (never deleted, never the repo's `.gitignore`, never the founder's machine); a path the agent writes later is released. Layer 1 of #1267 | — |
-| #1271 (BSVibe, #1269) | a run cancelled / discarded under a live drive stops before and after verification, and `write_verified_deliverable` refuses a cancelled run | — |
-| #1272 | the item judge reads the **cited test's body** from its file; a cited `file::name` the file does not define fails the item with a reason | — |
-| #1273 | **`issues.edited` by the trusted author goes to the unfinished run that issue started** (not a second run); its intent and ledger are refreshed — same item keeps its id, a removed one is `withdrawn` (owed nothing), a new one gets the next id | — |
-
-Issues worked through BSVibe in the same window: #1204 (token rotation, PR #1253), #1255 (run detail shows the checks,
-PR #1257), #1259 (runs_list carries a title/preview, not the whole intent; shipped by hand as #1262), #1263 (#1266),
-#1269 (#1271). #1244 is the ledger issue itself; #1267 / #1268 were filed record-only and done by hand (#1270, #1273).
-Rounds per issue run: #1255 1 · #1259 2 (+1 crash) · #1263 5 (one discard) · #1269 3 — every failed round was a real
-defect (type error, broken existing test, a wrong requirement, the 600-line cap, a collection error).
-
-**bsvibe-app product metadata (set 10-27):** `verify_floor` = lint-imports + `tests/architecture` +
-`test_h2a_decomposition` + `test_every_decision_has_a_way_out` (~5 s) · `verify_final` = ruff check / format --check,
-mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 and `--store-dir /tmp/pnpm-store` (~11 min) ·
-`verify_precheck` = ruff check, ruff format --check, mypy backend/, lint-imports (~1.5 min, set 10-28).
 
 ## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28 · 10-29 · 10-30 · 11-03)
 
@@ -306,23 +293,44 @@ mypy, full pytest, PWA install+lint+typecheck+test with pnpm 10.33.0 and `--stor
 * **I picked an issue that was already done (#1046 → #1047).** Check `git log -S` / the code on main before filing
   or re-running an issue.
 
+## §Ⅱ-k — What 11-04/11-06 found
+
+* **A deploy stranded the runs it interrupted for two hours.** `AgentWorker.stop()` waited for its drives; a drive can
+  be an hour into one executor turn, so the container was killed first and the claim stayed until the stale-claim
+  lease (2 × `executor_task_timeout_s`). #1322's run sat RUNNING with nobody driving it (11-05). With concurrent drives
+  and the merge watch's autodeploys this would hit often — fixed by hand (#1323). After #1323 the worker logs
+  `worker_runtime_stopped` on a deploy; **a deploy during a live drive has not been seen yet** (checklist below).
+* **The gate never ran the commands an issue said must pass** — the deriver was told to leave ledger items alone, and
+  the judge only reads cited evidence (#1316's R5: `rejected`, then `unclear`; only the PR's CI said whether lint /
+  tsc / vitest passed). Running the issue's string as written is wrong too: the PWA's commands fail at the repo root.
+* **The ledger dropped every sub-list under a checklist item** (#1325: R4 read only "테스트:"; the judge could not
+  judge it). Issues written with nested bullets lost their substance; fixed by #1328.
+* **An issue requirement that asks for evidence a diff cannot carry stalls the ledger.** "Cut the wire and show the
+  test go red" (#1322 R4, #1325 R5) stayed missing / `unclear` — the run has no way to record that it did it. Put
+  wire-cut proof in your own review, not in an issue requirement.
+* **I misread `gh issue create … &` output.** Two issues filed in parallel print their URLs in finish order; I paired
+  #1316/#1317 with the wrong bodies and nearly "fixed" BSVibe's correct `Closes`. Read the title back.
+* **A test that seeds rows in a workspace scope must commit inside it** — on Postgres the RLS GUC is gone once the
+  scope exits (#1323's first CI run). SQLite does not catch it; check on a throwaway Postgres.
+
 ## §Ⅲ — Next
 
-1. **Run the agent worker's drives concurrently** (up to the run cap) — the serial worker is the biggest limit on the
-   sample rate and on what a founder waits for.
-2. **Confirm `leftovers_excluded` reaches the DB** on a real run (the #1309 test reads the returned object, not the
-   stored row), then use it to decide #1267 layer 2.
-3. **R5 independent reviewer** (report-only first) — open.
-4. Read `bsvibe_runs_verification_quality` (avg rounds, unclear / vacuous rates, ledger-only failures) after each
-   batch of runs; tidy the private `verification_feedback._failed` import it uses.
-5. **#1267 layer 2** (the deriver names the stack's cache paths up front) — only after item 2's records have
-   accumulated on real runs.
-6. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
-   (`docs/runbook/vault-to-postgres.md` §"A second box"). `/app/var/vault` may go now (kept until 10-29).
-7. **#930** — 2M tuning still has no sample.
-8. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap (code shipped by #1047) · #937 outside the repo.
-9. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md`, `ci-parity-checklist.md` (B failing-final,
-   D, E, F), `counterfactual-guard-checklist.md` (B, C), `intake-trust-by-repo-permission-checklist.md` (live items).
+1. **See #1323 live**: a deploy while a run is mid-drive — `agent_worker_released_on_stop` (or
+   `agent_worker_released_orphaned_claims` after the restart) names the run and it is claimed again within a minute
+   (`docs/e2e/worker-restart-releases-claims-checklist.md`).
+2. **R5 independent reviewer** (report-only first) — open.
+3. Read `verification_quality` after each batch; once `leftover_dirs` has a sample, decide **#1267 layer 2** (the
+   deriver names the stack's cache paths up front).
+4. `covers_rejection` still accepts a hiding operator further along (`… lint && echo done || true`) and a background
+   `&` — low priority.
+5. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
+   (`docs/runbook/vault-to-postgres.md` §"A second box"). Startup claim take-back (#1323) assumes ONE agent worker
+   process per machine id. `/app/var/vault` may go now (kept until 10-29).
+6. **#930** — 2M tuning still has no sample.
+7. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap (code shipped by #1047) · #937 outside the repo.
+8. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md`, `ci-parity-checklist.md` (B failing-final,
+   D, E, F), `counterfactual-guard-checklist.md` (B, C), `intake-trust-by-repo-permission-checklist.md` (live items),
+   `worker-restart-releases-claims-checklist.md`.
 
 ## §Ⅳ — Discipline that paid off
 
