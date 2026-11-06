@@ -575,6 +575,14 @@ class VerificationQuality(NamedTuple):
     ledger_only_failures: int
     rounds_with_leftovers: int
     leftover_dirs: list[dict[str, Any]]
+    #: Independent review (report-only), counted per ROUND that ran one: ``reviews_done`` /
+    #: ``reviews_unavailable`` out of ``verification_rounds``; findings summed over the
+    #: ``done`` rounds; ``runs_reviewed_with_high`` = runs with a ``done`` review naming a
+    #: high finding, out of ``runs_verified``.
+    reviews_done: int
+    reviews_unavailable: int
+    review_findings_by_severity: dict[str, int]
+    runs_reviewed_with_high: int
 
     def as_dict(self) -> dict[str, Any]:
         return self._asdict()
@@ -602,6 +610,28 @@ def _is_ledger_only_failure(row: Any) -> bool:
     if row.outcome is not VerificationOutcome.FAILED or _has_failed_command(row.result):
         return False
     return any(r.get("status") in {"missing", "rejected"} for r in _ledger_rows(row.result))
+
+
+def _tally_reviews(
+    verifications: Sequence[VerificationResult], by_severity: dict[str, int]
+) -> tuple[int, int, bool]:
+    """One run's rounds → (reviews done, reviews unavailable, any high finding); adds the
+    ``done`` findings to ``by_severity``."""
+    done = unavailable = 0
+    has_high = False
+    for v in verifications:
+        review = v.result.get("review") if isinstance(v.result, dict) else None
+        if not isinstance(review, dict):
+            continue
+        if review.get("status") != "done":
+            unavailable += 1
+            continue
+        done += 1
+        for f in review.get("findings") or []:
+            if isinstance(f, dict) and f.get("severity") in by_severity:
+                by_severity[f["severity"]] += 1
+                has_high = has_high or f["severity"] == "high"
+    return done, unavailable, has_high
 
 
 async def verification_quality(
@@ -642,7 +672,13 @@ async def verification_quality(
     rounds = sum(len(v) for v in by_run.values())
     items = unclear = checked = vacuous = failed = ledger_only = leftover_rounds = 0
     leftover_dirs: Counter[str] = Counter()
+    reviews_done = reviews_unavailable = runs_with_high = 0
+    by_severity = dict.fromkeys(("high", "medium", "low"), 0)
     for verifications in by_run.values():
+        done, unavailable, high = _tally_reviews(verifications, by_severity)
+        reviews_done += done
+        reviews_unavailable += unavailable
+        runs_with_high += high
         ledger = [
             r for r in _ledger_rows(verifications[-1].result) if r.get("status") != "withdrawn"
         ]
@@ -678,6 +714,10 @@ async def verification_quality(
         ledger_only_failures=ledger_only,
         rounds_with_leftovers=leftover_rounds,
         leftover_dirs=[{"path": path, "count": n} for path, n in top_dirs],
+        reviews_done=reviews_done,
+        reviews_unavailable=reviews_unavailable,
+        review_findings_by_severity=by_severity,
+        runs_reviewed_with_high=runs_with_high,
     )
 
 

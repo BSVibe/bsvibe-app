@@ -82,6 +82,11 @@ export function toPendingDecisions(
         large_change_warning: d.large_change_warning,
       },
       ledger: { ledger_counts: d.ledger_counts, ledger_attention: d.ledger_attention },
+      review: {
+        review_status: d.review_status,
+        review_counts: d.review_counts,
+        review_findings: d.review_findings,
+      },
       createdAt: d.created_at,
     });
   }

@@ -1243,5 +1243,9 @@
   "ledgerStatus": {
     "confirmed": "{done} of {total} requirements confirmed",
     "attentionTitle": "Not confirmed — read before approving"
+  },
+  "reviewStatus": {
+    "counts": "Independent review: high {high} · medium {medium} · low {low}",
+    "unavailable": "The independent review could not be done"
   }
 }

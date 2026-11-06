@@ -236,4 +236,5 @@ async def test_ledgers_are_read_in_one_query(db, workspace_id):
             event.remove(engine, "before_cursor_execute", _record)
 
     assert len(ledgers) == 3
-    assert len([q for q in seen if "verification_results" in q]) == 1
+    # One query for the ledgers + one for the reviews — fixed, however many runs (3 here).
+    assert len([q for q in seen if "verification_results" in q]) == 2

@@ -11,7 +11,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.workflow.application.safe_mode_ledger import LedgerAttentionItem
+from backend.workflow.application.safe_mode_ledger import LedgerAttentionItem, ReviewFindingItem
 from backend.workflow.application.safe_mode_queue import DenyKind
 from backend.workflow.domain.change_footprint import TopDir
 
@@ -40,6 +40,11 @@ class SafeModeItemResponse(BaseModel):
     # empty when the run has no ledger. ``ledger_attention`` = unclear + deferred items.
     ledger_counts: dict[str, int] = {}
     ledger_attention: list[LedgerAttentionItem] = []
+    # Independent review of the run's last passed round (report-only): ``done`` /
+    # ``unavailable`` / ``none``; the top-5 findings by severity.
+    review_status: str = "none"
+    review_counts: dict[str, int] = {}
+    review_findings: list[ReviewFindingItem] = []
 
 
 class SafeModeRunGroupResponse(BaseModel):

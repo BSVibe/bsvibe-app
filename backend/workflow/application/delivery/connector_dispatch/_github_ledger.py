@@ -8,10 +8,14 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.workflow.application.requirements_ledger import latest_ledger_rows
 from backend.workflow.domain.requirements import ledger_closes, render_ledger_table
+
+logger = structlog.get_logger(__name__)
 
 
 async def _requirements_rows(
@@ -22,6 +26,68 @@ async def _requirements_rows(
 
     async with session_factory() as session, workspace_session_scope(session, workspace_id):
         return await latest_ledger_rows(session, run_id)
+
+
+async def _independent_review(
+    session_factory: async_sessionmaker[AsyncSession], run_id: uuid.UUID, workspace_id: uuid.UUID
+) -> dict[str, Any] | None:
+    """The independent review stored on the run's last PASSED verification (``None`` = none)."""
+    from backend.data.rls import workspace_session_scope  # noqa: PLC0415
+    from backend.workflow.infrastructure.db import (  # noqa: PLC0415
+        VerificationOutcome,
+        VerificationResult,
+    )
+
+    async with session_factory() as session, workspace_session_scope(session, workspace_id):
+        result = (
+            await session.execute(
+                select(VerificationResult.result)
+                .where(
+                    VerificationResult.run_id == run_id,
+                    VerificationResult.outcome == VerificationOutcome.PASSED,
+                )
+                .order_by(VerificationResult.created_at.desc(), VerificationResult.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    review = result.get("review") if isinstance(result, dict) else None
+    return review if isinstance(review, dict) else None
+
+
+async def with_stored_independent_review(
+    session_factory: async_sessionmaker[AsyncSession],
+    body: str,
+    run_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+) -> str:
+    """:func:`with_independent_review` on the stored review; a failed read never blocks the PR."""
+    try:
+        review = await _independent_review(session_factory, run_id, workspace_id)
+    except Exception:  # noqa: BLE001 — a missing review never blocks the PR
+        logger.warning("github_delivery_review_failed", run_id=str(run_id), exc_info=True)
+        return body
+    return with_independent_review(body, review)
+
+
+def with_independent_review(body: str, review: dict[str, Any] | None) -> str:
+    """Append the "Independent review" section (report-only); no review, no section."""
+    if review is None:
+        return body
+    if review.get("status") != "done":
+        reason = str(review.get("reason") or "").strip() or "no reason recorded"
+        return f"{body.strip()}\n\n## Independent review\n\nUnavailable: {reason}"
+    lines = []
+    for f in review.get("findings") or []:
+        if not isinstance(f, dict):
+            continue
+        where = str(f.get("file") or "")
+        if where and f.get("line") is not None:
+            where = f"{where}:{f['line']}"
+        place = f" `{where}`" if where else ""
+        lines.append(
+            f"- **{f.get('severity')}**{place} — {f.get('claim')} — {f.get('failure_scenario')}"
+        )
+    return f"{body.strip()}\n\n## Independent review\n\n" + ("\n".join(lines) or "No findings.")
 
 
 def with_requirements_ledger(body: str, rows: list[dict[str, Any]]) -> str:
