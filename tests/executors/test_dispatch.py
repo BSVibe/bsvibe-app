@@ -1453,7 +1453,10 @@ async def test_task_timeout_reports_how_many_times_it_polled() -> None:
         )
         await s.commit()
         with pytest.raises(dispatch.TaskTimeout) as exc:
-            await dispatch.await_completion(redis, session=s, task_id=task.id, timeout_s=0.5)
+            await dispatch.await_completion(redis, session=s, task_id=task.id, timeout_s=3.0)
+    # A 0.5s budget can be spent entirely on pub/sub setup when the CI box is
+    # busy (the full suite runs ~20 min), so the loop legitimately never ticks.
+    # Three seconds leaves room for the first tick without hiding a real stall.
     assert exc.value.polls >= 1, "a loop that ran must say so"
     assert "polls" in str(exc.value)
     await redis.aclose()
