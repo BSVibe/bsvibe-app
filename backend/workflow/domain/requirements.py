@@ -38,7 +38,7 @@ TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 #: (a private org member shows as CONTRIBUTOR) but who has write access to the repo.
 COMMENT_TRUSTED_KEY = "comment_author_trusted"
 
-_ITEM_MAX_CHARS = 300
+_ITEM_MAX_CHARS = 800
 _MAX_ITEMS = 40
 
 # Heading words → kind. Matched against the heading text with its marks and any trailing
@@ -81,7 +81,27 @@ def _heading_kind(title: str) -> str | None:
 
 
 def _clip(text: str) -> str:
-    return " ".join(text.split())[:_ITEM_MAX_CHARS]
+    flat = " ".join(text.split())
+    if len(flat) <= _ITEM_MAX_CHARS:
+        return flat
+    return flat[: _ITEM_MAX_CHARS - 1] + "…"
+
+
+_MARKER = re.compile(r"^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?")
+
+
+class _Open:
+    """The item being read: its head, the indented lines under it, and its own indent."""
+
+    def __init__(self, head: str | None, kind: str, source: str, indent: int) -> None:
+        self.head, self.kind, self.source, self.indent = head, kind, source, indent
+        self.subs: list[str] = []
+
+    def item(self) -> dict[str, str] | None:
+        if self.head is None:
+            return None  # a ticked box: done, but its sub-lines are still not items
+        text = self.head if not self.subs else f"{self.head} — {'; '.join(self.subs)}"
+        return {"text": _clip(text), "kind": self.kind, "source": self.source}
 
 
 def extract_requirements(text: str, *, source: str = "request") -> list[dict[str, str]]:
@@ -89,45 +109,55 @@ def extract_requirements(text: str, *, source: str = "request") -> list[dict[str
 
     * an unticked checkbox (``- [ ] …``) is an item wherever it is; a ticked one is done;
     * a top-level list item directly under a recognised heading is an item of that kind;
-    * everything else — prose, lists under other headings, nested bullets, anything inside a
-      code fence — is not.
+    * lines indented deeper than an item (sub-list entries, checkboxes among them, or
+      continued paragraphs) belong to that item's text, up to the next sibling, parent or
+      heading — they are never items of their own;
+    * everything else — prose, lists under other headings, anything inside a code fence —
+      is not an item.
     """
     items: list[dict[str, str]] = []
     heading_kind: str | None = None
     list_indent: int | None = None
     in_fence = False
-    for line in text.splitlines():
+    current: _Open | None = None
+
+    def close() -> None:
+        nonlocal current
+        if current is not None and (item := current.item()) is not None:
+            items.append(item)
+        current = None
+
+    for raw in text.splitlines():
         # A fenced block is quoted material (a script, a config), never headings or items.
-        if line.lstrip().startswith(("```", "~~~")):
+        if raw.lstrip().startswith(("```", "~~~")):
             in_fence = not in_fence
             continue
-        if in_fence:
+        if in_fence or not raw.strip():
             continue
+        line = raw.expandtabs(4)
+        indent = len(line) - len(line.lstrip())
         heading = _MD_HEADING.match(line) or _BOLD_HEADING.match(line)
         if heading:
+            close()
             heading_kind = _heading_kind(heading.group("title"))
             list_indent = None
             continue
+        if current is not None and indent > current.indent:
+            current.subs.append(_MARKER.sub("", line.strip()))
+            continue
+        close()
         box = _CHECKBOX.match(line)
         if box:
-            if box.group("mark") == " ":
-                items.append(
-                    {
-                        "text": _clip(box.group("text")),
-                        "kind": heading_kind or "do",
-                        "source": source,
-                    }
-                )
+            head = box.group("text") if box.group("mark") == " " else None
+            current = _Open(head, heading_kind or "do", source, indent)
             continue
         entry = _LIST_ITEM.match(line)
         if entry and heading_kind is not None:
-            indent = len(entry.group("indent").expandtabs(4))
             if list_indent is None:
                 list_indent = indent
             if indent <= list_indent:
-                items.append(
-                    {"text": _clip(entry.group("text")), "kind": heading_kind, "source": source}
-                )
+                current = _Open(entry.group("text"), heading_kind, source, indent)
+    close()
     return [i for i in items if i["text"]]
 
 

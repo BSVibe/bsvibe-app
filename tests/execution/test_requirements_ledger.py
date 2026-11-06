@@ -54,7 +54,7 @@ def _texts(items: list[dict[str, str]]) -> list[tuple[str, str]]:
 def test_items_come_from_checkboxes_and_from_lists_under_work_headings() -> None:
     assert _texts(extract_requirements(ISSUE)) == [
         ("백엔드 경로", "do"),
-        ("MCP 툴", "do"),
+        ("MCP 툴 — 하위 설명은 항목이 아니다", "do"),
         ("다른 워크스페이스는 404", "guard"),
         ("PWA 는 건드리지 마라", "constraint"),
     ]
@@ -273,3 +273,73 @@ def test_an_unclear_item_is_counted_as_unclear_not_done() -> None:
         "requirements_deferred": 1,
         "requirements_unclear": 1,
     }
+
+
+# ── sub-lists belong to their item (#1325) ───────────────────────────────────────────
+
+_ISSUE_1325 = """## 요구사항
+
+- [ ] 검증 명령은 실제로 실행되는 형태여야 한다. 인정 예와 거부 예:
+  - 인정: `uv run pytest tests/x.py`
+  - 거부: `echo ok`
+- [ ] 그 명령의 종료 코드를 바꾸거나 감출 수 있는 형태는 인정하지 않는다:
+  - `cmd || true`
+  - `cmd; true`
+  - `cmd | tee log`
+  - `cmd &`
+- [ ] 테스트:
+  - [ ] 실제 경로로 R2를 검증한다
+  - [ ] 하위 체크박스는 별도 항목이 아니다
+    계속되는 문단도 본문이다
+
+## 가드
+- 일반 목록 항목
+  - 그 하위 줄
+- 형제 항목
+"""
+
+
+def _ledger_1325() -> list[dict[str, str]]:
+    from backend.workflow.domain.requirements import build_ledger
+
+    return build_ledger({"intent_text": _ISSUE_1325})
+
+
+def test_sub_lines_are_part_of_their_item_in_the_built_ledger() -> None:
+    by_id = {i["id"]: i["text"] for i in _ledger_1325()}
+    assert by_id["R1"] == (
+        "검증 명령은 실제로 실행되는 형태여야 한다. 인정 예와 거부 예: — "
+        "인정: `uv run pytest tests/x.py`; 거부: `echo ok`"
+    )
+    assert by_id["R2"] == (
+        "그 명령의 종료 코드를 바꾸거나 감출 수 있는 형태는 인정하지 않는다: — "
+        "`cmd || true`; `cmd; true`; `cmd | tee log`; `cmd &`"
+    )
+    assert by_id["R3"].startswith("테스트: — 실제 경로로 R2를 검증한다; 하위 체크박스는")
+    assert by_id["R3"].endswith("계속되는 문단도 본문이다")
+
+
+def test_a_sub_checkbox_is_not_an_item_of_its_own() -> None:
+    texts = [i["text"] for i in _ledger_1325()]
+    assert not any(t.startswith("실제 경로로") or t.startswith("하위 체크박스") for t in texts)
+    assert len(texts) == 5  # 3 checkboxes + 2 top-level guard items
+
+
+def test_a_plain_list_item_under_a_heading_takes_its_sub_lines_too() -> None:
+    by_text = {i["text"]: i["kind"] for i in _ledger_1325()}
+    assert by_text["일반 목록 항목 — 그 하위 줄"] == "guard"
+    assert by_text["형제 항목"] == "guard"
+
+
+def test_an_item_without_sub_lines_keeps_its_text() -> None:
+    assert [i["text"] for i in extract_requirements("- [ ] 하나\n- [ ] 둘\n")] == ["하나", "둘"]
+
+
+def test_an_over_long_item_is_cut_with_an_ellipsis_and_stays_stable() -> None:
+    from backend.workflow.domain.requirements import build_ledger
+
+    subs = "\n".join(f"  - 하위 {n} " + "가" * 60 for n in range(30))
+    [item] = build_ledger({"intent_text": f"- [ ] 머리말\n{subs}\n"})
+    assert item["text"].endswith("…")
+    assert len(item["text"]) == 800
+    assert item["text"].startswith("머리말 — 하위 0 ")
