@@ -28,11 +28,10 @@ from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRo
 
 from ._context import _build_context
 from ._github_ledger import (
-    _independent_review,
     _requirements_rows,
-    with_independent_review,
     with_issue_link,
     with_requirements_ledger,
+    with_stored_independent_review,
 )
 from ._merge_watch import enqueue_merge_watch
 from ._resolver import GithubBinding
@@ -154,23 +153,16 @@ async def _open_pr_and_settle(
         )
     except Exception:  # noqa: BLE001 — a missing directive never blocks the PR
         logger.warning("github_delivery_request_section_failed", run_id=str(run_id), exc_info=True)
-    # The requirements ledger, then the link back to the issue (``Closes`` only if nothing
-    # was deferred — see :func:`with_issue_link`). Both here, not at the two callers, so
-    # a sandbox run and a ``client_attach`` run cannot drift apart.
+    # Ledger, independent review, then the issue link (``Closes`` only if nothing was
+    # deferred — see :func:`with_issue_link`): here, so both execution models agree.
     try:
         rows = await _requirements_rows(deps.session_factory, run_id, workspace_id)
     except Exception:  # noqa: BLE001 — a missing ledger never blocks the PR
         rows = []
         logger.warning("github_delivery_ledger_failed", run_id=str(run_id), exc_info=True)
     body = with_requirements_ledger(body, rows)
-    try:
-        review = await _independent_review(deps.session_factory, run_id, workspace_id)
-    except Exception:  # noqa: BLE001 — a missing review never blocks the PR
-        review = None
-        logger.warning("github_delivery_review_failed", run_id=str(run_id), exc_info=True)
-    body = with_issue_link(
-        with_independent_review(body, review), source_issue=source_issue, rows=rows
-    )
+    body = await with_stored_independent_review(deps.session_factory, body, run_id, workspace_id)
+    body = with_issue_link(body, source_issue=source_issue, rows=rows)
 
     # 4. Open the PR via the github plugin's open_pr action. Routing (repo/base) is
     #    the founder-set config; head is the run branch; title/body from content.

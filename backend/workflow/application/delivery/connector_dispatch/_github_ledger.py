@@ -8,11 +8,14 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.workflow.application.requirements_ledger import latest_ledger_rows
 from backend.workflow.domain.requirements import ledger_closes, render_ledger_table
+
+logger = structlog.get_logger(__name__)
 
 
 async def _requirements_rows(
@@ -49,6 +52,21 @@ async def _independent_review(
         ).scalar_one_or_none()
     review = result.get("review") if isinstance(result, dict) else None
     return review if isinstance(review, dict) else None
+
+
+async def with_stored_independent_review(
+    session_factory: async_sessionmaker[AsyncSession],
+    body: str,
+    run_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+) -> str:
+    """:func:`with_independent_review` on the stored review; a failed read never blocks the PR."""
+    try:
+        review = await _independent_review(session_factory, run_id, workspace_id)
+    except Exception:  # noqa: BLE001 — a missing review never blocks the PR
+        logger.warning("github_delivery_review_failed", run_id=str(run_id), exc_info=True)
+        return body
+    return with_independent_review(body, review)
 
 
 def with_independent_review(body: str, review: dict[str, Any] | None) -> str:
