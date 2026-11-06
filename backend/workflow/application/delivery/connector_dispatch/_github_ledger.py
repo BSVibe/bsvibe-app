@@ -5,6 +5,7 @@ Split out of ``_github_pr.py`` to keep that file under the package's LOC cap.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -69,6 +70,21 @@ async def with_stored_independent_review(
     return with_independent_review(body, review)
 
 
+_FIELD_MAX = 300
+_LEADING_MARKDOWN = re.compile(r"^([#>*+-])")
+
+
+def _one_line(value: Any) -> str:
+    """A reviewer-written field as one inert line: whitespace collapsed, cut at 300 chars.
+
+    A leading ``#`` / ``-`` / ``*`` / ``>`` is escaped so it never reads as a heading or list.
+    """
+    text = " ".join(str(value if value is not None else "").split())
+    if len(text) > _FIELD_MAX:
+        text = text[:_FIELD_MAX].rstrip() + "…"
+    return _LEADING_MARKDOWN.sub(r"\\\1", text)
+
+
 def with_independent_review(body: str, review: dict[str, Any] | None) -> str:
     """Append the "Independent review" section (report-only); no review, no section."""
     if review is None:
@@ -85,7 +101,8 @@ def with_independent_review(body: str, review: dict[str, Any] | None) -> str:
             where = f"{where}:{f['line']}"
         place = f" `{where}`" if where else ""
         lines.append(
-            f"- **{f.get('severity')}**{place} — {f.get('claim')} — {f.get('failure_scenario')}"
+            f"- **{_one_line(f.get('severity'))}**{place} — {_one_line(f.get('claim'))}"
+            f" — {_one_line(f.get('failure_scenario'))}"
         )
     return f"{body.strip()}\n\n## Independent review\n\n" + ("\n".join(lines) or "No findings.")
 

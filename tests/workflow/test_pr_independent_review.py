@@ -86,7 +86,9 @@ async def _seed_run(
     return workspace_id, run_id
 
 
-async def _pr_body(sf_: Any, workspace_id: uuid.UUID, run_id: uuid.UUID) -> str:
+async def _pr_body(
+    sf_: Any, workspace_id: uuid.UUID, run_id: uuid.UUID, source_issue: int | None = None
+) -> str:
     runner = _Runner()
     deps = SimpleNamespace(
         session_factory=sf_, plugins_by_name={"github": object()}, runner=runner, settings=None
@@ -104,7 +106,7 @@ async def _pr_body(sf_: Any, workspace_id: uuid.UUID, run_id: uuid.UUID) -> str:
         title="t",
         body="Report",
         token="tok",
-        source_issue=None,
+        source_issue=source_issue,
         action_prefix="github:outbound:code",
         pushed_by="server",
     )
@@ -132,6 +134,37 @@ async def test_done_review_lists_each_finding_after_the_ledger(sf) -> None:
         " — two items with one id -> total is doubled"
     )
     assert "naming" not in body
+
+
+async def test_multiline_finding_stays_one_line(sf) -> None:
+    finding = {
+        **FINDING,
+        "claim": "# big\n\n- claim   spread",
+        "failure_scenario": "줄1\n## 가짜 제목\n- 목록",
+    }
+    workspace_id, run_id = await _seed_run(
+        sf, [(P, {"review": {"status": "done", "findings": [finding]}})]
+    )
+
+    body = await _pr_body(sf, workspace_id, run_id, source_issue=7)
+
+    section = body.split("## Independent review\n\n", 1)[1]
+    listing, _, tail = section.partition("\n\n")
+    assert len(listing.splitlines()) == 1 and listing.startswith("- **high**")
+    assert "\n## 가짜 제목" not in body
+    assert "줄1 ## 가짜 제목 - 목록" in listing
+    assert tail.strip() in ("Closes #7", "Refs #7")
+
+
+async def test_long_field_is_cut_at_300_chars(sf) -> None:
+    workspace_id, run_id = await _seed_run(
+        sf, [(P, {"review": {"status": "done", "findings": [{**FINDING, "claim": "x" * 400}]}})]
+    )
+
+    body = await _pr_body(sf, workspace_id, run_id)
+
+    assert "x" * 300 + "…" in body
+    assert "x" * 301 not in body
 
 
 async def test_clean_review_says_no_findings(sf) -> None:
