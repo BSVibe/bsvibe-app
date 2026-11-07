@@ -379,8 +379,8 @@ async def _seed_reviews(db, workspace_id, product_id) -> None:
         workspace_id,
         [
             (F, _result(_req("missing"))),
-            (P, {**_result(_req("done")), **_review("high", "low")}),
             (P, {**_result(_req("done")), **_UNAVAILABLE}),
+            (P, {**_result(_req("done")), **_review("high", "low")}),
         ],
         product_id=product_id,
     )
@@ -432,6 +432,31 @@ async def test_reviews_of_other_workspaces_and_products_are_not_counted(
     assert scoped["review_findings_by_severity"] == {"high": 0, "medium": 0, "low": 1}
     assert (whole["reviews_done"], whole["runs_reviewed_with_high"]) == (2, 1)
     assert whole["review_findings_by_severity"] == {"high": 1, "medium": 0, "low": 1}
+
+
+async def test_high_counts_only_the_last_passed_round(db, workspace_id, registry, seeded) -> None:
+    from backend.workflow.application.safe_mode_ledger import ledgers_for_runs
+
+    # First passed round named a high finding, it was fixed, the last passed round is clean.
+    run_id = await _seed_run(
+        db,
+        workspace_id,
+        [
+            (P, {**_result(_req("done")), **_review("high")}),
+            (F, _result(_req("missing"))),
+            (P, {**_result(_req("done")), **_review()}),
+        ],
+    )
+
+    out = await _mcp(db, registry, workspace_id)
+    async with scoped_session(db, workspace_id) as s:
+        cards = await ledgers_for_runs(s, workspace_id=workspace_id, run_ids=[run_id])
+
+    assert out["runs_reviewed_with_high"] == 0
+    # per-round figures still count every round
+    assert out["reviews_done"] == 2
+    assert out["review_findings_by_severity"]["high"] == 1
+    assert cards[run_id].review_counts["high"] == 0
 
 
 async def test_no_reviews_reads_zero(db, workspace_id, registry, seeded) -> None:

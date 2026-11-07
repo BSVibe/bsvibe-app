@@ -577,8 +577,8 @@ class VerificationQuality(NamedTuple):
     leftover_dirs: list[dict[str, Any]]
     #: Independent review (report-only), counted per ROUND that ran one: ``reviews_done`` /
     #: ``reviews_unavailable`` out of ``verification_rounds``; findings summed over the
-    #: ``done`` rounds; ``runs_reviewed_with_high`` = runs with a ``done`` review naming a
-    #: high finding, out of ``runs_verified``.
+    #: ``done`` rounds; ``runs_reviewed_with_high`` = runs whose LAST PASSED round's ``done``
+    #: review names a high finding (the card's basis, not per round), out of ``runs_verified``.
     reviews_done: int
     reviews_unavailable: int
     review_findings_by_severity: dict[str, int]
@@ -615,12 +615,18 @@ def _is_ledger_only_failure(row: Any) -> bool:
 def _tally_reviews(
     verifications: Sequence[VerificationResult], by_severity: dict[str, int]
 ) -> tuple[int, int, bool]:
-    """One run's rounds → (reviews done, reviews unavailable, any high finding); adds the
-    ``done`` findings to ``by_severity``."""
+    """One run's rounds → (reviews done, reviews unavailable, high in the last passed round).
+
+    Done / unavailable / ``by_severity`` count per ROUND (every review; adds the ``done``
+    findings to ``by_severity``). The high flag is per RUN and matches the card and the PR
+    body: only the run's LAST passed round's review is looked at, so a high finding fixed
+    before that round does not make the run a high run."""
     done = unavailable = 0
-    has_high = False
+    last_passed: Any = None
     for v in verifications:
         review = v.result.get("review") if isinstance(v.result, dict) else None
+        if v.outcome is VerificationOutcome.PASSED:
+            last_passed = review
         if not isinstance(review, dict):
             continue
         if review.get("status") != "done":
@@ -630,7 +636,14 @@ def _tally_reviews(
         for f in review.get("findings") or []:
             if isinstance(f, dict) and f.get("severity") in by_severity:
                 by_severity[f["severity"]] += 1
-                has_high = has_high or f["severity"] == "high"
+    has_high = (
+        isinstance(last_passed, dict)
+        and last_passed.get("status") == "done"
+        and any(
+            isinstance(f, dict) and f.get("severity") == "high"
+            for f in last_passed.get("findings") or []
+        )
+    )
     return done, unavailable, has_high
 
 
