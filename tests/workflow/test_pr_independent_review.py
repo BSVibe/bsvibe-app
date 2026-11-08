@@ -156,6 +156,19 @@ async def test_multiline_finding_stays_one_line(sf) -> None:
     assert tail.strip() in ("Closes #7", "Refs #7")
 
 
+async def test_multiline_file_stays_one_line(sf) -> None:
+    finding = {**FINDING, "file": "a.py\n## x", "line": 5}
+    workspace_id, run_id = await _seed_run(
+        sf, [(P, {"review": {"status": "done", "findings": [finding]}})]
+    )
+
+    body = await _pr_body(sf, workspace_id, run_id)
+
+    listing = body.split("## Independent review\n\n", 1)[1]
+    assert len(listing.splitlines()) == 1 and listing.startswith("- **high**")
+    assert "\n## x" not in body
+
+
 async def test_long_field_is_cut_at_300_chars(sf) -> None:
     workspace_id, run_id = await _seed_run(
         sf, [(P, {"review": {"status": "done", "findings": [{**FINDING, "claim": "x" * 400}]}})]

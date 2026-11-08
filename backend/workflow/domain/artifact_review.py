@@ -197,6 +197,21 @@ def _json_object(raw: str) -> Any:
         return None
 
 
+_FILE_MAX = 200
+
+
+def _clean_file(value: Any) -> str | None:
+    """A reviewer's file path, or ``None`` when it could break a one-line PR entry."""
+    if not isinstance(value, str):
+        return None
+    path = value.strip()
+    if not path or len(path) > _FILE_MAX or "`" in path:
+        return None
+    if any(not ch.isprintable() for ch in path):
+        return None
+    return path
+
+
 def parse_review(raw: str) -> dict[str, Any] | None:
     """``{"status": "done", "findings": [...]}``, or ``None`` when the output is not a review."""
     data = _json_object(raw or "")
@@ -213,12 +228,12 @@ def parse_review(raw: str) -> dict[str, Any] | None:
         if severity not in SEVERITIES or not claim or not scenario:
             continue
         line = item.get("line")
-        file = item.get("file")
+        valid_line = isinstance(line, int) and not isinstance(line, bool) and line >= 1
         findings.append(
             {
                 "severity": severity,
-                "file": file if isinstance(file, str) and file else None,
-                "line": line if isinstance(line, int) and not isinstance(line, bool) else None,
+                "file": _clean_file(item.get("file")),
+                "line": line if valid_line else None,
                 "claim": claim,
                 "failure_scenario": scenario,
             }

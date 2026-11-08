@@ -224,6 +224,23 @@ def test_unparseable_review_output_is_dropped() -> None:
     assert parse_review('{"findings": []}') == {"status": "done", "findings": []}
 
 
+def _located(file: Any, line: Any) -> dict[str, Any]:
+    finding = {**_FINDING, "file": file, "line": line}
+    review = parse_review(json.dumps({"findings": [finding]}))
+    assert review is not None
+    return review["findings"][0]
+
+
+def test_review_location_is_validated() -> None:
+    for bad in ("a.py\n## x", "a`b`.py", "x" * 201, "a\x07.py", "   "):
+        assert _located(bad, 3)["file"] is None
+    assert _located("  src/a.py  ", 12)["file"] == "src/a.py"
+    assert _located("x" * 200, 1)["file"] == "x" * 200
+    for bad_line in (0, -3, True):
+        assert _located("a.py", bad_line)["line"] is None
+    assert _located("a.py", 12)["line"] == 12
+
+
 def test_run_detail_exposes_the_review() -> None:
     review = {"status": "done", "findings": [_FINDING]}
     row = SimpleNamespace(
