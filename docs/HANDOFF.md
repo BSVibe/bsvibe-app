@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-11-06
+# BSVibe session handoff — 2026-11-09
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,9 +21,9 @@
 
 ---
 
-## §0 — One line: **The harness items now run through BSVibe — two at a time — and its real runs keep finding the next hole**
+## §0 — One line: **Every passed round now gets an independent review on the card and the PR; its first findings were all real**
 
-11-04 → 11-06. Decision 11-04: HANDOFF §Ⅲ items go up as issues for BSVibe. Each run below was reviewed before its
+11-04 → 11-09. Decision 11-04: HANDOFF §Ⅲ items go up as issues for BSVibe. Each run below was reviewed before its
 Safe Mode card was approved; one was denied with a reason and re-driven.
 
 | Issue → PR | What | Rounds |
@@ -36,10 +36,19 @@ Safe Mode card was approved; one was denied with a reason and re-driven.
 | #1322 → #1324 | no runnable form → the judge's verdict stands (with a note); `covers` honoured only when the form carries the command's words | 4 (one orphaned by a deploy, retried) |
 | #1325 → #1326 | `covers` must sit in the command position, and a form that hides the exit code (`\|\| true`, `; true`, a pipe, `&& true`) is refused | **1** |
 | #1327 → #1328 | **the ledger keeps a checklist item's sub-list** (`head — sub1; sub2`, 800 chars, `…` when cut); a sub-checkbox is no longer an item of its own | **1** |
+| #1330 → #1331 | **R5 independent review (report-only)** — every PASSED round (after the final checks) gets one fresh-context review: request + ledger + whole `baseline..HEAD` diff + where non-test code calls each new public symbol ("운영 호출 없음") + the gate's commands; stored as `result["review"]` (`done` + findings `{severity, file, line, claim, failure_scenario}` / `unavailable`); the same tree is not reviewed twice | 1 (+ a CI flake the run fixed itself) |
+| #1332 → #1333 | the review shows on the Safe Mode card (`review_status` / `review_counts` / top 5), in the PR body ("## Independent review" after the ledger) and in `verification_quality` (`reviews_done` / `_unavailable`, `review_findings_by_severity`, `runs_reviewed_with_high`) — **live from #1334's card and PR #1335** | 2 |
+| #1334 → #1335 | the review's own first two findings: PR-body lines made one inert line; `runs_reviewed_with_high` judged on the last passed round, like the card | **1** |
+| #1336 → #1337 | the review's next finding: `file` / `line` validated when stored, the location flattened in the PR body | 2 |
 | by hand → #1323 | **a worker restart gives its drives back**: `stop()` cancels in-flight drives (their cancel path releases the claim), then releases whatever it still holds; on start a worker takes back the claims a previous process left on its own machine | — |
 
 Rounds per issue run this session: #1314 2 · #1316 2 · #1317 **1** · #1320 1 (+ a denial) · #1322 4 · #1325 **1** ·
-#1327 **1**.
+#1327 **1** · #1330 **1** · #1332 2 · #1334 **1** · #1336 2. #1332's and #1336's first rounds failed on the full
+`pytest -q` final check (an existing test the change broke) — not on the ledger.
+
+**The independent review's sample so far (3 reviews): 3 findings, all low, all real** — markdown injection into the PR
+body from reviewer text (#1333), a metric on a different basis than the card (#1333), an unflattened `file` field
+(#1335). None was a false alarm; two were fixed by the next run.
 
 ## §0-b — previous session (10-30 → 11-04): **Seven of the last nine issue runs passed on round 1; what the founder sends a running run now reaches it**
 
@@ -293,7 +302,7 @@ Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #128
 * **I picked an issue that was already done (#1046 → #1047).** Check `git log -S` / the code on main before filing
   or re-running an issue.
 
-## §Ⅱ-k — What 11-04/11-06 found
+## §Ⅱ-k — What 11-04/11-09 found
 
 * **A deploy stranded the runs it interrupted for two hours.** `AgentWorker.stop()` waited for its drives; a drive can
   be an hour into one executor turn, so the container was killed first and the claim stayed until the stale-claim
@@ -313,16 +322,24 @@ Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #128
 * **A test that seeds rows in a workspace scope must commit inside it** — on Postgres the RLS GUC is gone once the
   scope exits (#1323's first CI run). SQLite does not catch it; check on a throwaway Postgres.
 
+* **The review's first findings were things the ledger judge cannot see** — they are about the whole change (an
+  unescaped field reaching the PR body, two views counting on different bases), not about any one item.
+* **Autodeploy already defers while an executor run is alive** (`_infra/scripts/autodeploy.sh`, `run_liveness.sh`);
+  #1322's run was orphaned in the gap right after its claim, before it counted as alive. #1323 covers that gap and a
+  forced kill; a mid-drive deploy is therefore rare and has not been seen since.
+* **Ledger commands are proven live**: #1332's R6 ("`pnpm lint`·`tsc`·`test` 통과") was decided by the gate running
+  `cd apps/pwa && …` forms tagged `covers` — `done` with "명령 통과", no evidence citing needed.
+
 ## §Ⅲ — Next
 
-1. **See #1323 live**: a deploy while a run is mid-drive — `agent_worker_released_on_stop` (or
-   `agent_worker_released_orphaned_claims` after the restart) names the run and it is claimed again within a minute
-   (`docs/e2e/worker-restart-releases-claims-checklist.md`).
-2. **R5 independent reviewer** (report-only first) — open.
-3. Read `verification_quality` after each batch; once `leftover_dirs` has a sample, decide **#1267 layer 2** (the
-   deriver names the stack's cache paths up front).
+1. **R5 stage 2 decision** — once the review has a real sample (≥ 20 reviewed cards), compare the deny rate of cards
+   with a medium/high finding against cards without; only then consider letting a high finding hold the card. Read
+   `verification_quality` (`reviews_done`, `review_findings_by_severity`, `runs_reviewed_with_high`) per batch.
+2. **#1323 live** stays open: `agent_worker_released_on_stop` / `agent_worker_released_orphaned_claims` naming a run on
+   the next deploy that does hit a live drive (`docs/e2e/worker-restart-releases-claims-checklist.md`).
+3. Once `leftover_dirs` has a sample, decide **#1267 layer 2** (the deriver names the stack's cache paths up front).
 4. `covers_rejection` still accepts a hiding operator further along (`… lint && echo done || true`) and a background
-   `&` — low priority.
+   `&`; `git grep -w` call-site lookup counts a common name (`render`, `run`) as called — both low priority.
 5. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
    (`docs/runbook/vault-to-postgres.md` §"A second box"). Startup claim take-back (#1323) assumes ONE agent worker
    process per machine id. `/app/var/vault` may go now (kept until 10-29).
