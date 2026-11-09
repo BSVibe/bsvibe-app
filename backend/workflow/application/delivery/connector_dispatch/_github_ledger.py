@@ -99,6 +99,7 @@ def with_independent_review(body: str, review: dict[str, Any] | None) -> str:
         where = str(f.get("file") or "")
         if where and f.get("line") is not None:
             where = f"{where}:{f['line']}"
+        where = _one_line(where).replace("`", "'")
         place = f" `{where}`" if where else ""
         lines.append(
             f"- **{_one_line(f.get('severity'))}**{place} — {_one_line(f.get('claim'))}"
