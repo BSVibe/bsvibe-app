@@ -774,6 +774,7 @@ class TestGithubDeliveryDefensiveBranches:
             deliverable_id=uuid.uuid4(),
             run_id=uuid.uuid4(),
             content={"summary": "S"},
+            artifact_type="code",
         )
         assert len(actions) == 1 and actions[0].succeeded is False
         assert "workspace_root" in (actions[0].error or "")
@@ -788,6 +789,7 @@ class TestGithubDeliveryDefensiveBranches:
             deliverable_id=uuid.uuid4(),
             run_id=uuid.uuid4(),  # no dir created for it
             content={"summary": "S"},
+            artifact_type="code",
         )
         assert len(actions) == 1 and actions[0].succeeded is False
         assert "checkout does not exist" in (actions[0].error or "")

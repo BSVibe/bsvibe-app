@@ -119,15 +119,12 @@ async def _github_actions(
     deliverable_id: uuid.UUID,
     run_id: uuid.UUID | None,
     content: dict[str, Any],
+    artifact_type: str,
 ) -> list[ActionResult]:
     """``deliver_github`` with the SAME soft-fail contract every other target has.
 
-    The per-binding loop below already records a raising target as a failed
-    action so "a single bad target does not wedge the queue". github was the one
-    call outside that guarantee: when it raised, the exception escaped
-    ``dispatch()`` and every target after it was skipped — the founder got
-    nothing rather than everything-but-github (live 2026-08-10, a client_attach
-    approval where git-ops had no checkout to work in). Recorded, never silent.
+    A raising github call used to escape ``dispatch()`` and skip every later target
+    (live 2026-08-10, a client_attach approval with no checkout). Recorded, never silent.
     """
     try:
         return list(
@@ -138,6 +135,7 @@ async def _github_actions(
                 deliverable_id=deliverable_id,
                 run_id=run_id,
                 content=content,
+                artifact_type=artifact_type,
             )
         )
     except Exception as exc:  # noqa: BLE001 — one target's fault, not the fan-out's
@@ -258,6 +256,7 @@ class ConnectorDeliveryAdapter:
                     deliverable_id=deliverable_id,
                     run_id=run_id,
                     content=content,
+                    artifact_type=artifact_type,
                 )
             )
         for binding in bindings:

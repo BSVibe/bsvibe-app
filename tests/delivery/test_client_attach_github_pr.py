@@ -176,6 +176,7 @@ async def test_the_runs_pushed_branch_becomes_a_pull_request() -> None:
             deliverable_id=uuid.uuid4(),
             run_id=run_id,
             content={"summary": "Add the thing\n\nDetails."},
+            artifact_type="code",
         )
 
     assert actions[0].succeeded is True, actions[0].error
@@ -208,6 +209,7 @@ async def test_a_run_that_pushed_nothing_opens_no_pull_request() -> None:
             deliverable_id=uuid.uuid4(),
             run_id=run_id,
             content={"summary": "Nothing to do"},
+            artifact_type="code",
         )
 
     assert actions[0].succeeded is False, (
@@ -232,6 +234,7 @@ async def test_a_branch_level_with_base_opens_no_pull_request() -> None:
             deliverable_id=uuid.uuid4(),
             run_id=run_id,
             content={"summary": "s"},
+            artifact_type="code",
         )
 
     assert actions[0].succeeded is False, "no PR opened for a verified change is a failure"
@@ -262,6 +265,7 @@ async def test_the_credential_is_the_servers_and_the_pr_carries_it() -> None:
             deliverable_id=uuid.uuid4(),
             run_id=run_id,
             content={"summary": "s"},
+            artifact_type="code",
         )
 
     assert captured.get("open_pr") == _TOKEN

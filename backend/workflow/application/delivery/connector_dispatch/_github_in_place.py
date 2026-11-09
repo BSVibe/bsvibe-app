@@ -37,6 +37,22 @@ logger = structlog.get_logger(__name__)
 # A verified code change that produces no commit is not a clean no-op: no PR was opened.
 NO_CHANGES_ERROR = "no changes to deliver: no PR was opened for a verified code change"
 
+#: Artifact types that ARE a code change — only these turn "no commits" into a failure.
+CODE_ARTIFACT_TYPES: frozenset[str] = frozenset({"code", "pr"})
+
+
+def no_changes_result(action: str, artifact_type: str) -> ActionResult:
+    """The outcome of a delivery whose branch carries no commits.
+
+    A verified code change that opened no PR failed. Any other artifact (a report's
+    ``direct_output``) never promised a PR, so having none to open is a clean skip.
+    """
+    if artifact_type in CODE_ARTIFACT_TYPES:
+        return ActionResult(action=action, succeeded=False, error=NO_CHANGES_ERROR)
+    return ActionResult(
+        action=action, succeeded=True, output={"skipped": True, "reason": "no_changes"}
+    )
+
 
 async def _run_is_client_attach(
     session_factory: async_sessionmaker[AsyncSession], run_id: uuid.UUID
@@ -69,6 +85,7 @@ async def _deliver_client_attach_pr(
     deliverable_id: uuid.UUID,
     run_id: uuid.UUID,
     content: dict[str, Any],
+    artifact_type: str,
 ) -> list[ActionResult]:
     """Open a PR for a run that committed and pushed on the founder's machine.
 
@@ -137,13 +154,7 @@ async def _deliver_client_attach_pr(
             branch=branch,
             mode="client_attach",
         )
-        return [
-            ActionResult(
-                action=action_prefix,
-                succeeded=False,
-                error=NO_CHANGES_ERROR,
-            )
-        ]
+        return [no_changes_result(action_prefix, artifact_type)]
 
     return await _open_pr_and_settle(
         deps=deps,
