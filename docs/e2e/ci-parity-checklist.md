@@ -19,8 +19,9 @@ red when its production edge is removed).
 - [x] `runs_detail` for the next run's verification shows `floor` commands in
       `derived_gate.commands` on every round.
 - [x] The passing round shows `final` commands, and no failed round does.
-- [ ] A round whose `final` fails goes back to the agent with the failing command in the
+- [x] A round whose `final` fails goes back to the agent with the failing command in the
       feedback (not a silent pass, not a founder question).
+      (#1332, #1336, #1339 round 1: `GATE COMMAND FAILED: uv run pytest -q` in the feedback; the next round fixed the broken test.)
 - [x] No round fails on `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` (CI=true reached the
       command).
 
@@ -33,16 +34,18 @@ red when its production edge is removed).
 
 ## D. client_attach (BStockReport)
 
-- [ ] A run with no `verify_floor` / `verify_final` declared behaves as before (no extra
+- [x] A run with no `verify_floor` / `verify_final` declared behaves as before (no extra
       commands in the in-place gate blob).
+      (BStockReport 11-09 `d330b009`: one derived check only, no floor/final.)
 
 ## E. Before a round is spent
 
 - [ ] A run that says "done" with owed ledger items unevidenced gets ONE
       `REQUIREMENT EVIDENCE MISSING` turn naming them, and its first verification carries the
       evidence.
-- [ ] The derived gate no longer repeats a command the product's floor or final runs (no second
+- [x] The derived gate no longer repeats a command the product's floor or final runs (no second
       full pytest in the same verification).
+      (#1339 run `f83bb33b`: derived `pytest` scoped to `tests/delivery …`, the full `pytest -q` once, as `final`.)
 - [ ] A ledger item that names an identifier deep in a long diff is judged `done` or
       `rejected`, not `unclear` from a cut-off excerpt.
 

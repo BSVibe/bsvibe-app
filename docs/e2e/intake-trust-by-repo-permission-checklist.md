@@ -17,6 +17,7 @@ member) is routed to the run when that person has write access to the repo.
 
 ## Live (after deploy)
 
-- [ ] Edit the body of an issue whose run is in flight, as the founder → worker log shows
+- [x] Edit the body of an issue whose run is in flight, as the founder → worker log shows
       `issue_edit_routed_to_run`, not `issue_edit_not_routed_untrusted_editor`, and no new request
+      (2026-11-03/04, #1296 and #1299: the founder's edit and comment reached the running run's ledger as R9 / R10.)
 - [ ] A comment by an account without write access is still logged `*_not_routed_*`
