@@ -33,7 +33,11 @@ from backend.workflow.domain.delivery import ActionResult
 from backend.workflow.infrastructure.delivery.git_ops import GitOps
 
 from ._builders import _split_summary
-from ._github_in_place import NO_CHANGES_ERROR, _deliver_client_attach_pr, _run_is_client_attach
+from ._github_in_place import (
+    _deliver_client_attach_pr,
+    _run_is_client_attach,
+    no_changes_result,
+)
 from ._github_pr import _open_pr_and_settle, _source_github_issue_number
 from ._resolver import GithubBinding, product_runs_in_place, resolve_github_binding
 
@@ -161,6 +165,7 @@ async def deliver_github(
     deliverable_id: uuid.UUID,
     run_id: uuid.UUID | None,
     content: dict[str, Any],
+    artifact_type: str,
 ) -> list[ActionResult]:
     """Commit the run's checkout → push the branch → open a PR.
 
@@ -181,6 +186,7 @@ async def deliver_github(
             deliverable_id=deliverable_id,
             run_id=run_id,
             content=content,
+            artifact_type=artifact_type,
         )
     if deps.workspace_root is None or run_id is None:
         logger.warning(
@@ -227,13 +233,7 @@ async def deliver_github(
                 deliverable_id=str(deliverable_id),
                 run_id=str(run_id),
             )
-            return [
-                ActionResult(
-                    action=action_prefix,
-                    succeeded=False,
-                    error=NO_CHANGES_ERROR,
-                )
-            ]
+            return [no_changes_result(action_prefix, artifact_type)]
         logger.info(
             "github_delivery_using_w2_commit",
             workspace_id=str(workspace_id),

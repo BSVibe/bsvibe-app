@@ -41,6 +41,7 @@ async def test_a_raising_github_target_does_not_abort_the_other_targets(
         deliverable_id=uuid.uuid4(),
         run_id=None,
         content={},
+        artifact_type="code",
     )
 
     assert len(actions) == 1
@@ -69,6 +70,7 @@ async def test_a_working_github_target_is_passed_through_unchanged() -> None:
             deliverable_id=uuid.uuid4(),
             run_id=None,
             content={},
+            artifact_type="code",
         )
     finally:
         cd.deliver_github = original  # type: ignore[assignment]

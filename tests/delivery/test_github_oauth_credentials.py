@@ -150,6 +150,7 @@ async def test_deliver_github_pushes_and_opens_pr_with_oauth_token(tmp_path: Pat
             deliverable_id=uuid.uuid4(),
             run_id=run_id,
             content={"summary": "Title\n\nBody"},
+            artifact_type="code",
         )
 
     assert actions[0].succeeded is True

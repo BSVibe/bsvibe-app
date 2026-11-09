@@ -131,6 +131,7 @@ class _RealGithubDispatcher:
             deliverable_id=kwargs["deliverable_id"],
             run_id=deliverable.run_id,
             content={"summary": "Add the thing"},
+            artifact_type="code",
         )
         if self._also_failing:
             actions.append(
