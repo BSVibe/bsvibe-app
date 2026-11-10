@@ -98,6 +98,8 @@ def create_app() -> FastAPI:
             build_delivery_adapter,
         )
 
+        wire_delivery_failure_decisions()
+
         delivery_dispatcher = await build_delivery_adapter(session_factory=session_factory)
 
         # T1b — the two LOOP-owned effects behind the run-scoped work tools, injected here:
@@ -284,6 +286,23 @@ def create_app() -> FastAPI:
     bind_process_redis(settings)
 
     return app
+
+
+def wire_delivery_failure_decisions() -> None:
+    """Give THIS process the decision factory the delivery path raises ``delivery_failed`` with.
+
+    Safe Mode approval (REST / MCP / Telegram) dispatches from the backend process, so a failed
+    delivery must raise its Decision here too -- the same factory the worker runtime wires --
+    or the founder is never told and cannot resend.
+    """
+    from backend.workflow.application.run_persistence import (  # noqa: PLC0415
+        create_decision,
+    )
+    from backend.workflow.infrastructure.workers.delivery_worker import (  # noqa: PLC0415
+        set_decision_factory,
+    )
+
+    set_decision_factory(create_decision)
 
 
 def bind_process_redis(settings: Settings) -> None:
