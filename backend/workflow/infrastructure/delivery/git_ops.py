@@ -313,6 +313,24 @@ class GitOps:
         code, out, _err = await self._run("rev-parse", "--is-shallow-repository", cwd=dest)
         return code == 0 and out.strip() == "true"
 
+    async def deepen(self, dest: Path, by: int, *, token: str | None = None) -> None:
+        """``git fetch --deepen <by> origin`` -- ``by`` more commits of a shallow clone's history.
+
+        Token handling as :meth:`fetch`: ``origin`` is re-authenticated for THIS fetch and
+        scrubbed back, so a clone whose origin carries no credential can still be deepened.
+        """
+        if token:
+            origin = await self._run_checked("remote", "get-url", "origin", cwd=dest)
+            authed = self.authed_url(origin.strip(), token=token)
+            await self._run_checked("remote", "set-url", "origin", authed, cwd=dest, token=token)
+        try:
+            await self._run_checked(
+                "fetch", "--quiet", f"--deepen={by}", "origin", cwd=dest, token=token
+            )
+        finally:
+            if token:
+                await self.scrub_origin_token(dest)
+
     async def fetch(
         self,
         dest: Path,

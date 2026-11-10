@@ -65,6 +65,7 @@ from backend.workflow.application.runtime.sandbox_selection import (
 from backend.workflow.application.runtime.workspace_provisioning import (
     _build_composite_workspace_provisioner,
     _product_workspace_provisioner,
+    _restore_github_run_checkpoint,
 )
 from backend.workflow.application.stages.frame import FrameLlm
 from backend.workflow.domain.client_worktree import client_run_worktree
@@ -352,7 +353,9 @@ def build_agent_execution_deps(
             suggested_skill_description=suggested_skill_description,
         )
 
-    github_provisioner = build_github_workspace_provisioner(cipher=cipher_from_settings)
+    github_provisioner = build_github_workspace_provisioner(
+        cipher=cipher_from_settings, restore_checkpoint=_restore_github_run_checkpoint
+    )
     provisioner = _build_composite_workspace_provisioner(
         github=github_provisioner,
         product=_product_workspace_provisioner,

@@ -28,6 +28,7 @@ from backend.storage.product_bundle_store import (
     build_run_checkpoint_store,
 )
 from backend.storage.product_workspace import (
+    RunCloneSource,
     add_run_worktree,
     checkpoint_run_worktree,
     delete_run_checkpoint,
@@ -37,7 +38,9 @@ from backend.storage.product_workspace import (
     publish_product_bundle,
     restore_run_worktree,
     run_worktree_path,
+    standalone_run_branch,
 )
+from backend.workflow.infrastructure.delivery.git_ops import GitOps
 
 pytestmark = pytest.mark.asyncio
 
@@ -317,10 +320,35 @@ async def test_a_run_that_comes_back_continues_from_the_newest_work(
         assert (wt / "edit.py").read_text() == "edit.py v3 — done on box-b\n"
 
 
-async def test_a_standalone_clone_run_round_trips(
-    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A GitHub run's tree is its own ``--depth 1`` clone, with no product repository behind it."""
+async def _github_origin(tmp_path: Path) -> Path:
+    """A local bare repository standing in for the GitHub origin (two commits on ``main``)."""
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    await _git("init", "-q", "-b", "main", cwd=seed)
+    await _git("config", "user.email", "t@example.com", cwd=seed)
+    await _git("config", "user.name", "t", cwd=seed)
+    for n in (1, 2):
+        (seed / "base.py").write_text(f"v{n}\n")
+        await _git("add", ".", cwd=seed)
+        await _git("commit", "-qm", f"base {n}", cwd=seed)
+    bare = tmp_path / "origin.git"
+    await _git("clone", "-q", "--bare", str(seed), str(bare), cwd=tmp_path)
+    return bare
+
+
+def _clone_source(origin: Path) -> RunCloneSource:
+    """What the GitHub provisioner does for the run: a depth-1 clone with a token-free origin."""
+    ops = GitOps()
+    return RunCloneSource(
+        clone=lambda dest: ops.clone(origin.as_uri(), dest, token=None, depth=1),
+        deepen=lambda dest, by: ops.deepen(dest, by),
+    )
+
+
+async def _standalone_run(
+    world: dict[str, Any], origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Any, str, str]:
+    """On machine A: the run's own depth-1 clone with a commit and uncommitted work, checkpointed."""
     from types import SimpleNamespace
 
     from backend.workflow.application import run_checkpoint
@@ -334,26 +362,13 @@ async def test_a_standalone_clone_run_round_trips(
 
     monkeypatch.setattr(run_checkpoint, "product_is_client_attach", _not_client_attach)
 
-    origin = tmp_path / "origin"
-    origin.mkdir()
-    await _git("init", "-q", "-b", "main", cwd=origin)
-    await _git("config", "user.email", "t@example.com", cwd=origin)
-    await _git("config", "user.name", "t", cwd=origin)
-    for n in (1, 2):
-        (origin / "base.py").write_text(f"v{n}\n")
-        await _git("add", ".", cwd=origin)
-        await _git("commit", "-qm", f"base {n}", cwd=origin)
-
-    pid, rid = uuid.uuid4(), uuid.uuid4()
-    branch = f"bsvibe/run-{str(rid)[:8]}"
-    run = SimpleNamespace(id=rid, product_id=pid, payload={})
+    rid = uuid.uuid4()
+    run = SimpleNamespace(id=rid, product_id=uuid.uuid4(), payload={})
+    branch = standalone_run_branch(rid)
     with world["a"]:
         wt = run_worktree_path(rid)
-        wt.parent.mkdir(parents=True)
-        await _git("clone", "-q", "--depth", "1", origin.as_uri(), str(wt), cwd=tmp_path)
+        await GitOps().clone(origin.as_uri(), wt, token=None, depth=1)
         assert (wt / ".git" / "shallow").exists()
-        await _git("config", "user.email", "t@example.com", cwd=wt)
-        await _git("config", "user.name", "t", cwd=wt)
         await _git("checkout", "-qb", branch, cwd=wt)
         (wt / "committed.py").write_text("verified work\n")
         await _git("add", ".", cwd=wt)
@@ -361,19 +376,96 @@ async def test_a_standalone_clone_run_round_trips(
         head = await _git("rev-parse", "HEAD", cwd=wt)
         (wt / "base.py").write_text("v3 (uncommitted)\n")
         (wt / "new.py").write_text("brand new\n")
+        # The checkpoint needs neither network nor credentials: origin is gone for it.
+        await _git("remote", "set-url", "origin", (tmp_path / "gone.git").as_uri(), cwd=wt)
         await run_checkpoint.checkpoint_before_release(object(), run, machine_id="box-a")
+    return run, branch, head
+
+
+async def test_a_standalone_clone_run_round_trips(
+    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: Any
+) -> None:
+    """A GitHub run's tree is its own ``--depth 1`` clone, with no product repository behind it."""
+    from backend.workflow.application import run_checkpoint
+
+    origin = await _github_origin(tmp_path)
+    run, branch, head = await _standalone_run(world, origin, tmp_path, monkeypatch)
     assert run.payload["checkpoint"] == {
         "sha": run.payload["checkpoint"]["sha"],
         "machine": "box-a",
-    }, "no stale record: the save worked"
+    }, "no stale record: the save worked, with origin unreachable"
 
     with world["b"]:
-        wt = run_worktree_path(rid)
+        wt = run_worktree_path(run.id)
         assert not wt.exists()
-        await run_checkpoint.provision_run_worktree(run, workspace_dir=wt, machine_id="box-b")
+        await run_checkpoint.provision_run_worktree(
+            run, workspace_dir=wt, machine_id="box-b", clone_source=_clone_source(origin)
+        )
         assert await _git("rev-parse", "--abbrev-ref", "HEAD", cwd=wt) == branch
         assert await _git("rev-parse", "HEAD", cwd=wt) == head
         assert (wt / "base.py").read_text() == "v3 (uncommitted)\n"
         assert (wt / "new.py").read_text() == "brand new\n"
         status = await _git("status", "--porcelain", cwd=wt)
         assert " M base.py" in status and "?? new.py" in status
+        # The restored tree is what the provisioner makes: a token-free origin it can push to.
+        assert await _git("remote", "get-url", "origin", cwd=wt) == origin.as_uri()
+        await _git("add", ".", cwd=wt)
+        await _git("commit", "-qm", "continued on box-b", cwd=wt)
+        await _git("push", "-q", "origin", branch, cwd=wt)
+    pushed = await _git("rev-parse", f"refs/heads/{branch}", cwd=origin)
+    assert pushed == await _git("rev-parse", "HEAD", cwd=run_worktree_path(run.id))
+    assert "run_checkpoint_failed" not in caplog.text
+
+
+async def test_a_standalone_restore_deepens_when_origin_moved_on(
+    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The checkpoint's base commit is not in a fresh depth-1 clone once origin has moved."""
+    from backend.workflow.application import run_checkpoint
+
+    origin = await _github_origin(tmp_path)
+    run, branch, head = await _standalone_run(world, origin, tmp_path, monkeypatch)
+    pusher = tmp_path / "pusher"
+    await _git("clone", "-q", str(origin), str(pusher), cwd=tmp_path)
+    await _git("config", "user.email", "t@example.com", cwd=pusher)
+    await _git("config", "user.name", "t", cwd=pusher)
+    (pusher / "other.py").write_text("merged elsewhere\n")
+    await _git("add", ".", cwd=pusher)
+    await _git("commit", "-qm", "main moved", cwd=pusher)
+    await _git("push", "-q", "origin", "main", cwd=pusher)
+
+    with world["b"]:
+        wt = run_worktree_path(run.id)
+        await run_checkpoint.provision_run_worktree(
+            run, workspace_dir=wt, machine_id="box-b", clone_source=_clone_source(origin)
+        )
+        assert await _git("rev-parse", "HEAD", cwd=wt) == head
+        assert (wt / "new.py").read_text() == "brand new\n"
+
+
+async def test_a_standalone_restore_that_cannot_get_its_base_is_refused(
+    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Origin without the run's base (rewritten history) -> RunCheckpointMissing, no tree left."""
+    from backend.workflow.application import run_checkpoint
+
+    origin = await _github_origin(tmp_path)
+    run, _branch, _head = await _standalone_run(world, origin, tmp_path, monkeypatch)
+    other = tmp_path / "other-origin.git"
+    seed = tmp_path / "seed2"
+    seed.mkdir()
+    await _git("init", "-q", "-b", "main", cwd=seed)
+    await _git("config", "user.email", "t@example.com", cwd=seed)
+    await _git("config", "user.name", "t", cwd=seed)
+    (seed / "x.py").write_text("unrelated\n")
+    await _git("add", ".", cwd=seed)
+    await _git("commit", "-qm", "unrelated", cwd=seed)
+    await _git("clone", "-q", "--bare", str(seed), str(other), cwd=tmp_path)
+
+    with world["b"]:
+        wt = run_worktree_path(run.id)
+        with pytest.raises(run_checkpoint.RunCheckpointMissing):
+            await run_checkpoint.provision_run_worktree(
+                run, workspace_dir=wt, machine_id="box-b", clone_source=_clone_source(other)
+            )
+        assert not wt.exists()

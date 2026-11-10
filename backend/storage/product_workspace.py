@@ -942,8 +942,8 @@ async def checkpoint_run_worktree(
     (parent: the branch HEAD), built through a throwaway index: the branch, the real index and
     the files on disk are untouched, so no "WIP" commit can reach ``main`` when the run ships.
     Build byproducts are left out (the same pathspecs a real commit excludes). The branch and
-    the snapshot go up as one self-contained bundle — a thin bundle would need ``main`` to be
-    present on the machine that restores it, and that machine may never have had this one's.
+    the snapshot go up as one self-contained bundle (a product worktree's restoring machine may
+    never have had ``main``); only a shallow clone's bundle is thin, see below.
 
     Returns the snapshot sha, or ``None`` when this machine holds no worktree for the run.
     """
@@ -956,13 +956,18 @@ async def checkpoint_run_worktree(
         )
 
         store = build_run_checkpoint_store()
+    exclude: list[str] = []
     if _is_standalone_clone(worktree):
+        # The tree is its own repository (a GitHub run's clone), so the bundle comes from the tree
+        # itself and carries its real branch. A ``--depth 1`` clone is bundled AS IS, thin: the
+        # shallow boundary commits are excluded (``^<sha>``) and become the bundle's
+        # prerequisites. No ``fetch --unshallow`` -- that needs origin and a credential (the
+        # run's origin URL carries none), and a checkpoint must work with neither network nor
+        # auth. The machine that restores clones origin first, so it has those commits.
         branch = await _current_branch(worktree)
-        # A ``--depth 1`` clone bundles to a THIN bundle (its parents are missing), which no
-        # other machine can fetch. Deepen to full history first; if that fails the checkpoint
-        # fails (recorded ``stale``) rather than saving something unrestorable.
-        if (worktree / ".git" / "shallow").exists():
-            await _git("fetch", "--quiet", "--unshallow", "origin", cwd=worktree)
+        shallow = worktree / ".git" / "shallow"
+        if shallow.exists():
+            exclude = [f"^{sha}" for sha in shallow.read_text().split()]
         repo = worktree
     else:
         branch = run_branch_name(run_id)
@@ -990,6 +995,7 @@ async def checkpoint_run_worktree(
             str(bundle),
             f"refs/heads/{branch}",
             _checkpoint_ref(run_id),
+            *exclude,
             cwd=repo,
         )
         await store.put(run_id, bundle)
@@ -997,13 +1003,73 @@ async def checkpoint_run_worktree(
     return snapshot
 
 
+@dataclass(frozen=True, slots=True)
+class RunCloneSource:
+    """How a GitHub run's OWN clone is made again on another machine.
+
+    The same way the run's GitHub provisioner made it (connector credential, ``--depth``, an
+    ``origin`` URL without the token, committer identity), so a restored tree is that tree.
+    ``clone`` creates the clone at ``dest``; ``deepen`` fetches ``by`` more commits of history.
+    """
+
+    clone: Callable[[Path], Awaitable[None]]
+    deepen: Callable[[Path, int], Awaitable[None]]
+
+
+def standalone_run_branch(run_id: uuid.UUID) -> str:
+    """The branch of a run's own clone (``bsvibe/run-<id8>``; the GitHub provisioner's name)."""
+    return f"bsvibe/run-{run_id.hex[:8]}"
+
+
+_DEEPEN_STEPS = (50, 500, 5000)
+
+
+async def _restore_standalone_clone(
+    source: RunCloneSource, worktree: Path, run_id: uuid.UUID, bundle: Path
+) -> bool:
+    """Clone origin like the provisioner did, then put the bundle's branch on top of it.
+
+    The bundle of a shallow clone is thin: its prerequisites are in the fresh clone, or a few
+    deepens bring them. ``False`` (and no tree left behind) when they cannot be had.
+    """
+    branch = standalone_run_branch(run_id)
+    ref = _checkpoint_ref(run_id)
+    specs = [f"refs/heads/{branch}:refs/heads/{branch}", f"{ref}:{ref}"]
+    if worktree.exists() and not any(worktree.iterdir()):  # noqa: ASYNC240
+        worktree.rmdir()  # noqa: ASYNC240
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        await source.clone(worktree)
+        fetch = ("fetch", "--quiet", "--force", str(bundle), *specs)
+        fetched = await _git(*fetch, cwd=worktree, check=False)
+        for by in _DEEPEN_STEPS:
+            if fetched.returncode == 0:
+                break
+            await source.deepen(worktree, by)
+            fetched = await _git(*fetch, cwd=worktree, check=False)
+        if fetched.returncode != 0:
+            logger.warning("run_restore_prerequisites_missing", run_id=str(run_id))
+            await asyncio.to_thread(shutil.rmtree, worktree, True)
+            return False
+        await _git("checkout", "--quiet", branch, cwd=worktree)
+    except BaseException:
+        await asyncio.to_thread(shutil.rmtree, worktree, True)
+        raise
+    return True
+
+
 async def restore_run_worktree(
     product_id: uuid.UUID,
     run_id: uuid.UUID,
     *,
     store: ProductBundleStore | None = None,
+    clone_source: RunCloneSource | None = None,
 ) -> bool:
     """Rebuild a run's worktree on THIS machine from its checkpoint (#929).
+
+    ``clone_source`` is given for a run that executes as its own GitHub clone (decided by the
+    run's product binding, never by what the bundle or this machine holds); without it the run
+    is a worktree of the product repository.
 
     ``True`` when the worktree is here afterwards (already present, or restored); ``False``
     when there is no checkpoint — the caller decides whether that is a new run (branch from
@@ -1020,16 +1086,17 @@ async def restore_run_worktree(
         )
 
         store = build_run_checkpoint_store()
-    repo = product_workspace_path(product_id)
-    branch = run_branch_name(run_id)
     ref = _checkpoint_ref(run_id)
     with tempfile.TemporaryDirectory(prefix="bsvibe-restore-run-") as tmp:
         bundle = Path(tmp) / f"{run_id}.bundle"
         if not await store.get(run_id, bundle):
             return False
-        heads = (await _git("bundle", "list-heads", str(bundle), cwd=Path(tmp))).stdout
-        names = [parts[1] for parts in (ln.split() for ln in heads.splitlines()) if len(parts) == 2]
-        if repo.exists() and f"refs/heads/{branch}" in names:
+        if clone_source is not None:
+            if not await _restore_standalone_clone(clone_source, worktree, run_id, bundle):
+                return False
+        else:
+            repo = product_workspace_path(product_id)
+            branch = run_branch_name(run_id)
             await _git(
                 "fetch",
                 "--quiet",
@@ -1043,26 +1110,6 @@ async def restore_run_worktree(
             await _git("worktree", "prune", cwd=repo)
             worktree.parent.mkdir(parents=True, exist_ok=True)
             await _git("worktree", "add", "--quiet", str(worktree), branch, cwd=repo)
-        else:
-            # A GitHub run's own clone: its branch is not ``bsvibe/run/<rid>``. Take the
-            # bundle's real branch and rebuild a standalone repository (the bundle does not
-            # carry ``origin``).
-            heads_only = [n for n in names if n.startswith("refs/heads/")]
-            if not heads_only:
-                return False
-            branch = heads_only[0].removeprefix("refs/heads/")
-            worktree.mkdir(parents=True, exist_ok=True)
-            await _git("init", "--quiet", cwd=worktree)
-            await _git(
-                "fetch",
-                "--quiet",
-                "--force",
-                str(bundle),
-                f"refs/heads/{branch}:refs/heads/{branch}",
-                f"{ref}:{ref}",
-                cwd=worktree,
-            )
-            await _git("checkout", "--quiet", branch, cwd=worktree)
     # The snapshot's files into the tree, then the index back to HEAD: the work is uncommitted
     # again, as it was. ``checkout <tree> -- .`` cannot remove a file, so deletions are applied
     # by name.
