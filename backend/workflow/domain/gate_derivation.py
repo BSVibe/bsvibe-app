@@ -17,6 +17,8 @@ prompt-shape independently testable.
 
 from __future__ import annotations
 
+import re
+import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -160,6 +162,65 @@ def surface_exercised(commands: Sequence[Mapping[str, Any]]) -> bool:
     return any(c.get("kind") == "surface" and c.get("status") == "passed" for c in commands)
 
 
+_ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_SHELL_OPERATORS = frozenset({"&&", "||", ";", "|", "&", ">", ">>", "<", "2>&1"})
+#: pytest options that take a SEPARATE value (``-n 4``); that value is not a path.
+_PYTEST_VALUE_FLAGS = frozenset(
+    {"-n", "-p", "-c", "-o", "-W", "--maxfail", "--tb", "--durations", "--rootdir", "--junitxml"}
+)
+#: pytest options that NARROW what runs: the run is no longer "everything".
+_PYTEST_NARROWING = ("-k", "-m", "--deselect", "--ignore", "--lf", "--last-failed", "--sw")
+
+
+def _pytest_scope(command: str) -> tuple[str, ...] | None:
+    """What a ``pytest`` invocation runs: ``()`` for the whole suite, else its path arguments and
+    narrowing options. ``None`` when it is not a plain pytest invocation (another tool, or a
+    compound command whose scope cannot be read from its words)."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    while tokens and _ENV_ASSIGNMENT.match(tokens[0]):
+        tokens.pop(0)
+    if any(t in _SHELL_OPERATORS for t in tokens):
+        return None
+    if tokens[:2] in (["uv", "run"], ["poetry", "run"]):
+        tokens = tokens[2:]
+    if tokens[:3] in (["python", "-m", "pytest"], ["python3", "-m", "pytest"]):
+        tokens = tokens[2:]
+    if not tokens or tokens[0] != "pytest":
+        return None
+    scope: list[str] = []
+    skip_value = False
+    for token in tokens[1:]:
+        if skip_value:
+            skip_value = False
+        elif token.startswith("-"):
+            skip_value = token in _PYTEST_VALUE_FLAGS
+            if token.startswith(_PYTEST_NARROWING):
+                scope.append(token)
+        else:
+            scope.append(token)
+    return tuple(scope)
+
+
+def duplicates_product_run(command: str, product_checks: Sequence[str]) -> str | None:
+    """Why ``command`` repeats a check the product already runs, or ``None``.
+
+    A whole-suite ``pytest`` run (no path, no narrowing option) beside a product check that is
+    also a whole-suite ``pytest`` run is the same test run under other flags (``--cov``, ``-v``):
+    the entire suite would run twice in one verification (prod #1343: three rounds lost to the
+    slower copy timing out). Decided over the words of the two commands, never by a model. A
+    narrowed run (``pytest tests/delivery``) is not a duplicate.
+    """
+    if _pytest_scope(command) != ():
+        return None
+    for check in product_checks:
+        if _pytest_scope(check) == ():
+            return f"the whole-suite pytest run is already a product check ({check})"
+    return None
+
+
 _DERIVATION_SYSTEM_PROMPT = (
     "You are an INDEPENDENT verification-gate deriver. Given a repository's OWN "
     "declarations and the files a work step changed, output the exact shell "
@@ -217,7 +278,8 @@ _DERIVATION_SYSTEM_PROMPT = (
     "PREVIOUS ROUND, when given, lists the commands the previous verification of this "
     "same work ran. Re-emit each of them VERBATIM unless the change since then made it "
     "wrong (a path renamed or removed); never make a command that passed stricter. Add a "
-    "command only for what the change newly needs.\n"
+    "command only for what the change newly needs. A command listed as TIMED OUT is not "
+    "re-emitted: no code change fixes a time limit, so narrow its scope or leave it out.\n"
     "CONSTRAINTS: the task intent often states not only what to build but what NOT "
     "to do. Every such constraint is verifiable and must become its own command "
     "whose EXIT CODE decides whether it held — exit 0 when the constraint was "
@@ -273,6 +335,7 @@ def derivation_planner_messages(
     ledger_items: Sequence[str] = (),
     previous_commands: Sequence[str] = (),
     ledger_commands: Sequence[str] = (),
+    timed_out_commands: Sequence[str] = (),
 ) -> list[dict[str, str]]:
     """Build the (system, user) message pair grounding the deriver in the repo.
 
@@ -345,6 +408,13 @@ def derivation_planner_messages(
         if previous_commands
         else ""
     )
+    timed_out_block = (
+        "\n\nCommands that TIMED OUT in the previous verification (do not re-emit them as they "
+        "are - narrow the scope or leave them out):\n"
+        + "\n".join(f"- {c}" for c in timed_out_commands)
+        if timed_out_commands
+        else ""
+    )
     user = (
         f"Task intent:\n{intent}\n\n"
         f"{decisions_block}"
@@ -356,6 +426,7 @@ def derivation_planner_messages(
         f"{ledger_block}"
         f"{ledger_commands_block}"
         f"{previous_block}"
+        f"{timed_out_block}"
     )
     return [
         {"role": "system", "content": _DERIVATION_SYSTEM_PROMPT},
@@ -368,6 +439,7 @@ __all__ = [
     "DerivedCommand",
     "DerivedGate",
     "derivation_planner_messages",
+    "duplicates_product_run",
     "founder_decisions_from_payload",
     "parse_derived_gate",
     "surface_exercised",
