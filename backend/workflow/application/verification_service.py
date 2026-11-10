@@ -41,6 +41,7 @@ from backend.workflow.application.counterfactual_check import check_guards
 from backend.workflow.application.gate_commands import (
     any_failed,
     latest_derived_commands,
+    latest_timed_out_commands,
     product_declared_checks,
     run_gate_commands,
 )
@@ -57,6 +58,7 @@ from backend.workflow.domain.declared_checks import gate_command
 from backend.workflow.domain.gate_derivation import (
     DerivedGate,
     derivation_planner_messages,
+    duplicates_product_run,
     founder_decisions_from_payload,
     parse_derived_gate,
     surface_exercised,
@@ -632,6 +634,7 @@ class VerificationService:
         # Read while the connection is still held: what the PRODUCT requires checked.
         declared = await product_declared_checks(self._session, run.product_id)
         previous = await latest_derived_commands(self._session, run.id)
+        timed_out = await latest_timed_out_commands(self._session, run.id)
         # Every step from here to the final persist is external work (git,
         # sandbox, LLM) that touches no DB — so hold no connection across it.
         # See :meth:`_release_connection` for the failure this prevents (#686).
@@ -806,6 +809,7 @@ class VerificationService:
             floor=declared.floor,
             final=declared.final,
             previous=previous,
+            timed_out=timed_out,
         )
         derived_gate = gate_outcome.blob if isinstance(gate_outcome, DerivedGateOk) else None
         deriver_failed = isinstance(gate_outcome, DerivedGateFailed)
@@ -1247,6 +1251,7 @@ class VerificationService:
         ledger_items: tuple[str, ...] = (),
         previous_commands: tuple[str, ...] = (),
         ledger_commands: tuple[str, ...] = (),
+        timed_out_commands: tuple[str, ...] = (),
     ) -> DerivedGate | DerivedGateFailed:
         """Ask the independent deriver for this repo's verification commands,
         grounded in its manifests. Bounded — a hung executor CLI must never stall
@@ -1275,6 +1280,7 @@ class VerificationService:
                         ledger_items=ledger_items,
                         previous_commands=previous_commands,
                         ledger_commands=ledger_commands,
+                        timed_out_commands=timed_out_commands,
                     ),
                 ),
                 timeout=_VERIFY_LLM_TIMEOUT_S,
@@ -1315,6 +1321,7 @@ class VerificationService:
         floor: tuple[str, ...] = (),
         final: tuple[str, ...] = (),
         previous: tuple[str, ...] = (),
+        timed_out: tuple[str, ...] = (),
     ) -> DerivedGateOutcome:
         """I1′ — the repo's OWN verification gate, DERIVED by an LLM grounded in
         the repo's declarations (not a per-stack detector list nor a hardcoded
@@ -1363,6 +1370,7 @@ class VerificationService:
             # tagged ``covers``, and the item is decided from the exit codes of those.
             **({"ledger_commands": ledger_commands} if ledger_commands else {}),
             **({"previous_commands": previous} if previous else {}),
+            **({"timed_out_commands": timed_out} if timed_out else {}),
         )
         if isinstance(gate, DerivedGateFailed):
             return gate
@@ -1388,6 +1396,18 @@ class VerificationService:
         run_list = [
             c for c in gate.commands if derived or (kept_covers.get(c.command) and ledger_commands)
         ]
+        # The deriver may re-word a whole-suite run the product already runs (other flags): the
+        # entire suite would run twice. A command carrying a ledger ``covers`` tag stays.
+        product_checks = (*floor, *final)
+        deduped = []
+        for c in run_list:
+            if not kept_covers.get(c.command) and (
+                reason := duplicates_product_run(c.command, product_checks)
+            ):
+                logger.warning("gate_command_duplicates_product", command=c.command, reason=reason)
+                continue
+            deduped.append(c)
+        run_list = deduped
         commands: list[tuple[str, str]] = [(c.command, c.kind) for c in run_list]
         covers = {c.command: kept_covers[c.command] for c in run_list if c.command in kept_covers}
         # The product's floor runs beside whatever was derived — including nothing: it is
