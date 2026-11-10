@@ -45,6 +45,15 @@ COPY bsvibe_sdk/ ./bsvibe_sdk/
 COPY plugin/ ./plugin/
 RUN uv sync --no-dev --frozen
 
+# tree-sitter 파서는 패키지에 없고 GitHub Releases 에서 내려받는다. 실행 중 GitHub
+# 장애에 휘둘리지 않도록 빌드 때 고정 경로에 미리 받아 두고, 런타임 다운로드는 막는다.
+ENV BSVIBE_PARSER_CACHE_DIR=/opt/tree-sitter-parsers \
+    BSVIBE_PARSER_OFFLINE=1
+RUN uv run --no-dev python -c "import os, tree_sitter_language_pack as p; \
+p.configure(p.PackConfig(cache_dir=os.environ['BSVIBE_PARSER_CACHE_DIR'])); \
+p.download(['python', 'typescript', 'tsx', 'javascript', 'markdown'])" \
+    && chmod -R a+rX /opt/tree-sitter-parsers
+
 # alembic.ini lives at the repo root; the backend image needs it (+ the
 # migration scripts under backend/data/migrations, already copied above) so
 # the entrypoint can run `alembic upgrade head` on boot.

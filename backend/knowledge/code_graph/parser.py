@@ -27,6 +27,7 @@ Robustness:
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from abc import ABC, abstractmethod
@@ -83,6 +84,10 @@ def detect_language(path: str) -> str | None:
 # Parser cache — per-process. tree-sitter Parsers are cheap to call but
 # carry a non-trivial grammar binding cost; we keep one per language.
 # ---------------------------------------------------------------------------
+#: 이미지 안의 고정 파서 캐시 경로 / 실행 중 다운로드 금지 스위치.
+PARSER_CACHE_DIR_ENV = "BSVIBE_PARSER_CACHE_DIR"
+PARSER_OFFLINE_ENV = "BSVIBE_PARSER_OFFLINE"
+
 _parser_cache: dict[str, tree_sitter.Parser] = {}
 _parser_lock = threading.Lock()
 
@@ -103,9 +108,22 @@ def _get_parser(language: str) -> tree_sitter.Parser:
         if cached is not None:
             return cached
         import tree_sitter  # noqa: PLC0415 — lazy so test infra without tree-sitter still imports
-        from tree_sitter_language_pack import get_language  # noqa: PLC0415
+        import tree_sitter_language_pack as pack  # noqa: PLC0415
 
-        lang = get_language(language)
+        # 이미지는 빌드 때 파서를 미리 내려받아 고정 경로에 둔다. 실행 중에 GitHub
+        # Releases 에 의존하지 않도록, OFFLINE 이면 캐시에 없는 언어를 즉시 거부한다.
+        cache_dir = os.environ.get(PARSER_CACHE_DIR_ENV)
+        if cache_dir:
+            pack.configure(pack.PackConfig(cache_dir=cache_dir))
+        if (
+            os.environ.get(PARSER_OFFLINE_ENV) == "1"
+            and language not in pack.downloaded_languages()
+        ):
+            raise RuntimeError(
+                f"tree-sitter parser {language!r} is not in the prebuilt cache "
+                f"({pack.cache_dir()}); download it at image build time"
+            )
+        lang = pack.get_language(language)
         parser = tree_sitter.Parser(lang)
         _parser_cache[language] = parser
         return parser

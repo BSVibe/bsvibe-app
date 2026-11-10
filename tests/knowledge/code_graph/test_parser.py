@@ -8,10 +8,14 @@ inherits, doc references.
 
 from __future__ import annotations
 
+import os
+import shutil
 import textwrap
+from pathlib import Path
 
 import pytest
 
+from backend.knowledge.code_graph import parser as parser_module
 from backend.knowledge.code_graph.parser import (
     SUPPORTED_LANGUAGES,
     detect_language,
@@ -209,3 +213,75 @@ class TestParserRobustness:
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
+
+
+@pytest.fixture
+def restore_pack_config():
+    """configure() 는 프로세스 전역이므로 테스트가 끝나면 원래 cache_dir 로 되돌린다."""
+    import tree_sitter_language_pack as pack
+
+    original = pack.cache_dir()
+    yield pack
+    pack.configure(pack.PackConfig(cache_dir=original))
+
+
+@pytest.fixture
+def block_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """파이썬 소켓과 프록시 경로를 막아 실제 다운로드가 실패하게 한다."""
+    import socket
+
+    def _refuse(*_a: object, **_k: object) -> None:
+        raise OSError("network blocked by test")
+
+    monkeypatch.setattr(socket.socket, "connect", _refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", _refuse)
+    for var in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.setenv(var, "http://127.0.0.1:1")
+
+
+def _find_primed_cache(pack) -> Path | None:
+    """이미 내려받아 둔 캐시(환경변수 또는 기본 경로)를 찾는다. 네트워크는 쓰지 않는다."""
+    for cand in (os.environ.get("BSVIBE_PARSER_CACHE_DIR"), pack.cache_dir()):
+        if not cand or not Path(cand).is_dir():
+            continue
+        pack.configure(pack.PackConfig(cache_dir=cand))
+        if "python" in pack.downloaded_languages():
+            return Path(cand)
+    return None
+
+
+class TestParserCache:
+    """이미지에 미리 내려받아 둔 캐시만 쓰고, 실행 중에는 다운로드하지 않는다."""
+
+    def test_primed_cache_makes_no_download(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        restore_pack_config,
+        block_network: None,
+    ) -> None:
+        source = _find_primed_cache(restore_pack_config)
+        if source is None:
+            pytest.skip("미리 내려받은 파서 캐시가 없다(BSVIBE_PARSER_CACHE_DIR 를 준비할 것)")
+        primed = tmp_path / "primed"
+        shutil.copytree(source, primed)
+
+        monkeypatch.setenv("BSVIBE_PARSER_CACHE_DIR", str(primed))
+        monkeypatch.delenv("BSVIBE_PARSER_OFFLINE", raising=False)
+        monkeypatch.setattr(parser_module, "_parser_cache", {})
+
+        assert parser_module._get_parser("python") is not None
+
+    def test_empty_cache_offline_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        restore_pack_config,
+        block_network: None,
+    ) -> None:
+        monkeypatch.setenv("BSVIBE_PARSER_CACHE_DIR", str(tmp_path))
+        monkeypatch.setenv("BSVIBE_PARSER_OFFLINE", "1")
+        monkeypatch.setattr(parser_module, "_parser_cache", {})
+
+        with pytest.raises(RuntimeError, match="not in the prebuilt cache"):
+            parser_module._get_parser("python")

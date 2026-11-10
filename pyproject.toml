@@ -33,7 +33,7 @@ dependencies = [
     # NetworkX graph before LLM synthesis fans out per community.
     "pathspec>=0.12",
     "tree-sitter>=0.23",
-    "tree-sitter-language-pack>=0.4",
+    "tree-sitter-language-pack==1.8.1",
     "python-igraph>=0.11",
     # NetworkX's pagerank uses scipy's sparse linear algebra; we need
     # it to rank nodes inside each community before LLM synthesis.

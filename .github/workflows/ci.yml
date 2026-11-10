@@ -69,6 +69,19 @@ jobs:
       - name: uv sync
         run: uv sync --all-extras
 
+      # tree-sitter 파서는 실행 중 GitHub Releases 에서 내려받는다. 버전(uv.lock)을
+      # 키에 넣어 보존하고, 테스트 전에 한 번 download 한다(캐시가 있으면 네트워크 미사용).
+      - name: Cache tree-sitter parsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/tsl-parsers
+          key: tree-sitter-parsers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('uv.lock') }}
+
+      - name: Download tree-sitter parsers
+        run: |
+          echo "BSVIBE_PARSER_CACHE_DIR=$HOME/.cache/tsl-parsers" >> "$GITHUB_ENV"
+          BSVIBE_PARSER_CACHE_DIR=$HOME/.cache/tsl-parsers uv run python -c "import os, tree_sitter_language_pack as p; p.configure(p.PackConfig(cache_dir=os.environ['BSVIBE_PARSER_CACHE_DIR'])); p.download(['python', 'typescript', 'tsx', 'javascript', 'markdown'])"
+
       - name: Ruff (lint)
         run: uv run ruff check backend/ tests/ bsvibe_sdk/ plugin/
 
