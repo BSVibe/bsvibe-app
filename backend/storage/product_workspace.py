@@ -721,6 +721,8 @@ async def add_run_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> Path:
     worktree_path = run_worktree_path(run_id)
     branch = run_branch_name(run_id)
 
+    if _is_standalone_clone(worktree_path):
+        return worktree_path  # a GitHub run's own clone (or its restore): nothing to register
     if worktree_path.exists():
         # Is it a registered worktree of THIS product? Walk the worktree
         # list and look for a matching path. Cheap, exact match.
@@ -918,6 +920,16 @@ def _checkpoint_ref(run_id: uuid.UUID) -> str:
     return f"refs/bsvibe/checkpoints/{run_id}"
 
 
+def _is_standalone_clone(worktree: Path) -> bool:
+    """A run tree that is its own repository (``.git`` is a directory), not a product worktree
+    (``.git`` is a file pointing into ``var/products/<product>``)."""
+    return (worktree / ".git").is_dir()
+
+
+async def _current_branch(worktree: Path) -> str:
+    return (await _git("symbolic-ref", "--short", "HEAD", cwd=worktree)).stdout.strip()
+
+
 async def checkpoint_run_worktree(
     product_id: uuid.UUID,
     run_id: uuid.UUID,
@@ -944,7 +956,17 @@ async def checkpoint_run_worktree(
         )
 
         store = build_run_checkpoint_store()
-    repo = product_workspace_path(product_id)
+    if _is_standalone_clone(worktree):
+        branch = await _current_branch(worktree)
+        # A ``--depth 1`` clone bundles to a THIN bundle (its parents are missing), which no
+        # other machine can fetch. Deepen to full history first; if that fails the checkpoint
+        # fails (recorded ``stale``) rather than saving something unrestorable.
+        if (worktree / ".git" / "shallow").exists():
+            await _git("fetch", "--quiet", "--unshallow", "origin", cwd=worktree)
+        repo = worktree
+    else:
+        branch = run_branch_name(run_id)
+        repo = product_workspace_path(product_id)
     with tempfile.TemporaryDirectory(prefix="bsvibe-checkpoint-") as tmp:
         index = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
         await _git("read-tree", "HEAD", cwd=worktree, env=index)
@@ -966,7 +988,7 @@ async def checkpoint_run_worktree(
             "create",
             "--quiet",
             str(bundle),
-            f"refs/heads/{run_branch_name(run_id)}",
+            f"refs/heads/{branch}",
             _checkpoint_ref(run_id),
             cwd=repo,
         )
@@ -1005,19 +1027,42 @@ async def restore_run_worktree(
         bundle = Path(tmp) / f"{run_id}.bundle"
         if not await store.get(run_id, bundle):
             return False
-        await _git(
-            "fetch",
-            "--quiet",
-            "--force",
-            str(bundle),
-            f"refs/heads/{branch}:refs/heads/{branch}",
-            f"{ref}:{ref}",
-            cwd=repo,
-        )
-    # A registration left by a worktree whose directory is gone would refuse the add.
-    await _git("worktree", "prune", cwd=repo)
-    worktree.parent.mkdir(parents=True, exist_ok=True)
-    await _git("worktree", "add", "--quiet", str(worktree), branch, cwd=repo)
+        heads = (await _git("bundle", "list-heads", str(bundle), cwd=Path(tmp))).stdout
+        names = [parts[1] for parts in (ln.split() for ln in heads.splitlines()) if len(parts) == 2]
+        if repo.exists() and f"refs/heads/{branch}" in names:
+            await _git(
+                "fetch",
+                "--quiet",
+                "--force",
+                str(bundle),
+                f"refs/heads/{branch}:refs/heads/{branch}",
+                f"{ref}:{ref}",
+                cwd=repo,
+            )
+            # A registration left by a worktree whose directory is gone would refuse the add.
+            await _git("worktree", "prune", cwd=repo)
+            worktree.parent.mkdir(parents=True, exist_ok=True)
+            await _git("worktree", "add", "--quiet", str(worktree), branch, cwd=repo)
+        else:
+            # A GitHub run's own clone: its branch is not ``bsvibe/run/<rid>``. Take the
+            # bundle's real branch and rebuild a standalone repository (the bundle does not
+            # carry ``origin``).
+            heads_only = [n for n in names if n.startswith("refs/heads/")]
+            if not heads_only:
+                return False
+            branch = heads_only[0].removeprefix("refs/heads/")
+            worktree.mkdir(parents=True, exist_ok=True)
+            await _git("init", "--quiet", cwd=worktree)
+            await _git(
+                "fetch",
+                "--quiet",
+                "--force",
+                str(bundle),
+                f"refs/heads/{branch}:refs/heads/{branch}",
+                f"{ref}:{ref}",
+                cwd=worktree,
+            )
+            await _git("checkout", "--quiet", branch, cwd=worktree)
     # The snapshot's files into the tree, then the index back to HEAD: the work is uncommitted
     # again, as it was. ``checkout <tree> -- .`` cannot remove a file, so deletions are applied
     # by name.

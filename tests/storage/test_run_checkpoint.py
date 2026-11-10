@@ -315,3 +315,65 @@ async def test_a_run_that_comes_back_continues_from_the_newest_work(
         assert (wt / "edit.py").read_text() == "edit.py v2 (uncommitted)\n", "A's leftover tree"
         await run_checkpoint.provision_run_worktree(run, workspace_dir=wt, machine_id="box-a")
         assert (wt / "edit.py").read_text() == "edit.py v3 — done on box-b\n"
+
+
+async def test_a_standalone_clone_run_round_trips(
+    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A GitHub run's tree is its own ``--depth 1`` clone, with no product repository behind it."""
+    from types import SimpleNamespace
+
+    from backend.workflow.application import run_checkpoint
+
+    s = get_settings()
+    monkeypatch.setattr(s, "product_bundle_backend", "local", raising=False)
+    monkeypatch.setattr(s, "product_bundle_local_root", str(tmp_path / "bundles"), raising=False)
+
+    async def _not_client_attach(session: Any, pid: uuid.UUID) -> bool:
+        return False
+
+    monkeypatch.setattr(run_checkpoint, "product_is_client_attach", _not_client_attach)
+
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    await _git("init", "-q", "-b", "main", cwd=origin)
+    await _git("config", "user.email", "t@example.com", cwd=origin)
+    await _git("config", "user.name", "t", cwd=origin)
+    for n in (1, 2):
+        (origin / "base.py").write_text(f"v{n}\n")
+        await _git("add", ".", cwd=origin)
+        await _git("commit", "-qm", f"base {n}", cwd=origin)
+
+    pid, rid = uuid.uuid4(), uuid.uuid4()
+    branch = f"bsvibe/run-{str(rid)[:8]}"
+    run = SimpleNamespace(id=rid, product_id=pid, payload={})
+    with world["a"]:
+        wt = run_worktree_path(rid)
+        wt.parent.mkdir(parents=True)
+        await _git("clone", "-q", "--depth", "1", origin.as_uri(), str(wt), cwd=tmp_path)
+        assert (wt / ".git" / "shallow").exists()
+        await _git("config", "user.email", "t@example.com", cwd=wt)
+        await _git("config", "user.name", "t", cwd=wt)
+        await _git("checkout", "-qb", branch, cwd=wt)
+        (wt / "committed.py").write_text("verified work\n")
+        await _git("add", ".", cwd=wt)
+        await _git("commit", "-qm", "real run commit", cwd=wt)
+        head = await _git("rev-parse", "HEAD", cwd=wt)
+        (wt / "base.py").write_text("v3 (uncommitted)\n")
+        (wt / "new.py").write_text("brand new\n")
+        await run_checkpoint.checkpoint_before_release(object(), run, machine_id="box-a")
+    assert run.payload["checkpoint"] == {
+        "sha": run.payload["checkpoint"]["sha"],
+        "machine": "box-a",
+    }, "no stale record: the save worked"
+
+    with world["b"]:
+        wt = run_worktree_path(rid)
+        assert not wt.exists()
+        await run_checkpoint.provision_run_worktree(run, workspace_dir=wt, machine_id="box-b")
+        assert await _git("rev-parse", "--abbrev-ref", "HEAD", cwd=wt) == branch
+        assert await _git("rev-parse", "HEAD", cwd=wt) == head
+        assert (wt / "base.py").read_text() == "v3 (uncommitted)\n"
+        assert (wt / "new.py").read_text() == "brand new\n"
+        status = await _git("status", "--porcelain", cwd=wt)
+        assert " M base.py" in status and "?? new.py" in status
