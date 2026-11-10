@@ -926,8 +926,29 @@ def _is_standalone_clone(worktree: Path) -> bool:
     return (worktree / ".git").is_dir()
 
 
-async def _current_branch(worktree: Path) -> str:
-    return (await _git("symbolic-ref", "--short", "HEAD", cwd=worktree)).stdout.strip()
+async def _current_branch(worktree: Path) -> str | None:
+    """The branch HEAD is on, ``None`` when HEAD is detached."""
+    result = await _git("symbolic-ref", "-q", "--short", "HEAD", cwd=worktree, check=False)
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
+_BRANCH_TRAILER = "bsvibe-branch: "
+_DETACHED = "(detached)"
+
+
+def _checkpoint_message(run_id: uuid.UUID, branch: str | None) -> str:
+    """The snapshot's message; its trailer is the checkpoint's record of the branch it saved."""
+    return f"bsvibe checkpoint {run_id}\n\n{_BRANCH_TRAILER}{branch or _DETACHED}\n"
+
+
+async def _checkpoint_branch(worktree: Path, ref: str) -> str | None:
+    """The branch recorded in the checkpoint at ``ref``; ``None`` = it was saved detached."""
+    body = (await _git("log", "-1", "--format=%B", ref, cwd=worktree)).stdout
+    for line in body.splitlines():
+        if line.startswith(_BRANCH_TRAILER):
+            name = line[len(_BRANCH_TRAILER) :].strip()
+            return None if name == _DETACHED else name
+    raise ProductWorkspaceError(f"checkpoint {ref} records no branch")
 
 
 async def checkpoint_run_worktree(
@@ -957,13 +978,17 @@ async def checkpoint_run_worktree(
 
         store = build_run_checkpoint_store()
     exclude: list[str] = []
-    if _is_standalone_clone(worktree):
+    standalone = _is_standalone_clone(worktree)
+    if standalone:
         # The tree is its own repository (a GitHub run's clone), so the bundle comes from the tree
         # itself and carries its real branch. A ``--depth 1`` clone is bundled AS IS, thin: the
         # shallow boundary commits are excluded (``^<sha>``) and become the bundle's
         # prerequisites. No ``fetch --unshallow`` -- that needs origin and a credential (the
         # run's origin URL carries none), and a checkpoint must work with neither network nor
         # auth. The machine that restores clones origin first, so it has those commits.
+        # The branch ref is NOT bundled: a run that has not committed yet has its branch tip ON
+        # the shallow boundary, which the exclusion would drop. The snapshot's first parent is
+        # the branch tip, and its message records the branch name (or that HEAD was detached).
         branch = await _current_branch(worktree)
         shallow = worktree / ".git" / "shallow"
         if shallow.exists():
@@ -972,6 +997,9 @@ async def checkpoint_run_worktree(
     else:
         branch = run_branch_name(run_id)
         repo = product_workspace_path(product_id)
+    refs = [_checkpoint_ref(run_id)]
+    if not standalone:
+        refs.insert(0, f"refs/heads/{branch}")
     with tempfile.TemporaryDirectory(prefix="bsvibe-checkpoint-") as tmp:
         index = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
         await _git("read-tree", "HEAD", cwd=worktree, env=index)
@@ -983,7 +1011,13 @@ async def checkpoint_run_worktree(
         head = (await _git("rev-parse", "HEAD", cwd=worktree)).stdout.strip()
         snapshot = (
             await _git(
-                "commit-tree", tree, "-p", head, "-m", f"bsvibe checkpoint {run_id}", cwd=worktree
+                "commit-tree",
+                tree,
+                "-p",
+                head,
+                "-m",
+                _checkpoint_message(run_id, branch),
+                cwd=worktree,
             )
         ).stdout.strip()
         await _git("update-ref", _checkpoint_ref(run_id), snapshot, cwd=worktree)
@@ -993,8 +1027,7 @@ async def checkpoint_run_worktree(
             "create",
             "--quiet",
             str(bundle),
-            f"refs/heads/{branch}",
-            _checkpoint_ref(run_id),
+            *refs,
             *exclude,
             cwd=repo,
         )
@@ -1032,15 +1065,13 @@ async def _restore_standalone_clone(
     The bundle of a shallow clone is thin: its prerequisites are in the fresh clone, or a few
     deepens bring them. ``False`` (and no tree left behind) when they cannot be had.
     """
-    branch = standalone_run_branch(run_id)
     ref = _checkpoint_ref(run_id)
-    specs = [f"refs/heads/{branch}:refs/heads/{branch}", f"{ref}:{ref}"]
     if worktree.exists() and not any(worktree.iterdir()):  # noqa: ASYNC240
         worktree.rmdir()  # noqa: ASYNC240
     worktree.parent.mkdir(parents=True, exist_ok=True)
     try:
         await source.clone(worktree)
-        fetch = ("fetch", "--quiet", "--force", str(bundle), *specs)
+        fetch = ("fetch", "--quiet", "--force", str(bundle), f"{ref}:{ref}")
         fetched = await _git(*fetch, cwd=worktree, check=False)
         for by in _DEEPEN_STEPS:
             if fetched.returncode == 0:
@@ -1051,7 +1082,14 @@ async def _restore_standalone_clone(
             logger.warning("run_restore_prerequisites_missing", run_id=str(run_id))
             await asyncio.to_thread(shutil.rmtree, worktree, True)
             return False
-        await _git("checkout", "--quiet", branch, cwd=worktree)
+        # The snapshot's first parent is the branch tip it was taken on; the branch is stood up
+        # there under the name the checkpoint recorded (or HEAD is left detached, as saved).
+        saved = await _checkpoint_branch(worktree, ref)
+        tip = f"{ref}^1"
+        if saved is None:
+            await _git("checkout", "--quiet", "--detach", tip, cwd=worktree)
+        else:
+            await _git("checkout", "--quiet", "-B", saved, tip, cwd=worktree)
     except BaseException:
         await asyncio.to_thread(shutil.rmtree, worktree, True)
         raise

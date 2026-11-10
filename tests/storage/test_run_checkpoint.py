@@ -352,9 +352,19 @@ def _clone_source(origin: Path) -> RunCloneSource:
 
 
 async def _standalone_run(
-    world: dict[str, Any], origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    world: dict[str, Any],
+    origin: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    commit: bool = True,
+    detach: bool = False,
 ) -> tuple[Any, str, str]:
-    """On machine A: the run's own depth-1 clone with a commit and uncommitted work, checkpointed."""
+    """On machine A: the run's own depth-1 clone with a commit and uncommitted work, checkpointed.
+
+    ``commit=False`` leaves the branch tip on the shallow boundary (nothing committed yet);
+    ``detach`` saves it with HEAD detached.
+    """
     from types import SimpleNamespace
 
     from backend.workflow.application import run_checkpoint
@@ -376,9 +386,12 @@ async def _standalone_run(
         await GitOps().clone(origin.as_uri(), wt, token=None, depth=1)
         assert (wt / ".git" / "shallow").exists()
         await _git("checkout", "-qb", branch, cwd=wt)
-        (wt / "committed.py").write_text("verified work\n")
-        await _git("add", ".", cwd=wt)
-        await _git("commit", "-qm", "real run commit", cwd=wt)
+        if commit:
+            (wt / "committed.py").write_text("verified work\n")
+            await _git("add", ".", cwd=wt)
+            await _git("commit", "-qm", "real run commit", cwd=wt)
+        if detach:
+            await _git("checkout", "-q", "--detach", cwd=wt)
         head = await _git("rev-parse", "HEAD", cwd=wt)
         (wt / "base.py").write_text("v3 (uncommitted)\n")
         (wt / "new.py").write_text("brand new\n")
@@ -421,6 +434,32 @@ async def test_a_standalone_clone_run_round_trips(
     pushed = await _git("rev-parse", f"refs/heads/{branch}", cwd=origin)
     assert pushed == await _git("rev-parse", "HEAD", cwd=run_worktree_path(run.id))
     assert "run_checkpoint_failed" not in caplog.text
+
+
+@pytest.mark.parametrize("detach", [False, True], ids=["on-branch", "detached"])
+async def test_an_uncommitted_depth_one_run_round_trips(
+    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, detach: bool
+) -> None:
+    """Branch tip == shallow boundary (first turn, nothing committed): the branch ref cannot be
+    in the thin bundle, so it is rebuilt from the snapshot's parent. Detached stays detached."""
+    from backend.workflow.application import run_checkpoint
+
+    origin = await _github_origin(tmp_path)
+    run, branch, head = await _standalone_run(
+        world, origin, tmp_path, monkeypatch, commit=False, detach=detach
+    )
+    with world["b"]:
+        wt = run_worktree_path(run.id)
+        await run_checkpoint.provision_run_worktree(
+            run, workspace_dir=wt, machine_id="box-b", clone_source=_clone_source(origin)
+        )
+        assert await _git("rev-parse", "HEAD", cwd=wt) == head
+        current = await _git("branch", "--show-current", cwd=wt)
+        assert current == ("" if detach else branch)
+        assert (wt / "new.py").read_text() == "brand new\n"
+        assert (wt / "base.py").read_text() == "v3 (uncommitted)\n"
+        status = await _git("status", "--porcelain", cwd=wt)
+        assert " M base.py" in status and "?? new.py" in status
 
 
 async def test_a_standalone_restore_deepens_when_origin_moved_on(
