@@ -36,9 +36,16 @@ from backend.config import get_settings
 from backend.data.rls import workspace_session_scope
 from backend.mcp.api import McpPrincipal, ToolContext, ToolRegistry
 from backend.mcp.tools import register_all_tools
-from backend.workflow.application.checkpoint_resolution import resolve_checkpoint
+from backend.workflow.application.checkpoint_resolution import (
+    CheckpointNotFound,
+    resolve_checkpoint,
+)
 from backend.workflow.application.safe_mode_queue import SafeModeQueue
-from backend.workflow.domain.delivery import ActionResult, DeliveryResult
+from backend.workflow.domain.delivery import (
+    FOUNDER_APPROVED_KEY,
+    ActionResult,
+    DeliveryResult,
+)
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -152,17 +159,43 @@ async def _assert_failure_decision_and_retry(
     assert _GITHUB_ERROR in decision.rationale
     assert any(_GITHUB_ERROR in f["error"] for f in decision.payload["failures"])
 
+    before = await _delivery_events(sf, workspace_id, deliverable_id)
+    await _resolve(sf, workspace_id, decision.id, "retry")
+    after = await _delivery_events(sf, workspace_id, deliverable_id)
+
+    # 승인 경로의 첫 배송이 남긴 이벤트와 구분되도록, 새로 생긴 것만 본다.
+    added = [e for e in after if e.id not in {b.id for b in before}]
+    assert len(after) == len(before) + 1 and len(added) == 1, (
+        "retry(다시 보내기)가 배송 이벤트를 정확히 하나 새로 넣어야 한다"
+    )
+    # 이벤트 행은 배송 워커가 처리한 뒤에 지워진다 -- 행이 남아 있으면 아직 배송을 기다린다.
+    # 창업자의 클릭이 곧 승인이라 Safe Mode가 다시 묻지 않는다.
+    assert added[0].payload[FOUNDER_APPROVED_KEY] is True
+    assert added[0].run_id == run_id
+
+    # 이미 retry로 처리한 결정을 또 처리해도 이벤트가 또 생기지 않는다(중복 재배송 방지).
+    with pytest.raises(CheckpointNotFound):
+        await _resolve(sf, workspace_id, decision.id, "retry")
+    assert len(await _delivery_events(sf, workspace_id, deliverable_id)) == len(after)
+
+
+async def _resolve(sf, workspace_id: uuid.UUID, checkpoint_id: uuid.UUID, action_key: str) -> None:
     async with sf() as s, workspace_session_scope(s, workspace_id):
         await resolve_checkpoint(
             s,
             workspace_id=workspace_id,
-            checkpoint_id=decision.id,
-            action_key="retry",
+            checkpoint_id=checkpoint_id,
+            action_key=action_key,
             actor_id=uuid.uuid4(),
         )
         await s.commit()
+
+
+async def _delivery_events(
+    sf, workspace_id: uuid.UUID, deliverable_id: uuid.UUID
+) -> list[DeliveryEventRow]:
     async with sf() as s, workspace_session_scope(s, workspace_id):
-        events = (
+        return list(
             (
                 await s.execute(
                     select(DeliveryEventRow).where(
@@ -173,7 +206,6 @@ async def _assert_failure_decision_and_retry(
             .scalars()
             .all()
         )
-    assert events, "retry(다시 보내기)가 배송 이벤트를 다시 넣지 않았다"
 
 
 async def test_create_app_lifespan_wires_the_decision_factory(monkeypatch) -> None:
