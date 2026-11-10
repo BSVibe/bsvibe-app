@@ -63,6 +63,7 @@ async def resolve_principal_from_bearer(
         scopes=verified.scopes,
         jti=verified.jti,
         run_id=verified.run_id,
+        run_claim=verified.run_claim,
     )
 
 

@@ -48,6 +48,7 @@ def issue_access_token(
     issuer: str,
     signing_key: SigningKey | None = None,
     run_id: uuid.UUID | None = None,
+    run_claim: uuid.UUID | None = None,
 ) -> str:
     """Return a signed ES256 JWT access token.
 
@@ -66,6 +67,10 @@ def issue_access_token(
     (:mod:`backend.mcp.tools.work_tools`) are bound to that run's worktree and nothing else —
     a leaked worker token reaches one run. An ordinary token (the founder's editor, the CLI)
     omits the claim entirely, and the work tools refuse it.
+
+    ``run_claim`` binds that run-scoped token to the CLAIM (``ExecutionRun.claimed_by``) of the
+    job that minted it: the work tools refuse it once the run is no longer RUNNING under that
+    claim (released, re-claimed by another job, finished).
     """
     key = signing_key or get_signing_key()
     payload: dict[str, Any] = {
@@ -82,6 +87,8 @@ def issue_access_token(
         payload["exp"] = expires_at
     if run_id is not None:
         payload["run_id"] = str(run_id)
+    if run_claim is not None:
+        payload["run_claim"] = str(run_claim)
     return jwt.encode(
         payload,
         key.private_key,

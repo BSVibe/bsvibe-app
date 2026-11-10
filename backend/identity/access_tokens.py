@@ -56,6 +56,9 @@ class VerifiedAccessToken:
     #: founder's editor, the CLI, a PAT). Surfaces that are not the work tools
     #: refuse a token that carries it.
     run_id: uuid.UUID | None = None
+    #: The claim (``ExecutionRun.claimed_by``) the run-scoped token was minted under; ``None``
+    #: when the run was unclaimed at mint time.
+    run_claim: uuid.UUID | None = None
 
     def has_scope(self, scope: str) -> bool:
         return scope in self.scopes
@@ -104,6 +107,11 @@ async def verify_access_token_with_row(
         run_id = uuid.UUID(str(run_raw)) if run_raw else None
     except (ValueError, AttributeError, TypeError):
         run_id = None
+    claim_raw = claims.get("run_claim")
+    try:
+        run_claim = uuid.UUID(str(claim_raw)) if claim_raw else None
+    except (ValueError, AttributeError, TypeError):
+        run_claim = None
 
     return VerifiedAccessToken(
         user_id=user_id,
@@ -112,6 +120,7 @@ async def verify_access_token_with_row(
         scopes=frozenset(s for s in str(scopes_raw).split() if s),
         jti=jti,
         run_id=run_id,
+        run_claim=run_claim,
     )
 
 

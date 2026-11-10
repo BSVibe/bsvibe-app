@@ -31,7 +31,7 @@ from backend.workflow.application.tool_registry import (
 from backend.workflow.application.tool_registry import (
     assemble_run_tool_registry,
 )
-from backend.workflow.infrastructure.db import TERMINAL_RUN_STATUSES, ExecutionRun
+from backend.workflow.infrastructure.db import TERMINAL_RUN_STATUSES, ExecutionRun, RunStatus
 from backend.workflow.infrastructure.sandbox import get_sandbox_manager, with_session_env
 from backend.workflow.infrastructure.tools import ToolRegistry
 
@@ -118,6 +118,22 @@ async def load_run(run_id: uuid.UUID, ctx: ToolContext) -> ExecutionRun:
         # worktree until 10:52 (measured 2026-09-30). A finished run accepts no more work.
         logger.info("mcp_work_run_finished", run_id=str(run_id), status=run.status.value)
         raise ToolError(f"run {run_id} is {run.status.value} — stop working on it")
+    claim = ctx.principal.run_claim
+    if claim is not None and (run.status != RunStatus.RUNNING or run.claimed_by != claim):
+        # The token belongs to ONE job's claim. A worker restart or a cancel releases the run
+        # (RUNNING -> OPEN) and another job may claim it; the turn the old job launched is
+        # still alive and must not touch the tree the new job owns.
+        logger.info(
+            "mcp_work_claim_lost",
+            run_id=str(run_id),
+            status=run.status.value,
+            token_claim=str(claim),
+            run_claim=str(run.claimed_by) if run.claimed_by else None,
+        )
+        raise ToolError(
+            f"run {run_id} is no longer held by the job that started this turn "
+            f"(status {run.status.value}) — stop working on it"
+        )
     return run
 
 

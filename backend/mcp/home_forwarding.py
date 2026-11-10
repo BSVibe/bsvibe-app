@@ -71,6 +71,7 @@ def _principal_to_wire(p: McpPrincipal) -> dict[str, Any]:
         "scopes": sorted(p.scopes),
         "jti": str(p.jti),
         "run_id": str(p.run_id) if p.run_id is not None else None,
+        "run_claim": str(p.run_claim) if p.run_claim is not None else None,
     }
 
 
@@ -82,6 +83,7 @@ def _principal_from_wire(d: dict[str, Any]) -> McpPrincipal:
         scopes=frozenset(d["scopes"]),
         jti=uuid.UUID(d["jti"]),
         run_id=uuid.UUID(d["run_id"]) if d.get("run_id") else None,
+        run_claim=uuid.UUID(d["run_claim"]) if d.get("run_claim") else None,
     )
 
 
