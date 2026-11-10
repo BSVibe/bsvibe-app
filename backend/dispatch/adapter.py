@@ -27,6 +27,7 @@ Both adapters expose the same ``chat`` surface.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import uuid
@@ -720,6 +721,15 @@ class ExecutorAdapter:
         cap = effective_run_token_cap(cap, row[2] if row is not None else None)
         return max(cap - used, 1), max_turns
 
+    async def _run_claim(self, session: AsyncSession) -> uuid.UUID | None:
+        """``ExecutionRun.claimed_by`` of the run this turn works for -- ``None`` if unclaimed."""
+        from sqlalchemy import select  # noqa: PLC0415
+
+        from backend.workflow.infrastructure.db import ExecutionRun  # noqa: PLC0415
+
+        stmt = select(ExecutionRun.claimed_by).where(ExecutionRun.id == self.run_id)
+        return await session.scalar(stmt)
+
     async def _work_tool_surface(
         self, session: AsyncSession, *, agentic: bool
     ) -> dict[str, Any] | None:
@@ -743,6 +753,9 @@ class ExecutorAdapter:
             workspace_id=self.workspace_id,
             user_id=await _founder_of(session, self.workspace_id),
             issuer=self.settings.oauth_issuer,
+            # The token dies with the claim it was minted under (a restart, a cancel, a
+            # re-claim by another job) -- the work tools compare it to the run's claim.
+            claim=await self._run_claim(session),
         )
         return build_work_tool_dispatch(token=token, issuer=self.settings.oauth_issuer)
 
@@ -879,6 +892,26 @@ class ExecutorAdapter:
                 session_factory=self.session_factory,
                 abandon_if=self._run_cancelled_probe(session),
             )
+        except asyncio.CancelledError:
+            # The JOB awaiting this turn was cancelled (worker stop(), a run cancel). The turn
+            # runs on the executor's side and would keep calling the work tools; kill its
+            # session first. Shielded + bounded: this task is already being cancelled, and a
+            # redis hiccup must not hold the shutdown. A turn that cannot be killed is still
+            # refused by ``load_run`` (its token's claim is gone).
+            logger.info(
+                "executor_adapter_job_cancelled_mid_turn",
+                run_id=str(self.run_id),
+                worker_id=str(worker.id),
+                task_id=str(task.id),
+            )
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await asyncio.wait_for(
+                    asyncio.shield(
+                        dispatch.cancel_task(self.redis, worker_id=worker.id, task_id=task.id)
+                    ),
+                    timeout=5.0,
+                )
+            raise
         except dispatch.TaskAbandoned as exc:
             # #1106 — the run this turn works for was cancelled. Kill the session on the
             # worker (the same signal the timeout path sends) and stop: re-dispatching a

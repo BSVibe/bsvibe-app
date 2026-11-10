@@ -202,6 +202,7 @@ async def issue_run_task_token(
     workspace_id: uuid.UUID,
     user_id: uuid.UUID,
     issuer: str,
+    claim: uuid.UUID | None = None,
     now: datetime | None = None,
 ) -> str:
     """Mint the credential a dispatched executor task carries (T2).
@@ -211,6 +212,9 @@ async def issue_run_task_token(
 
     * bound to ONE run (the ``run_id`` claim → :attr:`McpPrincipal.run_id`), so the work tools
       reach that run's worktree and nothing else;
+    * bound to the run's CLAIM (``claim`` = ``ExecutionRun.claimed_by`` of the job that mints
+      it), so a turn that outlives its job (a worker restart, a cancel) is refused by the work
+      tools instead of editing a tree a newer job now owns;
     * short-lived (:data:`RUN_TASK_TOKEN_TTL`);
     * **no refresh token** — :func:`issue_token_pair` mints one, and a task that could re-mint
       its own access would be a durable foothold rather than a task credential;
@@ -243,6 +247,7 @@ async def issue_run_task_token(
         expires_at=int((n + RUN_TASK_TOKEN_TTL).timestamp()),
         issuer=issuer,
         run_id=run_id,
+        run_claim=claim,
     )
 
 

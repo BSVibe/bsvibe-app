@@ -80,6 +80,9 @@ class McpPrincipal:
     #: leaked worker token has to be one run, and an argument the agent controls could
     #: redirect a write into another run's tree.
     run_id: uuid.UUID | None = None
+    #: The claim the run-scoped token was minted under (``ExecutionRun.claimed_by``). When set,
+    #: the work tools accept the token only while the run is RUNNING under that same claim.
+    run_claim: uuid.UUID | None = None
 
     def has_scope(self, scope: str) -> bool:
         return scope in self.scopes

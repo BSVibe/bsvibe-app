@@ -34,6 +34,8 @@ _SIDECAR_MEMORY = "1g"
 # Poll interval while waiting for the test-PG sidecar's ``pg_isready`` — module
 # constant so unit tests can shrink it (no real sleeping against a mock).
 _PG_READY_POLL_S = 1.0
+# docker's refusal when ``--name`` is taken (lowercased for matching).
+_NAME_IN_USE = "is already in use"
 
 
 def _container_name(project_id: uuid.UUID) -> str:
@@ -423,29 +425,34 @@ class DockerSandboxManager:
                 net_flag = ["--network", network]
                 env_flags = self._test_db_env_flags(sidecar)
             user_flag = ["--user", self._user] if self._user else []
-            code, _out, err = await self._docker(
-                [
-                    "run",
-                    "-d",
-                    "--name",
-                    name,
-                    "--memory",
-                    _SANDBOX_MEMORY,
-                    "--memory-swap",
-                    _SANDBOX_MEMORY,
-                    *net_flag,
-                    *env_flags,
-                    *user_flag,
-                    "-v",
-                    f"{workspace_path}:{_WORK_MOUNT}",
-                    "-w",
-                    _WORK_MOUNT,
-                    self._image,
-                    "sleep",
-                    "infinity",
-                ],
-                timeout_s=_DOCKER_OP_TIMEOUT_S,
-            )
+            run_argv = [
+                "run",
+                "-d",
+                "--name",
+                name,
+                "--memory",
+                _SANDBOX_MEMORY,
+                "--memory-swap",
+                _SANDBOX_MEMORY,
+                *net_flag,
+                *env_flags,
+                *user_flag,
+                "-v",
+                f"{workspace_path}:{_WORK_MOUNT}",
+                "-w",
+                _WORK_MOUNT,
+                self._image,
+                "sleep",
+                "infinity",
+            ]
+            code, _out, err = await self._docker(run_argv, timeout_s=_DOCKER_OP_TIMEOUT_S)
+            if code != 0 and _NAME_IN_USE in err.decode("utf-8", errors="replace").lower():
+                # Another process (the API's work tools, a turn that outlived its job) created
+                # this run's box between our ``rm -f`` and ``run``. The name is ours by
+                # construction (keyed by run): clear it and create once more.
+                logger.warning("sandbox_name_conflict_retry", project_id=str(project_id))
+                await self._docker(["rm", "-f", name], timeout_s=_DOCKER_OP_TIMEOUT_S)
+                code, _out, err = await self._docker(run_argv, timeout_s=_DOCKER_OP_TIMEOUT_S)
         except BaseException:
             self._semaphore.release()
             raise
