@@ -102,6 +102,8 @@ docker compose -f deploy/compose.yaml -f deploy/compose.prod.yaml \
 
 `GIT_SHA` is baked into the image (surfaced at `/api/health` → `git_sha`).
 
+Verify the tree-sitter parsers were prefetched at build time: `docker compose -f deploy/compose.yaml run --rm --no-deps --entrypoint uv backend run python -c "import os, tree_sitter_language_pack as p; p.configure(p.PackConfig(cache_dir=os.environ['BSVIBE_PARSER_CACHE_DIR'])); print(p.downloaded_languages())"` (expect python, typescript, tsx, javascript, markdown; the image sets `BSVIBE_PARSER_CACHE_DIR=/opt/tree-sitter-parsers`).
+
 ## 5. Bring up the stack (staged rollout)
 
 **Stage A — api + auth first (UI testing).** Bring up Postgres, Redis, and the

@@ -27,6 +27,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # the moment a sandbox starts. Projects may still pin their own via uv.
 RUN uv pip install --system --no-cache pytest ruff
 
+# 코드 그래프 파서를 빌드 때 미리 받아 둔다(버전은 pyproject/uv.lock 의 1.8.1 과 일치).
+# 실행 중 GitHub 장애로 검증이 깨지지 않게 한다. 캐시는 모든 사용자가 읽는 고정 경로.
+ENV BSVIBE_PARSER_CACHE_DIR=/opt/tree-sitter-parsers
+RUN uv pip install --system --no-cache tree-sitter-language-pack==1.8.1 \
+    && python -c "import os, tree_sitter_language_pack as p; \
+p.configure(p.PackConfig(cache_dir=os.environ['BSVIBE_PARSER_CACHE_DIR'])); \
+p.download(['python', 'typescript', 'tsx', 'javascript', 'markdown'])" \
+    && chmod -R a+rX /opt/tree-sitter-parsers
+
 USER sandbox
 WORKDIR /work
 
