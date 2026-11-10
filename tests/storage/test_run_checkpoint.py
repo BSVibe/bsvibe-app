@@ -198,7 +198,7 @@ def test_run_checkpoints_live_under_their_own_prefix(monkeypatch: pytest.MonkeyP
 
 
 async def test_a_run_released_on_one_machine_continues_on_another(
-    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    world: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: Any
 ) -> None:
     """The whole policy with nothing faked: A's release saves, B's provision restores."""
     from types import SimpleNamespace
@@ -224,8 +224,14 @@ async def test_a_run_released_on_one_machine_continues_on_another(
         await ensure_product_workspace(pid, store=world["products"])
         wt = run_worktree_path(rid)
         await run_checkpoint.provision_run_worktree(run, workspace_dir=wt, machine_id="box-b")
+        assert await _git("rev-parse", "--abbrev-ref", "HEAD", cwd=wt) == f"bsvibe/run/{rid}"
         assert await _git("rev-parse", "HEAD", cwd=wt) == head
         assert (wt / "edit.py").read_text() == "edit.py v2 (uncommitted)\n"
+        assert (wt / "new.py").read_text() == "brand new (untracked)\n"
+        assert not (wt / "gone.py").exists()
+        status = await _git("status", "--porcelain", cwd=wt)
+        assert " M edit.py" in status and "?? new.py" in status and " D gone.py" in status
+    assert "run_checkpoint_failed" not in caplog.text
 
 
 async def test_removing_a_finished_runs_tree_removes_its_checkpoint(
