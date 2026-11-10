@@ -84,14 +84,18 @@ async def product_declared_checks(
 _DERIVED_KINDS = frozenset({"quality", "test", "surface"})
 
 
-async def latest_derived_commands(
-    session: AsyncSession, run_id: uuid.UUID | None
-) -> tuple[str, ...]:
-    """The commands the deriver produced for this run's latest verification (``()`` if none).
+def _timed_out(command: dict[str, Any]) -> bool:
+    return bool(command.get("timed_out")) or (
+        command.get("status") == "failed" and command.get("exit_code") is None
+    )
 
-    Shown to the next round's deriver so it re-emits them instead of re-wording them (#1275)."""
+
+async def _latest_derived_results(
+    session: AsyncSession, run_id: uuid.UUID | None
+) -> list[dict[str, Any]]:
+    """The deriver-written command results of this run's latest verification."""
     if run_id is None:
-        return ()
+        return []
     from sqlalchemy import select  # noqa: PLC0415
 
     from backend.workflow.infrastructure.db import VerificationResult  # noqa: PLC0415
@@ -107,17 +111,39 @@ async def latest_derived_commands(
     gate = result.get("derived_gate") if isinstance(result, dict) else None
     commands = gate.get("commands") if isinstance(gate, dict) else None
     if not isinstance(commands, list):
-        return ()
-    return tuple(
-        str(c["command"])
+        return []
+    return [
+        c
         for c in commands
         if isinstance(c, dict) and c.get("kind") in _DERIVED_KINDS and c.get("command")
-    )
+    ]
+
+
+async def latest_derived_commands(
+    session: AsyncSession, run_id: uuid.UUID | None
+) -> tuple[str, ...]:
+    """The commands the deriver produced for this run's latest verification (``()`` if none),
+    minus those that timed out.
+
+    Shown to the next round's deriver so it re-emits them instead of re-wording them (#1275).
+    A timed-out command is not re-emitted: no code change fixes a time limit, so it would time
+    out again every round (#1343) - see :func:`latest_timed_out_commands`."""
+    results = await _latest_derived_results(session, run_id)
+    return tuple(str(c["command"]) for c in results if not _timed_out(c))
+
+
+async def latest_timed_out_commands(
+    session: AsyncSession, run_id: uuid.UUID | None
+) -> tuple[str, ...]:
+    """The deriver-written commands of the latest verification that ended by timing out."""
+    results = await _latest_derived_results(session, run_id)
+    return tuple(str(c["command"]) for c in results if _timed_out(c))
 
 
 __all__ = [
     "any_failed",
     "latest_derived_commands",
+    "latest_timed_out_commands",
     "product_declared_checks",
     "run_gate_commands",
 ]
