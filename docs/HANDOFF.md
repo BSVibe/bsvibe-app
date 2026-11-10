@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-11-09
+# BSVibe session handoff — 2026-11-10
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,9 +21,9 @@
 
 ---
 
-## §0 — One line: **Every passed round now gets an independent review on the card and the PR; its first findings were all real**
+## §0 — One line: **The independent review now catches what the founder would — it led two denials on 11-10; #929 stage 1 is on in prod**
 
-11-04 → 11-09. Decision 11-04: HANDOFF §Ⅲ items go up as issues for BSVibe. Each run below was reviewed before its
+11-04 → 11-10. Decision 11-04: HANDOFF §Ⅲ items go up as issues for BSVibe. Each run below was reviewed before its
 Safe Mode card was approved; one was denied with a reason and re-driven.
 
 | Issue → PR | What | Rounds |
@@ -40,13 +40,22 @@ Safe Mode card was approved; one was denied with a reason and re-driven.
 | #1332 → #1333 | the review shows on the Safe Mode card (`review_status` / `review_counts` / top 5), in the PR body ("## Independent review" after the ledger) and in `verification_quality` (`reviews_done` / `_unavailable`, `review_findings_by_severity`, `runs_reviewed_with_high`) — **live from #1334's card and PR #1335** | 2 |
 | #1334 → #1335 | the review's own first two findings: PR-body lines made one inert line; `runs_reviewed_with_high` judged on the last passed round, like the card | **1** |
 | #1336 → #1337 | the review's next finding: `file` / `line` validated when stored, the location flattened in the PR body | 2 |
+| #1339 → #1340 | **a non-code artifact with no commits is a clean skip, not `delivery_failed`** — #1266 had made every "no PR opened" a failure, so the weekly BStockReport (`direct_output`) raised a spurious decision on 11-02 and 11-09 although the report reached Telegram; both decisions discarded | 4 (three lost to a GitHub Releases 504 in the parser download → #1341) |
+| #1341 → #1348 | **tree-sitter parsers prefetched at image build** (backend + sandbox, `/opt/tree-sitter-parsers`, backend `BSVIBE_PARSER_OFFLINE=1`), version pinned, CI cache — runtime never downloads. Delivered **by hand**: the GitHub App lacked `workflows` permission (now granted) | 1 (+ a denial led by the review) |
+| #1343 → #1344 | **a delivery that fails right after a Safe Mode approval raises `delivery_failed`** — the decision factory was wired only in the worker process, so approvals (backend: REST / MCP / Telegram) logged `delivery_failure_decision_unwired` and left the run stuck with nothing to resend | 4 (three lost to the gate's duplicate coverage run timing out → #1346) |
+| #1345 → #1349 | **checkpoints work for a GitHub run's own `--depth 1` clone** (#929): thin bundle with no network/auth at save; restore = clone like the provisioner (credential, token-free origin) + fetch the checkpoint; the branch is rebuilt from the snapshot's parent and its recorded name | 1 (+ two denials, both led by the review: no `origin` after restore; an uncommitted run's branch dropped from the bundle) |
+| #1346 → #1347 | the derived gate drops a whole-suite `pytest` that only re-flags the product's own final run, and a timed-out command is listed apart instead of "re-emit verbatim" | **1** |
 | by hand → #1323 | **a worker restart gives its drives back**: `stop()` cancels in-flight drives (their cancel path releases the claim), then releases whatever it still holds; on start a worker takes back the claims a previous process left on its own machine | — |
 
 Rounds per issue run this session: #1314 2 · #1316 2 · #1317 **1** · #1320 1 (+ a denial) · #1322 4 · #1325 **1** ·
 #1327 **1** · #1330 **1** · #1332 2 · #1334 **1** · #1336 2. #1332's and #1336's first rounds failed on the full
 `pytest -q` final check (an existing test the change broke) — not on the ledger.
 
-**The independent review's sample so far (3 reviews): 3 findings, all low, all real** — markdown injection into the PR
+**The independent review's sample (11-06 → 11-10): every finding so far was real.** The first three (low) were
+fixed by the next runs. On 11-10 it caught what the founder's own review would have: the #1341 test re-introduced the
+network dependency it was meant to remove (3 medium), and #1345's restore had no `origin` (high) and dropped an
+uncommitted run's branch (high) — both cards were denied with the review's findings as the reason, and the re-work
+passed. Earlier sample: markdown injection into the PR
 body from reviewer text (#1333), a metric on a different basis than the card (#1333), an unflattened `file` field
 (#1335). None was a false alarm; two were fixed by the next run.
 
@@ -302,7 +311,7 @@ Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #128
 * **I picked an issue that was already done (#1046 → #1047).** Check `git log -S` / the code on main before filing
   or re-running an issue.
 
-## §Ⅱ-k — What 11-04/11-09 found
+## §Ⅱ-k — What 11-04/11-10 found
 
 * **A deploy stranded the runs it interrupted for two hours.** `AgentWorker.stop()` waited for its drives; a drive can
   be an hour into one executor turn, so the container was killed first and the claim stayed until the stale-claim
@@ -330,24 +339,37 @@ Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #128
 * **Ledger commands are proven live**: #1332's R6 ("`pnpm lint`·`tsc`·`test` 통과") was decided by the gate running
   `cd apps/pwa && …` forms tagged `covers` — `done` with "명령 통과", no evidence citing needed.
 
+* **#929 stage 1 is on** (11-09): `BSVIBE_MACHINE_ID=mac-mini-1` in `deploy/.env.prod` (backup `.env.prod.bak-20261109`),
+  applied by the next autodeploy. It switched on checkpoints, which immediately showed GitHub clone runs were never
+  covered (`run_checkpoint_failed`, fixed by #1349). Watch for `run_worktree_checkpointed` on the next released run.
+* **A test that downloads at runtime turns a GitHub outage into failed rounds** — three of #1339's rounds and #1342's
+  CI were lost to `tree-sitter-language-pack` fetching parsers (504). #1348 prefetches at build time.
+* **The gate re-ran the product's own full suite with `--cov -v`** and re-emitted it after it timed out — three of
+  #1343's rounds lost (#1347).
+* **An approval-path delivery failure was silent** (#1343): no decision, card consumed, run stuck `review_ready`.
+  Wiring that only one process does is a class of bug — check both backend and worker when a factory is injected.
+* **The GitHub App had no `workflows` permission**: an approved change to `.github/workflows/` cannot be pushed by
+  BSVibe until it is granted (granted 11-10; the app is owned by the founder's account, installed on the org).
+
 ## §Ⅲ — Next
 
-1. **R5 stage 2 decision** — once the review has a real sample (≥ 20 reviewed cards), compare the deny rate of cards
-   with a medium/high finding against cards without; only then consider letting a high finding hold the card. Read
-   `verification_quality` (`reviews_done`, `review_findings_by_severity`, `runs_reviewed_with_high`) per batch.
-2. **#1323 live** stays open: `agent_worker_released_on_stop` / `agent_worker_released_orphaned_claims` naming a run on
-   the next deploy that does hit a live drive (`docs/e2e/worker-restart-releases-claims-checklist.md`).
-3. Once `leftover_dirs` has a sample, decide **#1267 layer 2** (the deriver names the stack's cache paths up front).
-4. `covers_rejection` still accepts a hiding operator further along (`… lint && echo done || true`) and a background
-   `&`; `git grep -w` call-site lookup counts a common name (`render`, `run`) as called — both low priority.
-5. **#929 turn-on** — a `BSVIBE_MACHINE_ID` on this box alone, then a second machine
-   (`docs/runbook/vault-to-postgres.md` §"A second box"). Startup claim take-back (#1323) assumes ONE agent worker
-   process per machine id. `/app/var/vault` may go now (kept until 10-29).
-6. **#930** — 2M tuning still has no sample.
-7. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap (code shipped by #1047) · #937 outside the repo.
-8. E2E checklists still open: `docs/e2e/requirements-ledger-checklist.md`, `ci-parity-checklist.md` (B failing-final,
-   D, E, F), `counterfactual-guard-checklist.md` (B, C), `intake-trust-by-repo-permission-checklist.md` (live items),
-   `worker-restart-releases-claims-checklist.md`.
+1. **See #1349 live**: the next run released on this box logs `run_worktree_checkpointed`, not `run_checkpoint_failed`.
+   Then the rest of the #929 second-box list (`docs/runbook/vault-to-postgres.md` §"A second box").
+2. **11-16 weekly BStockReport**: ships with one Telegram message and no `delivery_failed` (#1340); tick
+   `requirements-ledger-checklist.md` D.
+3. **#1350** (the "send again" test checks that a delivery event is actually re-added) — in flight.
+4. **R5 stage 2 decision** — once ≥ 20 reviewed cards, compare deny rates with / without a medium-or-high finding.
+   So far every denial this session was led by a review finding.
+5. **#1323 live** stays open (a deploy that hits a live drive; autodeploy defers while a run is alive).
+6. Once `leftover_dirs` has a sample, decide **#1267 layer 2**.
+7. Low priority: `covers_rejection` still accepts a hiding operator further along; `git grep -w` counts common names
+   as called; `duplicates_product_run` reads `--cov backend` (space) as a path; the sandbox image has no
+   `BSVIBE_PARSER_OFFLINE`.
+8. **#930** — 2M tuning still has no sample. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap ·
+   #937 outside the repo.
+9. E2E checklists still open: `requirements-ledger-checklist.md` (A1, B, C2, D1/D2/D3, E), `ci-parity-checklist.md`
+   (C, E1/E3, F), `counterfactual-guard-checklist.md`, `intake-trust-by-repo-permission-checklist.md` (non-writer
+   comment), `worker-restart-releases-claims-checklist.md`.
 
 ## §Ⅳ — Discipline that paid off
 
