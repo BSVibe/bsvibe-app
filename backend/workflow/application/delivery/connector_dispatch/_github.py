@@ -16,7 +16,7 @@ event builder. Two pieces live here:
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,6 +44,13 @@ from ._resolver import GithubBinding, product_runs_in_place, resolve_github_bind
 logger = structlog.get_logger(__name__)
 
 
+#: ``(run, workspace_dir, clone, deepen) -> handled`` -- see ``build_github_workspace_provisioner``.
+CheckpointRestore = Callable[
+    [Any, Path, Callable[[Path], Awaitable[None]], Callable[[Path, int], Awaitable[None]]],
+    Awaitable[bool],
+]
+
+
 def github_remote_url(repo: str) -> str:
     """Default github HTTPS clone/push URL for an ``owner/name`` repo."""
     return f"https://github.com/{repo}.git"
@@ -64,6 +71,7 @@ def build_github_workspace_provisioner(
     cipher: CredentialCipher | Callable[[], CredentialCipher],
     git_ops: GitOps | None = None,
     remote_url_for: Callable[[str], str] | None = None,
+    restore_checkpoint: CheckpointRestore | None = None,
 ) -> Callable[[AsyncSession, Any, Path], Any]:
     """A :attr:`AgentExecutionDeps.workspace_provisioner` for the github path.
 
@@ -75,6 +83,9 @@ def build_github_workspace_provisioner(
     ``cipher`` may be a :class:`CredentialCipher` or a zero-arg factory called
     LAZILY only when a github binding is present (a non-github run never forces the
     KMS key). ``remote_url_for`` overrides the clone URL (tests → LOCAL bare repo).
+    ``restore_checkpoint`` (#929) is the run-checkpoint policy, injected because this layer may
+    not import it: called with the run, the workspace dir and the ways to clone / deepen this
+    run's repo; ``True`` when it provided the tree (kept or restored), so no fresh clone.
     """
     ops = git_ops or GitOps()
     url_for = remote_url_for or github_remote_url
@@ -101,6 +112,29 @@ def build_github_workspace_provisioner(
         binding = await resolve_github_binding(session, workspace_id=ws, product_id=product_id)
         if binding is None:
             return
+        # #929 — a run with a checkpoint may have moved machines: ``restore_checkpoint`` keeps
+        # this machine's tree when it saved the latest checkpoint, otherwise restores it. The
+        # restore clones exactly as below does (connector credential, depth 1, origin without
+        # the token) and fetches the checkpointed branch + uncommitted work on top.
+        if restore_checkpoint is not None:
+            resolved: list[str] = []
+
+            async def _token() -> str:  # only a run that really restores needs the credential
+                if not resolved:
+                    creds = await resolve_connector_credentials(
+                        session, account=binding.account, cipher=_resolve_cipher()
+                    )
+                    resolved.append(creds["token"])
+                return resolved[0]
+
+            async def _clone(dest: Path) -> None:
+                await ops.clone(url_for(binding.repo), dest, token=await _token(), depth=1)
+
+            async def _deepen(dest: Path, by: int) -> None:
+                await ops.deepen(dest, by, token=await _token())
+
+            if await restore_checkpoint(run, workspace_dir, _clone, _deepen):
+                return
         # Idempotency under drive_once re-entry: a resumed run re-enters with the
         # SAME workspace_dir already holding the prior drive's checkout. git clone
         # refuses a non-empty dir → re-cloning would stall the run OPEN. REUSE it

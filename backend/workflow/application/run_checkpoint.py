@@ -25,6 +25,7 @@ from typing import Any
 import structlog
 
 from backend.storage.product_workspace import (
+    RunCloneSource,
     add_run_worktree,
     checkpoint_run_worktree,
     discard_local_run_worktree,
@@ -68,8 +69,19 @@ async def checkpoint_before_release(session: Any, run: Any, *, machine_id: str) 
     run.payload = {**(run.payload or {}), CHECKPOINT_KEY: record}
 
 
-async def provision_run_worktree(run: Any, *, workspace_dir: Path, machine_id: str) -> Path:
+async def provision_run_worktree(
+    run: Any,
+    *,
+    workspace_dir: Path,
+    machine_id: str,
+    clone_source: RunCloneSource | None = None,
+) -> Path:
     """Make the run's worktree present on THIS machine: keep, restore, or start it.
+
+    ``clone_source`` marks a run that executes as its own GitHub clone (its product is bound to
+    a GitHub repo; the caller knows that from the binding). Such a run is restored by cloning
+    like its provisioner did and fetching the checkpoint on top; with no checkpoint it is left
+    to that provisioner (this never makes a product worktree for it).
 
     A tree already here is kept only when THIS machine saved the latest checkpoint. When
     another machine did, the tree here is left over from before the run moved away — older
@@ -88,11 +100,18 @@ async def provision_run_worktree(run: Any, *, workspace_dir: Path, machine_id: s
                 f"run {run.id}: its latest work was not saved off {checkpoint.get('machine')}; "
                 "it can only continue there"
             )
-        if not await restore_run_worktree(run.product_id, run.id):
+        restored = await (
+            restore_run_worktree(run.product_id, run.id)
+            if clone_source is None
+            else restore_run_worktree(run.product_id, run.id, clone_source=clone_source)
+        )
+        if not restored:
             raise RunCheckpointMissing(
                 f"run {run.id}: checkpoint {str(checkpoint.get('sha'))[:12]} from "
                 f"{checkpoint.get('machine')} could not be restored"
             )
+    if clone_source is not None:
+        return workspace_dir
     # Idempotent for a tree that is present (kept or just restored); a fresh branch from
     # ``main`` only for a run that never had one.
     return await add_run_worktree(run.product_id, run.id)

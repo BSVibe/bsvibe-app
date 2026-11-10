@@ -28,6 +28,7 @@ logger = structlog.get_logger(__name__)
 __all__ = [
     "_build_composite_workspace_provisioner",
     "_product_workspace_provisioner",
+    "_restore_github_run_checkpoint",
 ]
 
 
@@ -98,3 +99,34 @@ def _build_composite_workspace_provisioner(
         await product(session, run, workspace_dir)
 
     return _composed
+
+
+async def _restore_github_run_checkpoint(
+    run: ExecutionRun,
+    workspace_dir: Path,
+    clone: Callable[[Path], Awaitable[None]],
+    deepen: Callable[[Path, int], Awaitable[None]],
+) -> bool:
+    """#929 — the run-checkpoint policy for a run that is its own GitHub clone.
+
+    ``True`` when the tree is here (kept, or restored from the checkpoint on top of a clone made
+    like the provisioner makes it); ``False`` for a run with no checkpoint, which the GitHub
+    provisioner then clones fresh. A single-box deployment (no machine id) never checkpoints.
+    """
+    from backend.config import get_settings  # noqa: PLC0415 — lazy
+    from backend.storage.product_workspace import RunCloneSource  # noqa: PLC0415
+    from backend.workflow.application.run_checkpoint import (  # noqa: PLC0415
+        CHECKPOINT_KEY,
+        provision_run_worktree,
+    )
+
+    machine_id = get_settings().machine_id
+    if not machine_id or not (run.payload or {}).get(CHECKPOINT_KEY):
+        return False
+    await provision_run_worktree(
+        run,
+        workspace_dir=workspace_dir,
+        machine_id=machine_id,
+        clone_source=RunCloneSource(clone=clone, deepen=deepen),
+    )
+    return True
