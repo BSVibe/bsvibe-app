@@ -130,9 +130,14 @@ def _core_words(command: str) -> list[str]:
     return words
 
 
-_OPERATOR = re.compile(r"(&&|\|\||;|\|)")
+#: ``&&`` ``||`` ``;`` ``|`` and a lone ``&`` (background); ``&&``, ``2>&1``, ``>&2`` and
+#: ``&>`` are not a lone ``&``.
+_OPERATOR = re.compile(r"(&&|\|\||;|\||(?<![<>&])&(?![&>]))")
 #: Final commands that make the whole line exit 0 whatever came before.
 _MASKING_TAILS = (("true",), ("exit", "0"), (":",))
+
+
+_ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_]\w*=")
 
 
 def _is_launcher(word: str) -> bool:
@@ -143,12 +148,24 @@ def _starts_with_core(piece: list[str], core: list[str]) -> bool:
     """Whether, past its launchers and options, ``piece`` begins with ``core[0]`` and carries
     the rest of ``core`` in order."""
     start = 0
-    while start < len(piece) and _is_launcher(piece[start]):
+    while start < len(piece) and (
+        _is_launcher(piece[start]) or _ENV_ASSIGNMENT.match(piece[start])
+    ):
         start += 1
     rest = iter(piece[start:])
     if start >= len(piece) or piece[start] != core[0]:
         return False
     return all(word in rest for word in core)
+
+
+def _hiding_operator(following: Sequence[str]) -> str | None:
+    """Why an operator after the command hides its exit code; only ``&&`` may follow."""
+    for op in following:
+        if op == "|":
+            return "파이프의 마지막이 아니라 종료 코드를 감춤"
+        if op != "&&":
+            return f"`{op}` 가 종료 코드를 감춤"
+    return None
 
 
 def covers_rejection(derived: str, ledger_command: str) -> str | None:
@@ -157,25 +174,26 @@ def covers_rejection(derived: str, ledger_command: str) -> str | None:
 
     The ledger command minus its launcher (``npx``, ``pnpm``, ``uv run`` …), version (``@9``)
     and ``--yes`` must follow, in order, from the command word of one of the pieces the form
-    splits into at ``&&`` ``;`` ``||`` ``|`` (a ``cd <dir>`` piece is not one). And that
-    command's exit code must reach the caller: ``|| true``, ``; true``, a pipe into something
-    else, or a form ending in ``true`` / ``exit 0`` / ``:`` hides a failure."""
+    splits into at ``&&`` ``;`` ``||`` ``|`` ``&`` (a ``cd <dir>`` piece is not one). And that
+    command's exit code must reach the caller: after its piece only ``&&`` may follow, to the
+    end of the line (``|| x``, ``; x``, a pipe, anywhere later hides a failure), no lone ``&``
+    (background) may appear, and a form ending in ``true`` / ``exit 0`` / ``:`` hides one too."""
     core = _core_words(ledger_command) or ledger_command.split()
     if not core:
         return "빈 명령"
     parts = _OPERATOR.split(derived)
     pieces = [p.split() for p in parts[0::2]]
     operators = parts[1::2]
+    if "&" in operators:
+        return "`&`(백그라운드)가 종료 코드를 감춤"
     found = False
     for i, piece in enumerate(pieces):
         if not piece or piece[0] == "cd" or not _starts_with_core(piece, core):
             continue
         found = True
-        after = operators[i] if i < len(operators) else ""
-        if after in {"||", ";"}:
-            return f"`{after}` 가 종료 코드를 감춤"
-        if after == "|":
-            return "파이프의 마지막이 아니라 종료 코드를 감춤"
+        hidden = _hiding_operator(operators[i:])
+        if hidden:
+            return hidden
     if not found:
         return "핵심 단어가 실행기 자리에 없음"
     last = next((p for p in reversed(pieces) if p), [])

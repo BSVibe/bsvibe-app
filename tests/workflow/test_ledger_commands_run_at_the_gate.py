@@ -34,6 +34,7 @@ from backend.workflow.domain.ledger_commands import (
     command_verdict,
     commands_required,
     covers_command,
+    covers_rejection,
 )
 from backend.workflow.domain.requirements import REQUIREMENTS_KEY, build_ledger
 from backend.workflow.domain.verifier_contract import VerificationCheck, VerificationContract
@@ -280,6 +281,36 @@ def test_covers_command_refuses_a_form_that_hides_the_exit_code() -> None:
     ):
         assert not covers_command(hidden, _LINT), hidden
     assert covers_command("cd apps/pwa && npx --yes pnpm@9 lint && echo done", _LINT)
+
+
+def test_covers_command_refuses_an_operator_after_the_command_that_hides_its_exit_code() -> None:
+    for hidden in (
+        "pnpm lint && echo done || echo x",
+        "pnpm lint && echo done; echo x",
+        "pnpm lint && echo done | tee out.txt",
+    ):
+        assert covers_rejection(hidden, "pnpm lint") is not None, hidden
+    reason = covers_rejection("pnpm lint && echo done || echo x", "pnpm lint")
+    assert reason is not None and "||" in reason
+
+
+def test_covers_command_refuses_a_background_ampersand() -> None:
+    for hidden in (
+        "pnpm lint &",
+        "pnpm lint & wait",
+        "pnpm lint && pnpm test &",
+        "sleep 1 & pnpm lint",
+    ):
+        reason = covers_rejection(hidden, "pnpm lint")
+        assert reason is not None and "&" in reason, hidden
+
+
+def test_covers_command_keeps_accepting_the_ordinary_forms() -> None:
+    assert covers_rejection("cd apps/pwa && npx --yes pnpm@9 lint", "pnpm lint") is None
+    assert covers_rejection("pnpm install && pnpm lint && pnpm test", "pnpm lint") is None
+    assert covers_rejection("CI=true uv run pytest tests/x 2>&1", "uv run pytest tests/x") is None
+    assert covers_rejection("pnpm lint >&2", "pnpm lint") is None
+    assert covers_rejection("pnpm lint &> out.txt", "pnpm lint") is None
 
 
 async def test_a_covers_that_hides_the_failure_is_dropped_at_the_gate(
