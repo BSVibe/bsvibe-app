@@ -166,7 +166,22 @@ _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SHELL_OPERATORS = frozenset({"&&", "||", ";", "|", "&", ">", ">>", "<", "2>&1"})
 #: pytest options that take a SEPARATE value (``-n 4``); that value is not a path.
 _PYTEST_VALUE_FLAGS = frozenset(
-    {"-n", "-p", "-c", "-o", "-W", "--maxfail", "--tb", "--durations", "--rootdir", "--junitxml"}
+    {
+        "-n",
+        "-p",
+        "-c",
+        "-o",
+        "-W",
+        "--maxfail",
+        "--tb",
+        "--durations",
+        "--rootdir",
+        "--junitxml",
+        "--cov-report",
+        "--cov-fail-under",
+        "--cov-config",
+        "--cov-context",
+    }
 )
 #: pytest options that NARROW what runs: the run is no longer "everything".
 _PYTEST_NARROWING = ("-k", "-m", "--deselect", "--ignore", "--lf", "--last-failed", "--sw")
@@ -192,11 +207,17 @@ def _pytest_scope(command: str) -> tuple[str, ...] | None:
         return None
     scope: list[str] = []
     skip_value = False
+    after_cov = False
     for token in tokens[1:]:
-        if skip_value:
+        # ``--cov`` takes an optional value: the word right after it is its value, unless it is
+        # an option (``-``) or reads as a test path.
+        cov_value = after_cov and not (token.startswith(("-", "tests")) or token.endswith(".py"))
+        after_cov = False
+        if skip_value or cov_value:
             skip_value = False
         elif token.startswith("-"):
             skip_value = token in _PYTEST_VALUE_FLAGS
+            after_cov = token == "--cov"  # noqa: S105 - a pytest option name, not a secret
             if token.startswith(_PYTEST_NARROWING):
                 scope.append(token)
         else:
