@@ -67,6 +67,8 @@ class SafeModeItem(_Output):
     #: without a ledger) and the unclear / deferred items to read before approving.
     ledger_counts: dict[str, int] = {}
     ledger_attention: list[LedgerAttentionItem] = []
+    #: ``done`` items that followed a founder correction (denial reason).
+    ledger_corrected: list[LedgerAttentionItem] = []
     #: The independent review of the run's last passed round (report-only).
     review_status: str = "none"
     review_counts: dict[str, int] = {}
@@ -85,6 +87,7 @@ def _item_to_dict(
         **(footprint.model_dump() if footprint is not None else {}),
         ledger_counts=ledger.counts if ledger is not None else {},
         ledger_attention=ledger.attention if ledger is not None else [],
+        ledger_corrected=ledger.corrected if ledger is not None else [],
         review_status=ledger.review_status if ledger is not None else "none",
         review_counts=ledger.review_counts if ledger is not None else {},
         review_findings=ledger.review_findings if ledger is not None else [],

@@ -40,6 +40,8 @@ class SafeModeItemResponse(BaseModel):
     # empty when the run has no ledger. ``ledger_attention`` = unclear + deferred items.
     ledger_counts: dict[str, int] = {}
     ledger_attention: list[LedgerAttentionItem] = []
+    # ``done`` items that followed a founder correction (denial reason) — shown on the card.
+    ledger_corrected: list[LedgerAttentionItem] = []
     # Independent review of the run's last passed round (report-only): ``done`` /
     # ``unavailable`` / ``none``; the top-5 findings by severity.
     review_status: str = "none"

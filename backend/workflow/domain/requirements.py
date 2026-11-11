@@ -27,6 +27,25 @@ from typing import Any
 REQUIREMENTS_KEY = "requirements"
 #: ``VerificationResult.result`` key holding the verdict rows of that round.
 LEDGER_RESULT_KEY = "requirements"
+#: Run payload key holding the founder's own denial reasons (``rejected_approach`` only).
+#: Written by the safe-mode queue from the text the founder typed — never from an agent note
+#: or a reviewer — so the ledger judge may treat it as a correction of the request.
+FOUNDER_CORRECTIONS_KEY = "founder_corrections"
+_CORRECTION_MAX_CHARS = 1500
+
+
+def founder_corrections(payload: Mapping[str, Any] | None) -> list[str]:
+    """The founder's denial reasons recorded on a run's payload (``[]`` when none)."""
+    raw = (payload or {}).get(FOUNDER_CORRECTIONS_KEY)
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for entry in raw:
+        text = entry.get("text") if isinstance(entry, Mapping) else None
+        if isinstance(text, str) and text.strip():
+            out.append(text.strip()[:_CORRECTION_MAX_CHARS])
+    return out
+
 
 REQUIREMENT_KINDS = ("do", "guard", "done", "constraint")
 #: Item statuses. ``pending`` = grounded, awaiting the item judge. ``noted`` = a constraint.
@@ -842,6 +861,8 @@ def render_ledger_table(rows: Sequence[Mapping[str, Any]]) -> str:
     for row in rows:
         evidence = ", ".join([*row.get("paths", []), *row.get("tests", [])]) or row.get("note", "")
         status = str(row.get("status"))
+        if row.get("founder_correction"):
+            status += " ✎ 창업자 정정 반영"
         if row.get("counterfactual") == "vacuous":
             # Report-only: the test that was cited still passes with the change taken away.
             status += f" ⚠ {row.get('counterfactual_note') or 'passes without the change'}"
@@ -861,6 +882,7 @@ def public_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         "tests",
         "note",
         "excerpt_hash",
+        "founder_correction",
         "counterfactual",
         "counterfactual_note",
     )
@@ -868,6 +890,8 @@ def public_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "FOUNDER_CORRECTIONS_KEY",
+    "founder_corrections",
     "evidence_reminder",
     "owed_before_verify",
     "refresh_ledger",
