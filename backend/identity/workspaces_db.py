@@ -56,6 +56,10 @@ DEFAULT_MAX_CONCURRENT_RUNS = 3
 #: to guard and a new workspace is born without a monthly budget. The budget stays
 #: as a spend ceiling the workspace owner/admin may choose to set. Declared here,
 #: beside the column, so the Python default and the column default have ONE source.
+#:
+#: History: the old 50,000,000 default was derived from the only measured number
+#: (``agent_max_run_tokens`` = 2,000,000), and a monthly budget below that could
+#: not fund a single worst-case run. That derivation no longer applies.
 DEFAULT_MONTHLY_TOKEN_BUDGET: int | None = None
 
 #: The plan every workspace is born on — the default for ``workspaces.plan``. The plans
@@ -211,8 +215,8 @@ class WorkspaceRow(WorkspacesBase):
     # subscription limit is the workspace's own and BSVibe has nothing to protect.
     # Platform resources are bounded by the plan (``max_concurrent_runs``,
     # ``verify_stack_slots``), not by this column; no plan sets it. The per-run
-    # ceiling (``agent_max_run_tokens``) is the separate guard that keeps one
-    # runaway run from burning the user's own key.
+    # per-run token ceiling is the separate guard that keeps one runaway run
+    # from burning the user's own key.
     #
     # It counts what a workspace SPENT, terminal runs included — shipping does not
     # refund the provider bill. Owner/admin set or clear it (REST + MCP).

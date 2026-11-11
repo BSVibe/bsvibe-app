@@ -14,7 +14,7 @@ provider's webhook calls exactly this; so does an operator.
 
 ``monthly_token_budget`` is not a plan limit: tokens are BYO, so the monthly budget is a spend
 ceiling the workspace chooses (``workspaces_db``), and no plan sets or overwrites it. The per-run
-ceiling (``agent_max_run_tokens``) is what keeps a runaway run off the user's own key.
+token ceiling is what keeps a runaway run off the user's own key.
 
 A downgrade does not touch what a workspace already holds: runs over the new cap keep running,
 the cap only refuses the next submission (``run_caps`` counts at admission).
