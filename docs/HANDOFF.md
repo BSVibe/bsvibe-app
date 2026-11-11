@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-11-10
+# BSVibe session handoff — 2026-11-11
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,9 +21,9 @@
 
 ---
 
-## §0 — One line: **The independent review now catches what the founder would — it led two denials on 11-10; #929 stage 1 is on in prod**
+## §0 — One line: **A worker restart mid-run is now proven safe in prod; a founder's denial reason now corrects the ledger**
 
-11-04 → 11-10. Decision 11-04: HANDOFF §Ⅲ items go up as issues for BSVibe. Each run below was reviewed before its
+11-04 → 11-11. Decision 11-04: HANDOFF §Ⅲ items go up as issues for BSVibe. Each run below was reviewed before its
 Safe Mode card was approved; one was denied with a reason and re-driven.
 
 | Issue → PR | What | Rounds |
@@ -45,6 +45,12 @@ Safe Mode card was approved; one was denied with a reason and re-driven.
 | #1343 → #1344 | **a delivery that fails right after a Safe Mode approval raises `delivery_failed`** — the decision factory was wired only in the worker process, so approvals (backend: REST / MCP / Telegram) logged `delivery_failure_decision_unwired` and left the run stuck with nothing to resend | 4 (three lost to the gate's duplicate coverage run timing out → #1346) |
 | #1345 → #1349 | **checkpoints work for a GitHub run's own `--depth 1` clone** (#929): thin bundle with no network/auth at save; restore = clone like the provisioner (credential, token-free origin) + fetch the checkpoint; the branch is rebuilt from the snapshot's parent and its recorded name | 1 (+ two denials, both led by the review: no `origin` after restore; an uncommitted run's branch dropped from the bundle) |
 | #1346 → #1347 | the derived gate drops a whole-suite `pytest` that only re-flags the product's own final run, and a timed-out command is listed apart instead of "re-emit verbatim" | **1** |
+| #1350 → #1352 | the "send again" test checks that exactly one new delivery event (founder-approved, same run) is added, and that resolving the decision twice adds none | **1** |
+| #1353 → #1354 | `covers_rejection` refuses `\|\|` / `;` / `\|` anywhere after the ledger command and a lone background `&`; an env prefix (`CI=true …`) is skipped like a launcher | **1** |
+| #1356 → #1357 | **a turn that outlives its job is cut off**: the run-scoped task token carries the run's claim and the work tools refuse it once the run is no longer RUNNING under that claim (`mcp_work_claim_lost`); a cancelled job kills its executor session (`cancel_task`); a sandbox name conflict is cleared and retried once | **1** |
+| #1355 → #1358 | `duplicates_product_run` knows the pytest-cov value flags; `--cov` takes the next word only when it is not an option or a test path | 3 (one forced fail by a worker restart before #1357; one denial led by two high review findings — the issue's own wording was wrong; one round lost to the ledger holding that wording → #1359) |
+| #1359 → #1360 | **a founder's `rejected_approach` reason corrects the ledger**: recorded on the run (`founder_corrections`, founder-typed text only, numbered), given to the item judge as FOUNDER CORRECTIONS that outrank the request (later supersedes earlier); an item done by a correction is marked (`founder_correction`, PR table "✎ 창업자 정정 반영", card `ledger_corrected`) | 1 (+ a denial: the card had no mark, corrections had no order) |
+| #1361 → #1362 | the PWA card lists `ledger_corrected` items as info, not an alert | **1** |
 | by hand → #1323 | **a worker restart gives its drives back**: `stop()` cancels in-flight drives (their cancel path releases the claim), then releases whatever it still holds; on start a worker takes back the claims a previous process left on its own machine | — |
 
 Rounds per issue run this session: #1314 2 · #1316 2 · #1317 **1** · #1320 1 (+ a denial) · #1322 4 · #1325 **1** ·
@@ -311,7 +317,7 @@ Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #128
 * **I picked an issue that was already done (#1046 → #1047).** Check `git log -S` / the code on main before filing
   or re-running an issue.
 
-## §Ⅱ-k — What 11-04/11-10 found
+## §Ⅱ-k — What 11-04/11-11 found
 
 * **A deploy stranded the runs it interrupted for two hours.** `AgentWorker.stop()` waited for its drives; a drive can
   be an hour into one executor turn, so the container was killed first and the claim stayed until the stale-claim
@@ -351,25 +357,40 @@ Rounds per issue run: #1279 1 then 4 (a denial with a reason) · #1046 4 · #128
 * **The GitHub App had no `workflows` permission**: an approved change to `.github/workflows/` cannot be pushed by
   BSVibe until it is granted (granted 11-10; the app is owned by the founder's account, installed on the org).
 
+* **#1323 is proven live (11-11)** — by restarting the prod worker by hand mid-turn (founder's OK), graceful and
+  `docker kill`; see the checklist. The first attempt (11-10, before #1357) **killed the run**: `stop()` released it,
+  but the executor turn runs outside the worker and kept calling the work tools; the backend created the run's
+  sandbox for that stale call and the re-drive failed on `container name … already in use` → #1356.
+* **Restarting a worker is the way to exercise drive-lifecycle code** — autodeploy defers while a run is alive, so a
+  mid-drive deploy almost never happens on its own. Wait until the run is calling tools (backend `mcp_work_tool`),
+  then restart; read worker AND backend logs, and check the run status afterwards — "re-claimed in 1 s" said nothing
+  about whether the re-drive survived.
+* **A denial reason that corrects the request was invisible to the ledger** (#1355): the judge compared the fixed code
+  with the issue's wrong sentence and rejected it; the agent escaped by marking the item `deferred` while it was
+  done. #1359/#1360 lets the founder's own reason outrank the request.
+* **My issue wording was the defect twice** (#1353 claimed `CI=true …` was accepted — it was refused; #1355 said
+  "always the next word"). The review caught the second. Read the sentence as a rule an agent will follow literally.
+* **`gh pr merge` was often already done** — the founder merges from their side; check `mergedBy` before writing.
+* **bsvibe MCP can vanish mid-session** (`CREDENTIAL_STORE_UNAVAILABLE`, keychain); no GitHub writes until it is back.
+
 ## §Ⅲ — Next
 
-1. **See #1349 live**: the next run released on this box logs `run_worktree_checkpointed`, not `run_checkpoint_failed`.
-   Then the rest of the #929 second-box list (`docs/runbook/vault-to-postgres.md` §"A second box").
-2. **11-16 weekly BStockReport**: ships with one Telegram message and no `delivery_failed` (#1340); tick
+1. **11-16 weekly BStockReport**: ships with one Telegram message and no `delivery_failed` (#1340); tick
    `requirements-ledger-checklist.md` D.
-3. **#1350** (the "send again" test checks that a delivery event is actually re-added) — in flight.
+2. **First live founder correction**: the next `rejected_approach` denial whose reason contradicts a ledger item —
+   the item should come back `done` with "✎ 창업자 정정 반영" in the PR table and on the PWA card.
+3. **#1323 leftovers**: `mcp_work_claim_lost` firing for a turn that survives its job; a run paused on a founder
+   decision across a restart. Then the rest of the #929 second-box list (`docs/runbook/vault-to-postgres.md`).
 4. **R5 stage 2 decision** — once ≥ 20 reviewed cards, compare deny rates with / without a medium-or-high finding.
-   So far every denial this session was led by a review finding.
-5. **#1323 live** stays open (a deploy that hits a live drive; autodeploy defers while a run is alive).
-6. Once `leftover_dirs` has a sample, decide **#1267 layer 2**.
-7. Low priority: `covers_rejection` still accepts a hiding operator further along; `git grep -w` counts common names
-   as called; `duplicates_product_run` reads `--cov backend` (space) as a path; the sandbox image has no
-   `BSVIBE_PARSER_OFFLINE`.
-8. **#930** — 2M tuning still has no sample. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap ·
+   Every denial 11-10/11 was led by a review finding.
+5. Once `leftover_dirs` has a sample, decide **#1267 layer 2**.
+6. Low priority: `git grep -w` counts common names as called; `--cov ./tests/x` is read as `--cov`'s value; a vague
+   denial reason re-judges every ledger item; the sandbox image has no `BSVIBE_PARSER_OFFLINE`.
+7. **#930** — 2M tuning still has no sample. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap ·
    #937 outside the repo.
-9. E2E checklists still open: `requirements-ledger-checklist.md` (A1, B, C2, D1/D2/D3, E), `ci-parity-checklist.md`
+8. E2E checklists still open: `requirements-ledger-checklist.md` (A1, B, C2, D1/D2/D3, E), `ci-parity-checklist.md`
    (C, E1/E3, F), `counterfactual-guard-checklist.md`, `intake-trust-by-repo-permission-checklist.md` (non-writer
-   comment), `worker-restart-releases-claims-checklist.md`.
+   comment), `worker-restart-releases-claims-checklist.md` (claim-lost, paused run).
 
 ## §Ⅳ — Discipline that paid off
 
