@@ -209,9 +209,9 @@ def _pytest_scope(command: str) -> tuple[str, ...] | None:
     skip_value = False
     after_cov = False
     for token in tokens[1:]:
-        # ``--cov`` takes an optional value: the word right after it is its value, unless it
-        # reads as a test path.
-        cov_value = after_cov and not (token.startswith("tests") or token.endswith(".py"))
+        # ``--cov`` takes an optional value: the word right after it is its value, unless it is
+        # an option (``-``) or reads as a test path.
+        cov_value = after_cov and not (token.startswith(("-", "tests")) or token.endswith(".py"))
         after_cov = False
         if skip_value or cov_value:
             skip_value = False
