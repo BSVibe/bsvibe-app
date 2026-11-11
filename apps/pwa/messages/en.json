@@ -1242,7 +1242,8 @@
   },
   "ledgerStatus": {
     "confirmed": "{done} of {total} requirements confirmed",
-    "attentionTitle": "Not confirmed — read before approving"
+    "attentionTitle": "Not confirmed — read before approving",
+    "correctedTitle": "Followed your correction"
   },
   "reviewStatus": {
     "counts": "Independent review: high {high} · medium {medium} · low {low}",

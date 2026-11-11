@@ -50,6 +50,35 @@ describe("Safe Mode card — requirements ledger", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("shows items that followed the founder's correction as info, not an alert", () => {
+    render(
+      <DeliveryRow
+        item={delivery({
+          ledger_counts: counts(8),
+          ledger_attention: [],
+          ledger_corrected: [{ id: "R2", text: "Export as TSV" }],
+        })}
+        onResolved={() => {}}
+      />,
+    );
+    expect(screen.getByText("Followed your correction")).toBeInTheDocument();
+    expect(screen.getByText("R2: Export as TSV")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows no corrected section when ledger_corrected is empty or absent", () => {
+    const { unmount } = render(
+      <DeliveryRow
+        item={delivery({ ledger_counts: counts(8), ledger_corrected: [] })}
+        onResolved={() => {}}
+      />,
+    );
+    expect(screen.queryByText("Followed your correction")).toBeNull();
+    unmount();
+    render(<DeliveryRow item={delivery({ ledger_counts: counts(8) })} onResolved={() => {}} />);
+    expect(screen.queryByText("Followed your correction")).toBeNull();
+  });
+
   it("renders nothing for a run without a ledger", () => {
     render(
       <DeliveryRow
