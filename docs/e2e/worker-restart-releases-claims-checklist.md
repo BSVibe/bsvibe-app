@@ -17,13 +17,23 @@ Unit coverage:
 
 ## Live (production, after the deploy that ships this)
 
-- [ ] A deploy while a run is mid-drive: the run goes RUNNING → OPEN at shutdown (the job's cancel
+- [x] A deploy while a run is mid-drive: the run goes RUNNING → OPEN at shutdown (the job's cancel
       path releases it first, so `stop()`'s own cleanup step usually has nothing left to do and
       `agent_worker_released_on_stop` is NOT the evidence), or, after an ungraceful restart,
       `agent_worker_released_orphaned_claims` names that run.
-- [ ] The same run is claimed again (`agent_worker_claimed_for_drive`) within a minute of the
+      *2026-11-11, run `f33f959b`, with #1357 deployed (worker restarted by hand mid-turn):
+      graceful — `executor_adapter_job_cancelled_mid_turn` → `run_worktree_checkpointed` →
+      running → open at 09:53:29; `docker kill` — the new worker logged
+      `agent_worker_released_orphaned_claims` naming the run 7 s after start.*
+- [x] The same run is claimed again (`agent_worker_claimed_for_drive`) within a minute of the
       new worker starting — not two hours later.
+      *Same run: re-claimed 2 s after the graceful restart (sandbox created with no conflict) and
+      1 s after the kill (`sandbox_adopted`); the run went on to pass and ship.*
 - [ ] After the restart, a tool call from the previous execution turn is refused: the backend log
       shows `mcp_work_claim_lost` for that run, no `mcp_work_tool` edit lands on it, and the new
       job's sandbox is created without `container name … already in use`.
+      *Partly seen: on both restarts the new sandbox came up without a conflict and no stale edit
+      landed — the cancelled turn was killed by `cancel_task`, so `mcp_work_claim_lost` (the safety
+      net for a turn that survives) has not fired yet. Before #1357 (2026-11-10) the surviving turn
+      edited the run and the re-drive failed on the name conflict.*
 - [ ] A run paused on a founder decision during the deploy stays RUNNING and paused.
