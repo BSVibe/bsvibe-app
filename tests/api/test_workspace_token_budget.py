@@ -334,11 +334,9 @@ async def test_the_refusal_names_the_limit_and_carries_a_machine_code(
     assert detail["window_start"] == budget_window_start().isoformat()
 
 
-async def test_a_new_workspace_starts_on_the_default_budget(sf, workspace_id) -> None:
-    """The column's default IS the plan. A workspace nobody configured is
-    budgeted, not unlimited — a fail-open default would price nothing, and under
-    public signup (founder decision, 2026-09-14) it would price nothing for
-    every stranger who signs up."""
+async def test_a_new_workspace_has_no_monthly_budget(sf, workspace_id) -> None:
+    """Tokens are BYO (2026-10-16): a workspace nobody configured is unlimited. Guard: if the
+    default goes back to 50,000,000 this goes red."""
     now = datetime.now(tz=UTC)
     async with sf() as s:
         s.add(WorkspaceRow(id=workspace_id, name="fresh", created_at=now, updated_at=now))
@@ -346,7 +344,8 @@ async def test_a_new_workspace_starts_on_the_default_budget(sf, workspace_id) ->
     async with sf() as s, workspace_session_scope(s, workspace_id):
         row = await s.get(WorkspaceRow, workspace_id)
         assert row is not None
-        assert row.monthly_token_budget == DEFAULT_MONTHLY_TOKEN_BUDGET
+        assert row.monthly_token_budget is None
+        assert DEFAULT_MONTHLY_TOKEN_BUDGET is None
 
 
 async def test_the_budget_holds_when_the_per_run_ceiling_is_switched_off(

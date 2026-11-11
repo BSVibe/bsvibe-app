@@ -6,16 +6,15 @@ crosses ``agent_max_run_tokens``, stops on a founder Decision. Kept out of
 turn-count budget cannot bound a single huge turn, so this is the other half of
 the runaway guard.
 
-⚠️ **This is a safety ceiling, not a price lever** — but the sentence that used
-to justify that here no longer holds. It read "BYO-key means the spend is the
-founder's own provider bill, so the ceiling is a safety limit, not a price
-lever", and the founder decided on 2026-09-14 that BSVibe opens to public
-signup, which breaks the BYO-key premise. The conclusion survives the premise:
-the free plan's price lever is ``workspaces.max_concurrent_runs`` and billing is
-#928. Nothing in this module prices anything.
+**Who this protects.** Model tokens are BYO (founder decision 2026-10-16): the workspace
+pays its own provider, or runs a worker on its own subscription. The platform has no token cost
+to guard, so this per-run ceiling exists to protect the USER from a runaway — a run stuck in a
+loop would otherwise burn their key's bill or their subscription limit. Nothing in this module
+prices anything.
 
 **This is one of TWO ceilings.** The other — the per-WORKSPACE cumulative budget
-(``workspaces.monthly_token_budget``, #930 part 1) — lives in
+(``workspaces.monthly_token_budget``, #930 part 1; a spend ceiling the user chooses,
+unlimited by default) — lives in
 :mod:`backend.workflow.application.workspace_token_budget`, enforced at
 ADMISSION rather than mid-run. That module carries the argument for its window,
 its moment and its refusal shape. The two are deliberately INDEPENDENT: setting

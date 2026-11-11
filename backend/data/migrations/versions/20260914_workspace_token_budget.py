@@ -34,7 +34,9 @@ from typing import Union
 import sqlalchemy as sa
 from alembic import op
 
-from backend.identity.workspaces_db import DEFAULT_MONTHLY_TOKEN_BUDGET
+#: Frozen at the value this migration shipped with. The live default moved to
+#: ``None`` (unlimited) in a later revision, so a migration must not import it.
+DEFAULT_MONTHLY_TOKEN_BUDGET = 50_000_000
 
 # ⚠ Revision ids are capped at 32 chars by ``alembic_version.version_num`` —
 # a longer one fails at the UPDATE, not at the DDL. This is 22.

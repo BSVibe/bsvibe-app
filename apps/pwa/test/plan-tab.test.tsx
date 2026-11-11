@@ -6,13 +6,15 @@
 
 import PlanTab from "@/components/settings/PlanTab";
 import type { WorkspacePlan } from "@/lib/api/workspace";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getWorkspacePlan = vi.fn<() => Promise<WorkspacePlan>>();
+const setWorkspaceTokenBudget = vi.fn<(limit: number | null) => Promise<WorkspacePlan>>();
 
 vi.mock("@/lib/api/workspace", () => ({
   getWorkspacePlan: () => getWorkspacePlan(),
+  setWorkspaceTokenBudget: (limit: number | null) => setWorkspaceTokenBudget(limit),
 }));
 
 function plan(overrides: Partial<WorkspacePlan> = {}): WorkspacePlan {
@@ -28,6 +30,7 @@ function plan(overrides: Partial<WorkspacePlan> = {}): WorkspacePlan {
 
 beforeEach(() => {
   getWorkspacePlan.mockReset();
+  setWorkspaceTokenBudget.mockReset();
 });
 
 describe("Settings → Plan", () => {
@@ -77,6 +80,44 @@ describe("Settings → Plan", () => {
     render(<PlanTab />);
     await screen.findByText("Pro");
     expect(screen.queryByRole("link", { name: /paid plans/i })).toBeNull();
+  });
+
+  it("shows an empty budget as no limit and saves a chosen one", async () => {
+    getWorkspacePlan.mockResolvedValue(
+      plan({ tokens: { used: 10, limit: null, period_start: "2026-10-01T00:00:00+00:00" } }),
+    );
+    setWorkspaceTokenBudget.mockResolvedValue(
+      plan({ tokens: { used: 10, limit: 5_000, period_start: "2026-10-01T00:00:00+00:00" } }),
+    );
+    render(<PlanTab />);
+
+    const field = await screen.findByLabelText("Monthly token budget", { selector: "input" });
+    expect(field).toHaveValue("");
+    expect(screen.getByLabelText("Tokens this month")).toHaveTextContent("10 / Unlimited");
+    expect(screen.queryByRole("button", { name: "Remove limit" })).toBeNull();
+
+    fireEvent.change(field, { target: { value: "5000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+
+    await waitFor(() => expect(setWorkspaceTokenBudget).toHaveBeenCalledWith(5_000));
+    expect(await screen.findByRole("button", { name: "Remove limit" })).toBeInTheDocument();
+  });
+
+  it("clears a set budget and rejects a non-positive value", async () => {
+    getWorkspacePlan.mockResolvedValue(plan());
+    setWorkspaceTokenBudget.mockResolvedValue(
+      plan({ tokens: { used: 3_500, limit: null, period_start: "2026-10-01T00:00:00+00:00" } }),
+    );
+    render(<PlanTab />);
+
+    const field = await screen.findByLabelText("Monthly token budget", { selector: "input" });
+    fireEvent.change(field, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/greater than 0/i);
+    expect(setWorkspaceTokenBudget).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove limit" }));
+    await waitFor(() => expect(setWorkspaceTokenBudget).toHaveBeenCalledWith(null));
   });
 
   it("fails calmly when the plan cannot be read", async () => {

@@ -19,14 +19,12 @@ functions in ``token_budget`` broke the "MCP context depends only on Identity +
 Workflow + Knowledge + common" contract three ways. The seam is the contract's,
 not a preference.
 
-**Neither ceiling is a price lever.** ``token_budget`` used to justify that with
-"BYO-key means the spend is the founder's own provider bill". The founder decided
-on 2026-09-14 that BSVibe opens to public signup, which breaks the BYO-key
-premise — but the conclusion is unchanged and this module states it in its own
-words rather than inheriting the old sentence: this is a SAFETY quota.
-``workspaces.max_concurrent_runs`` is the free plan's price lever and stays the
-only one; billing is #928. A quota that quietly became a price lever would be
-sold without anyone deciding to sell it.
+**Who each ceiling protects.** Model tokens are BYO (founder decision 2026-10-16): the
+workspace pays its own provider, or runs a worker on its own subscription. So the platform has
+no token cost to guard, and the monthly budget is a spend ceiling the USER chooses — ``NULL``
+(unlimited) by default, set or cleared by a workspace owner/admin. The per-run ceiling is the
+guard that keeps one looping run from burning the user's own key or subscription limit. Platform
+resources (concurrent runs, verification slots) are bounded by the plan, not by this budget.
 
 **Why ADMISSION and not mid-run.** The per-run ceiling has to be mid-run — a
 single run can blow it without ever passing a door again. A cumulative budget
@@ -119,9 +117,8 @@ def budget_window_start(now: datetime | None = None) -> datetime:
 async def load_workspace_token_budget(session: AsyncSession, workspace_id: uuid.UUID) -> int | None:
     """This workspace's per-period token budget. ``None`` = unlimited.
 
-    A missing workspace row falls back to the default rather than to
-    "unlimited", for the reason ``run_caps.load_run_cap`` states: an unknown
-    workspace must not be the cheapest way past the gate. A budget of ``0`` is
+    A missing workspace row falls back to the default (``None`` — only a
+    workspace itself sets a budget). A budget of ``0`` is
     honoured as written (it refuses everything) — rewriting it to the default
     would hide a deliberate suspension.
     """
@@ -130,6 +127,26 @@ async def load_workspace_token_budget(session: AsyncSession, workspace_id: uuid.
         logger.warning("token_budget_workspace_missing", workspace_id=str(workspace_id))
         return DEFAULT_MONTHLY_TOKEN_BUDGET
     return row.monthly_token_budget
+
+
+async def set_workspace_token_budget(
+    session: AsyncSession, workspace_id: uuid.UUID, budget: int | None
+) -> None:
+    """Set (a positive int) or clear (``None`` = unlimited) the monthly budget.
+
+    The one writer for REST and MCP. Authorization (owner/admin) is the caller's;
+    this refuses a value that is not a positive int so ``0`` or a negative number
+    can never be stored by a surface that forgot to validate. Commits nothing.
+    """
+    if budget is not None and (
+        isinstance(budget, bool) or not isinstance(budget, int) or budget < 1
+    ):
+        raise ValueError("monthly token budget must be a positive integer or null")
+    row = await session.get(WorkspaceRow, workspace_id)
+    if row is None:
+        raise LookupError(f"no workspace {workspace_id}")
+    row.monthly_token_budget = budget
+    await session.flush()
 
 
 async def sum_workspace_tokens_since(
@@ -214,5 +231,6 @@ __all__ = [
     "budget_window_start",
     "enforce_workspace_token_budget",
     "load_workspace_token_budget",
+    "set_workspace_token_budget",
     "sum_workspace_tokens_since",
 ]

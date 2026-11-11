@@ -50,21 +50,13 @@ WorkspacesBase = Base
 #: that reads it lives in ``backend.workflow.application.run_caps``.
 DEFAULT_MAX_CONCURRENT_RUNS = 3
 
-#: The default for ``workspaces.monthly_token_budget`` — how many LLM tokens a
-#: workspace may burn in one calendar month (UTC). Declared here, beside the
-#: column, for the same reason ``DEFAULT_MAX_CONCURRENT_RUNS`` is: the Python
-#: default and the DDL ``server_default`` must have ONE source. The rule that
-#: reads it lives in ``backend.workflow.application.token_budget``.
-#:
-#: The NUMBER is derived, not measured — #930 part 3 (tuning) is still waiting
-#: on traffic, and #953 changed the denominator, so pre-#953 totals cannot tune
-#: it. The only measured number in the repo is the per-run ceiling
-#: (``agent_max_run_tokens`` = 2,000,000), and a monthly budget below that could
-#: not fund a single worst-case run. 50,000,000 is 25 of them: generous enough
-#: that it never trims legitimate work (the same posture the per-run ceiling
-#: documents) while still bounding a runaway workspace two orders of magnitude
-#: below "unbounded".
-DEFAULT_MONTHLY_TOKEN_BUDGET = 50_000_000
+#: The default for ``workspaces.monthly_token_budget`` — ``None`` = unlimited.
+#: Model tokens are BYO (founder decision 2026-10-16): the workspace pays its own
+#: provider, or runs a worker on its own subscription, so the platform has no cost
+#: to guard and a new workspace is born without a monthly budget. The budget stays
+#: as a spend ceiling the workspace owner/admin may choose to set. Declared here,
+#: beside the column, so the Python default and the column default have ONE source.
+DEFAULT_MONTHLY_TOKEN_BUDGET: int | None = None
 
 #: The plan every workspace is born on — the default for ``workspaces.plan``. The plans
 #: themselves (and the limits each sets) live in :mod:`backend.identity.plans`, which imports
@@ -213,39 +205,21 @@ class WorkspaceRow(WorkspacesBase):
     billing_event_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # How many LLM tokens this workspace may burn in one calendar month (UTC) —
-    # #930 part 1. It sits beside ``max_concurrent_runs`` and copies its shape
-    # deliberately (nullable column, DDL default, ``NULL`` = unlimited), because
-    # it is the same kind of thing: a per-workspace ceiling, not a server
-    # constant.
+    # A spend ceiling the workspace CHOOSES: how many LLM tokens it lets itself burn
+    # in one calendar month (UTC). ``NULL`` = unlimited, and that is the default —
+    # model tokens are BYO (founder decision 2026-10-16), so the provider bill or
+    # subscription limit is the workspace's own and BSVibe has nothing to protect.
+    # Platform resources are bounded by the plan (``max_concurrent_runs``,
+    # ``verify_stack_slots``), not by this column; no plan sets it. The per-run
+    # ceiling (``agent_max_run_tokens``) is the separate guard that keeps one
+    # runaway run from burning the user's own key.
     #
-    # What it is NOT is a price lever. ``max_concurrent_runs`` prices the free
-    # plan; this is a SAFETY quota. BYO-key means the tokens are the founder's
-    # own provider bill, and billing is #928 — this column exists so that under
-    # public signup (founder decision, 2026-09-14) one workspace cannot spend
-    # without bound before anyone notices. If #928 later needs a price lever it
-    # should add one rather than reinterpret this.
-    #
-    # What it counts is every run created inside the current month, terminal
-    # ones INCLUDED — the opposite of ``max_concurrent_runs``, and on purpose.
-    # The run cap counts what a workspace HOLDS, so shipping a run frees a slot;
-    # this counts what a workspace SPENT, and shipping does not refund the
-    # provider bill.
-    #
-    # ``NULL`` = unlimited, which is how a workspace comes off the quota (the
-    # operator's own, grandfathered by this feature's migration). The default is
-    # a number for the reason ``max_concurrent_runs`` documents: a fail-open
-    # default would bound nothing for every stranger who signs up. ⚠ The default
-    # is DDL-side, so an INSERT can never say "unlimited" — SQLAlchemy omits a
-    # ``None``-valued column carrying a ``server_default``. Lifting the quota is
-    # an UPDATE, here and in the migration alike.
+    # It counts what a workspace SPENT, terminal runs included — shipping does not
+    # refund the provider bill. Owner/admin set or clear it (REST + MCP).
     #
     # ``BigInteger`` because ``execution_runs.usage_*`` is: the comparison is
-    # budget-vs-SUM(those columns), and a 32-bit budget would cap the ceiling
-    # below a single month of a large paying workspace.
-    monthly_token_budget: Mapped[int | None] = mapped_column(
-        BigInteger, nullable=True, server_default=str(DEFAULT_MONTHLY_TOKEN_BUDGET)
-    )
+    # budget-vs-SUM(those columns).
+    monthly_token_budget: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # Lift E1 — workspace-default ModelAccount fallback for the new
     # :class:`backend.dispatch.resolver.ModelAccountResolver`. The founder
     # picks this through Settings → Models or the MCP tool

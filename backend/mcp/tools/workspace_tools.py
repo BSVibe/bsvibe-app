@@ -25,12 +25,16 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictInt
+from sqlalchemy import select
 
+from backend.identity.db import MembershipRow
 from backend.identity.infrastructure.repositories import SqlAlchemyWorkspaceRepository
+from backend.identity.roles import role_satisfies
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.infrastructure.repositories import SqlAlchemyModelAccountRepository
 from backend.workflow.application.plan_summary import load_plan_summary
+from backend.workflow.application.workspace_token_budget import set_workspace_token_budget
 
 # ---------------------------------------------------------------------------
 # bsvibe_workspace_get
@@ -196,6 +200,44 @@ class _PlanEnvelope(RootModel[dict[str, Any]]):
 
 
 # ---------------------------------------------------------------------------
+# bsvibe_workspace_set_token_budget — parity with PUT /api/v1/workspace/token-budget
+# ---------------------------------------------------------------------------
+class WorkspaceSetTokenBudgetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    monthly_token_budget: StrictInt | None = Field(
+        ge=1,
+        description=(
+            "Monthly token spend ceiling for the workspace: a positive integer, or null "
+            "for unlimited (the default)."
+        ),
+    )
+
+
+async def _h_set_token_budget(args: WorkspaceSetTokenBudgetInput, ctx: ToolContext) -> Any:
+    role = await ctx.session.scalar(
+        select(MembershipRow.role).where(
+            MembershipRow.user_id == ctx.principal.user_id,
+            MembershipRow.workspace_id == ctx.principal.workspace_id,
+            MembershipRow.left_at.is_(None),
+        )
+    )
+    if role is None or not role_satisfies(role, "admin"):
+        raise ToolError("only a workspace owner or admin may set the monthly token budget")
+    try:
+        await set_workspace_token_budget(
+            ctx.session, ctx.principal.workspace_id, args.monthly_token_budget
+        )
+    except (LookupError, ValueError) as exc:
+        raise ToolError(str(exc)) from exc
+    await ctx.session.commit()
+    summary = await load_plan_summary(ctx.session, ctx.principal.workspace_id)
+    if summary is None:
+        raise ToolError(f"workspace not found: {ctx.principal.workspace_id}")
+    return _PlanEnvelope(summary.to_wire())
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 def register_workspace_tools(registry: ToolRegistry) -> None:
@@ -224,6 +266,22 @@ def register_workspace_tools(registry: ToolRegistry) -> None:
             output_schema=_PlanEnvelope,
             handler=_h_plan,
             required_scopes=("mcp:read",),
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_workspace_set_token_budget",
+            description=(
+                "Set (positive integer) or clear (null = unlimited) the workspace's monthly "
+                "token budget. Tokens are BYO, so this is a spend ceiling the workspace "
+                "chooses; unlimited by default. Workspace owner/admin only. Mirrors PUT "
+                "/api/v1/workspace/token-budget and returns the plan summary."
+            ),
+            input_schema=WorkspaceSetTokenBudgetInput,
+            output_schema=_PlanEnvelope,
+            handler=_h_set_token_budget,
+            required_scopes=("mcp:admin",),
+            audit_event="bsvibe.mcp.workspace_set_token_budget.invoked",
         )
     )
     registry.register(

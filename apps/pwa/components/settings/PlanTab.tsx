@@ -1,6 +1,6 @@
 "use client";
 
-import { type WorkspacePlan, getWorkspacePlan } from "@/lib/api/workspace";
+import { type WorkspacePlan, getWorkspacePlan, setWorkspaceTokenBudget } from "@/lib/api/workspace";
 import { useLocale, useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
@@ -17,6 +17,86 @@ import { useEffect, useState } from "react";
 type State = { kind: "loading" } | { kind: "loaded"; plan: WorkspacePlan } | { kind: "failed" };
 
 const PLAN_KEYS = new Set(["free", "pro", "operator"]);
+
+/**
+ * The monthly token budget the workspace chooses for itself. Tokens are BYO, so there is no
+ * platform default: empty = no limit. Saving an empty field clears it; owner/admin only (the
+ * backend refuses other roles, which surfaces as the save error).
+ */
+function BudgetField({
+  limit,
+  onSaved,
+}: { limit: number | null; onSaved: (plan: WorkspacePlan) => void }) {
+  const t = useTranslations("settings.plan");
+  const [value, setValue] = useState(limit === null ? "" : String(limit));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<"invalid" | "save" | null>(null);
+
+  const submit = async (raw: string) => {
+    const trimmed = raw.trim();
+    let next: number | null = null;
+    if (trimmed !== "") {
+      if (!/^\d+$/.test(trimmed) || Number(trimmed) < 1 || !Number.isSafeInteger(Number(trimmed))) {
+        setError("invalid");
+        return;
+      }
+      next = Number(trimmed);
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      onSaved(await setWorkspaceTokenBudget(next));
+    } catch {
+      setError("save");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-field" aria-label={t("budgetLabel")}>
+      <label className="settings-field__label" htmlFor="plan-token-budget">
+        {t("budgetLabel")}
+      </label>
+      <input
+        id="plan-token-budget"
+        className="settings-field__input"
+        inputMode="numeric"
+        value={value}
+        placeholder={t("budgetPlaceholder")}
+        onChange={(e) => setValue(e.target.value)}
+        disabled={busy}
+      />
+      <span className="settings-field__hint">{t("budgetHint")}</span>
+      <button
+        type="button"
+        className="settings-field__primary"
+        disabled={busy}
+        onClick={() => void submit(value)}
+      >
+        {busy ? t("budgetSaving") : t("budgetSave")}
+      </button>
+      {limit !== null ? (
+        <button
+          type="button"
+          className="settings-field__primary"
+          disabled={busy}
+          onClick={() => {
+            setValue("");
+            void submit("");
+          }}
+        >
+          {t("budgetClear")}
+        </button>
+      ) : null}
+      {error ? (
+        <p className="settings-field__error" role="alert">
+          {error === "invalid" ? t("budgetInvalid") : t("budgetSaveError")}
+        </p>
+      ) : null}
+    </section>
+  );
+}
 
 export default function PlanTab() {
   const t = useTranslations("settings.plan");
@@ -65,6 +145,11 @@ export default function PlanTab() {
         <span className="settings-field__label">{t("tokens")}</span>
         <span className="settings-field__value">{usage(plan.tokens.used, plan.tokens.limit)}</span>
       </section>
+      <BudgetField
+        key={plan.tokens.limit ?? "none"}
+        limit={plan.tokens.limit}
+        onSaved={(next) => setState({ kind: "loaded", plan: next })}
+      />
       <section className="settings-field" aria-label={t("verifyStacks")}>
         <span className="settings-field__label">{t("verifyStacks")}</span>
         <span className="settings-field__value">{number(plan.verify_stack_slots)}</span>

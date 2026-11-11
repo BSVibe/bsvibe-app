@@ -26,13 +26,14 @@ from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id, require_role
 from backend.api.v1._identity_deps import get_workspace_repository
 from backend.identity.domain.repositories import WorkspaceRepository
 from backend.workflow.application.plan_summary import load_plan_summary
+from backend.workflow.application.workspace_token_budget import set_workspace_token_budget
 
 router = APIRouter()
 
@@ -138,6 +139,35 @@ async def get_workspace_plan(
 
     Same function and same shape as MCP ``bsvibe_workspace_plan``. A ``null`` limit is
     unlimited."""
+    summary = await load_plan_summary(session, workspace_id)
+    if summary is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return summary.to_wire()
+
+
+class TokenBudgetUpdate(BaseModel):
+    """PUT body — the monthly token budget, a positive integer, or ``null`` = unlimited."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    monthly_token_budget: StrictInt | None = Field(ge=1)
+
+
+@router.put("/token-budget", dependencies=[Depends(require_role("admin"))])
+async def set_workspace_token_budget_route(
+    payload: TokenBudgetUpdate,
+    workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, object]:
+    """Set or clear the workspace's monthly token budget (owner/admin only).
+
+    Tokens are BYO, so this is a spend ceiling the workspace chooses; ``null`` =
+    unlimited. Returns the plan summary, same shape as ``GET /plan``."""
+    try:
+        await set_workspace_token_budget(session, workspace_id, payload.monthly_token_budget)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
+    await session.commit()
     summary = await load_plan_summary(session, workspace_id)
     if summary is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
