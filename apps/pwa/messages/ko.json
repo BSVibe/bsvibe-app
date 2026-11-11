@@ -1242,7 +1242,8 @@
   },
   "ledgerStatus": {
     "confirmed": "요구사항 {total}개 중 {done}개 확인",
-    "attentionTitle": "확인되지 않은 항목 — 승인 전에 읽어 주세요"
+    "attentionTitle": "확인되지 않은 항목 — 승인 전에 읽어 주세요",
+    "correctedTitle": "창업자 정정을 따른 항목"
   },
   "reviewStatus": {
     "counts": "독립 리뷰: 높음 {high} · 중간 {medium} · 낮음 {low}",

@@ -432,6 +432,8 @@ export interface LedgerFields {
     requirements_unclear?: number;
   };
   ledger_attention?: { id: string; text: string }[];
+  /** Items that went `done` following the founder's correction (informational). */
+  ledger_corrected?: { id: string; text: string }[];
 }
 
 /** The independent review of the run's last passed round on a Safe Mode queue item

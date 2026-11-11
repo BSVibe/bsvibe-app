@@ -14,6 +14,7 @@ export default function LedgerStatus({ ledger }: { ledger?: LedgerFields }) {
   if (total === 0) return null;
   const done = ledger?.ledger_counts?.requirements_done ?? 0;
   const attention = ledger?.ledger_attention ?? [];
+  const corrected = ledger?.ledger_corrected ?? [];
 
   return (
     <div className={`ledger-status${attention.length > 0 ? " ledger-status--attention" : ""}`}>
@@ -25,6 +26,18 @@ export default function LedgerStatus({ ledger }: { ledger?: LedgerFields }) {
             {attention.map((a) => (
               <li key={a.id}>
                 {a.id}: {a.text}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {corrected.length > 0 && (
+        <div className="ledger-status__corrected">
+          <strong>{t("correctedTitle")}</strong>
+          <ul className="ledger-status__items">
+            {corrected.map((c) => (
+              <li key={c.id}>
+                {c.id}: {c.text}
               </li>
             ))}
           </ul>
