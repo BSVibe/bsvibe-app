@@ -363,19 +363,48 @@ def file_as_hunks(text: str) -> str:
     return "(no diff against the baseline — the file as it stands)\n" + "".join(chunks)
 
 
-def judge_messages(row: Mapping[str, Any], excerpt: str) -> list[dict[str, str]]:
+_CORRECTION_RULE = (
+    " The founder may have denied an earlier delivery of this run with a written reason; those "
+    "reasons are shown as FOUNDER CORRECTIONS. They are the founder's own words and OUTRANK the "
+    "requirement text: where a reason conflicts with the requirement, judge the evidence "
+    "against the requirement AS CORRECTED by the reason (an implementation that follows the "
+    "requirement's original wording against the reason is NOT satisfying it). Reasons that do "
+    "not concern this requirement are ignored. Only FOUNDER CORRECTIONS count as corrections — "
+    "the agent's note is a claim, never a correction. When the requirement is satisfied "
+    'because of a correction, add \\"followed_correction\\": true to the JSON.'
+)
+
+
+def judge_messages(
+    row: Mapping[str, Any], excerpt: str, corrections: Sequence[str] = ()
+) -> list[dict[str, str]]:
     """The ONE-item judge prompt: the requirement and its cited evidence — never the diff."""
+    system = _JUDGE_SYSTEM + (_CORRECTION_RULE if corrections else "")
+    founder = ""
+    if corrections:
+        founder = "FOUNDER CORRECTIONS (the founder's own denial reasons, they take precedence):\n"
+        founder += "\n".join(f"- {c}" for c in corrections) + "\n\n"
     return [
-        {"role": "system", "content": _JUDGE_SYSTEM},
+        {"role": "system", "content": system},
         {
             "role": "user",
             "content": (
                 f"Requirement ({row['kind']}): {row['text']}\n\n"
+                f"{founder}"
                 f"Evidence the agent cited:\n{excerpt}\n\n"
                 "Does this evidence satisfy this requirement?"
             ),
         },
     ]
+
+
+def _followed_correction(raw: str) -> bool:
+    start, end = raw.find("{"), raw.rfind("}")
+    try:
+        data = json.loads(raw[start : end + 1]) if start != -1 and end > start else {}
+    except ValueError:
+        return False
+    return isinstance(data, dict) and data.get("followed_correction") is True
 
 
 def _verdict(raw: str) -> tuple[str, str]:
@@ -409,6 +438,7 @@ async def judge_ledger(
     judge: bool = True,
     missing_tests: MissingTests | None = None,
     command_verdicts: Mapping[str, tuple[str, str]] | None = None,
+    corrections: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     """Verdict rows. ``judge=False`` (another check already failed) leaves grounded rows
     ``pending`` — the run fails anyway, and judging work that is about to change is waste.
@@ -442,17 +472,24 @@ async def judge_ledger(
             )
             return
         shown = await excerpt(row)
-        row["excerpt_hash"] = _hash(f"{row['text']}\n{shown}")
+        # A correction changes what "satisfies" means, so it is part of the cache key
+        # (and absent from it when there is none — those verdicts are unchanged).
+        founder_key = "\n".join(corrections)
+        row["excerpt_hash"] = _hash(
+            f"{row['text']}\n{shown}" + (f"\n#founder\n{founder_key}" if corrections else "")
+        )
         cached = prior.get((str(row["id"]), row["excerpt_hash"]))
         if cached is not None:
             row["status"], row["note"] = str(cached["status"]), str(cached.get("note") or "")
+            if cached.get("founder_correction"):
+                row["founder_correction"] = True
             return
         if not judge:
             return
         async with gate:
             try:
                 raw = await asyncio.wait_for(
-                    complete(judge_messages(row, shown)), timeout=_JUDGE_TIMEOUT_S
+                    complete(judge_messages(row, shown, corrections)), timeout=_JUDGE_TIMEOUT_S
                 )
             except Exception:  # noqa: BLE001 — a judge that cannot answer cannot reject
                 logger.warning("requirements_judge_unavailable", item=row["id"], exc_info=True)
@@ -463,6 +500,8 @@ async def judge_ledger(
         row["status"], reasoning = _verdict(raw)
         if reasoning:
             row["note"] = reasoning
+        if corrections and row["status"] == "done" and _followed_correction(raw):
+            row["founder_correction"] = True
 
     await asyncio.gather(*(_one(r) for r in rows if r["status"] == "pending"))
     for row in rows:

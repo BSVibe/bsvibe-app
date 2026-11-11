@@ -81,7 +81,11 @@ from backend.workflow.domain.outcome_demonstration import (
     parse_demonstration_plan,
     summarize,
 )
-from backend.workflow.domain.requirements import ledger_passed, public_rows
+from backend.workflow.domain.requirements import (
+    founder_corrections,
+    ledger_passed,
+    public_rows,
+)
 from backend.workflow.domain.verifier_contract import (
     VerificationCheck,
     VerificationContract,
@@ -1039,6 +1043,7 @@ class VerificationService:
             prior_rows=prior,
             judge=judge,
             missing_tests=cited_tests(box),
+            corrections=founder_corrections(run.payload if isinstance(run.payload, dict) else {}),
             command_verdicts=command_verdicts(
                 ledger_command_plan(requirements),
                 [*((derived_gate or {}).get("commands") or []), *command_results],
