@@ -49,6 +49,8 @@ class RunLedger(BaseModel):
 
     counts: dict[str, int] = {}
     attention: list[LedgerAttentionItem] = []
+    #: Items judged ``done`` BECAUSE they followed a founder correction (denial reason).
+    corrected: list[LedgerAttentionItem] = []
     review_status: str = "none"
     review_counts: dict[str, int] = {}
     review_findings: list[ReviewFindingItem] = []
@@ -125,6 +127,11 @@ async def ledgers_for_runs(
                 LedgerAttentionItem(id=str(r.get("id", "")), text=str(r.get("text", "")))
                 for r in rows
                 if r.get("status") in _ATTENTION_STATUSES
+            ],
+            corrected=[
+                LedgerAttentionItem(id=str(r.get("id", "")), text=str(r.get("text", "")))
+                for r in rows
+                if r.get("status") == "done" and r.get("founder_correction")
             ],
             review_status=status,
             review_counts=counts,

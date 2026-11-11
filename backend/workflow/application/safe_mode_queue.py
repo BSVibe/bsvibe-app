@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.common.settle_kinds import NEGATIVE_PATTERN_SETTLE_KIND, founder_authored_text
 from backend.workflow.application.run_status import move_run_status
 from backend.workflow.domain.repositories import SafeModeQueueRepository
+from backend.workflow.domain.requirements import FOUNDER_CORRECTIONS_KEY
 from backend.workflow.infrastructure.db import RunStatus
 from backend.workflow.infrastructure.delivery.db import SafeModeQueueItemRow, SafeModeStatus
 from backend.workflow.infrastructure.repositories import SqlAlchemySafeModeQueueRepository
@@ -380,6 +381,10 @@ class SafeModeQueue:
             }
         )
         payload["resolved_decisions"] = resolved
+        # 장부 판정자에게 줄 정정 근거 — 형님이 직접 쓴 사유만 (노트·리뷰어 텍스트는 아님).
+        corrections = list(payload.get(FOUNDER_CORRECTIONS_KEY) or [])
+        corrections.append({"decision_id": str(item_id), "text": reason})
+        payload[FOUNDER_CORRECTIONS_KEY] = corrections
         run.payload = payload
 
         await self._session.flush()

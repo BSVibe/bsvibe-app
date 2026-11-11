@@ -206,6 +206,22 @@ async def test_only_unclear_and_deferred_are_attention(db, registry, client, wor
         assert item["ledger_attention"] == expected
 
 
+async def test_corrected_done_items_are_on_the_card(db, registry, client, workspace_id):
+    rows = [
+        _row("R1", "done"),
+        {**_row("R2", "done", "R2 text"), "founder_correction": True},
+        _row("R3", "deferred"),
+    ]
+    deliverable_id = await _hold(db, workspace_id, rows)
+
+    report, mcp_item = await _mcp(db, registry, workspace_id, deliverable_id)
+    rest_flat, rest_grouped = await _rest(client, deliverable_id)
+
+    for item in (mcp_item, rest_flat, rest_grouped):
+        assert item["ledger_corrected"] == [{"id": "R2", "text": "R2 text"}]
+        assert [a["id"] for a in item["ledger_attention"]] == ["R3"]
+
+
 async def test_run_without_ledger_is_empty(db, registry, client, workspace_id):
     no_verification = await _hold(db, workspace_id, None)
     no_ledger = await _hold(db, workspace_id, [])
