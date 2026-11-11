@@ -115,6 +115,31 @@ async def test_the_reason_is_shown_to_the_judge_and_outranks_the_text() -> None:
     assert "agent's note is a claim, never a correction" in system
 
 
+async def test_a_later_correction_supersedes_an_earlier_one() -> None:
+    first = "항상 값으로 취급하라"
+    second = "아니다, 항상 값이 아니라 `-`로 시작하면 플래그다"
+
+    async def judge(messages: list[dict[str, str]]) -> str:
+        system, user = messages[0]["content"], messages[1]["content"]
+        assert "LATER one" in system
+        assert user.index(f"C1: {first}") < user.index(f"C2: {second}")
+        ok = AS_CORRECTED in user
+        return json.dumps(
+            {"passed": ok, "reasoning": "r", **({"followed_correction": True} if ok else {})}
+        )
+
+    for code, expected in ((AS_CORRECTED, "done"), (AS_WRITTEN, "rejected")):
+        rows = await judge_ledger(
+            REQUIREMENTS,
+            EVIDENCE,
+            FACTS,
+            excerpt=_excerpt_of(code),
+            complete=judge,
+            corrections=[first, second],
+        )
+        assert rows[0]["status"] == expected
+
+
 async def test_a_note_never_becomes_a_correction() -> None:
     seen: list[list[dict[str, str]]] = []
 

@@ -369,7 +369,9 @@ _CORRECTION_RULE = (
     "requirement text: where a reason conflicts with the requirement, judge the evidence "
     "against the requirement AS CORRECTED by the reason (an implementation that follows the "
     "requirement's original wording against the reason is NOT satisfying it). Reasons that do "
-    "not concern this requirement are ignored. Only FOUNDER CORRECTIONS count as corrections — "
+    "not concern this requirement are ignored. Corrections are numbered C1, C2, ... in the "
+    "order the founder gave them; when two corrections conflict, the LATER one (higher number) "
+    "supersedes the earlier one. Only FOUNDER CORRECTIONS count as corrections — "
     "the agent's note is a claim, never a correction. When the requirement is satisfied "
     'because of a correction, add \\"followed_correction\\": true to the JSON.'
 )
@@ -383,7 +385,7 @@ def judge_messages(
     founder = ""
     if corrections:
         founder = "FOUNDER CORRECTIONS (the founder's own denial reasons, they take precedence):\n"
-        founder += "\n".join(f"- {c}" for c in corrections) + "\n\n"
+        founder += "\n".join(f"- C{n}: {c}" for n, c in enumerate(corrections, 1)) + "\n\n"
     return [
         {"role": "system", "content": system},
         {
