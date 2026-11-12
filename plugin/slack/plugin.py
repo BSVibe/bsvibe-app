@@ -18,6 +18,7 @@ import os
 from typing import Any
 
 from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.egress import check_connector_config
 from backend.workflow.domain.incoming import TriggerEvent
 from bsvibe_sdk import plugin
 from plugin.slack.client import DEFAULT_BASE_URL, SlackClient
@@ -43,7 +44,7 @@ p = plugin(
 )
 
 
-def _client(context: SkillContext) -> SlackClient:
+async def _client(context: SkillContext) -> SlackClient:
     """Build an authed client from the injected credentials.
 
     ``config['slack_api_url']`` overrides the API base (testing / proxy).
@@ -53,6 +54,7 @@ def _client(context: SkillContext) -> SlackClient:
     token = context.credentials.get("bot_token")
     if not token:
         raise ValueError("slack: missing required 'bot_token' credential")
+    await check_connector_config(context.config)
     base_url = context.config.get("slack_api_url", DEFAULT_BASE_URL)
     return SlackClient(token, base_url=base_url)
 
@@ -93,7 +95,7 @@ async def deliver_message(context: SkillContext, event: dict[str, Any]) -> dict[
     """Post a Slack message. A posted message can be deleted (chat.delete),
     but deletion leaves an audit trail in Slack → tier ``t2_trail``."""
     channel = event["channel"]
-    client = _client(context)
+    client = await _client(context)
     data = await client.post_message(
         channel,
         event["text"],
@@ -123,7 +125,7 @@ async def revert_message(context: SkillContext, handle: dict[str, Any]) -> dict[
     Idempotent: an already-deleted message (``message_not_found``) yields a
     silent no-op success."""
     channel, ts = handle["channel"], str(handle["ts"])
-    client = _client(context)
+    client = await _client(context)
     error = await client.delete_message(channel, ts)
     already = error == "message_not_found"
     return {
@@ -160,7 +162,7 @@ async def post_message(
     thread_ts: str | None = None,
     blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    client = _client(context)
+    client = await _client(context)
     data = await client.post_message(channel, text, thread_ts=thread_ts, blocks=blocks)
     ts = str(data["ts"])
     out_channel = str(data.get("channel", channel))
@@ -204,7 +206,7 @@ async def respond_ephemeral(
     Slack has no separate spinner-ack (HTTP 200 to the POST is the ack); this is
     how an unauthorized tapper is told "권한이 없어요" and how the acting founder gets
     a private confirmation — without editing the shared card. Best-effort UI ack."""
-    client = _client(context)
+    client = await _client(context)
     await client.respond(response_url, text)
     return {"ok": True}
 
@@ -220,7 +222,7 @@ async def update_message(
     """Edit the card in place (``chat.update``) — keep the original non-button
     blocks, append the approve/reject status block, and drop the buttons. ``text``
     is the accessibility / notification fallback."""
-    client = _client(context)
+    client = await _client(context)
     return await client.update_message(channel, ts, text, blocks=blocks)
 
 

@@ -34,6 +34,7 @@ from backend.router.accounts.crypto import (
     CredentialCipher,
     cipher_from_settings,
 )
+from backend.router.egress import check_connector_config
 from backend.workflow.application.delivery.connector_dispatch._resolver import (
     resolve_github_binding,
 )
@@ -94,6 +95,7 @@ def build_merge_watch_client_resolver(*, cipher: CredentialCipher) -> MergeClien
         # Persist any token refresh resolve performed under the hood.
         await session.commit()
         token = creds["token"]
+        await check_connector_config(binding.account.delivery_config)
         base_url = str(
             (binding.account.delivery_config or {}).get("github_api_url") or DEFAULT_BASE_URL
         )

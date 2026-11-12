@@ -23,6 +23,7 @@ import os
 from typing import Any
 
 from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.egress import check_connector_config
 from backend.workflow.domain.incoming import TriggerEvent
 from bsvibe_sdk import plugin
 from plugin.sentry.client import (
@@ -52,7 +53,7 @@ p = plugin(
 )
 
 
-def _client(context: SkillContext) -> SentryClient:
+async def _client(context: SkillContext) -> SentryClient:
     """Build an authed client from the injected credentials.
 
     ``config['sentry_api_url']`` overrides the API base (self-hosted / EU
@@ -62,6 +63,7 @@ def _client(context: SkillContext) -> SentryClient:
     token = context.credentials.get("auth_token")
     if not token:
         raise ValueError("sentry: missing required 'auth_token' credential")
+    await check_connector_config(context.config)
     base_url = context.config.get("sentry_api_url", DEFAULT_BASE_URL)
     return SentryClient(token, base_url=base_url)
 
@@ -102,7 +104,7 @@ async def deliver_resolve(context: SkillContext, event: dict[str, Any]) -> dict[
     """Resolve a Sentry issue. Reversible (re-open via ``status:unresolved``),
     but Sentry records the resolve in the issue activity trail → ``t2_trail``."""
     issue_id = str(event["issue_id"])
-    client = _client(context)
+    client = await _client(context)
     data = await client.update_issue_status(issue_id, "resolved")
     return {
         "artifact_type": "sentry_issue_update",
@@ -124,7 +126,7 @@ async def revert_resolve(context: SkillContext, handle: dict[str, Any]) -> dict[
     resolve/unresolve flip leaves a Sentry activity trail. Idempotent: a
     404 (issue already gone) is treated as a silent no-op success."""
     issue_id = str(handle["issue_id"])
-    client = _client(context)
+    client = await _client(context)
     try:
         await client.update_issue_status(issue_id, "unresolved")
         already = False
@@ -160,7 +162,7 @@ async def revert_resolve(context: SkillContext, handle: dict[str, Any]) -> dict[
     },
 )
 async def resolve_issue(context: SkillContext, issue_id: str) -> dict[str, Any]:
-    client = _client(context)
+    client = await _client(context)
     data = await client.update_issue_status(str(issue_id), "resolved")
     return {
         "issue_id": str(issue_id),
@@ -217,7 +219,7 @@ async def list_issues(
 
     Each entry is trimmed to ``id``, ``title``, ``status``, ``permalink``,
     ``count``, ``culprit`` so the payload stays inside the LLM response budget."""
-    client = _client(context)
+    client = await _client(context)
     capped = max(1, min(int(limit), 50))
     raw = await client.list_project_issues(
         organization_slug, project_slug, query=query, per_page=capped

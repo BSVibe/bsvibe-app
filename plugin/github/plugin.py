@@ -18,6 +18,7 @@ import os
 from typing import Any
 
 from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.egress import check_connector_config
 from backend.workflow.domain.incoming import TriggerEvent
 from bsvibe_sdk import plugin
 from plugin.github.client import DEFAULT_BASE_URL, GithubClient
@@ -43,7 +44,7 @@ p = plugin(
 )
 
 
-def _client(context: SkillContext) -> GithubClient:
+async def _client(context: SkillContext) -> GithubClient:
     """Build an authed client from the injected credentials.
 
     ``config['github_api_url']`` overrides the API base (GitHub Enterprise).
@@ -53,6 +54,7 @@ def _client(context: SkillContext) -> GithubClient:
     token = context.credentials.get("token")
     if not token:
         raise ValueError("github: missing required 'token' credential")
+    await check_connector_config(context.config)
     base_url = context.config.get("github_api_url", DEFAULT_BASE_URL)
     return GithubClient(token, base_url=base_url)
 
@@ -97,7 +99,7 @@ async def on_webhook(context: SkillContext, payload: dict[str, Any]) -> TriggerE
 async def deliver_pr(context: SkillContext, event: dict[str, Any]) -> dict[str, Any]:
     """Open a new PR, or update the existing one when ``pr_number`` is given."""
     owner, repo = _split_repo(event["repo"])
-    client = _client(context)
+    client = await _client(context)
     number = event.get("pr_number")
     if number is not None:
         data = await client.update_pr(
@@ -133,7 +135,7 @@ async def deliver_comment(context: SkillContext, event: dict[str, Any]) -> dict[
     """Post a comment on an issue/PR thread."""
     owner, repo = _split_repo(event["repo"])
     issue_number = int(event["issue_number"])
-    client = _client(context)
+    client = await _client(context)
     data = await client.post_comment(owner, repo, issue_number, event["body"])
     comment_id = int(data["id"])
     return {
@@ -157,7 +159,7 @@ async def revert_pr(context: SkillContext, handle: dict[str, Any]) -> dict[str, 
     """Close the PR (T2 — commits remain on the branch). Idempotent: a PR that
     is already closed yields a silent no-op success."""
     owner, repo, number = handle["owner"], handle["repo"], int(handle["number"])
-    client = _client(context)
+    client = await _client(context)
     pr = await client.get_pr(owner, repo, number)
     if pr.get("state") == "closed":
         return {
@@ -180,7 +182,7 @@ async def revert_comment(context: SkillContext, handle: dict[str, Any]) -> dict[
     """Delete the comment (T1 — clean). Idempotent: a 404 (already deleted) is
     treated as success."""
     owner, repo, comment_id = handle["owner"], handle["repo"], int(handle["comment_id"])
-    client = _client(context)
+    client = await _client(context)
     status = await client.delete_comment(owner, repo, comment_id)
     already = status == 404
     return {
@@ -221,7 +223,7 @@ async def open_pr(
     body: str = "",
 ) -> dict[str, Any]:
     owner, name = _split_repo(repo)
-    client = _client(context)
+    client = await _client(context)
     data = await client.open_pr(owner, name, head=head, base=base, title=title, body=body)
     number = int(data["number"])
     return {
@@ -271,7 +273,7 @@ async def compare_branch(
 )
 async def comment(context: SkillContext, repo: str, issue_number: int, body: str) -> dict[str, Any]:
     owner, name = _split_repo(repo)
-    client = _client(context)
+    client = await _client(context)
     data = await client.post_comment(owner, name, int(issue_number), body)
     return {"comment_id": int(data["id"]), "url": data.get("html_url")}
 
@@ -317,7 +319,7 @@ async def list_issues(
     REST endpoint mixes them in by default; agents asking for issues do not
     want PRs in the result)."""
     owner, name = _split_repo(repo)
-    client = _client(context)
+    client = await _client(context)
     capped = max(1, min(int(limit), 50))
     raw = await client.list_issues(owner, name, state=state, per_page=capped)
     issues = []
@@ -378,7 +380,7 @@ async def merge_pr(
     ``{"status", "merged", "sha"}``. ``status`` is ``merged`` / ``not_mergeable``
     / ``head_changed`` — the latter two are non-error retryable states."""
     owner, name = _split_repo(repo)
-    client = _client(context)
+    client = await _client(context)
     result = await client.merge_pr(owner, name, int(number), method=method)
     return {"status": result.status, "merged": result.merged, "sha": result.sha}
 
