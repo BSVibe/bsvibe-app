@@ -8,6 +8,7 @@ from backend.workflow.application.requirements_ledger import (
     diff_excerpt,
     file_content_key,
     judge_ledger,
+    judge_messages,
 )
 from backend.workflow.domain.requirements import GateFacts, ledger_passed
 from backend.workflow.infrastructure.sandbox import SandboxResult
@@ -100,3 +101,29 @@ async def test_an_excerpt_not_shown_verdict_is_unclear_and_not_a_failure() -> No
     )
     assert rows[0]["status"] == "unclear"
     assert ledger_passed(rows)
+
+
+async def test_same_file_helper_outside_cited_paths_is_in_the_excerpt() -> None:
+    row = {**_ROW, "paths": ["src/impl.py"]}
+    box = _Box({_PATH: _PY, "src/impl.py": "def impl():\n    return 2\n"})
+    shown = await diff_excerpt(box, "base")(row)  # type: ignore[arg-type]
+    assert "def _seed_bound_repo" in shown
+    # the cited path comes first, the same-file definition after it
+    assert shown.index("--- src/impl.py") < shown.index("def _seed_bound_repo")
+
+
+async def test_helpers_fill_the_budget_after_the_cited_paths() -> None:
+    big = "".join(f"line {n} about seeds a bound repo\n" for n in range(2000))
+    row = {**_ROW, "paths": ["src/a.py", "src/b.py"]}
+    box = _Box({_PATH: _PY, "src/a.py": big, "src/b.py": big})
+    shown = await diff_excerpt(box, "base")(row)  # type: ignore[arg-type]
+    assert len(shown) <= 10000 + 500
+    assert "--- src/a.py" in shown
+    assert "--- src/b.py" in shown
+    assert "same-file helpers of the cited test not shown" in shown
+
+
+def test_judge_prompt_reserves_rejected_for_conflict() -> None:
+    system = judge_messages(_ROW, "x")[0]["content"]
+    assert "CONFLICTS" in system
+    assert "missing from the excerpt is not a conflict" in system

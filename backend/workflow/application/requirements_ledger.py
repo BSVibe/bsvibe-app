@@ -68,7 +68,9 @@ _JUDGE_SYSTEM = (
     "You check ONE requirement against the evidence a coding agent cited for it. Answer with "
     'ONE JSON object: {"passed": true|false|"cannot_determine", "reasoning": "<one sentence>"}. '
     "passed=true only when the evidence shown plainly satisfies the requirement. passed=false "
-    "when it plainly does not (wrong behaviour, a different thing, or only part of it). Use "
+    "ONLY when the evidence shown CONFLICTS with the requirement (wrong behaviour, a different "
+    "thing, or only part of it). A definition or hunk missing from the excerpt is not a "
+    "conflict: use "
     '"cannot_determine" when the excerpt is cut off or does not show enough to tell.'
 )
 
@@ -216,7 +218,8 @@ async def _test_file(box: SandboxSession, path: str) -> str | None:
         return None
 
 
-async def _cited_body(box: SandboxSession, test: str) -> str | None:
+async def _cited_body(box: SandboxSession, test: str) -> tuple[str, str] | None:
+    """``(test body + imported helpers, same-file helpers)`` of a cited test."""
     split = split_test_id(test)
     if split is None:
         return None
@@ -228,13 +231,21 @@ async def _cited_body(box: SandboxSession, test: str) -> str | None:
         return None
     # The same-file helpers and fixtures the test names — without them a test that stores
     # rows through ``_hold(db, MIXED)`` shows the judge nothing it can check (#1287).
+    # They are returned apart: the excerpt fills the cited paths first, then these.
     helpers = cited_test_helpers(text, body)
-    parts = [body]
-    if helpers:
-        parts.append(f"--- defined in the same file, used above:\n{helpers}")
     # …and the ones it imports from another file (#1302: ``issue_t._seed`` from a sibling test).
-    parts += await _imported_helpers(box, text, split[0], f"{body}\n{helpers}")
-    return "\n\n".join(parts)
+    parts = [body, *await _imported_helpers(box, text, split[0], f"{body}\n{helpers}")]
+    return "\n\n".join(parts), helpers
+
+
+async def _same_file_helpers(box: SandboxSession, tests: Sequence[Any]) -> list[str]:
+    """The same-file definitions each cited test calls, one block per test."""
+    out: list[str] = []
+    for test in tests:
+        got = await _cited_body(box, str(test))
+        if got is not None and got[1] and got[1] not in out:
+            out.append(got[1])
+    return out
 
 
 async def _imported_helpers(
@@ -294,8 +305,8 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
         # reached (#1275). The paths fill what is left.
         lead: list[str] = []
         for test in row.get("tests") or []:
-            body = await _cited_body(box, test)
-            lead.append(f"--- test {test}: passed at the gate" + (f"\n{body}" if body else ""))
+            got = await _cited_body(box, test)
+            lead.append(f"--- test {test}: passed at the gate" + (f"\n{got[0]}" if got else ""))
         if row.get("note"):
             lead.append(f"--- agent's note: {row['note']}")
         head = "\n\n".join(lead)
@@ -321,6 +332,14 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
             room -= len(part) + 2
         if not_shown:
             parts.append(f"[... not shown, out of room: {', '.join(not_shown)} ...]")
+        # Then the same-file definitions the cited tests call, in what the paths left.
+        for helpers in await _same_file_helpers(box, row.get("tests") or []):
+            block = f"--- defined in the same file as the cited test, used by it:\n{helpers}"
+            if len(block) > room:
+                parts.append("[... same-file helpers of the cited test not shown, out of room ...]")
+                break
+            parts.append(block)
+            room -= len(block) + 2
         return "\n\n".join(x for x in (head, "\n\n".join(parts)) if x)
 
     async def _path_diff(path: str) -> str:
