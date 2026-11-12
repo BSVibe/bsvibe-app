@@ -15,6 +15,7 @@ import pytest
 
 from backend.connectors.auth.app_credentials import (
     AppCredentials,
+    AppCredentialsExistError,
     get_app_credentials,
     upsert_app_credentials,
 )
@@ -103,6 +104,7 @@ async def test_upsert_is_idempotent_single_row_per_provider() -> None:
                 webhook_secret=None,
                 html_url=None,
                 cipher=cipher,
+                replace=True,
             )
         await s.commit()
 
@@ -122,3 +124,25 @@ async def test_get_missing_provider_returns_none() -> None:
     async with memory_session() as s:
         creds = await get_app_credentials(s, provider="github", cipher=_cipher())
     assert creds is None
+
+
+async def test_upsert_refuses_to_overwrite_without_replace() -> None:
+    cipher = _cipher()
+    kwargs = {
+        "provider": "github",
+        "app_id": "1",
+        "app_slug": None,
+        "client_id": "Iv1.cid",
+        "private_key_pem": _PEM,
+        "webhook_secret": None,
+        "html_url": None,
+        "cipher": cipher,
+    }
+    async with memory_session() as s:
+        await upsert_app_credentials(s, client_secret="first", **kwargs)
+        await s.commit()
+        with pytest.raises(AppCredentialsExistError):
+            await upsert_app_credentials(s, client_secret="second", **kwargs)
+        creds = await get_app_credentials(s, provider="github", cipher=cipher)
+    assert creds is not None
+    assert creds.client_secret == "first"
