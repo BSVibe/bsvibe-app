@@ -24,6 +24,7 @@ import httpx
 import structlog
 
 from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.egress import check_connector_config
 from bsvibe_sdk import plugin
 from plugin.notion.client import DEFAULT_BASE_URL, NotionClient
 from plugin.notion.converter import extract_page_title, render_blocks
@@ -56,7 +57,7 @@ p = plugin(
 )
 
 
-def _client(context: SkillContext) -> NotionClient:
+async def _client(context: SkillContext) -> NotionClient:
     """Build an authed client from the injected credentials.
 
     ``config['notion_api_url']`` overrides the API base; ``config['notion_version']``
@@ -66,6 +67,7 @@ def _client(context: SkillContext) -> NotionClient:
     token = context.credentials.get("token")
     if not token:
         raise ValueError("notion: missing required 'token' credential")
+    await check_connector_config(context.config)
     base_url = context.config.get("notion_api_url", DEFAULT_BASE_URL)
     version = context.config.get("notion_version")
     if version:
@@ -94,7 +96,7 @@ def _parent_page_id(context: SkillContext, event: dict[str, Any]) -> str:
 async def deliver_page(context: SkillContext, event: dict[str, Any]) -> dict[str, Any]:
     """Create a Notion page from a deliverable under the configured parent page."""
     parent_page_id = _parent_page_id(context, event)
-    client = _client(context)
+    client = await _client(context)
     data = await client.create_page(
         parent_page_id=parent_page_id,
         title=event["title"],
@@ -121,7 +123,7 @@ async def revert_page(context: SkillContext, handle: dict[str, Any]) -> dict[str
     public API cannot hard-delete it in place). Idempotent: a 404 (page already
     gone) is treated as success."""
     page_id = str(handle["page_id"])
-    client = _client(context)
+    client = await _client(context)
     status = await client.archive_page(page_id)
     already = status == 404
     return {
@@ -155,7 +157,7 @@ async def create_page(
     title: str,
     body: str = "",
 ) -> dict[str, Any]:
-    client = _client(context)
+    client = await _client(context)
     data = await client.create_page(parent_page_id=parent_page_id, title=title, body=body)
     page_id = str(data["id"])
     return {
@@ -179,7 +181,7 @@ async def create_page(
     },
 )
 async def append(context: SkillContext, page_id: str, text: str) -> dict[str, Any]:
-    client = _client(context)
+    client = await _client(context)
     data = await client.append_block(page_id, text)
     return {"page_id": page_id, "appended": True, "object": data.get("object")}
 
@@ -300,7 +302,7 @@ async def import_pages(
     if resolved_dbs is None:
         resolved_dbs = context.config.get("database_ids")
 
-    client = _client(context)
+    client = await _client(context)
 
     pages_count = 0
     blocks_count = 0

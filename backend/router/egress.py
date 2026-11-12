@@ -18,12 +18,18 @@ complete answer. This is the application-layer floor.
 
 from __future__ import annotations
 
-import asyncio
-import ipaddress
-import socket
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
-from urllib.parse import urlsplit
+
+from backend.config import get_settings
+from backend.extensions.plugin.egress import (
+    EgressRefused,
+    Resolver,
+    check_connector_config,
+    check_endpoint,
+    resolve_host,
+    set_allowed_hosts_provider,
+)
 
 #: The kwargs that name where LiteLLM sends the request.
 _ENDPOINT_KEYS = frozenset({"api_base", "base_url"})
@@ -39,48 +45,9 @@ _LOOPBACK_DEFAULT_PREFIXES = (
     "llamafile/",
 )
 
-Resolver = Callable[[str], Awaitable[list[str]]]
-
-
-class EgressRefused(ValueError):
-    """A model endpoint the server must not call. The message names the endpoint, not a key."""
-
-
-async def resolve_host(host: str) -> list[str]:
-    """Every address ``host`` resolves to (the system resolver, off the event loop)."""
-    infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    return sorted({str(info[4][0]) for info in infos})
-
-
-def _is_global(address: str) -> bool:
-    ip = ipaddress.ip_address(address.split("%", 1)[0])
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return ip.is_global
-
-
-async def check_endpoint(
-    url: str, *, resolver: Resolver, allowed_hosts: frozenset[str] = frozenset()
-) -> None:
-    """Refuse ``url`` unless it is http(s) and every address its host resolves to is global."""
-    parts = urlsplit(url)
-    if parts.scheme not in {"http", "https"} or not parts.hostname:
-        raise EgressRefused(f"model endpoint must be an http(s) URL: {url!r}")
-    host = parts.hostname
-    if host in allowed_hosts:
-        return
-    try:
-        addresses = [str(ipaddress.ip_address(host))]
-    except ValueError:
-        try:
-            addresses = await resolver(host)
-        except (OSError, UnicodeError) as exc:
-            raise EgressRefused(f"model endpoint host does not resolve: {host!r}") from exc
-    if not addresses or not all(_is_global(a) for a in addresses):
-        raise EgressRefused(
-            f"model endpoint {host!r} is not a public address — the server does not call "
-            "private, loopback or link-local networks on a workspace's behalf"
-        )
+# Connector plugins share this check through ``backend.extensions.plugin.egress`` (they may not
+# import the router); hand it the operator allow-list, read per call like the model path.
+set_allowed_hosts_provider(lambda: frozenset(get_settings().llm_egress_allowed_hosts))
 
 
 def _endpoints(kwargs: Mapping[str, Any]) -> list[str]:
@@ -109,4 +76,11 @@ async def check_completion_kwargs(
         await check_endpoint(url, resolver=resolver, allowed_hosts=allowed_hosts)
 
 
-__all__ = ["EgressRefused", "check_completion_kwargs", "check_endpoint", "resolve_host"]
+__all__ = [
+    "EgressRefused",
+    "check_completion_kwargs",
+    "check_connector_config",
+    "check_endpoint",
+    "resolve_host",
+    "Resolver",
+]
