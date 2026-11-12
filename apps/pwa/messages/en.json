@@ -977,7 +977,15 @@
       "unlimited": "Unlimited",
       "pastDue": "Your payment is past due — the plan stays active while it is retried.",
       "loadError": "We couldn't load your plan. Try again in a moment.",
-      "paidPlans": "About paid plans"
+      "paidPlans": "About paid plans",
+      "budgetLabel": "Monthly token budget",
+      "budgetHint": "Tokens are billed to your own provider or subscription. Set a ceiling to stop new work once this month's use reaches it; leave it empty for no limit.",
+      "budgetPlaceholder": "No limit",
+      "budgetSave": "Save budget",
+      "budgetClear": "Remove limit",
+      "budgetSaving": "Saving…",
+      "budgetInvalid": "Enter a whole number greater than 0.",
+      "budgetSaveError": "Couldn’t save the budget. Only owners and admins can change it."
     }
   },
   "report": {

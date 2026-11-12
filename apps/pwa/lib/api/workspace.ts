@@ -111,3 +111,13 @@ export interface WorkspacePlan {
 export function getWorkspacePlan(): Promise<WorkspacePlan> {
   return apiFetch<WorkspacePlan>("/api/v1/workspace/plan");
 }
+
+/** PUT — set (a positive integer) or clear (`null` = unlimited) the workspace's monthly token
+ *  budget. Tokens are BYO, so this is a spend ceiling the workspace chooses. Owner/admin only
+ *  (the backend answers 403 otherwise). Returns the refreshed plan summary. */
+export function setWorkspaceTokenBudget(monthlyTokenBudget: number | null): Promise<WorkspacePlan> {
+  return apiFetch<WorkspacePlan>("/api/v1/workspace/token-budget", {
+    method: "PUT",
+    body: JSON.stringify({ monthly_token_budget: monthlyTokenBudget }),
+  });
+}

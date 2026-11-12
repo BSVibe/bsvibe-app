@@ -12,8 +12,9 @@ caller's transaction, so the rules that read the columns (``run_caps``, ``verify
 ``workspace_token_budget``) need no change and cannot see a half-applied plan. The payment
 provider's webhook calls exactly this; so does an operator.
 
-``monthly_token_budget`` is a SAFETY quota, not a price lever (``workspaces_db``), so the paid
-plan does not raise it — a paying workspace is no less able to run away.
+``monthly_token_budget`` is not a plan limit: tokens are BYO, so the monthly budget is a spend
+ceiling the workspace chooses (``workspaces_db``), and no plan sets or overwrites it. The per-run
+token ceiling is what keeps a runaway run off the user's own key.
 
 A downgrade does not touch what a workspace already holds: runs over the new cap keep running,
 the cap only refuses the next submission (``run_caps`` counts at admission).
@@ -30,7 +31,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.identity.workspaces_db import (
     DEFAULT_MAX_CONCURRENT_RUNS,
-    DEFAULT_MONTHLY_TOKEN_BUDGET,
     DEFAULT_PLAN,
     WorkspaceRow,
 )
@@ -50,7 +50,6 @@ class PlanLimits:
 
     max_concurrent_runs: int | None
     verify_stack_slots: int
-    monthly_token_budget: int | None
 
 
 PLAN_LIMITS: dict[Plan, PlanLimits] = {
@@ -58,19 +57,16 @@ PLAN_LIMITS: dict[Plan, PlanLimits] = {
     Plan.FREE: PlanLimits(
         max_concurrent_runs=DEFAULT_MAX_CONCURRENT_RUNS,
         verify_stack_slots=1,
-        monthly_token_budget=DEFAULT_MONTHLY_TOKEN_BUDGET,
     ),
     # Founder decision 2026-10-16: 10 runs · 2 verification stacks — what one host carries
     # before horizontal scale-out (#929).
     Plan.PRO: PlanLimits(
         max_concurrent_runs=10,
         verify_stack_slots=2,
-        monthly_token_budget=DEFAULT_MONTHLY_TOKEN_BUDGET,
     ),
     Plan.OPERATOR: PlanLimits(
         max_concurrent_runs=None,
         verify_stack_slots=2,
-        monthly_token_budget=None,
     ),
 }
 
@@ -90,7 +86,6 @@ async def apply_plan(session: AsyncSession, *, workspace_id: uuid.UUID, plan: Pl
             plan=plan.value,
             max_concurrent_runs=limits.max_concurrent_runs,
             verify_stack_slots=limits.verify_stack_slots,
-            monthly_token_budget=limits.monthly_token_budget,
         )
     )
     if result.rowcount != 1:  # type: ignore[attr-defined]

@@ -9,10 +9,10 @@ Now ``workspaces.plan`` names the plan and :func:`apply_plan` is the ONE place t
 workspace between plans, writing every limit the plan sets in the same transaction. The
 payment provider's webhook (step 2) will call exactly this.
 
-* Free: 3 runs · 1 verification slot · 50M tokens/month (unchanged).
-* Pro: 10 runs · 2 slots · 50M tokens/month — the token budget is a SAFETY quota, not a
-  price lever (``workspaces_db.py``), so the plan does not move it.
-* Operator: uncapped runs and budget — the grandfathered operator workspace, named.
+* Free: 3 runs · 1 verification slot.
+* Pro: 10 runs · 2 slots.
+* Operator: uncapped runs — the grandfathered operator workspace, named.
+* The monthly token budget is NOT a plan limit (tokens are BYO): it is the user's own ceiling.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from backend.data.rls import workspace_session_scope
 from backend.identity.plans import PLAN_LIMITS, Plan, apply_plan
 from backend.identity.workspaces_db import (
     DEFAULT_MAX_CONCURRENT_RUNS,
-    DEFAULT_MONTHLY_TOKEN_BUDGET,
     WorkspaceRow,
 )
 from backend.workflow.infrastructure.db import RunStatus
@@ -72,11 +71,8 @@ async def test_applying_a_plan_writes_every_limit_it_sets(sf, workspace_id) -> N
 
     row = await _plan_row(sf, workspace_id)
     assert row.plan == "pro"
-    assert (row.max_concurrent_runs, row.verify_stack_slots, row.monthly_token_budget) == (
-        10,
-        2,
-        DEFAULT_MONTHLY_TOKEN_BUDGET,
-    )
+    assert (row.max_concurrent_runs, row.verify_stack_slots) == (10, 2)
+    assert row.monthly_token_budget is None  # no plan sets the budget
 
 
 async def test_a_downgrade_restores_the_free_limits(sf, workspace_id) -> None:  # noqa: F811
@@ -98,7 +94,7 @@ async def test_the_operator_plan_is_uncapped(sf, workspace_id) -> None:  # noqa:
     await _apply(sf, workspace_id, Plan.OPERATOR)
 
     row = await _plan_row(sf, workspace_id)
-    assert (row.max_concurrent_runs, row.monthly_token_budget) == (None, None)
+    assert row.max_concurrent_runs is None
 
 
 async def test_a_new_workspace_is_born_free_with_the_free_limits(sf, workspace_id) -> None:  # noqa: F811
@@ -109,11 +105,25 @@ async def test_a_new_workspace_is_born_free_with_the_free_limits(sf, workspace_i
     row = await _plan_row(sf, workspace_id)
     free = PLAN_LIMITS[Plan.FREE]
     assert row.plan == "free"
-    assert (row.max_concurrent_runs, row.verify_stack_slots, row.monthly_token_budget) == (
+    assert (row.max_concurrent_runs, row.verify_stack_slots) == (
         free.max_concurrent_runs,
         free.verify_stack_slots,
-        free.monthly_token_budget,
     )
+    assert row.monthly_token_budget is None
+
+
+async def test_a_plan_change_does_not_touch_the_budget_the_user_chose(sf, workspace_id) -> None:  # noqa: F811
+    """The monthly budget is the workspace's own spend ceiling — no plan may overwrite it."""
+    await _seed(sf, workspace_id=workspace_id, cap=DEFAULT_MAX_CONCURRENT_RUNS)
+    async with sf() as s, workspace_session_scope(s, workspace_id):
+        row = await s.get(WorkspaceRow, workspace_id)
+        assert row is not None
+        row.monthly_token_budget = 1_234_567
+        await s.commit()
+
+    for plan in (Plan.PRO, Plan.FREE, Plan.OPERATOR):
+        await _apply(sf, workspace_id, plan)
+        assert (await _plan_row(sf, workspace_id)).monthly_token_budget == 1_234_567, plan
 
 
 async def test_an_unknown_workspace_is_an_error_not_a_silent_no_op(sf) -> None:  # noqa: F811

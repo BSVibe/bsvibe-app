@@ -74,7 +74,7 @@ async def test_the_plan_endpoint_reports_limits_and_use(sf, client, workspace_id
     assert body["plan"] == "free"
     assert body["runs"] == {"held": 1, "limit": 3}
     assert body["tokens"]["used"] == 3_500
-    assert body["tokens"]["limit"] == 50_000_000
+    assert body["tokens"]["limit"] is None  # no budget by default (BYO tokens)
     assert body["verify_stack_slots"] == 1
     assert body["billing_status"] is None
     assert datetime.fromisoformat(body["tokens"]["period_start"]) == budget_window_start()

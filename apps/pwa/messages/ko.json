@@ -974,10 +974,18 @@
       "runs": "동시 런",
       "tokens": "이번 달 토큰",
       "verifyStacks": "검증 스택",
-      "unlimited": "무제한",
+      "unlimited": "제한 없음",
       "pastDue": "결제가 밀려 있어요 — 재시도하는 동안 플랜은 유지돼요.",
       "loadError": "플랜을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
-      "paidPlans": "유료 플랜 안내"
+      "paidPlans": "유료 플랜 안내",
+      "budgetLabel": "월 토큰 예산",
+      "budgetHint": "토큰은 내 프로바이더나 구독으로 결제돼요. 상한을 정하면 이번 달 사용량이 그 값에 닿을 때 새 작업을 막고, 비워 두면 제한이 없어요.",
+      "budgetPlaceholder": "제한 없음",
+      "budgetSave": "예산 저장",
+      "budgetClear": "제한 해제",
+      "budgetSaving": "저장 중…",
+      "budgetInvalid": "0보다 큰 정수를 입력해 주세요.",
+      "budgetSaveError": "예산을 저장하지 못했어요. 소유자와 관리자만 바꿀 수 있어요."
     }
   },
   "report": {
