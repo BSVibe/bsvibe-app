@@ -47,6 +47,7 @@ from backend.connectors.auth import service as oauth_service
 from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.catalog import get_connector_catalog
 from backend.connectors.db import ConnectorAccountRow
+from backend.connectors.github_access import reject_server_owned_installation
 from backend.extensions.plugin.base import PluginRunError
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.accounts.crypto import (
@@ -251,6 +252,12 @@ class ConnectorsCreateOutput(BaseModel):
 async def _h_create(args: ConnectorsCreateInput, ctx: ToolContext) -> Any:
     if not _is_registerable_connector(args.connector):
         raise ToolError(f"unknown connector: {args.connector!r}")
+    try:
+        reject_server_owned_installation(
+            args.connector, external_ref=args.external_ref, delivery_config=args.delivery_config
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
     cipher = cipher_from_settings()
     webhook_token = secrets.token_urlsafe(_TOKEN_BYTES)
     row = ConnectorAccountRow(
@@ -323,6 +330,12 @@ async def _h_set_delivery_config(args: ConnectorsSetDeliveryConfigInput, ctx: To
     row = await _resolve_connector(ctx, args.connector_id)
     # Shallow-merge, reassigning a fresh dict so the SQLAlchemy JSON column
     # detects the change (mirrors the REST PATCH handler exactly).
+    try:
+        reject_server_owned_installation(
+            row.connector, external_ref=None, delivery_config=args.delivery_config
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
     row.delivery_config = {**(row.delivery_config or {}), **args.delivery_config}
     await ctx.session.commit()
     return _row_to_dict(row)

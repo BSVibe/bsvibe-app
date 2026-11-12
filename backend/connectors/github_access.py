@@ -25,19 +25,47 @@ _HTTP_TIMEOUT = 10.0
 
 
 class RepoAccessError(Exception):
-    """계정이 저장소에 접근할 수 있음을 확인하지 못했다."""
+    """계정이 저장소에 접근할 수 없다(권한 없음/없는 저장소/자격증명 거부)."""
+
+
+class RepoAccessUnavailable(Exception):
+    """GitHub 가 일시적으로 답하지 못했다(타임아웃·5xx·429). 접근 거부가 아니다 — 재시도 대상."""
+
+
+_TRANSIENT_STATUSES = frozenset({429})
+
+
+def _is_transient(status: int) -> bool:
+    return status in _TRANSIENT_STATUSES or status >= 500  # noqa: PLR2004
+
+
+def reject_server_owned_installation(
+    connector: str, *, external_ref: str | None, delivery_config: dict[str, Any] | None
+) -> None:
+    """사용자 입력이 설치 id 를 주장하지 못하게 한다(``ValueError``).
+
+    설치 id 는 설치 claim 이 서버에서 ``external_ref`` 에 기록한 값만 믿는다.
+    ``delivery_config['installation_id']`` 와, github 커넥터를 직접 만들 때의 숫자
+    ``external_ref`` 는 다른 테넌트의 설치 id 를 흉내 낼 수 있어 거절한다.
+    """
+    if delivery_config and "installation_id" in delivery_config:
+        raise ValueError(
+            "installation_id 는 서버가 설치 claim 때 기록하는 값이라 직접 설정할 수 없습니다"
+        )
+    if connector == "github" and external_ref and external_ref.strip().isdigit():
+        raise ValueError(
+            "github 커넥터의 숫자 external_ref 는 설치 claim 이 기록하는 값이라 직접 설정할 수 없습니다"
+        )
 
 
 def github_installation_id(account: ConnectorAccountRow) -> str | None:
     """계정의 GitHub App 설치 id, 없으면 ``None``.
 
-    ``delivery_config['installation_id']`` 가 우선이고, 없으면 숫자로만 된
-    ``external_ref`` (설치 claim 이 기록하는 값)를 쓴다.
+    서버가 설치 claim 때 기록한 ``external_ref`` (숫자) 에서만 읽는다.
+    사용자가 쓸 수 있는 ``delivery_config`` 는 보지 않는다.
     """
-    raw = (account.delivery_config or {}).get("installation_id")
-    if raw is None and account.external_ref and account.external_ref.isdigit():
-        raw = account.external_ref
-    return str(raw) if raw not in (None, "") else None
+    ref = (account.external_ref or "").strip()
+    return ref if ref.isdigit() else None
 
 
 def repo_slug(repo: str) -> str:
@@ -90,14 +118,29 @@ async def verify_repo_access(
     try:
         token = await _credential(session, account, cipher)
         status = await _repo_status(token, slug)
+    except httpx.HTTPError as exc:  # 타임아웃·연결 실패 — 접근 거부가 아니다
+        raise RepoAccessUnavailable(
+            f"GitHub 가 응답하지 않아 저장소 {slug} 접근을 확인하지 못했습니다. 잠시 후 다시 시도하세요 ({type(exc).__name__})"
+        ) from exc
     except Exception as exc:  # noqa: BLE001 — 자격증명/네트워크 어떤 실패든 접근 미확인
         raise RepoAccessError(
             f"GitHub 저장소 {slug} 접근을 확인하지 못했습니다 ({type(exc).__name__})"
         ) from exc
+    if _is_transient(status):
+        raise RepoAccessUnavailable(
+            f"GitHub 가 일시적으로 실패해 저장소 {slug} 접근을 확인하지 못했습니다 (HTTP {status}). 잠시 후 다시 시도하세요"
+        )
     if status != httpx.codes.OK:
         raise RepoAccessError(
             f"이 GitHub 연결은 저장소 {slug} 에 접근할 수 없습니다 (HTTP {status})"
         )
 
 
-__all__ = ["RepoAccessError", "github_installation_id", "repo_slug", "verify_repo_access"]
+__all__ = [
+    "RepoAccessError",
+    "RepoAccessUnavailable",
+    "github_installation_id",
+    "reject_server_owned_installation",
+    "repo_slug",
+    "verify_repo_access",
+]

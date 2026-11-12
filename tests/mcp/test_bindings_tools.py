@@ -419,3 +419,27 @@ async def test_mcp_rejects_inaccessible_repo(
         from sqlalchemy import select
 
         assert (await s.execute(select(ResourceBindingRow))).scalars().all() == []
+
+
+async def test_mcp_transient_github_failure_is_retryable_not_denied(
+    db, workspace_id, user_id, registry, seeded, _github_repo_status
+) -> None:
+    product_id, connector_account_id = seeded
+    _github_repo_status["status"] = 429
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="재시도"):
+            await registry.call_tool(
+                "bsvibe_bindings_create",
+                {
+                    "product_id": str(product_id),
+                    "connector_account_id": str(connector_account_id),
+                    "resource_id": "o/r",
+                },
+                ctx,
+            )

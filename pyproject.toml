@@ -306,6 +306,7 @@ ignore_imports = [
     "backend.mcp.tools.connectors_tools -> backend.api.v1.connectors",
     "backend.mcp.tools.connectors_tools -> backend.connectors.catalog",
     "backend.mcp.tools.connectors_tools -> backend.connectors.db",
+    "backend.mcp.tools.connectors_tools -> backend.connectors.github_access",
     # 게이트 3 후속 — the telegram webhook registration tool calls the SAME
     # ``register_telegram_webhook`` the REST route calls. That helper mints and
     # stores ``delivery_config["webhook_secret"]`` and hands Telegram the same

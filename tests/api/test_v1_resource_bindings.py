@@ -359,3 +359,18 @@ async def test_rest_rejects_inaccessible_repo(client_with_parents, _github_repo_
     assert "other/private-repo" in resp.json()["detail"]
     listed = await client.get(f"/api/v1/products/{product_id}/bindings")
     assert listed.json() == []
+
+
+async def test_rest_transient_github_failure_is_503_not_403(
+    client_with_parents, _github_repo_status
+) -> None:
+    client, _ws, product_id, account_id = client_with_parents
+    _github_repo_status["status"] = 503
+
+    resp = await client.post(
+        f"/api/v1/products/{product_id}/bindings",
+        json={"connector_account_id": str(account_id), "resource_id": "o/r"},
+    )
+
+    assert resp.status_code == 503
+    assert (await client.get(f"/api/v1/products/{product_id}/bindings")).json() == []

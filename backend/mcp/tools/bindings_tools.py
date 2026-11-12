@@ -34,7 +34,11 @@ from sqlalchemy import select
 from backend.common.binding_knobs import TriggerKnob
 from backend.common.connector_redaction import public_binding_selection
 from backend.connectors.db import ConnectorAccountRow
-from backend.connectors.github_access import RepoAccessError, verify_repo_access
+from backend.connectors.github_access import (
+    RepoAccessError,
+    RepoAccessUnavailable,
+    verify_repo_access,
+)
 from backend.identity.domain.repositories.resource_binding_repository import OUTPUT_MODES
 from backend.identity.infrastructure.repositories import (
     SqlAlchemyResourceBindingRepository,
@@ -150,6 +154,8 @@ async def _h_create(args: BindingsCreateInput, ctx: ToolContext) -> Any:
             account=account,
             resource_id=args.resource_id,
         )
+    except RepoAccessUnavailable as exc:
+        raise ToolError(f"일시적 오류(재시도 가능): {exc}") from exc
     except RepoAccessError as exc:
         raise ToolError(str(exc)) from exc
     repo = SqlAlchemyResourceBindingRepository(ctx.session)
