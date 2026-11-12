@@ -544,6 +544,7 @@ async def _h_github_app_status(_: GithubAppStatusInput, ctx: ToolContext) -> Git
 
 class GithubAppSetupInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    replace: bool = False
 
 
 class GithubAppSetupOutput(BaseModel):
@@ -553,10 +554,18 @@ class GithubAppSetupOutput(BaseModel):
     instructions: str
 
 
-async def _h_github_app_setup(_: GithubAppSetupInput, ctx: ToolContext) -> GithubAppSetupOutput:
-    data = await oauth_service.begin_github_app_manifest(
-        ctx.session, workspace_id=ctx.principal.workspace_id
-    )
+async def _h_github_app_setup(args: GithubAppSetupInput, ctx: ToolContext) -> GithubAppSetupOutput:
+    try:
+        data = await oauth_service.begin_github_app_manifest(
+            ctx.session,
+            workspace_id=ctx.principal.workspace_id,
+            user_id=str(ctx.principal.user_id),
+            replace=args.replace,
+        )
+    except oauth_service.NotOperatorError as exc:
+        raise ToolError("forbidden: GitHub App setup is restricted to instance operators") from exc
+    except oauth_service.AppAlreadyConfiguredError as exc:
+        raise ToolError("GitHub App already configured; pass replace=true to replace it") from exc
     return GithubAppSetupOutput(
         post_url=data["post_url"],
         manifest=data["manifest"],
@@ -773,7 +782,7 @@ def register_connectors_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_connectors_github_app_setup_url",
             description=(
-                "Begin the GitHub App Manifest setup. Returns the GitHub POST target + "
+                "Begin the GitHub App Manifest setup (instance operators only; pass replace=true to overwrite an existing App). Returns the GitHub POST target + "
                 "manifest for the human to approve once (no manual env editing)."
             ),
             input_schema=GithubAppSetupInput,

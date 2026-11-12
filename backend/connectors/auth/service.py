@@ -19,10 +19,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.connectors.auth import store
-from backend.connectors.auth.app_credentials import get_app_credentials
+from backend.connectors.auth.app_credentials import (
+    app_credentials_exist,
+    get_app_credentials,
+)
 from backend.connectors.auth.github_manifest import build_manifest, manifest_post_url
 from backend.connectors.auth.providers import get_provider
 from backend.connectors.auth.sentry import SentryProvider
+from backend.data.rls import workspace_session_scope
+from backend.identity.plans import Plan
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.crypto import (
     CredentialCipher,
     cipher_from_settings,
@@ -92,10 +98,54 @@ async def begin_oauth_connect(
     return prov.authorize_url(state=state, code_challenge=challenge, redirect_uri=redirect_uri)
 
 
+class NotOperatorError(Exception):
+    """The caller is not an instance operator (workspace plan is not ``operator``)."""
+
+
+class AppAlreadyConfiguredError(Exception):
+    """GitHub App credentials already exist and no explicit replace was requested."""
+
+
+async def is_operator(session: AsyncSession, *, workspace_id: uuid.UUID) -> bool:
+    """Instance operator = the active workspace is on the existing ``operator`` plan."""
+    # Scoped explicitly: the public callback has no request-resolved tenant (RLS).
+    async with workspace_session_scope(session, workspace_id):
+        row = await session.get(WorkspaceRow, workspace_id)
+    return row is not None and row.plan == Plan.OPERATOR.value
+
+
+def _encode_manifest_binding(*, user_id: str, replace: bool) -> str:
+    # The manifest flow has no PKCE verifier, so the (otherwise unused) column
+    # carries who started the flow and whether they asked to replace.
+    return f"manifest:{int(replace)}:{user_id}"
+
+
+def decode_manifest_binding(value: str) -> tuple[str, bool] | None:
+    """``(user_id, replace)`` of a bound state, or ``None`` for an unbound one."""
+    parts = value.split(":", 2)
+    if len(parts) != 3 or parts[0] != "manifest" or parts[1] not in ("0", "1") or not parts[2]:
+        return None
+    return parts[2], parts[1] == "1"
+
+
 async def begin_github_app_manifest(
-    session: AsyncSession, *, workspace_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: str,
+    replace: bool = False,
 ) -> dict[str, Any]:
-    """Stash CSRF state, return the GitHub POST target + manifest body."""
+    """Stash CSRF state, return the GitHub POST target + manifest body.
+
+    Operator-only (the App credentials are instance-global); refuses to start
+    over existing credentials unless ``replace`` is explicit.
+    """
+    if not await is_operator(session, workspace_id=workspace_id):
+        raise NotOperatorError(str(workspace_id))
+    if not replace and (
+        await app_credentials_exist(session, provider="github") or get_provider("github")
+    ):
+        raise AppAlreadyConfiguredError("github")
     settings = get_settings()
     state = secrets.token_urlsafe(_STATE_BYTES)
     redirect_uri = manifest_redirect_uri()
@@ -104,7 +154,7 @@ async def begin_github_app_manifest(
         state=state,
         provider=MANIFEST_PENDING_PROVIDER,
         workspace_id=workspace_id,
-        code_verifier="-",
+        code_verifier=_encode_manifest_binding(user_id=user_id, replace=replace),
         redirect_uri=redirect_uri,
     )
     await session.commit()
@@ -209,6 +259,10 @@ async def complete_sentry_install(
 
 
 __all__ = [
+    "AppAlreadyConfiguredError",
+    "NotOperatorError",
+    "decode_manifest_binding",
+    "is_operator",
     "MANIFEST_PENDING_PROVIDER",
     "UnknownProviderError",
     "begin_github_app_manifest",

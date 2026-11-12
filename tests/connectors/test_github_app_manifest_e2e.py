@@ -20,13 +20,14 @@ GitHub's conversions HTTP is the only thing mocked (respx pass-through).
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 import pytest_asyncio
 import respx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.api.deps import get_current_user, get_db_session, get_workspace_id
@@ -35,10 +36,12 @@ from backend.api.v1.connector_oauth import _MANIFEST_PENDING_PROVIDER
 from backend.api.webhooks import get_credential_cipher
 from backend.config import get_settings
 from backend.connectors.auth import providers as providers_mod
-from backend.connectors.auth.app_credentials import get_app_credentials
+from backend.connectors.auth.app_credentials import get_app_credentials, upsert_app_credentials
 from backend.connectors.auth.db import ConnectorOAuthPendingRow
 from backend.connectors.auth.github import GitHubAppProvider
 from backend.connectors.auth.providers import get_provider
+from backend.data.rls import workspace_session_scope
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
 
 from .._support import db_engine, fake_current_user
@@ -46,6 +49,8 @@ from .._support import db_engine, fake_current_user
 pytestmark = pytest.mark.asyncio
 
 TEST_KEY = b"0123456789abcdef0123456789abcdef"
+_START = "/api/v1/connectors/oauth/github/app-manifest/start"
+_CALLBACK = "/api/v1/connectors/oauth/github/app-manifest/callback"
 _CONVERSIONS = "https://api.github.com/app-manifests/the-code/conversions"
 _PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----"
 
@@ -69,11 +74,24 @@ def workspace_id() -> uuid.UUID:
 @pytest.fixture(autouse=True)
 def _isolate_registry() -> Iterator[None]:
     snapshot = dict(providers_mod._REGISTRY)
+    providers_mod._REGISTRY.pop("github", None)  # start unconfigured, whatever ran before
     try:
         yield
     finally:
         providers_mod._REGISTRY.clear()
         providers_mod._REGISTRY.update(snapshot)
+
+
+@pytest_asyncio.fixture
+async def seed_plan(
+    sf: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
+) -> Callable[[str], Awaitable[None]]:
+    async def _seed(plan: str) -> None:
+        async with sf() as s, workspace_session_scope(s, workspace_id):
+            s.add(WorkspaceRow(id=workspace_id, name="ws", plan=plan))
+            await s.commit()
+
+    return _seed
 
 
 @pytest_asyncio.fixture
@@ -98,8 +116,11 @@ async def client(
 
 
 async def test_start_returns_github_post_target_and_manifest(
-    client: httpx.AsyncClient, sf: async_sessionmaker[AsyncSession]
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    seed_plan: Callable[[str], Awaitable[None]],
 ) -> None:
+    await seed_plan("operator")
     r = await client.post("/api/v1/connectors/oauth/github/app-manifest/start")
     assert r.status_code == 200, r.text
     body = r.json()
@@ -131,7 +152,9 @@ async def test_callback_converts_code_persists_app_and_registers_provider(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
     cipher: CredentialCipher,
+    seed_plan: Callable[[str], Awaitable[None]],
 ) -> None:
+    await seed_plan("operator")
     respx_mock.post(_CONVERSIONS).mock(
         return_value=httpx.Response(
             201,
@@ -193,8 +216,11 @@ async def test_app_status_not_configured(client: httpx.AsyncClient) -> None:
 
 @respx.mock(assert_all_mocked=False)
 async def test_app_status_configured_after_manifest(
-    respx_mock: respx.MockRouter, client: httpx.AsyncClient
+    respx_mock: respx.MockRouter,
+    client: httpx.AsyncClient,
+    seed_plan: Callable[[str], Awaitable[None]],
 ) -> None:
+    await seed_plan("operator")
     respx_mock.post(_CONVERSIONS).mock(
         return_value=httpx.Response(
             201,
@@ -220,3 +246,147 @@ async def test_app_status_configured_after_manifest(
     assert body["configured"] is True
     assert body["app_slug"] == "bsvibe-dev"
     assert body["html_url"] == "https://github.com/apps/bsvibe-dev"
+
+
+_SEED = Callable[[str], Awaitable[None]]
+
+
+def _state(start: httpx.Response) -> str:
+    return parse_qs(urlsplit(start.json()["post_url"]).query)["state"][0]
+
+
+async def _seed_creds(sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher) -> None:
+    async with sf() as s:
+        await upsert_app_credentials(
+            s,
+            provider="github",
+            app_id="1",
+            client_id="Iv1.old",
+            client_secret="old-secret",
+            private_key_pem=_PEM,
+            app_slug="old",
+            webhook_secret=None,
+            html_url=None,
+            cipher=cipher,
+        )
+        await s.commit()
+
+
+async def test_start_rejects_non_operator_owner_403(
+    client: httpx.AsyncClient, sf: async_sessionmaker[AsyncSession], seed_plan: _SEED
+) -> None:
+    await seed_plan("free")
+    r = await client.post(_START)
+    assert r.status_code == 403, r.text
+    async with sf() as s:
+        pending = (await s.execute(select(ConnectorOAuthPendingRow))).scalars().all()
+    assert pending == []
+
+
+async def test_start_over_existing_app_needs_replace(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    seed_plan: _SEED,
+) -> None:
+    await seed_plan("operator")
+    await _seed_creds(sf, cipher)
+    assert (await client.post(_START)).status_code == 409
+    assert (await client.post(_START, params={"replace": "true"})).status_code == 200
+
+
+@respx.mock(assert_all_mocked=False, assert_all_called=False)
+async def test_callback_without_replace_keeps_existing_credentials(
+    respx_mock: respx.MockRouter,
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    seed_plan: _SEED,
+) -> None:
+    await seed_plan("operator")
+    route = respx_mock.post(_CONVERSIONS).mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "id": 9,
+                "slug": "new",
+                "client_id": "Iv1.new",
+                "client_secret": "new-secret",
+                "pem": _PEM,
+                "html_url": "https://github.com/apps/new",
+            },
+        )
+    )
+    # Started while unconfigured (no replace); credentials appear before the callback.
+    state = _state(await client.post(_START))
+    await _seed_creds(sf, cipher)
+
+    r = await client.get(_CALLBACK, params={"code": "the-code", "state": state})
+    assert r.status_code == 302
+    assert "github_app_error" in r.headers["location"]
+    assert not route.called
+    async with sf() as s:
+        creds = await get_app_credentials(s, provider="github", cipher=cipher)
+    assert creds is not None
+    assert creds.client_id == "Iv1.old"
+
+
+@respx.mock(assert_all_mocked=False)
+async def test_callback_with_replace_overwrites(
+    respx_mock: respx.MockRouter,
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    seed_plan: _SEED,
+) -> None:
+    await seed_plan("operator")
+    await _seed_creds(sf, cipher)
+    respx_mock.post(_CONVERSIONS).mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "id": 9,
+                "slug": "new",
+                "client_id": "Iv1.new",
+                "client_secret": "new-secret",
+                "pem": _PEM,
+                "html_url": "https://github.com/apps/new",
+            },
+        )
+    )
+    state = _state(await client.post(_START, params={"replace": "true"}))
+    r = await client.get(_CALLBACK, params={"code": "the-code", "state": state})
+    assert r.status_code == 302
+    async with sf() as s:
+        creds = await get_app_credentials(s, provider="github", cipher=cipher)
+    assert creds is not None
+    assert creds.client_id == "Iv1.new"
+
+
+@respx.mock(assert_all_mocked=False, assert_all_called=False)
+async def test_unbound_callback_state_writes_nothing(
+    respx_mock: respx.MockRouter,
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
+    seed_plan: _SEED,
+) -> None:
+    await seed_plan("operator")
+    route = respx_mock.post(_CONVERSIONS)
+    async with sf() as s:
+        s.add(
+            ConnectorOAuthPendingRow(
+                state="legacy",
+                provider=_MANIFEST_PENDING_PROVIDER,
+                workspace_id=workspace_id,
+                code_verifier="-",
+                redirect_uri="https://x",
+            )
+        )
+        await s.commit()
+    r = await client.get(_CALLBACK, params={"code": "the-code", "state": "legacy"})
+    assert r.status_code == 403
+    assert not route.called
+    async with sf() as s:
+        assert await get_app_credentials(s, provider="github", cipher=cipher) is None

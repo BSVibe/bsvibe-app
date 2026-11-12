@@ -518,7 +518,29 @@ async def test_github_app_status_not_configured(db, workspace_id, user_id, regis
     assert out["configured"] is False
 
 
-async def test_github_app_setup_url_returns_manifest(db, workspace_id, user_id, registry) -> None:
+async def _seed_ws(db, workspace_id, plan: str) -> None:
+    async with scoped_session(db, workspace_id) as s:
+        s.add(WorkspaceRow(id=workspace_id, name="ws", plan=plan))
+        await s.commit()
+
+
+async def test_github_app_setup_url_rejects_non_operator(
+    db, workspace_id, user_id, registry
+) -> None:
+    await _seed_ws(db, workspace_id, "free")
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="forbidden"):
+            await registry.call_tool("bsvibe_connectors_github_app_setup_url", {}, ctx)
+
+
+async def test_github_app_setup_url_returns_manifest_for_operator(
+    db, workspace_id, user_id, registry
+) -> None:
+    await _seed_ws(db, workspace_id, "operator")
     async with db() as s:
         ctx = ToolContext(
             principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
