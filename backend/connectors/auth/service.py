@@ -126,11 +126,11 @@ async def is_operator(
     # Scoped explicitly: the public callback has no request-resolved tenant (RLS).
     async with workspace_session_scope(session, workspace_id):
         row = await session.get(WorkspaceRow, workspace_id)
-    if row is None or row.plan != Plan.OPERATOR.value:
-        return False
-    membership = await SqlAlchemyMembershipRepository(session).active_for_user_in_workspace(
-        user_id, workspace_id
-    )
+        if row is None or row.plan != Plan.OPERATOR.value:
+            return False
+        membership = await SqlAlchemyMembershipRepository(session).active_for_user_in_workspace(
+            user_id, workspace_id
+        )
     return membership is not None and role_satisfies(membership.role, "admin")
 
 

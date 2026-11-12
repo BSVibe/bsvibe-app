@@ -126,6 +126,24 @@ async def client(
         yield c
 
 
+@pytest_asyncio.fixture
+async def public_client(
+    sf: async_sessionmaker[AsyncSession], cipher: CredentialCipher
+) -> AsyncIterator[httpx.AsyncClient]:
+    """Like the browser GitHub redirects: NO auth override, no bearer header."""
+    app = create_app()
+
+    async def _session() -> AsyncIterator[AsyncSession]:
+        async with sf() as s:
+            yield s
+
+    app.dependency_overrides[get_db_session] = _session
+    app.dependency_overrides[get_credential_cipher] = lambda: cipher
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
 async def test_start_returns_github_post_target_and_manifest(
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
@@ -305,23 +323,115 @@ async def test_start_rejects_operator_plan_viewer_403(
 
 
 @respx.mock(assert_all_mocked=False, assert_all_called=False)
-async def test_callback_by_other_user_writes_nothing(
+async def test_callback_after_starter_lost_operator_role_writes_nothing(
     respx_mock: respx.MockRouter,
     client: httpx.AsyncClient,
     sf: async_sessionmaker[AsyncSession],
     cipher: CredentialCipher,
+    workspace_id: uuid.UUID,
     seed_plan: _SEED,
 ) -> None:
     await seed_plan("operator")
     route = respx_mock.post(_CONVERSIONS)
     state = _state(await client.post(_START))
-    app = client._transport.app  # type: ignore[attr-defined]
-    app.dependency_overrides[get_current_user] = fake_current_user("other-user")
+    async with sf() as s:
+        m = (
+            await s.execute(select(MembershipRow).where(MembershipRow.user_id == _USER_ID))
+        ).scalar_one()
+        m.role = "viewer"
+        await s.commit()
     r = await client.get(_CALLBACK, params={"code": "the-code", "state": state})
     assert r.status_code == 403
+    assert "delete it on GitHub" in r.text
     assert not route.called
     async with sf() as s:
         assert await get_app_credentials(s, provider="github", cipher=cipher) is None
+
+
+@respx.mock(assert_all_mocked=False)
+async def test_public_callback_without_auth_succeeds_with_valid_state(
+    respx_mock: respx.MockRouter,
+    client: httpx.AsyncClient,
+    public_client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    seed_plan: _SEED,
+) -> None:
+    await seed_plan("operator")
+    respx_mock.post(_CONVERSIONS).mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "id": 77,
+                "slug": "pub",
+                "client_id": "Iv1.pub",
+                "client_secret": "pub-secret",
+                "pem": _PEM,
+                "html_url": "https://github.com/apps/pub",
+            },
+        )
+    )
+    state = _state(await client.post(_START))
+    # Browser redirect: no Authorization header, no auth override.
+    r = await public_client.get(_CALLBACK, params={"code": "the-code", "state": state})
+    assert r.status_code == 302, r.text
+    assert "github_app=ready" in r.headers["location"]
+    async with sf() as s:
+        creds = await get_app_credentials(s, provider="github", cipher=cipher)
+    assert creds is not None
+    assert creds.client_id == "Iv1.pub"
+
+
+@respx.mock(assert_all_mocked=False, assert_all_called=False)
+async def test_public_callback_refuses_unknown_expired_reused_state(
+    respx_mock: respx.MockRouter,
+    client: httpx.AsyncClient,
+    public_client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    seed_plan: _SEED,
+) -> None:
+    await seed_plan("operator")
+    route = respx_mock.post(_CONVERSIONS).mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "id": 5,
+                "slug": "x",
+                "client_id": "Iv1.x",
+                "client_secret": "s",
+                "pem": _PEM,
+                "html_url": "https://github.com/apps/x",
+            },
+        )
+    )
+    # unknown
+    r = await public_client.get(_CALLBACK, params={"code": "the-code", "state": "nope"})
+    assert r.status_code == 400
+    assert "delete it on GitHub" in r.text
+    # expired
+    expired = _state(await client.post(_START))
+    async with sf() as s:
+        row = await s.get(ConnectorOAuthPendingRow, expired)
+        assert row is not None
+        row.created_at = datetime.now(tz=UTC) - timedelta(hours=1)
+        await s.commit()
+    assert (
+        await public_client.get(_CALLBACK, params={"code": "the-code", "state": expired})
+    ).status_code == 400
+    assert not route.called
+    async with sf() as s:
+        assert await get_app_credentials(s, provider="github", cipher=cipher) is None
+    # reused: first use succeeds, second is refused
+    good = _state(await client.post(_START, params={"replace": "true"}))
+    assert (
+        await public_client.get(_CALLBACK, params={"code": "the-code", "state": good})
+    ).status_code == 302
+    assert route.call_count == 1
+    assert (
+        await public_client.get(_CALLBACK, params={"code": "the-code", "state": good})
+    ).status_code == 400
+    assert route.call_count == 1
 
 
 async def test_callback_state_is_single_use(client: httpx.AsyncClient, seed_plan: _SEED) -> None:
