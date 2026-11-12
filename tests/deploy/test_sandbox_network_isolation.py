@@ -65,13 +65,14 @@ class TestFirewallScript:
     def test_forward_drop_scoped_to_nested_bridge(self, firewall: str) -> None:
         # The FORWARD drops must be scoped to traffic ORIGINATING on the nested
         # bridge (in-interface), never global — else public egress breaks.
-        assert 'DOCKER-USER -i "$NESTED_BRIDGE" -d "$cidr" -j DROP' in firewall
+        assert 'DOCKER-USER -i "$iface" -d "$cidr" -j DROP' in firewall
+        assert 'SANDBOX_IFACES="$NESTED_BRIDGE br+"' in firewall
 
     def test_daemon_port_2375_blocked_on_nested_bridge_input(self, firewall: str) -> None:
         # Nested -> gateway:2375 arrives as INPUT (destined to the daemon itself),
         # not FORWARD, so it needs an explicit INPUT drop scoped to the bridge.
         assert 'DAEMON_PORT="2375"' in firewall
-        assert 'INPUT -i "$NESTED_BRIDGE" -p tcp --dport "$DAEMON_PORT" -j DROP' in firewall
+        assert 'INPUT -i "$iface" -p tcp --dport "$DAEMON_PORT" -j DROP' in firewall
 
     def test_uses_docker_user_chain_for_forward_rules(self, firewall: str) -> None:
         # DOCKER-USER is the only FORWARD-chain slot Docker never flushes.
