@@ -21,7 +21,7 @@ from :mod:`backend.identity.oauth_service`). Two endpoints:
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -29,17 +29,22 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_db_session, get_workspace_id
+from backend.api.deps import CurrentUser, get_db_session, get_workspace_id
 from backend.api.webhooks import get_credential_cipher
 from backend.config import get_settings
 from backend.connectors.auth import service, store
-from backend.connectors.auth.app_credentials import upsert_app_credentials
+from backend.connectors.auth.app_credentials import (
+    AppCredentialsExistError,
+    app_credentials_exist,
+    upsert_app_credentials,
+)
 from backend.connectors.auth.bootstrap import load_app_credential_providers
 from backend.connectors.auth.github_manifest import convert_manifest_code
 from backend.connectors.auth.providers import get_provider
 from backend.connectors.auth.service import (
     MANIFEST_PENDING_PROVIDER as _MANIFEST_PENDING_PROVIDER,
 )
+from backend.identity.service import get_user_by_supabase_id
 from backend.router.accounts.crypto import CredentialCipher
 
 logger = structlog.get_logger(__name__)
@@ -59,11 +64,19 @@ def _pwa_return_url(provider: str, *, ok: bool) -> str:
     return f"{base}/settings/connectors?{key}={provider}"
 
 
-def _pwa_manifest_return_url(*, ok: bool) -> str:
+# GitHub creates the App BEFORE redirecting to our callback, so a refused
+# callback can leave an unused App behind on GitHub.
+_ORPHAN_NOTE = "GitHub may already have created the App; delete it on GitHub if it is not needed"
+
+
+def _pwa_manifest_return_url(*, ok: bool, orphan: bool = False) -> str:
     base = get_settings().pwa_url.rstrip("/")
     key = "github_app" if ok else "github_app_error"
     value = "ready" if ok else "1"
-    return f"{base}/settings/connectors?{key}={value}"
+    url = f"{base}/settings/connectors?{key}={value}"
+    if orphan and not ok:
+        url += "&github_app_orphan=1"
+    return url
 
 
 @router.post("/{provider}/start")
@@ -159,15 +172,37 @@ async def github_app_status(
 @router.post("/github/app-manifest/start")
 async def start_github_app_manifest(
     workspace_id: Annotated[uuid.UUID, Depends(get_workspace_id)],
+    user: CurrentUser,
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    replace: bool = False,
 ) -> dict[str, object]:
     """Begin App creation: stash CSRF state, return the GitHub POST target + manifest.
 
     The PWA renders a hidden, auto-submitting form that POSTs ``manifest`` (JSON)
     to ``post_url``. GitHub creates the App, then redirects to the manifest's
     ``redirect_url`` with a ``code`` (and the echoed ``state``).
+
+    Operator-only (403 otherwise); 409 when the App already exists and
+    ``replace=true`` was not passed.
     """
-    return await service.begin_github_app_manifest(session, workspace_id=workspace_id)
+    user_row = await get_user_by_supabase_id(session, user.id)
+    try:
+        return await service.begin_github_app_manifest(
+            session,
+            workspace_id=workspace_id,
+            user_id=user_row.id if user_row is not None else None,
+            replace=replace,
+        )
+    except service.NotOperatorError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="GitHub App setup is restricted to instance operators",
+        ) from exc
+    except service.AppAlreadyConfiguredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="GitHub App already configured; pass replace=true to replace it",
+        ) from exc
 
 
 # H3 (2026-09-10 audit) — the runtime "set deployment-global provider App creds"
@@ -187,27 +222,60 @@ async def github_app_manifest_callback(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
 ) -> RedirectResponse:
-    """Complete App creation: exchange the code, store creds, register provider."""
+    """Complete App creation: exchange the code, store creds, register provider.
+
+    PUBLIC on purpose: GitHub redirects the browser here and a redirect carries
+    no ``Authorization`` header. The flow is bound through ``state`` alone — a
+    server-side, unguessable, single-use, short-lived row created at ``/start``
+    (after the operator check) that records the starting user.
+    """
     pending = await store.claim_pending(session, state=state, provider=_MANIFEST_PENDING_PROVIDER)
-    if pending is None:
+    if pending is None or service.manifest_state_expired(pending.created_at):
+        # Consume (the row is deleted by claim) and refuse.
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invalid or expired state",
+            detail="invalid, expired or already used state; " + _ORPHAN_NOTE,
+        )
+
+    # The state must carry its starter, who must still be an operator.
+    binding = service.decode_manifest_binding(pending.code_verifier)
+    started_by: uuid.UUID | None = None
+    if binding is not None:
+        try:
+            started_by = uuid.UUID(binding[0])
+        except ValueError:
+            started_by = None
+    if (
+        binding is None
+        or started_by is None
+        or not await service.is_operator(
+            session, workspace_id=pending.workspace_id, user_id=started_by
+        )
+    ):
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="manifest state is not bound to an operator; " + _ORPHAN_NOTE,
+        )
+    replace = binding[1]
+    # Consume the state now (single-use) whatever happens next.
+    await session.commit()
+    if not replace and await app_credentials_exist(session, provider="github"):
+        logger.warning("github_app_manifest_refused_existing")
+        return RedirectResponse(
+            _pwa_manifest_return_url(ok=False, orphan=True),
+            status_code=status.HTTP_302_FOUND,
         )
 
     result = await convert_manifest_code(code)
-    await upsert_app_credentials(
-        session,
-        provider="github",
-        app_id=result.app_id,
-        app_slug=result.app_slug,
-        client_id=result.client_id,
-        client_secret=result.client_secret,
-        private_key_pem=result.private_key_pem,
-        webhook_secret=result.webhook_secret,
-        html_url=result.html_url,
-        cipher=cipher,
-    )
+    try:
+        await _write_manifest_credentials(session, result, cipher, replace=replace)
+    except AppCredentialsExistError:
+        return RedirectResponse(
+            _pwa_manifest_return_url(ok=False, orphan=True),
+            status_code=status.HTTP_302_FOUND,
+        )
     await session.commit()
     # Register the GitHubAppProvider now so "Connect with GitHub" works without
     # a restart (DB load also re-registers it on the next boot).
@@ -221,6 +289,24 @@ async def github_app_manifest_callback(
     return RedirectResponse(
         _pwa_manifest_return_url(ok=True),
         status_code=status.HTTP_302_FOUND,
+    )
+
+
+async def _write_manifest_credentials(
+    session: AsyncSession, result: Any, cipher: CredentialCipher, *, replace: bool
+) -> None:
+    await upsert_app_credentials(
+        session,
+        provider="github",
+        app_id=result.app_id,
+        app_slug=result.app_slug,
+        client_id=result.client_id,
+        client_secret=result.client_secret,
+        private_key_pem=result.private_key_pem,
+        webhook_secret=result.webhook_secret,
+        html_url=result.html_url,
+        cipher=cipher,
+        replace=replace,
     )
 
 

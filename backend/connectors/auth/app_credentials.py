@@ -35,6 +35,15 @@ class AppCredentials:
     html_url: str | None = None
 
 
+class AppCredentialsExistError(Exception):
+    """App credentials already exist and the caller did not ask to replace them."""
+
+
+async def app_credentials_exist(session: AsyncSession, *, provider: str) -> bool:
+    """Whether a DB row of App credentials exists for ``provider``."""
+    return await session.get(ConnectorOAuthAppCredentialRow, provider) is not None
+
+
 async def upsert_app_credentials(
     session: AsyncSession,
     *,
@@ -47,8 +56,15 @@ async def upsert_app_credentials(
     webhook_secret: str | None,
     html_url: str | None,
     cipher: CredentialCipher,
+    replace: bool = False,
 ) -> ConnectorOAuthAppCredentialRow:
-    """Encrypt + persist the App credentials for ``provider`` (one row, upsert)."""
+    """Encrypt + persist the App credentials for ``provider`` (one row, upsert).
+
+    Instance-global credentials: an existing row is NEVER overwritten unless the
+    caller passes ``replace=True`` (:class:`AppCredentialsExistError` otherwise).
+    """
+    if not replace and await app_credentials_exist(session, provider=provider):
+        raise AppCredentialsExistError(provider)
     secret_ct = cipher.encrypt(client_secret)
     pem_ct = cipher.encrypt(private_key_pem)
     webhook_ct = cipher.encrypt(webhook_secret) if webhook_secret else None
@@ -101,4 +117,10 @@ async def get_app_credentials(
     )
 
 
-__all__ = ["AppCredentials", "get_app_credentials", "upsert_app_credentials"]
+__all__ = [
+    "AppCredentials",
+    "AppCredentialsExistError",
+    "app_credentials_exist",
+    "get_app_credentials",
+    "upsert_app_credentials",
+]
