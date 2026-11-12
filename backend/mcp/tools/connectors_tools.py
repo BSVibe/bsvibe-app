@@ -559,7 +559,7 @@ async def _h_github_app_setup(args: GithubAppSetupInput, ctx: ToolContext) -> Gi
         data = await oauth_service.begin_github_app_manifest(
             ctx.session,
             workspace_id=ctx.principal.workspace_id,
-            user_id=str(ctx.principal.user_id),
+            user_id=ctx.principal.user_id,
             replace=args.replace,
         )
     except oauth_service.NotOperatorError as exc:

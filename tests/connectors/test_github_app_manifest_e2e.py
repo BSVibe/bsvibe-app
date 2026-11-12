@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -41,6 +42,7 @@ from backend.connectors.auth.db import ConnectorOAuthPendingRow
 from backend.connectors.auth.github import GitHubAppProvider
 from backend.connectors.auth.providers import get_provider
 from backend.data.rls import workspace_session_scope
+from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.crypto import CredentialCipher
 
@@ -49,6 +51,8 @@ from .._support import db_engine, fake_current_user
 pytestmark = pytest.mark.asyncio
 
 TEST_KEY = b"0123456789abcdef0123456789abcdef"
+_USER_ID = uuid.uuid4()
+_OTHER_ID = uuid.uuid4()
 _START = "/api/v1/connectors/oauth/github/app-manifest/start"
 _CALLBACK = "/api/v1/connectors/oauth/github/app-manifest/callback"
 _CONVERSIONS = "https://api.github.com/app-manifests/the-code/conversions"
@@ -86,9 +90,16 @@ def _isolate_registry() -> Iterator[None]:
 async def seed_plan(
     sf: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
 ) -> Callable[[str], Awaitable[None]]:
-    async def _seed(plan: str) -> None:
+    async def _seed(plan: str, role: str = "owner") -> None:
         async with sf() as s, workspace_session_scope(s, workspace_id):
             s.add(WorkspaceRow(id=workspace_id, name="ws", plan=plan))
+            await s.commit()
+        async with sf() as s:
+            for sup_id, uid in (("test-user", _USER_ID), ("other-user", _OTHER_ID)):
+                s.add(UserRow(id=uid, supabase_user_id=sup_id, email=None))
+            await s.flush()
+            for uid in (_USER_ID, _OTHER_ID):
+                s.add(MembershipRow(user_id=uid, workspace_id=workspace_id, role=role))
             await s.commit()
 
     return _seed
@@ -248,7 +259,7 @@ async def test_app_status_configured_after_manifest(
     assert body["html_url"] == "https://github.com/apps/bsvibe-dev"
 
 
-_SEED = Callable[[str], Awaitable[None]]
+_SEED = Callable[..., Awaitable[None]]
 
 
 def _state(start: httpx.Response) -> str:
@@ -281,6 +292,68 @@ async def test_start_rejects_non_operator_owner_403(
     async with sf() as s:
         pending = (await s.execute(select(ConnectorOAuthPendingRow))).scalars().all()
     assert pending == []
+
+
+async def test_start_rejects_operator_plan_viewer_403(
+    client: httpx.AsyncClient, sf: async_sessionmaker[AsyncSession], seed_plan: _SEED
+) -> None:
+    await seed_plan("operator", role="viewer")
+    r = await client.post(_START)
+    assert r.status_code == 403, r.text
+    async with sf() as s:
+        assert (await s.execute(select(ConnectorOAuthPendingRow))).scalars().all() == []
+
+
+@respx.mock(assert_all_mocked=False, assert_all_called=False)
+async def test_callback_by_other_user_writes_nothing(
+    respx_mock: respx.MockRouter,
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    seed_plan: _SEED,
+) -> None:
+    await seed_plan("operator")
+    route = respx_mock.post(_CONVERSIONS)
+    state = _state(await client.post(_START))
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.dependency_overrides[get_current_user] = fake_current_user("other-user")
+    r = await client.get(_CALLBACK, params={"code": "the-code", "state": state})
+    assert r.status_code == 403
+    assert not route.called
+    async with sf() as s:
+        assert await get_app_credentials(s, provider="github", cipher=cipher) is None
+
+
+async def test_callback_state_is_single_use(client: httpx.AsyncClient, seed_plan: _SEED) -> None:
+    await seed_plan("operator")
+    state = _state(await client.post(_START))
+    with respx.mock(assert_all_mocked=False) as m:
+        m.post(_CONVERSIONS).mock(return_value=httpx.Response(404))
+        try:
+            await client.get(_CALLBACK, params={"code": "the-code", "state": state})
+        except Exception:  # noqa: BLE001 — conversion failure is irrelevant here
+            pass
+        second = await client.get(_CALLBACK, params={"code": "the-code", "state": state})
+    assert second.status_code == 400
+
+
+async def test_callback_expired_state_writes_nothing(
+    client: httpx.AsyncClient,
+    sf: async_sessionmaker[AsyncSession],
+    cipher: CredentialCipher,
+    seed_plan: _SEED,
+) -> None:
+    await seed_plan("operator")
+    state = _state(await client.post(_START))
+    async with sf() as s:
+        row = await s.get(ConnectorOAuthPendingRow, state)
+        assert row is not None
+        row.created_at = datetime.now(tz=UTC) - timedelta(hours=1)
+        await s.commit()
+    r = await client.get(_CALLBACK, params={"code": "the-code", "state": state})
+    assert r.status_code == 400
+    async with sf() as s:
+        assert await get_app_credentials(s, provider="github", cipher=cipher) is None
 
 
 async def test_start_over_existing_app_needs_replace(

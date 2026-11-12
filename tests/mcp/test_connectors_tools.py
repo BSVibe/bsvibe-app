@@ -16,6 +16,7 @@ import backend.identity.db  # noqa: F401
 import backend.identity.workspaces_db  # noqa: F401
 from backend.config import get_settings
 from backend.connectors.db import ConnectorAccountRow
+from backend.identity.db import MembershipRow, UserRow
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.mcp.api import McpPrincipal, ToolContext, ToolError, ToolRegistry
 from backend.mcp.tools import register_all_tools
@@ -479,6 +480,9 @@ from backend.connectors.auth.providers import register_provider  # noqa: E402
 @pytest.fixture(autouse=True)
 def _isolate_providers():
     snapshot = dict(_providers_mod._REGISTRY)
+    # Start unconfigured whatever ran before — the App-setup guard also refuses
+    # when a github provider is already registered (order-independence).
+    _providers_mod._REGISTRY.pop("github", None)
     try:
         yield
     finally:
@@ -518,16 +522,35 @@ async def test_github_app_status_not_configured(db, workspace_id, user_id, regis
     assert out["configured"] is False
 
 
-async def _seed_ws(db, workspace_id, plan: str) -> None:
+async def _seed_ws(db, workspace_id, plan: str, *, user_id=None, role: str = "owner") -> None:
     async with scoped_session(db, workspace_id) as s:
         s.add(WorkspaceRow(id=workspace_id, name="ws", plan=plan))
         await s.commit()
+    if user_id is not None:
+        async with db() as s:
+            s.add(UserRow(id=user_id, supabase_user_id=f"sb-{user_id}", email=None))
+            await s.flush()
+            s.add(MembershipRow(user_id=user_id, workspace_id=workspace_id, role=role))
+            await s.commit()
 
 
 async def test_github_app_setup_url_rejects_non_operator(
     db, workspace_id, user_id, registry
 ) -> None:
-    await _seed_ws(db, workspace_id, "free")
+    await _seed_ws(db, workspace_id, "free", user_id=user_id, role="owner")
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="forbidden"):
+            await registry.call_tool("bsvibe_connectors_github_app_setup_url", {}, ctx)
+
+
+async def test_github_app_setup_url_rejects_operator_plan_viewer(
+    db, workspace_id, user_id, registry
+) -> None:
+    await _seed_ws(db, workspace_id, "operator", user_id=user_id, role="viewer")
     async with db() as s:
         ctx = ToolContext(
             principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),
@@ -540,7 +563,7 @@ async def test_github_app_setup_url_rejects_non_operator(
 async def test_github_app_setup_url_returns_manifest_for_operator(
     db, workspace_id, user_id, registry
 ) -> None:
-    await _seed_ws(db, workspace_id, "operator")
+    await _seed_ws(db, workspace_id, "operator", user_id=user_id, role="admin")
     async with db() as s:
         ctx = ToolContext(
             principal=_principal(workspace_id=workspace_id, user_id=user_id, scopes=("mcp:write",)),

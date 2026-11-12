@@ -44,6 +44,7 @@ from backend.connectors.auth.providers import get_provider
 from backend.connectors.auth.service import (
     MANIFEST_PENDING_PROVIDER as _MANIFEST_PENDING_PROVIDER,
 )
+from backend.identity.service import get_user_by_supabase_id
 from backend.router.accounts.crypto import CredentialCipher
 
 logger = structlog.get_logger(__name__)
@@ -176,9 +177,13 @@ async def start_github_app_manifest(
     Operator-only (403 otherwise); 409 when the App already exists and
     ``replace=true`` was not passed.
     """
+    user_row = await get_user_by_supabase_id(session, user.id)
     try:
         return await service.begin_github_app_manifest(
-            session, workspace_id=workspace_id, user_id=str(user.id), replace=replace
+            session,
+            workspace_id=workspace_id,
+            user_id=user_row.id if user_row is not None else None,
+            replace=replace,
         )
     except service.NotOperatorError as exc:
         raise HTTPException(
@@ -206,26 +211,41 @@ async def start_github_app_manifest(
 async def github_app_manifest_callback(
     code: str,
     state: str,
+    user: CurrentUser,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
 ) -> RedirectResponse:
-    """Complete App creation: exchange the code, store creds, register provider."""
+    """Complete App creation: exchange the code, store creds, register provider.
+
+    The caller must be authenticated and be the very user who started the flow
+    (state is server-side, single-use, short-lived).
+    """
     pending = await store.claim_pending(session, state=state, provider=_MANIFEST_PENDING_PROVIDER)
-    if pending is None:
+    if pending is None or service.manifest_state_expired(pending.created_at):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="invalid or expired state",
         )
 
-    # The state must be bound to who started it (and still be an operator);
-    # an unbound / legacy state never reaches the credential write.
+    # The state must be bound to who started it, the completer must be that
+    # same user, and they must still be an operator; otherwise nothing is written.
     binding = service.decode_manifest_binding(pending.code_verifier)
-    if binding is None or not await service.is_operator(session, workspace_id=pending.workspace_id):
+    user_row = await get_user_by_supabase_id(session, user.id)
+    if (
+        binding is None
+        or user_row is None
+        or binding[0] != str(user_row.id)
+        or not await service.is_operator(
+            session, workspace_id=pending.workspace_id, user_id=user_row.id
+        )
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="manifest state is not bound to an operator",
+            detail="manifest state is not bound to this operator",
         )
     _started_by, replace = binding
+    # Consume the state now (single-use) whatever happens next.
+    await session.commit()
     if not replace and await app_credentials_exist(session, provider="github"):
         logger.warning("github_app_manifest_refused_existing")
         return RedirectResponse(

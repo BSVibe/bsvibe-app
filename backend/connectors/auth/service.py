@@ -13,6 +13,7 @@ import base64
 import hashlib
 import secrets
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +28,11 @@ from backend.connectors.auth.github_manifest import build_manifest, manifest_pos
 from backend.connectors.auth.providers import get_provider
 from backend.connectors.auth.sentry import SentryProvider
 from backend.data.rls import workspace_session_scope
+from backend.identity.infrastructure.repositories.membership_repository_sql import (
+    SqlAlchemyMembershipRepository,
+)
 from backend.identity.plans import Plan
+from backend.identity.roles import role_satisfies
 from backend.identity.workspaces_db import WorkspaceRow
 from backend.router.accounts.crypto import (
     CredentialCipher,
@@ -44,6 +49,7 @@ def build_credential_cipher() -> CredentialCipher:
 # user-OAuth ``github`` pending rows so the two never collide.
 MANIFEST_PENDING_PROVIDER = "github:app-manifest"  # noqa: S105 — marker, not a secret
 
+MANIFEST_STATE_TTL = timedelta(minutes=10)
 _STATE_BYTES = 32
 _VERIFIER_BYTES = 48
 
@@ -106,12 +112,26 @@ class AppAlreadyConfiguredError(Exception):
     """GitHub App credentials already exist and no explicit replace was requested."""
 
 
-async def is_operator(session: AsyncSession, *, workspace_id: uuid.UUID) -> bool:
-    """Instance operator = the active workspace is on the existing ``operator`` plan."""
+async def is_operator(
+    session: AsyncSession, *, workspace_id: uuid.UUID, user_id: uuid.UUID | None
+) -> bool:
+    """Instance operator = the caller is admin/owner of a workspace on the ``operator`` plan.
+
+    The plan alone is not enough: every member (viewer included) of an
+    operator-plan workspace would otherwise control the instance-wide App.
+    ``user_id`` is the caller's ``users.id`` (membership key).
+    """
+    if user_id is None:
+        return False
     # Scoped explicitly: the public callback has no request-resolved tenant (RLS).
     async with workspace_session_scope(session, workspace_id):
         row = await session.get(WorkspaceRow, workspace_id)
-    return row is not None and row.plan == Plan.OPERATOR.value
+    if row is None or row.plan != Plan.OPERATOR.value:
+        return False
+    membership = await SqlAlchemyMembershipRepository(session).active_for_user_in_workspace(
+        user_id, workspace_id
+    )
+    return membership is not None and role_satisfies(membership.role, "admin")
 
 
 def _encode_manifest_binding(*, user_id: str, replace: bool) -> str:
@@ -128,11 +148,18 @@ def decode_manifest_binding(value: str) -> tuple[str, bool] | None:
     return parts[2], parts[1] == "1"
 
 
+def manifest_state_expired(created_at: datetime) -> bool:
+    """True once a manifest state is older than :data:`MANIFEST_STATE_TTL`."""
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    return datetime.now(tz=UTC) - created_at > MANIFEST_STATE_TTL
+
+
 async def begin_github_app_manifest(
     session: AsyncSession,
     *,
     workspace_id: uuid.UUID,
-    user_id: str,
+    user_id: uuid.UUID | None,
     replace: bool = False,
 ) -> dict[str, Any]:
     """Stash CSRF state, return the GitHub POST target + manifest body.
@@ -140,7 +167,9 @@ async def begin_github_app_manifest(
     Operator-only (the App credentials are instance-global); refuses to start
     over existing credentials unless ``replace`` is explicit.
     """
-    if not await is_operator(session, workspace_id=workspace_id):
+    if user_id is None or not await is_operator(
+        session, workspace_id=workspace_id, user_id=user_id
+    ):
         raise NotOperatorError(str(workspace_id))
     if not replace and (
         await app_credentials_exist(session, provider="github") or get_provider("github")
@@ -154,7 +183,7 @@ async def begin_github_app_manifest(
         state=state,
         provider=MANIFEST_PENDING_PROVIDER,
         workspace_id=workspace_id,
-        code_verifier=_encode_manifest_binding(user_id=user_id, replace=replace),
+        code_verifier=_encode_manifest_binding(user_id=str(user_id), replace=replace),
         redirect_uri=redirect_uri,
     )
     await session.commit()
@@ -263,6 +292,7 @@ __all__ = [
     "NotOperatorError",
     "decode_manifest_binding",
     "is_operator",
+    "manifest_state_expired",
     "MANIFEST_PENDING_PROVIDER",
     "UnknownProviderError",
     "begin_github_app_manifest",
