@@ -375,6 +375,12 @@ async def test_the_dead_trigger_knob_is_refused_at_the_dispatcher(
     assert ok["trigger"] == {"filters": {"action": "opened"}}
 
 
+from backend.connectors import github_access as _ga  # noqa: E402
+
+_REAL_CREDENTIAL = _ga._credential
+_REAL_REPO_STATUS = _ga._repo_status
+
+
 @pytest.fixture(autouse=True)
 def _github_repo_status(monkeypatch) -> dict:
     """기본은 접근 가능(200). 테스트가 ``state['status']`` 로 바꾼다."""
@@ -443,3 +449,57 @@ async def test_mcp_transient_github_failure_is_retryable_not_denied(
                 },
                 ctx,
             )
+
+
+async def test_mcp_real_credential_selection_rejects_inaccessible_repo(
+    db, workspace_id, user_id, registry, seeded, monkeypatch
+) -> None:
+    """``_credential``/``_repo_status`` 는 실제 것 — GitHub HTTP 계층만 가짜."""
+    import httpx
+    from sqlalchemy import select
+
+    from backend.connectors import github_access
+    from backend.router.accounts import crypto
+
+    # autouse 가 바꾼 _credential/_repo_status 를 실제 함수로 되돌린다
+    monkeypatch.setattr(github_access, "_credential", _REAL_CREDENTIAL)
+    monkeypatch.setattr(github_access, "_repo_status", _REAL_REPO_STATUS)
+    monkeypatch.setattr(crypto, "_key_from_settings", lambda: b"k" * 32)
+    product_id, connector_account_id = seeded
+    seen: list[httpx.Request] = []
+    real = httpx.AsyncClient
+
+    def _factory(*a, **k):
+        def _handle(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(404)
+
+        k["transport"] = httpx.MockTransport(_handle)
+        return real(*a, **k)
+
+    monkeypatch.setattr(github_access.httpx, "AsyncClient", _factory)
+    async with scoped_session(db, workspace_id) as s:
+        acct = await s.get(ConnectorAccountRow, connector_account_id)
+        acct.signing_secret_ciphertext = crypto.cipher_from_settings().encrypt("pat-token")
+        await s.commit()
+
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="접근"):
+            await registry.call_tool(
+                "bsvibe_bindings_create",
+                {
+                    "product_id": str(product_id),
+                    "connector_account_id": str(connector_account_id),
+                    "resource_id": "other/private-repo",
+                },
+                ctx,
+            )
+    assert seen[0].headers["Authorization"] == "Bearer pat-token"
+    async with scoped_session(db, workspace_id) as s:
+        assert (await s.execute(select(ResourceBindingRow))).scalars().all() == []
