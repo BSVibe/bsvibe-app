@@ -106,6 +106,7 @@ async def _seed_bound_repo(
     *,
     resource_id: str = REPO,
     is_active: bool = True,
+    installation_id: int | None = 12345,
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     """A workspace whose product is bound to ``resource_id`` through an active
     github connector account. Returns ``(workspace, product, account)`` ids."""
@@ -127,7 +128,11 @@ async def _seed_bound_repo(
             connector="github",
             webhook_token="wht_" + uuid.uuid4().hex,
             signing_secret_ciphertext=cipher.encrypt("pat-token"),
-            delivery_config={"repo": resource_id, "base_branch": "main"},
+            delivery_config={
+                "repo": resource_id,
+                "base_branch": "main",
+                **({"installation_id": installation_id} if installation_id else {}),
+            },
             is_active=is_active,
         )
         s.add(product)
@@ -370,3 +375,45 @@ def test_the_app_manifest_subscribes_to_issue_events_it_can_read() -> None:
     )
     assert {"issues", "issue_comment", "pull_request"} <= set(manifest["default_events"])
     assert manifest["default_permissions"]["issues"] in {"read", "write"}
+
+
+# ── 설치 id 대조: 저장소 이름만으로는 배분하지 않는다 ──────────────────────────
+
+
+async def test_webhook_skips_other_installation(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    """같은 저장소 이름을 바인딩했어도 설치 id 가 다른 워크스페이스에는 가지 않는다."""
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    await _seed_bound_repo(sf, cipher, installation_id=999)
+
+    resp = await _post(client, _issue_body())  # installation.id == 12345
+
+    assert resp.status_code == 202
+    assert await _rows(sf) == []
+
+
+async def test_webhook_skips_account_without_installation(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    await _seed_bound_repo(sf, cipher, installation_id=None)
+
+    resp = await _post(client, _issue_body())
+
+    assert resp.status_code == 202
+    assert await _rows(sf) == []
+
+
+async def test_webhook_delivers_same_installation_only(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    ws_ok, _, _ = await _seed_bound_repo(sf, cipher, installation_id=12345)
+    await _seed_bound_repo(sf, cipher, installation_id=999)
+
+    resp = await _post(client, _issue_body())
+
+    assert resp.status_code == 202
+    rows = await _rows(sf)
+    assert [r.workspace_id for r in rows] == [ws_ok]

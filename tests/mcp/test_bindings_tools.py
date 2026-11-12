@@ -373,3 +373,49 @@ async def test_the_dead_trigger_knob_is_refused_at_the_dispatcher(
             ctx,
         )
     assert ok["trigger"] == {"filters": {"action": "opened"}}
+
+
+@pytest.fixture(autouse=True)
+def _github_repo_status(monkeypatch) -> dict:
+    """기본은 접근 가능(200). 테스트가 ``state['status']`` 로 바꾼다."""
+    from backend.connectors import github_access
+
+    state = {"status": 200}
+
+    async def _cred(*_a, **_k) -> str:
+        return "tok"
+
+    async def _status(_t: str, _s: str) -> int:
+        return state["status"]
+
+    monkeypatch.setattr(github_access, "_credential", _cred)
+    monkeypatch.setattr(github_access, "_repo_status", _status)
+    return state
+
+
+async def test_mcp_rejects_inaccessible_repo(
+    db, workspace_id, user_id, registry, seeded, _github_repo_status
+) -> None:
+    product_id, connector_account_id = seeded
+    _github_repo_status["status"] = 404
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="접근"):
+            await registry.call_tool(
+                "bsvibe_bindings_create",
+                {
+                    "product_id": str(product_id),
+                    "connector_account_id": str(connector_account_id),
+                    "resource_id": "other/private-repo",
+                },
+                ctx,
+            )
+    async with scoped_session(db, workspace_id) as s:
+        from sqlalchemy import select
+
+        assert (await s.execute(select(ResourceBindingRow))).scalars().all() == []

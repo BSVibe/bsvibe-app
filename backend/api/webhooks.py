@@ -50,6 +50,7 @@ from backend.api.deps import get_db_session
 from backend.config import get_settings
 from backend.connectors.auth.app_credentials import get_app_credentials
 from backend.connectors.db import ConnectorAccountRow
+from backend.connectors.github_access import github_installation_id
 from backend.connectors.handshake import handshake_response
 from backend.connectors.interactions import interaction_callback
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
@@ -421,13 +422,21 @@ _GITHUB = "github"
 _UNRESOLVED_WORKSPACE = uuid.UUID(int=0)
 
 
-async def _github_accounts_bound_to(session: AsyncSession, repo: str) -> list[ConnectorAccountRow]:
-    """Every active github account whose binding names ``repo``.
+async def _github_accounts_bound_to(
+    session: AsyncSession, repo: str, installation_id: str | None
+) -> list[ConnectorAccountRow]:
+    """Every active github account whose binding names ``repo`` AND whose App
+    installation is the one that sent this delivery.
 
-    One App serves every workspace, and each binding is its own stated intent,
-    so a repo two workspaces bound lands in both. No binding → nothing: routing
-    on ``repo_url`` alone would hand a repo to whichever workspace shares its name.
+    One App serves every workspace, so the repo name alone proves nothing: a
+    workspace that merely bound the same ``owner/name`` must not receive another
+    installation's events. The payload's ``installation.id`` has to equal the
+    installation recorded on the account; an account with no installation on
+    record gets no App delivery, and neither does a delivery without one. This
+    runs on every delivery, so bindings made before the rule are filtered too.
     """
+    if installation_id is None:
+        return []
     bound = select(ResourceBindingRow.connector_account_id).where(
         ResourceBindingRow.resource_id == repo
     )
@@ -436,7 +445,8 @@ async def _github_accounts_bound_to(session: AsyncSession, repo: str) -> list[Co
         ConnectorAccountRow.is_active.is_(True),
         ConnectorAccountRow.id.in_(bound),
     )
-    return list((await session.execute(stmt)).scalars().all())
+    rows = list((await session.execute(stmt)).scalars().all())
+    return [a for a in rows if github_installation_id(a) == installation_id]
 
 
 @router.post("/webhooks/github")
@@ -476,7 +486,11 @@ async def receive_github_app_webhook(  # noqa: PLR0911 — 404/401/skip/accept b
         return _skipped()
 
     repo = (probe.payload or {}).get("repo")
-    accounts = await _github_accounts_bound_to(session, str(repo)) if repo else []
+    raw_installation = ((probe.payload or {}).get("body") or {}).get("installation") or {}
+    installation_id = (
+        str(raw_installation["id"]) if raw_installation.get("id") is not None else None
+    )
+    accounts = await _github_accounts_bound_to(session, str(repo), installation_id) if repo else []
     if not accounts:
         logger.info("github_app_webhook_unbound", repo=repo)
         return _skipped()

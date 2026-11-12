@@ -325,6 +325,10 @@ ignore_imports = [
     # service primitives the REST surface uses so MCP and PWA paths stay one
     # canonical mutation chain.
     "backend.mcp.tools.bindings_tools -> backend.connectors.db",
+    # GitHub 바인딩 생성은 REST 와 같은 접근 확인 헬퍼(github_access)를 호출한다 —
+    # 확인 로직 사본을 두지 않기 위한 단일 간선 예외. 이 간선을 끊으면 헬퍼의
+    # router.accounts.crypto 전이 경로도 MCP 그래프에서 함께 빠진다.
+    "backend.mcp.tools.bindings_tools -> backend.connectors.github_access",
     # Lift D3c — UI-parity Knowledge retract/correct + Skills + Workspace.
     # Same pattern as D3a/b: each new tool module calls the SAME service /
     # loader the REST surface uses so MCP and PWA paths stay one canonical

@@ -34,6 +34,7 @@ from sqlalchemy import select
 from backend.common.binding_knobs import TriggerKnob
 from backend.common.connector_redaction import public_binding_selection
 from backend.connectors.db import ConnectorAccountRow
+from backend.connectors.github_access import RepoAccessError, verify_repo_access
 from backend.identity.domain.repositories.resource_binding_repository import OUTPUT_MODES
 from backend.identity.infrastructure.repositories import (
     SqlAlchemyResourceBindingRepository,
@@ -142,7 +143,15 @@ async def _h_create(args: BindingsCreateInput, ctx: ToolContext) -> Any:
             f"output_mode must be one of {sorted(_VALID_OUTPUT_MODES)}, got {args.output_mode!r}"
         )
     await _resolve_product(ctx, args.product_id)
-    await _resolve_connector_account(ctx, args.connector_account_id)
+    account = await _resolve_connector_account(ctx, args.connector_account_id)
+    try:
+        await verify_repo_access(
+            ctx.session,
+            account=account,
+            resource_id=args.resource_id,
+        )
+    except RepoAccessError as exc:
+        raise ToolError(str(exc)) from exc
     repo = SqlAlchemyResourceBindingRepository(ctx.session)
     row = await repo.create(
         workspace_id=ctx.principal.workspace_id,

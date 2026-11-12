@@ -323,3 +323,39 @@ async def test_a_binding_row_says_which_connector_it_is(client_with_parents) -> 
         assert row.get("connector"), f"목록 응답에 커넥터가 없다: {row}"
     # 음성 대조군 — uuid 를 종류로 착각하지 않는다
     assert rows[0]["connector"] != str(account_id)
+
+
+# ── 저장소 접근 확인 ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _github_repo_status(monkeypatch) -> dict:
+    """기본은 접근 가능(200). 테스트가 ``state['status']`` 로 바꾼다."""
+    from backend.connectors import github_access
+
+    state = {"status": 200}
+
+    async def _cred(*_a, **_k) -> str:
+        return "tok"
+
+    async def _status(_t: str, _s: str) -> int:
+        return state["status"]
+
+    monkeypatch.setattr(github_access, "_credential", _cred)
+    monkeypatch.setattr(github_access, "_repo_status", _status)
+    return state
+
+
+async def test_rest_rejects_inaccessible_repo(client_with_parents, _github_repo_status) -> None:
+    client, _ws, product_id, account_id = client_with_parents
+    _github_repo_status["status"] = 404
+
+    resp = await client.post(
+        f"/api/v1/products/{product_id}/bindings",
+        json={"connector_account_id": str(account_id), "resource_id": "other/private-repo"},
+    )
+
+    assert resp.status_code == 403
+    assert "other/private-repo" in resp.json()["detail"]
+    listed = await client.get(f"/api/v1/products/{product_id}/bindings")
+    assert listed.json() == []
