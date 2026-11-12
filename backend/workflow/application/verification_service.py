@@ -48,6 +48,7 @@ from backend.workflow.application.gate_commands import (
 from backend.workflow.application.requirements_ledger import (
     cited_tests,
     diff_excerpt,
+    file_content_key,
     gate_facts,
     judge_ledger,
     latest_ledger_rows,
@@ -1039,6 +1040,7 @@ class VerificationService:
             contract.requirement_evidence,
             facts,
             excerpt=diff_excerpt(box, baseline),
+            content_key=file_content_key(box),
             complete=complete,
             prior_rows=prior,
             judge=judge,

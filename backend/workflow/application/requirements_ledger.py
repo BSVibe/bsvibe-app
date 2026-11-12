@@ -72,6 +72,7 @@ _JUDGE_SYSTEM = (
     '"cannot_determine" when the excerpt is cut off or does not show enough to tell.'
 )
 
+ContentKey = Callable[[Mapping[str, Any]], Awaitable[str]]
 Complete = Callable[[list[dict[str, str]]], Awaitable[str]]
 Excerpt = Callable[[Mapping[str, Any]], Awaitable[str]]
 
@@ -425,8 +426,47 @@ def _verdict(raw: str) -> tuple[str, str]:
     return "unclear", reasoning or "cannot determine"
 
 
+def file_content_key(box: SandboxSession) -> ContentKey:
+    """A key over what an item cites: its text, the cited paths and tests, and those files'
+    CONTENT \u2014 independent of how the excerpt happened to be cut or ordered."""
+
+    async def _key(row: Mapping[str, Any]) -> str:
+        files: set[str] = {str(p) for p in row.get("paths") or []}
+        for test in row.get("tests") or []:
+            split = split_test_id(str(test))
+            files.add(split[0] if split else str(test))
+        parts = [str(row.get("text", "")), *sorted(str(t) for t in row.get("tests") or [])]
+        for path in sorted(files):
+            text = await _test_file(box, path)
+            parts.append(f"{path}\n{text if text is not None else '(unreadable)'}")
+        return _hash("\n#\n".join(parts))
+
+    return _key
+
+
 def _hash(excerpt: str) -> str:
     return hashlib.sha256(excerpt.encode()).hexdigest()[:16]
+
+
+async def _keep_done(
+    row: dict[str, Any],
+    content: str,
+    prior_done: Mapping[tuple[str, str], Mapping[str, Any]],
+    corrections: Sequence[str],
+) -> bool:
+    """Stamp ``row`` with its content hash; reuse the prior ``done`` for it when there is one."""
+    if corrections:
+        content = _hash(f"{content}\n#founder\n" + "\n".join(corrections))
+    row["content_hash"] = content
+    kept = prior_done.get((str(row["id"]), content))
+    if kept is None:
+        return False
+    row["status"], row["note"] = "done", str(kept.get("note") or "")
+    if kept.get("excerpt_hash"):
+        row["excerpt_hash"] = kept["excerpt_hash"]
+    if kept.get("founder_correction"):
+        row["founder_correction"] = True
+    return True
 
 
 async def judge_ledger(
@@ -441,6 +481,7 @@ async def judge_ledger(
     missing_tests: MissingTests | None = None,
     command_verdicts: Mapping[str, tuple[str, str]] | None = None,
     corrections: Sequence[str] = (),
+    content_key: ContentKey | None = None,
 ) -> list[dict[str, Any]]:
     """Verdict rows. ``judge=False`` (another check already failed) leaves grounded rows
     ``pending`` — the run fails anyway, and judging work that is about to change is waste.
@@ -462,6 +503,13 @@ async def judge_ledger(
         for r in prior_rows
         if r.get("status") in {"done", "rejected", "unclear"} and r.get("excerpt_hash")
     }
+    # An item that was ``done`` and cites the same content keeps that verdict, however the
+    # excerpt is cut this round (a cut that moves must not re-open a settled item).
+    prior_done = {
+        (str(r.get("id")), str(r.get("content_hash"))): r
+        for r in prior_rows
+        if r.get("status") == "done" and r.get("content_hash")
+    }
     gate = asyncio.Semaphore(_JUDGE_CONCURRENCY)
 
     async def _one(row: dict[str, Any]) -> None:
@@ -472,6 +520,10 @@ async def judge_ledger(
                 f"cited test(s) not found in their file: {', '.join(missing)} — cite the test "
                 "by the name it is defined with"
             )
+            return
+        if content_key is not None and await _keep_done(
+            row, await content_key(row), prior_done, corrections
+        ):
             return
         shown = await excerpt(row)
         # A correction changes what "satisfies" means, so it is part of the cache key
@@ -498,6 +550,7 @@ async def judge_ledger(
                 row["status"], row["note"] = "unclear", "judge unavailable"
                 # Not a verdict on this evidence — the next round must judge it again.
                 row.pop("excerpt_hash", None)
+                row.pop("content_hash", None)
                 return
         row["status"], reasoning = _verdict(raw)
         if reasoning:
@@ -570,6 +623,7 @@ async def ledger_rows_for_runs(
 __all__ = [
     "EvidenceReminder",
     "diff_excerpt",
+    "file_content_key",
     "gate_facts",
     "judge_ledger",
     "judge_messages",
