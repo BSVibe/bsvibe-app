@@ -74,3 +74,36 @@ def test_verify_fails_when_only_docker0_rules_exist(tmp_path: Path) -> None:
     }
     r = subprocess.run(["/bin/sh", str(_SCRIPT)], env=env, capture_output=True, timeout=60)
     assert r.returncode != 0
+
+
+def test_without_physdev_support_script_succeeds_and_drops_remain(tmp_path: Path) -> None:
+    """xt_physdev 가 없는 호스트: 가짜 iptables 가 -m physdev 를 거부해도 스크립트는 성공해야 한다."""
+    log = tmp_path / "rules.log"
+    # -C 는 삽입된 규칙이 있으면 성공(로그 조회), -m physdev 는 항상 거부.
+    body = (
+        'case "$*" in *"-L DOCKER-USER"*) exit 0 ;; esac\n'
+        'case "$*" in *physdev*) echo "Couldn\'t load match physdev" >&2; exit 2 ;; esac\n'
+        'a="$*"\n'
+        f'case "$*" in *"-C "*) r="${{a#*-C }}"; grep -qF -- "$r" {log} 2>/dev/null; exit $? ;; '
+        f'*"-I "*) r="${{a#*-I }}"; echo "$r" >> {log}; exit 0 ;; esac\n'
+        "exit 0\n"
+    )
+    for name, content in {"iptables": body, "ip": "exit 0\n"}.items():
+        p = tmp_path / name
+        p.write_text("#!/bin/bash\n" + content, encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    log.write_text("", encoding="utf-8")
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "SBX_FW_SELFTEST": "1",
+        "SBX_FW_WAIT_TRIES": "2",
+    }
+    r = subprocess.run(["/bin/sh", str(_SCRIPT)], env=env, capture_output=True, timeout=60)
+    assert r.returncode == 0, r.stderr.decode()
+    assert b"WARN" in r.stderr
+    rules = log.read_text(encoding="utf-8").splitlines()
+    assert not any("physdev" in x for x in rules)
+    for cidr in _PRIVATE:
+        assert any(f"DOCKER-USER -i br+ -d {cidr} -j DROP" in x for x in rules)
+    assert any("INPUT -i br+ -p tcp --dport 2375 -j DROP" in x for x in rules)

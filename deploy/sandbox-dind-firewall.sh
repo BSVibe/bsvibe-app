@@ -123,8 +123,19 @@ apply_firewall() {
     #     private range too; with br_netfilter it traverses FORWARD and would hit
     #     (a). Bridged (same-L2) traffic never leaves the network, so RETURN it
     #     BEFORE the DROPs (inserted last => evaluated first).
-    if ! iptables -w -C DOCKER-USER -i br+ -m physdev --physdev-is-bridged -j RETURN 2>/dev/null; then
-        iptables -w -I DOCKER-USER -i br+ -m physdev --physdev-is-bridged -j RETURN
+    #     OPTIONAL: `-m physdev` needs the xt_physdev kernel module. A host
+    #     without it must not take DinD down (set -e would kill every sandbox
+    #     run, sidecar on or off). The insert itself is the probe: if it is
+    #     rejected, warn and skip. The private-range DROPs and the :2375 block
+    #     above do NOT depend on this rule and stay in force on every network.
+    PHYSDEV_RETURN=0
+    if iptables -w -C DOCKER-USER -i br+ -m physdev --physdev-is-bridged -j RETURN 2>/dev/null; then
+        PHYSDEV_RETURN=1
+    elif iptables -w -I DOCKER-USER -i br+ -m physdev --physdev-is-bridged -j RETURN 2>/dev/null; then
+        PHYSDEV_RETURN=1
+    else
+        echo "[sbx-fw] WARN: xt_physdev unavailable - skipping the same-network RETURN rule;" \
+            "isolation DROPs stay in force (sidecar same-network traffic may be blocked)" >&2
     fi
 
     echo "[sbx-fw] nested-sandbox egress isolation applied (bridge=$NESTED_BRIDGE," \
@@ -143,8 +154,10 @@ verify_firewall() {
         iptables -w -C INPUT -i "$iface" -p tcp --dport "$DAEMON_PORT" -j DROP 2>/dev/null \
             || missing="$missing INPUT:$iface:$DAEMON_PORT"
     done
-    iptables -w -C DOCKER-USER -i br+ -m physdev --physdev-is-bridged -j RETURN 2>/dev/null \
-        || missing="$missing FORWARD:br+:bridged-return"
+    if [ "${PHYSDEV_RETURN:-0}" = "1" ]; then
+        iptables -w -C DOCKER-USER -i br+ -m physdev --physdev-is-bridged -j RETURN 2>/dev/null \
+            || missing="$missing FORWARD:br+:bridged-return"
+    fi
 
     if [ -n "$missing" ]; then
         echo "[sbx-fw] FATAL: rules absent after apply —$missing" >&2

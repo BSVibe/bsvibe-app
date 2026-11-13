@@ -22,3 +22,9 @@ test-DB 사이드카를 켠 상태에서 실제로 막히는지 확인한다.
 
 - [ ] backend/worker → `sandbox-dind:2375` 관리 경로가 그대로 동작한다.
 - [ ] 사이드카를 끄면 기존 `docker0` 프로브가 여전히 BLOCKED 이다.
+
+## xt_physdev 미지원 호스트
+
+- [ ] 호스트에 `xt_physdev` 가 없어도 DinD 가 정상 기동한다(사이드카 꺼짐 포함).
+- [ ] DinD 로그에 `[sbx-fw] WARN: xt_physdev unavailable` 와 `verified` 가 함께 남는다.
+- [ ] 이 경우에도 위 프로브의 2375 / 내부 대역 → **BLOCKED** 가 그대로 성립한다(DROP 규칙은 physdev RETURN 에 의존하지 않음).
