@@ -336,6 +336,11 @@ class Settings(BaseSettings):
     # guarantee conflict recovery terminates (retry → escalate), never wedges.
     github_conflict_resolution_deadline_s: float = 900.0
     github_conflict_max_redispatch: int = 2
+    # Run-wide caps on conflict resolution (head changes do NOT reset them): total
+    # re-dispatches per run, and tokens the run may spend after the first conflict
+    # (0 disables). Hitting either goes straight to ``merge_conflict_review``.
+    github_conflict_max_total_redispatch: int = 4
+    github_conflict_token_budget: int = 500_000
 
     # Red CI on a watched PR is sent back to the run that opened it (same shape as the
     # conflict hand-back). ``ci_fix_max_redispatch`` caps how many times before the

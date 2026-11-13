@@ -175,7 +175,9 @@ class ConflictRedispatch(Protocol):
         conflict_paths: list[str],
         base_branch: str,
         pr_number: int,
-    ) -> None: ...
+    ) -> bool | None:
+        """``False`` = the run-wide budget is spent and the callback already escalated."""
+        ...
 
 
 class ConflictEscalate(Protocol):
@@ -637,6 +639,9 @@ class MergeWatchWorker(BaseWorker):
 
             # 2. Mergeability gate.
             if mergeable_state == "clean":
+                # The conflict (if any) is resolved: its budget ends here, so a later
+                # CI-fix / review turn is never stopped by the conflict token ceiling.
+                await self._clear_conflict_budget(session, snap.run_id)
                 # The run that opened this PR may be reopened (a review comment
                 # routed to it, #1232) and still fixing it: merging the head
                 # that was reviewed would land the code the reviewer asked to
@@ -1111,12 +1116,19 @@ class MergeWatchWorker(BaseWorker):
             # Conflict — hand the run off to the agent to resolve. Re-dispatch
             # exactly once (guarded above by ``conflict_dispatched``), then park
             # the row in ``needs_resolution`` awaiting the agent's re-push.
-            await self._redispatch_conflict(
-                snap.run_id,
-                conflict_paths=list(outcome.conflict_paths),
-                base_branch=outcome.base_branch,
-                pr_number=snap.pr_number,
-            )
+            if (
+                await self._redispatch_conflict(
+                    snap.run_id,
+                    conflict_paths=list(outcome.conflict_paths),
+                    base_branch=outcome.base_branch,
+                    pr_number=snap.pr_number,
+                )
+                is False
+            ):
+                await repo.mark_status(
+                    snap.id, MergeWatchStatus.FAILED, last_error="conflict_budget_exhausted"
+                )
+                return
             logger.info(
                 "merge_watch_conflict_dispatched",
                 repo=snap.repo,
@@ -1215,12 +1227,19 @@ class MergeWatchWorker(BaseWorker):
         # callback is present; narrow the Optional for mypy.
         assert self._redispatch_conflict is not None  # noqa: S101
         next_attempt = snap.conflict_attempts + 1
-        await self._redispatch_conflict(
-            snap.run_id,
-            conflict_paths=[],
-            base_branch=snap.base_branch,
-            pr_number=snap.pr_number,
-        )
+        if (
+            await self._redispatch_conflict(
+                snap.run_id,
+                conflict_paths=[],
+                base_branch=snap.base_branch,
+                pr_number=snap.pr_number,
+            )
+            is False
+        ):
+            await repo.mark_status(
+                snap.id, MergeWatchStatus.FAILED, last_error="conflict_budget_exhausted"
+            )
+            return
         await repo.mark_status(
             snap.id,
             MergeWatchStatus.NEEDS_RESOLUTION,
@@ -1273,6 +1292,19 @@ class MergeWatchWorker(BaseWorker):
         → ``False``: treat as still-live and run the normal state machine."""
         status = await session.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run_id))
         return status is RunStatus.CANCELLED
+
+    async def _clear_conflict_budget(self, session: AsyncSession, run_id: uuid.UUID) -> None:
+        """Drop ``merge_conflict_budget`` from the run payload (no-op when absent)."""
+        stored = await session.scalar(select(ExecutionRun.payload).where(ExecutionRun.id == run_id))
+        if not stored or "merge_conflict_budget" not in stored:
+            return
+        run = await session.get(ExecutionRun, run_id)
+        if run is None:
+            return
+        payload = dict(run.payload or {})
+        payload.pop("merge_conflict_budget", None)
+        run.payload = payload
+        await session.flush()
 
     async def _run_still_fixing(self, session: AsyncSession, run_id: uuid.UUID) -> bool:
         """Is the run that opened the PR still working on it?

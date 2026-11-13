@@ -34,6 +34,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from backend.workflow.application.audit_events import LoopTerminal
+from backend.workflow.domain import conflict_budget as cb
 from backend.workflow.domain.run_token_cap import (
     TOKEN_CAP_DECISION_KIND,
     effective_run_token_cap,
@@ -63,9 +64,52 @@ async def account_and_enforce_token_cap(
     run.usage_prompt_tokens += turn.usage_prompt_tokens
     run.usage_completion_tokens += turn.usage_completion_tokens
 
+    used = run.usage_prompt_tokens + run.usage_completion_tokens
+
+    # Merge-conflict resolution has its OWN, smaller ceiling: spending the whole run cap on a
+    # conflict nobody resolved is what this guards. Reaching it hands the run to the founder
+    # as ``merge_conflict_review`` (with what was tried), not as ``run_token_cap_reached``.
+    budget = cb.read_budget(run.payload)
+    ceiling = budget.get("token_ceiling") if cb.is_resolving(run.payload) else None
+    run_cap = effective_run_token_cap(orch._settings.agent_max_run_tokens, run.payload)
+    if isinstance(ceiling, int) and ceiling > 0 and run_cap > 0:
+        ceiling = min(ceiling, run_cap)  # never larger than the run's own cap
+    if isinstance(ceiling, int) and ceiling > 0 and used >= ceiling:
+        await orch._audit(
+            run,
+            attempt,
+            LoopTerminal,
+            {"outcome": "conflict_token_budget_reached", "tokens": used, "ceiling": ceiling},
+        )
+        # Mark the budget spent: the merge-watch row stays NEEDS_RESOLUTION, so without the
+        # mark the worker's next re-dispatch would re-open the run under the pending review
+        # with no conflict ceiling. A founder retry clears the whole budget (and the mark).
+        spent = dict(budget)
+        spent[cb.EXHAUSTED_KEY] = "token_limit"
+        payload = dict(run.payload or {})
+        payload[cb.CONFLICT_BUDGET_KEY] = spent
+        payload.pop("merge_conflict", None)
+        payload.pop("merge_conflict_resolving", None)
+        run.payload = payload
+        decision = await orch._create_decision(
+            run,
+            work_step,
+            kind="merge_conflict_review",
+            payload={
+                "reason": "conflict_budget_exhausted",
+                "written_paths": written_paths,
+                **cb.summarize(budget, used_tokens=used, reason="token_limit"),
+            },
+            rationale=(
+                f"merge conflict resolution used {used - int(budget.get('tokens_at_start', used))} "
+                f"tokens, reaching its budget; stopped for founder review"
+            ),
+        )
+        await orch._session.commit()
+        return orch._decision_result(run, work_step, attempt, decision, written_paths, final_text)
+
     # #1105 — a founder's "keep going" raises THIS run's ceiling.
     cap = effective_run_token_cap(orch._settings.agent_max_run_tokens, run.payload)
-    used = run.usage_prompt_tokens + run.usage_completion_tokens
     if cap <= 0 or used < cap:
         return None
 

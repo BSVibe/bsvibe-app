@@ -8,7 +8,6 @@ which reach ``delivery_runtime`` via the approval-callback chain). Keeping the
 import-linter contract (the inbound layer has zero plugin imports).
 
 Two pieces:
-
 * :func:`build_merge_watch_client_resolver` — the production per-row GitHub
   client resolver (workspace github binding → decrypted API token → a
   :class:`~plugin.github.client.GithubClient`), injected into the worker so the
@@ -140,16 +139,12 @@ def build_merge_watch_conflict_escalate(
             if run is None:
                 logger.warning("merge_watch_escalate_run_missing", run_id=str(run_id))
                 return
-            # Clear the stale one-shot conflict markers (a failed re-drive may
-            # have consumed the directive but left ``merge_conflict_resolving``);
-            # a founder-guided retry re-enters cleanly.
+            # Clear stale one-shot conflict markers so a founder retry re-enters cleanly.
             payload = dict(run.payload or {})
             payload.pop("merge_conflict", None)
             payload.pop("merge_conflict_resolving", None)
             run.payload = payload
-            # Pause the run ON the Decision (RUNNING → not re-picked by
-            # drive_once). A no-op when the run is already RUNNING; a wedged
-            # OPEN/other-state run is pulled out of the drive loop here.
+            # Pause the run ON the Decision (RUNNING → not re-picked by drive_once).
             runner = AgentRunner(session)
             await runner.transition(
                 run_id=run_id,
@@ -304,6 +299,7 @@ def build_merge_watch_pr_concluded(
             if await move_run_status(session, run, to_status, reason=reason):
                 payload = dict(run.payload or {})
                 payload.pop(AWAITING_MERGE_KEY, None)
+                payload.pop("merge_conflict_budget", None)  # conflict period is over
                 if waiting:
                     payload[SHIPPED_WITH_WAITING_KEY] = [str(i) for i in waiting]
                 run.payload = payload
@@ -371,7 +367,10 @@ def build_merge_watch_workers(
                 run_workspace_root=Path(settings.run_workspace_root),
             ),
             redispatch_conflict=build_merge_watch_conflict_redispatch(
-                session_factory=session_factory
+                session_factory=session_factory,
+                max_total_redispatch=settings.github_conflict_max_total_redispatch,
+                token_budget=settings.github_conflict_token_budget,
+                run_token_cap=settings.agent_max_run_tokens,
             ),
             escalate_conflict=build_merge_watch_conflict_escalate(session_factory=session_factory),
             escalate_stall=build_merge_watch_stall_escalate(session_factory=session_factory),

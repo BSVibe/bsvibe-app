@@ -13,6 +13,8 @@ import uuid
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.workflow.domain import conflict_budget as cb
+from backend.workflow.domain.run_token_cap import effective_run_token_cap
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.workers.merge_watch_worker import (
     CiRedispatch,
@@ -23,7 +25,11 @@ logger = structlog.get_logger(__name__)
 
 
 def build_merge_watch_conflict_redispatch(
-    *, session_factory: async_sessionmaker[AsyncSession]
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    max_total_redispatch: int = 0,
+    token_budget: int = 0,
+    run_token_cap: int = 0,
 ) -> ConflictRedispatch:
     """Build the PR6 conflict re-dispatch callback for the MergeWatchWorker.
 
@@ -43,17 +49,79 @@ def build_merge_watch_conflict_redispatch(
         conflict_paths: list[str],
         base_branch: str,
         pr_number: int,
-    ) -> None:
+    ) -> bool | None:
+        """``False`` when the run-wide budget is spent: the run went to the founder as
+        ``merge_conflict_review`` (with what was tried) and was NOT re-opened."""
         from backend.workflow.application.agent_runner import AgentRunner  # noqa: PLC0415
+        from backend.workflow.application.run_persistence import create_decision  # noqa: PLC0415
 
         async with session_factory() as session:
             run = await session.get(ExecutionRun, run_id)
             if run is None:
                 logger.warning("merge_watch_redispatch_run_missing", run_id=str(run_id))
-                return
+                return None
             # Re-assign payload (not in-place mutate) so SQLAlchemy detects the
             # change on the JSON column — mirrors checkpoint_resolution.
             payload = dict(run.payload or {})
+            used = run.usage_prompt_tokens + run.usage_completion_tokens
+            budget = cb.read_budget(payload)
+            if budget.get(cb.EXHAUSTED_KEY):
+                # The in-turn ceiling already created the founder's merge_conflict_review:
+                # refuse (worker marks the row FAILED); no second decision, no re-open.
+                logger.warning(
+                    "merge_watch_conflict_redispatch_refused",
+                    run_id=str(run_id),
+                    pr_number=pr_number,
+                    reason=budget[cb.EXHAUSTED_KEY],
+                )
+                return False
+            why = cb.exhausted_reason(budget, used_tokens=used, max_redispatch=max_total_redispatch)
+            if why is not None:
+                # Run-wide cap (survives head changes): stop NOW, not at the run token cap.
+                payload.pop("merge_conflict", None)
+                payload.pop("merge_conflict_resolving", None)
+                run.payload = payload
+                await AgentRunner(session).transition(
+                    run_id=run_id,
+                    to_status=RunStatus.RUNNING,
+                    reason=f"merge conflict on PR #{pr_number}: budget spent ({why})",
+                )
+                await create_decision(
+                    session,
+                    run,
+                    None,
+                    kind="merge_conflict_review",
+                    payload={
+                        "reason": "conflict_budget_exhausted",
+                        "conflict_paths": list(conflict_paths),
+                        "base_branch": base_branch,
+                        "pr_number": pr_number,
+                        **cb.summarize(budget, used_tokens=used, reason=why),
+                    },
+                    rationale=(
+                        f"merge conflict re-dispatch budget spent ({why}) after "
+                        f"{budget.get('redispatches', 0)} attempts"
+                    ),
+                )
+                await session.commit()
+                logger.warning(
+                    "merge_watch_conflict_budget_exhausted",
+                    run_id=str(run_id),
+                    pr_number=pr_number,
+                    reason=why,
+                    redispatches=budget.get("redispatches", 0),
+                    tokens_total=used,
+                )
+                return False
+            budget = cb.record_redispatch(
+                budget,
+                used_tokens=used,
+                token_budget=token_budget,
+                run_token_cap=effective_run_token_cap(run_token_cap, payload),
+                pr_number=pr_number,
+                conflict_paths=conflict_paths,
+            )
+            payload[cb.CONFLICT_BUDGET_KEY] = budget
             payload["merge_conflict"] = {
                 "conflict_paths": list(conflict_paths),
                 "base_branch": base_branch,
@@ -79,7 +147,11 @@ def build_merge_watch_conflict_redispatch(
             run_id=str(run_id),
             pr_number=pr_number,
             conflict_paths=conflict_paths,
+            redispatch_n=budget["redispatches"],
+            tokens_total=used,
+            tokens_since_first_conflict=used - int(budget["tokens_at_start"]),
         )
+        return None
 
     return _redispatch
 
