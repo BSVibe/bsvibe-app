@@ -140,9 +140,7 @@ def build_merge_watch_conflict_escalate(
             if run is None:
                 logger.warning("merge_watch_escalate_run_missing", run_id=str(run_id))
                 return
-            # Clear the stale one-shot conflict markers (a failed re-drive may
-            # have consumed the directive but left ``merge_conflict_resolving``);
-            # a founder-guided retry re-enters cleanly.
+            # Clear stale one-shot conflict markers so a founder retry re-enters cleanly.
             payload = dict(run.payload or {})
             payload.pop("merge_conflict", None)
             payload.pop("merge_conflict_resolving", None)
