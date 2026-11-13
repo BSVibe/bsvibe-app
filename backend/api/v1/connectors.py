@@ -690,11 +690,19 @@ class ImportDispatcher:
         cipher: CredentialCipher,
         knowledge_factory: Callable[[uuid.UUID], Any],
         runner: PluginRunner | None = None,
+        import_root: str | None = None,
     ) -> None:
+        self._import_root = import_root
         self._plugins_by_name = plugins_by_name
         self._cipher = cipher
         self._knowledge_factory = knowledge_factory
         self._runner = runner or PluginRunner()
+
+    def _workspace_import_root(self, workspace_id: uuid.UUID) -> str | None:
+        """``<settings import_root>/<workspace_id>`` — only when the setting is absolute."""
+        if not self._import_root or not Path(self._import_root).is_absolute():
+            return None
+        return str(Path(self._import_root) / str(workspace_id))
 
     async def import_for(
         self,
@@ -729,6 +737,7 @@ class ImportDispatcher:
             logger=logger,
             credentials=credentials,
             knowledge=knowledge,
+            import_root=self._workspace_import_root(workspace_id),
         )
         result = await self._runner.dispatch_action(
             meta,
@@ -806,6 +815,7 @@ async def get_import_dispatcher() -> ImportDispatcher:  # pragma: no cover — o
         plugins_by_name=dict(registry),
         cipher=cipher_from_settings(),
         knowledge_factory=_knowledge,
+        import_root=settings.import_root,
     )
 
 

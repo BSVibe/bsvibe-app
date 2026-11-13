@@ -51,6 +51,7 @@ from backend.workflow.domain.model_account_decision import (
     ACCOUNT_CHOICES_KEY,
     DECISION_AMBIGUOUS_MODEL_ACCOUNT,
 )
+from backend.workflow.domain.requirements import FOUNDER_CORRECTIONS_KEY
 from backend.workflow.domain.run_token_cap import (
     TOKEN_CAP_DECISION_KIND,
     TOKEN_CAP_GRANT_KEY,
@@ -359,6 +360,18 @@ async def resolve_checkpoint(  # noqa: PLR0912, PLR0915 — one branch per resol
         }
     )
     payload["resolved_decisions"] = resolved
+    # 장부 정정 — 창업자가 질문에 자유 텍스트로 직접 쓴 답만 (옵션 선택·action_key 는 아님).
+    offered = _decision_options(decision) or []
+    typed = answer.strip()
+    if (
+        action_key is None
+        and decision.decision == "ask_user_question"
+        and typed
+        and typed not in {o.strip() for o in offered}
+    ):
+        corrections = list(payload.get(FOUNDER_CORRECTIONS_KEY) or [])
+        corrections.append({"decision_id": str(decision.id), "text": typed})
+        payload[FOUNDER_CORRECTIONS_KEY] = corrections
     await _prepare_the_resume(
         session, payload, run=run, decision=decision, action_key=action_key, answer=answer
     )
@@ -394,6 +407,22 @@ async def resolve_checkpoint(  # noqa: PLR0912, PLR0915 — one branch per resol
     if action_key == ACTION_SHIP:
         await _ship_decision_run(
             session, runner, run=run, decision=decision, deliverables=deliverables
+        )
+    elif run.status in _TERMINAL_RUN_STATUSES and (
+        action_key == ACTION_DISCARD
+        or (
+            action_key == ACTION_RETRY
+            and decision.decision not in (DELIVERY_FAILED_DECISION_KIND, "merge_watch_stalled")
+        )
+    ):
+        # discard would cancel a shipped run, retry would re-drive a finished one:
+        # on an ended run only the decision is closed, the run is left as it is.
+        logger.info(
+            "checkpoint_closed_on_terminal_run",
+            run_id=str(run.id),
+            decision_id=str(decision.id),
+            run_status=run.status.value,
+            action_key=action_key,
         )
     elif action_key == ACTION_DISCARD:
         await _discard_decision_run(runner, session, run=run, decision=decision)

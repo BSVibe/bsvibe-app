@@ -85,3 +85,7 @@ class SkillContext:
     retriever: RetrieverInterface | None = field(default=None)
     notify: NotificationInterface | None = field(default=None)
     knowledge: KnowledgeBackend | None = field(default=None)
+    # Absolute, already workspace-scoped directory that file-reading imports may touch.
+    # ``None`` (the default) means "no allowed root" — file imports REFUSE; there is no
+    # unrestricted mode.
+    import_root: str | None = field(default=None)
