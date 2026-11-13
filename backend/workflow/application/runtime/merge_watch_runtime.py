@@ -371,7 +371,9 @@ def build_merge_watch_workers(
                 run_workspace_root=Path(settings.run_workspace_root),
             ),
             redispatch_conflict=build_merge_watch_conflict_redispatch(
-                session_factory=session_factory
+                session_factory=session_factory,
+                max_total_redispatch=settings.github_conflict_max_total_redispatch,
+                token_budget=settings.github_conflict_token_budget,
             ),
             escalate_conflict=build_merge_watch_conflict_escalate(session_factory=session_factory),
             escalate_stall=build_merge_watch_stall_escalate(session_factory=session_factory),

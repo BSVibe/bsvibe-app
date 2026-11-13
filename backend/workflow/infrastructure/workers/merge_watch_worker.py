@@ -175,7 +175,9 @@ class ConflictRedispatch(Protocol):
         conflict_paths: list[str],
         base_branch: str,
         pr_number: int,
-    ) -> None: ...
+    ) -> bool | None:
+        """``False`` = the run-wide budget is spent and the callback already escalated."""
+        ...
 
 
 class ConflictEscalate(Protocol):
@@ -1111,12 +1113,19 @@ class MergeWatchWorker(BaseWorker):
             # Conflict — hand the run off to the agent to resolve. Re-dispatch
             # exactly once (guarded above by ``conflict_dispatched``), then park
             # the row in ``needs_resolution`` awaiting the agent's re-push.
-            await self._redispatch_conflict(
-                snap.run_id,
-                conflict_paths=list(outcome.conflict_paths),
-                base_branch=outcome.base_branch,
-                pr_number=snap.pr_number,
-            )
+            if (
+                await self._redispatch_conflict(
+                    snap.run_id,
+                    conflict_paths=list(outcome.conflict_paths),
+                    base_branch=outcome.base_branch,
+                    pr_number=snap.pr_number,
+                )
+                is False
+            ):
+                await repo.mark_status(
+                    snap.id, MergeWatchStatus.FAILED, last_error="conflict_budget_exhausted"
+                )
+                return
             logger.info(
                 "merge_watch_conflict_dispatched",
                 repo=snap.repo,
@@ -1215,12 +1224,19 @@ class MergeWatchWorker(BaseWorker):
         # callback is present; narrow the Optional for mypy.
         assert self._redispatch_conflict is not None  # noqa: S101
         next_attempt = snap.conflict_attempts + 1
-        await self._redispatch_conflict(
-            snap.run_id,
-            conflict_paths=[],
-            base_branch=snap.base_branch,
-            pr_number=snap.pr_number,
-        )
+        if (
+            await self._redispatch_conflict(
+                snap.run_id,
+                conflict_paths=[],
+                base_branch=snap.base_branch,
+                pr_number=snap.pr_number,
+            )
+            is False
+        ):
+            await repo.mark_status(
+                snap.id, MergeWatchStatus.FAILED, last_error="conflict_budget_exhausted"
+            )
+            return
         await repo.mark_status(
             snap.id,
             MergeWatchStatus.NEEDS_RESOLUTION,
