@@ -176,5 +176,7 @@ def test_user_cannot_claim_an_installation_id() -> None:
         reject("github", external_ref=None, delivery_config={"installation_id": 1})
     with pytest.raises(ValueError):
         reject("github", external_ref="123", delivery_config={})
-    reject("github", external_ref="o/r", delivery_config={"repo": "o/r"})
+    with pytest.raises(ValueError):
+        reject("github", external_ref="o/r", delivery_config={})
+    reject("github", external_ref=None, delivery_config={"repo": "o/r"})
     reject("slack", external_ref="123", delivery_config={})

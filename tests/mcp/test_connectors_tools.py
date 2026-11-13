@@ -95,7 +95,6 @@ async def test_create_lists_show_revoke_round_trip(
             {
                 "connector": "github",
                 "signing_secret": "shh-this-is-secret",
-                "external_ref": "BSVibe/bsvibe-app",
                 "delivery_config": {"repo": "bsvibe-app"},
             },
             ctx,
@@ -185,7 +184,6 @@ async def _create_github(
             {
                 "connector": "github",
                 "signing_secret": "shh",
-                "external_ref": "BSVibe/bsvibe-app",
                 "delivery_config": delivery_config,
             },
             ctx,
@@ -814,6 +812,7 @@ async def test_create_rejects_installation_claims(db, workspace_id, user_id, reg
         for args in (
             {"delivery_config": {"installation_id": 999}},
             {"external_ref": "999"},
+            {"external_ref": "o/r"},
         ):
             with pytest.raises(Exception, match="installation|external_ref"):
                 await registry.call_tool(
