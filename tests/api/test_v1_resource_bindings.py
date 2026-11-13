@@ -24,6 +24,7 @@ from backend.api.deps import (
     get_workspace_id,
 )
 from backend.api.main import create_app
+from backend.connectors import github_access
 from backend.connectors.db import ConnectorAccountRow
 from backend.identity.db import MembershipRow, UserRow  # noqa: F401 — register tables
 from backend.identity.workspaces_db import ProductRow, WorkspaceRow, WorkspacesBase
@@ -323,3 +324,110 @@ async def test_a_binding_row_says_which_connector_it_is(client_with_parents) -> 
         assert row.get("connector"), f"목록 응답에 커넥터가 없다: {row}"
     # 음성 대조군 — uuid 를 종류로 착각하지 않는다
     assert rows[0]["connector"] != str(account_id)
+
+
+# ── 저장소 접근 확인 ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _github_repo_status(monkeypatch) -> dict:
+    """기본은 접근 가능(200). 테스트가 ``state['status']`` 로 바꾼다."""
+    from backend.connectors import github_access
+
+    state = {"status": 200}
+
+    async def _cred(*_a, **_k) -> str:
+        return "tok"
+
+    async def _status(_t: str, _s: str) -> int:
+        return state["status"]
+
+    monkeypatch.setattr(github_access, "_credential", _cred)
+    monkeypatch.setattr(github_access, "_repo_status", _status)
+    return state
+
+
+async def test_rest_rejects_inaccessible_repo(client_with_parents, _github_repo_status) -> None:
+    client, _ws, product_id, account_id = client_with_parents
+    _github_repo_status["status"] = 404
+
+    resp = await client.post(
+        f"/api/v1/products/{product_id}/bindings",
+        json={"connector_account_id": str(account_id), "resource_id": "other/private-repo"},
+    )
+
+    assert resp.status_code == 403
+    assert "other/private-repo" in resp.json()["detail"]
+    listed = await client.get(f"/api/v1/products/{product_id}/bindings")
+    assert listed.json() == []
+
+
+async def test_rest_transient_github_failure_is_503_not_403(
+    client_with_parents, _github_repo_status
+) -> None:
+    client, _ws, product_id, account_id = client_with_parents
+    _github_repo_status["status"] = 503
+
+    resp = await client.post(
+        f"/api/v1/products/{product_id}/bindings",
+        json={"connector_account_id": str(account_id), "resource_id": "o/r"},
+    )
+
+    assert resp.status_code == 503
+    assert (await client.get(f"/api/v1/products/{product_id}/bindings")).json() == []
+
+
+# ── 실제 자격증명 선택 경로 — HTTP 계층만 가짜 ────────────────────────────────
+
+_REAL_CREDENTIAL = github_access._credential
+_REAL_REPO_STATUS = github_access._repo_status
+_REAL_HTTP_CLIENT = httpx.AsyncClient
+
+
+async def _use_real_credential_path(monkeypatch, db, account_id, code: int) -> list[httpx.Request]:
+    """``_credential``/``_repo_status`` 는 실제 것으로 되돌리고 GitHub HTTP 만 가짜로 둔다."""
+    from backend.router.accounts import crypto
+
+    monkeypatch.setattr(crypto, "_key_from_settings", lambda: b"k" * 32)
+    monkeypatch.setattr(github_access, "_credential", _REAL_CREDENTIAL)
+    monkeypatch.setattr(github_access, "_repo_status", _REAL_REPO_STATUS)
+    seen: list[httpx.Request] = []
+    real = _REAL_HTTP_CLIENT
+
+    def _factory(*a, **k):
+        def _handle(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(code)
+
+        k["transport"] = httpx.MockTransport(_handle)
+        return real(*a, **k)
+
+    monkeypatch.setattr(github_access.httpx, "AsyncClient", _factory)
+    async with db() as s:
+        acct = await s.get(ConnectorAccountRow, account_id)
+        acct.signing_secret_ciphertext = crypto.cipher_from_settings().encrypt("pat-token")
+        await s.commit()
+    return seen
+
+
+async def test_rest_real_credential_selection_rejects_404_and_accepts_200(
+    client_with_parents, db, monkeypatch
+) -> None:
+    client, _ws, product_id, account_id = client_with_parents
+    seen = await _use_real_credential_path(monkeypatch, db, account_id, 404)
+
+    denied = await client.post(
+        f"/api/v1/products/{product_id}/bindings",
+        json={"connector_account_id": str(account_id), "resource_id": "other/private"},
+    )
+    assert denied.status_code == 403
+    assert seen[0].headers["Authorization"] == "Bearer pat-token"
+    assert str(seen[0].url) == "https://api.github.com/repos/other/private"
+    assert (await client.get(f"/api/v1/products/{product_id}/bindings")).json() == []
+
+    await _use_real_credential_path(monkeypatch, db, account_id, 200)
+    ok = await client.post(
+        f"/api/v1/products/{product_id}/bindings",
+        json={"connector_account_id": str(account_id), "resource_id": "o/r"},
+    )
+    assert ok.status_code == 201

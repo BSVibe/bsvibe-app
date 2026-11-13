@@ -22,6 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_db_session, get_workspace_id
 from backend.connectors.db import ConnectorAccountRow
+from backend.connectors.github_access import (
+    RepoAccessError,
+    RepoAccessUnavailable,
+    verify_repo_access,
+)
 from backend.identity.infrastructure.repositories import (
     SqlAlchemyResourceBindingRepository,
 )
@@ -85,9 +90,23 @@ async def create_product_binding(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ResourceBindingResponse:
     await _resolve_product_in_workspace(session, product_id, workspace_id)
-    await _resolve_connector_account_in_workspace(
+    account = await _resolve_connector_account_in_workspace(
         session, payload.connector_account_id, workspace_id
     )
+    try:
+        await verify_repo_access(
+            session,
+            account=account,
+            resource_id=payload.resource_id,
+        )
+    except RepoAccessUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"Retry-After": "5"},
+        ) from exc
+    except RepoAccessError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     repo = SqlAlchemyResourceBindingRepository(session)
     row = await repo.create(
         workspace_id=workspace_id,

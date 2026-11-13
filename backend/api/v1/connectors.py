@@ -67,6 +67,7 @@ from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.connectors.catalog import ConnectorInfo, get_connector_catalog
 from backend.connectors.db import ConnectorAccountRow
+from backend.connectors.github_access import reject_server_owned_installation
 from backend.connectors.telegram_webhook import (
     TelegramWebhookStatus,
     register_telegram_webhook,
@@ -517,6 +518,14 @@ async def create_connector(
     cipher: Annotated[CredentialCipher, Depends(get_credential_cipher)],
     telegram_factory: Annotated[TelegramClientFactory, Depends(get_telegram_client_factory)],
 ) -> ConnectorCreated:
+    try:
+        reject_server_owned_installation(
+            payload.connector,
+            external_ref=payload.external_ref,
+            delivery_config=payload.delivery_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
     await _check_api_urls(payload.delivery_config)
     webhook_token = secrets.token_urlsafe(_TOKEN_BYTES)
     row = ConnectorAccountRow(
@@ -607,6 +616,12 @@ async def update_connector(
     # Shallow merge: start from the stored config, overlay the patch. Reassign a
     # fresh dict (not in-place mutate) so SQLAlchemy's JSON column reliably
     # detects the change and flushes it.
+    try:
+        reject_server_owned_installation(
+            row.connector, external_ref=None, delivery_config=payload.delivery_config
+        )
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
     row.delivery_config = {**(row.delivery_config or {}), **payload.delivery_config}
     await session.commit()
     return _row_to_out(row)
@@ -646,9 +661,7 @@ async def rotate_credential(
             telegram_factory=telegram_factory,
         )
     except CredentialRotationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from None
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     bound = await binding_counts(session, [row.id])
     return ConnectorCredentialRotated(
         connector=_row_to_out(row, binding_count=bound.get(row.id, 0)),
