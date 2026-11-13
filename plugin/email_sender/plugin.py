@@ -28,6 +28,7 @@ import os
 from typing import Any
 
 from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.egress import check_connector_config
 from bsvibe_sdk import plugin
 from plugin.email_sender.client import DEFAULT_BASE_URL, ResendClient
 
@@ -51,7 +52,7 @@ p = plugin(
 )
 
 
-def _client(context: SkillContext) -> ResendClient:
+async def _client(context: SkillContext) -> ResendClient:
     """Build an authed client from the injected credentials.
 
     ``config['resend_api_url']`` overrides the API base. Raises ``ValueError``
@@ -61,6 +62,7 @@ def _client(context: SkillContext) -> ResendClient:
     api_key = context.credentials.get("api_key")
     if not api_key:
         raise ValueError("email-sender: missing required 'api_key' credential")
+    await check_connector_config(context.config)
     base_url = context.config.get("resend_api_url", DEFAULT_BASE_URL)
     return ResendClient(api_key, base_url=base_url)
 
@@ -97,7 +99,7 @@ async def deliver_email(context: SkillContext, event: dict[str, Any]) -> dict[st
     body = event.get("body", "")
     as_text = bool(event.get("as_text"))
     sender = _sender(context, event)
-    client = _client(context)
+    client = await _client(context)
     if as_text:
         data = await client.send_email(sender=sender, to=to, subject=subject, text=body)
     else:
@@ -164,7 +166,7 @@ async def send_email(
     body: str,
 ) -> dict[str, Any]:
     sender = _sender(context, {})
-    client = _client(context)
+    client = await _client(context)
     data = await client.send_email(sender=sender, to=to, subject=subject, html=body)
     message_id = str(data["id"])
     return {

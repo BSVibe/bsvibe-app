@@ -28,6 +28,7 @@ import os
 from typing import Any
 
 from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.egress import check_connector_config
 from bsvibe_sdk import plugin
 from plugin.trello.client import (
     DEFAULT_BASE_URL,
@@ -55,7 +56,7 @@ p = plugin(
 )
 
 
-def _client(context: SkillContext) -> TrelloClient:
+async def _client(context: SkillContext) -> TrelloClient:
     """Build an authed client from the injected credentials.
 
     ``config['trello_api_url']`` overrides the API base. Raises ``ValueError``
@@ -66,6 +67,7 @@ def _client(context: SkillContext) -> TrelloClient:
     token = context.credentials.get("token")
     if not api_key or not token:
         raise ValueError("trello: missing required 'api_key' / 'token' credentials")
+    await check_connector_config(context.config)
     base_url = context.config.get("trello_api_url", DEFAULT_BASE_URL)
     return TrelloClient(api_key, token, base_url=base_url)
 
@@ -89,7 +91,7 @@ def _list_id(context: SkillContext, event: dict[str, Any]) -> str:
 async def deliver_card(context: SkillContext, event: dict[str, Any]) -> dict[str, Any]:
     """Create a Trello card from a deliverable on the resolved list."""
     list_id = _list_id(context, event)
-    client = _client(context)
+    client = await _client(context)
     desc = event.get("desc")
     if desc is None:
         desc = event.get("body", "")
@@ -119,7 +121,7 @@ async def revert_card(context: SkillContext, handle: dict[str, Any]) -> dict[str
     delivery flow cannot hard-delete it in place). Idempotent: an
     already-closed card or a 404 (card already gone) is treated as success."""
     card_id = str(handle["card_id"])
-    client = _client(context)
+    client = await _client(context)
     status = await client.archive_card(card_id)
     already = status == 404
     return {
@@ -153,7 +155,7 @@ async def create_card(
     title: str,
     desc: str = "",
 ) -> dict[str, Any]:
-    client = _client(context)
+    client = await _client(context)
     card = await client.create_card(list_id=list_id, name=title, desc=desc)
     card_id = str(card["id"])
     return {
