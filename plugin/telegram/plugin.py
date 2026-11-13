@@ -18,6 +18,7 @@ import os
 from typing import Any
 
 from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.egress import check_connector_config
 from backend.workflow.domain.incoming import TriggerEvent
 from bsvibe_sdk import plugin
 from plugin.telegram.client import DEFAULT_BASE_URL, TelegramClient
@@ -47,7 +48,7 @@ p = plugin(
 )
 
 
-def _client(context: SkillContext) -> TelegramClient:
+async def _client(context: SkillContext) -> TelegramClient:
     """Build an authed client from the injected credentials.
 
     ``config['telegram_api_url']`` overrides the API base (testing / proxy).
@@ -57,6 +58,7 @@ def _client(context: SkillContext) -> TelegramClient:
     token = context.credentials.get("bot_token")
     if not token:
         raise ValueError("telegram: missing required 'bot_token' credential")
+    await check_connector_config(context.config)
     base_url = context.config.get("telegram_api_url", DEFAULT_BASE_URL)
     return TelegramClient(token, base_url=base_url)
 
@@ -99,7 +101,7 @@ async def deliver_message(context: SkillContext, event: dict[str, Any]) -> dict[
     a recipient who already saw it (no clean undo) → tier ``t2_trail`` (matches
     Slack's deletable-message tier)."""
     chat_id = event["chat_id"]
-    client = _client(context)
+    client = await _client(context)
     data = await client.send_message(
         chat_id,
         event["text"],
@@ -129,7 +131,7 @@ async def revert_message(context: SkillContext, handle: dict[str, Any]) -> dict[
     the deletion is not a clean undo). Idempotent: an already-deleted message
     ("message to delete not found") yields a silent no-op success."""
     chat_id, message_id = handle["chat_id"], int(handle["message_id"])
-    client = _client(context)
+    client = await _client(context)
     description = await client.delete_message(chat_id, message_id)
     already = description is not None
     return {
@@ -168,7 +170,7 @@ async def send_message(
     chat_id: str | int,
     text: str,
 ) -> dict[str, Any]:
-    client = _client(context)
+    client = await _client(context)
     data = await client.send_message(chat_id, text)
     message_id = int(data["message_id"])
     out_chat = (data.get("chat") or {}).get("id", chat_id)
@@ -204,7 +206,7 @@ async def answer_callback_query(
     text: str | None = None,
 ) -> dict[str, Any]:
     """Acknowledge the tap (clears Telegram's spinner). Best-effort UI ack."""
-    client = _client(context)
+    client = await _client(context)
     return await client.answer_callback_query(callback_query_id, text=text)
 
 
@@ -220,7 +222,7 @@ async def edit_message_text(
     """Edit the card in place — append the approve/reject result line to its body
     and drop the buttons. ``entities`` re-sends the original card's entity list so
     its "보고서 보기" hyperlink is preserved (see :meth:`TelegramClient.edit_message_text`)."""
-    client = _client(context)
+    client = await _client(context)
     return await client.edit_message_text(
         chat_id, message_id, text, reply_markup=reply_markup, entities=entities
     )

@@ -77,6 +77,7 @@ from backend.extensions.plugin.context import SkillContext
 from backend.extensions.plugin.runner import PluginRunner
 from backend.identity.workspaces_db import ResourceBindingRow
 from backend.router.accounts.crypto import CredentialCipher, cipher_from_settings
+from backend.router.egress import EgressRefused, check_connector_config
 
 logger = structlog.get_logger(__name__)
 
@@ -96,6 +97,14 @@ _AUDIT_IMPORT_FAILED = "audit.connector.import_failed"
 def _webhook_url(connector: str, webhook_token: str) -> str:
     """The path an external provider POSTs to (mounted under ``/api``)."""
     return f"/api/webhooks/{connector}/{webhook_token}"
+
+
+async def _check_api_urls(config: dict[str, Any]) -> None:
+    """422 when a ``*_api_url`` key points anywhere but a public endpoint."""
+    try:
+        await check_connector_config(config)
+    except EgressRefused as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
 class ConnectorCreate(BaseModel):
@@ -517,6 +526,7 @@ async def create_connector(
         )
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from exc
+    await _check_api_urls(payload.delivery_config)
     webhook_token = secrets.token_urlsafe(_TOKEN_BYTES)
     row = ConnectorAccountRow(
         id=uuid.uuid4(),
@@ -602,6 +612,7 @@ async def update_connector(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"connector {connector_id} not found",
         )
+    await _check_api_urls(payload.delivery_config)
     # Shallow merge: start from the stored config, overlay the patch. Reassign a
     # fresh dict (not in-place mutate) so SQLAlchemy's JSON column reliably
     # detects the change and flushes it.

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.data.rls import workspace_session_scope
 from backend.router.accounts.crypto import CredentialCipher, cipher_from_settings
+from backend.router.egress import check_connector_config
 from backend.workflow.application.delivery.connector_dispatch._resolver import (
     resolve_github_binding,
 )
@@ -45,6 +46,7 @@ def build_repo_permission_lookup(
             )
             # Persist any token refresh resolve performed under the hood.
             await session.commit()
+        await check_connector_config(binding.account.delivery_config)
         base_url = str(
             (binding.account.delivery_config or {}).get("github_api_url") or DEFAULT_BASE_URL
         )

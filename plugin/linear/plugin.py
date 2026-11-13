@@ -25,6 +25,7 @@ import os
 from typing import Any
 
 from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.egress import check_connector_config
 from bsvibe_sdk import plugin
 from plugin.linear.client import (
     DEFAULT_BASE_URL,
@@ -51,7 +52,7 @@ p = plugin(
 _NOT_FOUND_CODES = frozenset({"entityNotFound", "ENTITY_NOT_FOUND"})
 
 
-def _client(context: SkillContext) -> LinearClient:
+async def _client(context: SkillContext) -> LinearClient:
     """Build an authed client from the injected credentials.
 
     ``config['linear_api_url']`` overrides the API base. Raises ``ValueError``
@@ -61,6 +62,7 @@ def _client(context: SkillContext) -> LinearClient:
     api_key = context.credentials.get("api_key")
     if not api_key:
         raise ValueError("linear: missing required 'api_key' credential")
+    await check_connector_config(context.config)
     base_url = context.config.get("linear_api_url", DEFAULT_BASE_URL)
     return LinearClient(api_key, base_url=base_url)
 
@@ -101,7 +103,7 @@ def _is_already_gone(exc: LinearApiError) -> bool:
 async def deliver_issue(context: SkillContext, event: dict[str, Any]) -> dict[str, Any]:
     """Create a Linear issue from a deliverable on the resolved team."""
     team_id = _team_id(context, event)
-    client = _client(context)
+    client = await _client(context)
     description = event.get("description")
     if description is None:
         description = event.get("body", "")
@@ -132,7 +134,7 @@ async def revert_issue(context: SkillContext, handle: dict[str, Any]) -> dict[st
     public API cannot hard-delete it in place). Idempotent: an already-archived
     / not-found issue (GraphQL ``entityNotFound``) is treated as success."""
     issue_id = str(handle["issue_id"])
-    client = _client(context)
+    client = await _client(context)
     try:
         await client.archive_issue(issue_id)
         already = False
@@ -171,7 +173,7 @@ async def create_issue(
     title: str,
     description: str = "",
 ) -> dict[str, Any]:
-    client = _client(context)
+    client = await _client(context)
     issue = await client.create_issue(team_id=team_id, title=title, description=description)
     issue_id = str(issue["id"])
     return {

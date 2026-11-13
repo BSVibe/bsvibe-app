@@ -320,6 +320,7 @@ ignore_imports = [
     # 같은 툴 모듈에 한정된 read-only 엣지다.
     "backend.mcp.tools.connectors_tools -> backend.connectors.auth.db",
     "backend.mcp.tools.connectors_tools -> backend.extensions.plugin.base",
+    "backend.mcp.tools.connectors_tools -> backend.extensions.plugin.egress",
     "backend.mcp.tools.connectors_tools -> backend.router.accounts.crypto",
     # Lift D3b — UI-parity workflow tools (bindings / decisions / routing
     # rules). Same pattern as D3a: each new tool module calls the SAME repo /

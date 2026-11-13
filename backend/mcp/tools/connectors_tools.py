@@ -43,12 +43,14 @@ from backend.common.connector_redaction import (
 from backend.common.connector_redaction import (
     token_hint as _token_hint,
 )
+from backend.config import get_settings
 from backend.connectors.auth import service as oauth_service
 from backend.connectors.auth.db import ConnectorOAuthTokenRow
 from backend.connectors.catalog import get_connector_catalog
 from backend.connectors.db import ConnectorAccountRow
 from backend.connectors.github_access import reject_server_owned_installation
 from backend.extensions.plugin.base import PluginRunError
+from backend.extensions.plugin.egress import EgressRefused, check_connector_config
 from backend.mcp.api import Tool, ToolContext, ToolError, ToolRegistry
 from backend.router.accounts.crypto import (
     cipher_from_settings,
@@ -249,6 +251,15 @@ class ConnectorsCreateOutput(BaseModel):
     created_at: str | None
 
 
+async def _check_api_urls(config: dict[str, Any]) -> None:
+    try:
+        await check_connector_config(
+            config, allowed_hosts=frozenset(get_settings().llm_egress_allowed_hosts)
+        )
+    except EgressRefused as exc:
+        raise ToolError(str(exc)) from exc
+
+
 async def _h_create(args: ConnectorsCreateInput, ctx: ToolContext) -> Any:
     if not _is_registerable_connector(args.connector):
         raise ToolError(f"unknown connector: {args.connector!r}")
@@ -258,6 +269,7 @@ async def _h_create(args: ConnectorsCreateInput, ctx: ToolContext) -> Any:
         )
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
+    await _check_api_urls(args.delivery_config)
     cipher = cipher_from_settings()
     webhook_token = secrets.token_urlsafe(_TOKEN_BYTES)
     row = ConnectorAccountRow(
@@ -328,6 +340,7 @@ class ConnectorsSetDeliveryConfigInput(BaseModel):
 
 async def _h_set_delivery_config(args: ConnectorsSetDeliveryConfigInput, ctx: ToolContext) -> Any:
     row = await _resolve_connector(ctx, args.connector_id)
+    await _check_api_urls(args.delivery_config)
     # Shallow-merge, reassigning a fresh dict so the SQLAlchemy JSON column
     # detects the change (mirrors the REST PATCH handler exactly).
     try:
