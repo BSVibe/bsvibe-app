@@ -38,7 +38,9 @@ class _Ctx:
         config: dict[str, Any] | None = None,
         knowledge: _Knowledge | None = None,
         logger: Any = None,
+        import_root: Path | None = None,
     ) -> None:
+        self.import_root: str | None = str(import_root) if import_root else None
         self.credentials: dict[str, Any] = {}
         self.config: dict[str, Any] = config or {}
         self.knowledge = knowledge if knowledge is not None else _Knowledge()
@@ -92,7 +94,7 @@ class TestImportVault:
         _write_md(tmp_path, "a.md", "# a body")
         _write_md(tmp_path, "sub/b.md", "---\ntitle: B\n---\nb body\n")
         knowledge = _Knowledge()
-        ctx = _Ctx(knowledge=knowledge)
+        ctx = _Ctx(knowledge=knowledge, import_root=tmp_path)
         result = await _runner().dispatch_action(
             P.meta,
             action_name="import_vault",
@@ -115,7 +117,7 @@ class TestImportVault:
             "---\ntitle: Hello\ntags:\n  - x\n---\nThe body.\n",
         )
         knowledge = _Knowledge()
-        ctx = _Ctx(knowledge=knowledge)
+        ctx = _Ctx(knowledge=knowledge, import_root=tmp_path)
         await _runner().dispatch_action(
             P.meta,
             action_name="import_vault",
@@ -136,7 +138,7 @@ class TestImportVault:
         await _runner().dispatch_action(
             P.meta,
             action_name="import_vault",
-            context=_Ctx(knowledge=knowledge),
+            context=_Ctx(knowledge=knowledge, import_root=tmp_path),
             kwargs={"vault_path": str(tmp_path)},
         )
         assert len(knowledge.calls) == 1
@@ -149,7 +151,7 @@ class TestImportVault:
         await _runner().dispatch_action(
             P.meta,
             action_name="import_vault",
-            context=_Ctx(knowledge=knowledge),
+            context=_Ctx(knowledge=knowledge, import_root=tmp_path),
             kwargs={
                 "vault_path": str(tmp_path),
                 "exclude_patterns": ["skip/**"],
@@ -164,7 +166,7 @@ class TestImportVault:
     async def test_missing_vault_path_in_args_falls_back_to_config(self, tmp_path):
         _write_md(tmp_path, "a.md", "x")
         knowledge = _Knowledge()
-        ctx = _Ctx(knowledge=knowledge, config={"vault_path": str(tmp_path)})
+        ctx = _Ctx(knowledge=knowledge, config={"vault_path": str(tmp_path)}, import_root=tmp_path)
         # Action allows omitting vault_path when the binding config supplies one.
         result = await _runner().dispatch_action(
             P.meta,
@@ -185,7 +187,7 @@ class TestImportVault:
     @pytest.mark.asyncio
     async def test_no_knowledge_backend_raises(self, tmp_path):
         _write_md(tmp_path, "a.md", "x")
-        ctx = _Ctx(knowledge=None)
+        ctx = _Ctx(knowledge=None, import_root=tmp_path)
         ctx.knowledge = None  # type: ignore[assignment]
         with pytest.raises(PluginRunError, match="knowledge"):
             await _runner().dispatch_action(
@@ -202,7 +204,7 @@ class TestImportVault:
         _write_md(tmp_path, "a.md", "x")
         _write_md(tmp_path, "Templates/skip.md", "tpl")
         knowledge = _Knowledge()
-        ctx = _Ctx(knowledge=knowledge)
+        ctx = _Ctx(knowledge=knowledge, import_root=tmp_path)
         with structlog.testing.capture_logs() as logs:
             await _runner().dispatch_action(
                 P.meta,
