@@ -50,7 +50,10 @@ from backend.api.deps import get_db_session
 from backend.config import get_settings
 from backend.connectors.auth.app_credentials import get_app_credentials
 from backend.connectors.db import ConnectorAccountRow
-from backend.connectors.github_access import github_installation_id
+from backend.connectors.github_access import (
+    confirm_unrecorded_installation,
+    github_installation_id,
+)
 from backend.connectors.handshake import handshake_response
 from backend.connectors.interactions import interaction_callback
 from backend.connectors.resolver import ConnectorInboundResolver, UnknownConnectorError
@@ -431,8 +434,10 @@ async def _github_accounts_bound_to(
     One App serves every workspace, so the repo name alone proves nothing: a
     workspace that merely bound the same ``owner/name`` must not receive another
     installation's events. The payload's ``installation.id`` has to equal the
-    installation recorded on the account; an account with no installation on
-    record gets no App delivery, and neither does a delivery without one. This
+    installation recorded on the account. An account with no installation on
+    record is accepted only when the App itself says that installation covers
+    ``repo`` (:func:`confirm_unrecorded_installation`, which then records it). A
+    delivery without an installation goes nowhere. This
     runs on every delivery, so bindings made before the rule are filtered too.
     """
     if installation_id is None:
@@ -446,7 +451,13 @@ async def _github_accounts_bound_to(
         ConnectorAccountRow.id.in_(bound),
     )
     rows = list((await session.execute(stmt)).scalars().all())
-    return [a for a in rows if github_installation_id(a) == installation_id]
+    accepted = [a for a in rows if github_installation_id(a) == installation_id]
+    for account in rows:
+        if account not in accepted and await confirm_unrecorded_installation(
+            account, repo=repo, installation_id=installation_id
+        ):
+            accepted.append(account)
+    return accepted
 
 
 @router.post("/webhooks/github")

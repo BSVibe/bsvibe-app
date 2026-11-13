@@ -128,6 +128,29 @@ class GitHubAppProvider:
             account_label=None,
         )
 
+    async def repo_installation_id(self, repo: str) -> str | None:
+        """The App installation that covers ``owner/name``, or ``None`` when the App is not
+        installed on it (404). Signed with the App JWT, so the answer comes from GitHub, never
+        from anything a workspace stored. Other HTTP failures raise."""
+        if not self.supports_service_token:
+            raise NotImplementedError(
+                "github installation lookup requires app_id + private_key_pem"
+            )
+        app_jwt = self._build_app_jwt()
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.get(
+                f"{_API_BASE}/repos/{repo}/installation",
+                headers={
+                    "Authorization": f"Bearer {app_jwt}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+        if resp.status_code == httpx.codes.NOT_FOUND:
+            return None
+        resp.raise_for_status()
+        installation = resp.json().get("id")
+        return str(installation) if installation is not None else None
+
     # ── internals ──
 
     async def _token_request(self, data: dict[str, str]) -> dict[str, Any]:
