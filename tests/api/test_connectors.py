@@ -661,7 +661,11 @@ async def test_workspace_isolation_list_and_revoke(
 
 async def test_create_rejects_installation_claims(client: httpx.AsyncClient) -> None:
     """설치 id 는 서버가 claim 때 기록한 값만 믿는다 — 생성 입력으로 주장할 수 없다."""
-    for extra in ({"delivery_config": {"installation_id": 999}}, {"external_ref": "999"}):
+    for extra in (
+        {"delivery_config": {"installation_id": 999}},
+        {"external_ref": "999"},
+        {"external_ref": "o/r"},
+    ):
         r = await client.post(
             "/api/v1/connectors",
             json={"connector": "github", "signing_secret": "shh", **extra},
