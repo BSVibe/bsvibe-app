@@ -51,6 +51,7 @@ from backend.workflow.domain.model_account_decision import (
     ACCOUNT_CHOICES_KEY,
     DECISION_AMBIGUOUS_MODEL_ACCOUNT,
 )
+from backend.workflow.domain.requirements import FOUNDER_CORRECTIONS_KEY
 from backend.workflow.domain.run_token_cap import (
     TOKEN_CAP_DECISION_KIND,
     TOKEN_CAP_GRANT_KEY,
@@ -355,6 +356,18 @@ async def resolve_checkpoint(  # noqa: PLR0912, PLR0915 — one branch per resol
         }
     )
     payload["resolved_decisions"] = resolved
+    # 장부 정정 — 창업자가 질문에 자유 텍스트로 직접 쓴 답만 (옵션 선택·action_key 는 아님).
+    offered = _decision_options(decision) or []
+    typed = answer.strip()
+    if (
+        action_key is None
+        and decision.decision == "ask_user_question"
+        and typed
+        and typed not in {o.strip() for o in offered}
+    ):
+        corrections = list(payload.get(FOUNDER_CORRECTIONS_KEY) or [])
+        corrections.append({"decision_id": str(decision.id), "text": typed})
+        payload[FOUNDER_CORRECTIONS_KEY] = corrections
     await _prepare_the_resume(
         session, payload, run=run, decision=decision, action_key=action_key, answer=answer
     )
