@@ -238,16 +238,6 @@ async def _cited_body(box: SandboxSession, test: str) -> tuple[str, str] | None:
     return "\n\n".join(parts), helpers
 
 
-async def _same_file_helpers(box: SandboxSession, tests: Sequence[Any]) -> list[str]:
-    """The same-file definitions each cited test calls, one block per test."""
-    out: list[str] = []
-    for test in tests:
-        got = await _cited_body(box, str(test))
-        if got is not None and got[1] and got[1] not in out:
-            out.append(got[1])
-    return out
-
-
 async def _imported_helpers(
     box: SandboxSession, text: str, test_path: str, used: str, *, limit: int = 3000
 ) -> list[str]:
@@ -307,6 +297,12 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
         for test in row.get("tests") or []:
             got = await _cited_body(box, test)
             lead.append(f"--- test {test}: passed at the gate" + (f"\n{got[0]}" if got else ""))
+            # The same-file helpers sit right under the test body and are reserved BEFORE the
+            # cited paths: on a large diff they used to be the first thing to drop (#1287).
+            if got and got[1] and not any(got[1] in block for block in lead[:-1]):
+                lead.append(
+                    f"--- defined in the same file as the cited test, used by it:\n{got[1]}"
+                )
         if row.get("note"):
             lead.append(f"--- agent's note: {row['note']}")
         head = "\n\n".join(lead)
@@ -332,14 +328,6 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
             room -= len(part) + 2
         if not_shown:
             parts.append(f"[... not shown, out of room: {', '.join(not_shown)} ...]")
-        # Then the same-file definitions the cited tests call, in what the paths left.
-        for helpers in await _same_file_helpers(box, row.get("tests") or []):
-            block = f"--- defined in the same file as the cited test, used by it:\n{helpers}"
-            if len(block) > room:
-                parts.append("[... same-file helpers of the cited test not shown, out of room ...]")
-                break
-            parts.append(block)
-            room -= len(block) + 2
         return "\n\n".join(x for x in (head, "\n\n".join(parts)) if x)
 
     async def _path_diff(path: str) -> str:
@@ -445,6 +433,17 @@ def _verdict(raw: str) -> tuple[str, str]:
     return "unclear", reasoning or "cannot determine"
 
 
+async def _imported_files(box: SandboxSession, test: str, split: tuple[str, str]) -> set[str]:
+    """Every file an imported helper of the cited test could come from — their content goes
+    into the excerpt, so a change there must re-open the item."""
+    text = await _test_file(box, split[0])
+    body = cited_test_body(text, split[1]) if text is not None else None
+    if text is None or body is None:
+        return set()
+    used = f"{body}\n{cited_test_helpers(text, body)}"
+    return {p for paths, _name in imported_helper_sources(text, split[0], used) for p in paths}
+
+
 def file_content_key(box: SandboxSession) -> ContentKey:
     """A key over what an item cites: its text, the cited paths and tests, and those files'
     CONTENT \u2014 independent of how the excerpt happened to be cut or ordered."""
@@ -454,7 +453,16 @@ def file_content_key(box: SandboxSession) -> ContentKey:
         for test in row.get("tests") or []:
             split = split_test_id(str(test))
             files.add(split[0] if split else str(test))
-        parts = [str(row.get("text", "")), *sorted(str(t) for t in row.get("tests") or [])]
+            if split is not None:
+                files |= await _imported_files(box, str(test), split)
+        # The item's evidence (note, paths, tests) is part of what was judged too.
+        parts = [
+            str(row.get("text", "")),
+            f"note={row.get('note') or ''}",
+            f"status={row.get('status') or ''}",
+            *(f"path={p}" for p in sorted(str(p) for p in row.get("paths") or [])),
+            *(f"test={t}" for t in sorted(str(t) for t in row.get("tests") or [])),
+        ]
         for path in sorted(files):
             text = await _test_file(box, path)
             parts.append(f"{path}\n{text if text is not None else '(unreadable)'}")
