@@ -68,10 +68,13 @@ _JUDGE_SYSTEM = (
     "You check ONE requirement against the evidence a coding agent cited for it. Answer with "
     'ONE JSON object: {"passed": true|false|"cannot_determine", "reasoning": "<one sentence>"}. '
     "passed=true only when the evidence shown plainly satisfies the requirement. passed=false "
-    "when it plainly does not (wrong behaviour, a different thing, or only part of it). Use "
+    "ONLY when the evidence shown CONFLICTS with the requirement (wrong behaviour, a different "
+    "thing, or only part of it). A definition or hunk missing from the excerpt is not a "
+    "conflict: use "
     '"cannot_determine" when the excerpt is cut off or does not show enough to tell.'
 )
 
+ContentKey = Callable[[Mapping[str, Any]], Awaitable[str]]
 Complete = Callable[[list[dict[str, str]]], Awaitable[str]]
 Excerpt = Callable[[Mapping[str, Any]], Awaitable[str]]
 
@@ -215,7 +218,8 @@ async def _test_file(box: SandboxSession, path: str) -> str | None:
         return None
 
 
-async def _cited_body(box: SandboxSession, test: str) -> str | None:
+async def _cited_body(box: SandboxSession, test: str) -> tuple[str, str] | None:
+    """``(test body + imported helpers, same-file helpers)`` of a cited test."""
     split = split_test_id(test)
     if split is None:
         return None
@@ -227,13 +231,11 @@ async def _cited_body(box: SandboxSession, test: str) -> str | None:
         return None
     # The same-file helpers and fixtures the test names — without them a test that stores
     # rows through ``_hold(db, MIXED)`` shows the judge nothing it can check (#1287).
+    # They are returned apart: the excerpt fills the cited paths first, then these.
     helpers = cited_test_helpers(text, body)
-    parts = [body]
-    if helpers:
-        parts.append(f"--- defined in the same file, used above:\n{helpers}")
     # …and the ones it imports from another file (#1302: ``issue_t._seed`` from a sibling test).
-    parts += await _imported_helpers(box, text, split[0], f"{body}\n{helpers}")
-    return "\n\n".join(parts)
+    parts = [body, *await _imported_helpers(box, text, split[0], f"{body}\n{helpers}")]
+    return "\n\n".join(parts), helpers
 
 
 async def _imported_helpers(
@@ -293,8 +295,14 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
         # reached (#1275). The paths fill what is left.
         lead: list[str] = []
         for test in row.get("tests") or []:
-            body = await _cited_body(box, test)
-            lead.append(f"--- test {test}: passed at the gate" + (f"\n{body}" if body else ""))
+            got = await _cited_body(box, test)
+            lead.append(f"--- test {test}: passed at the gate" + (f"\n{got[0]}" if got else ""))
+            # The same-file helpers sit right under the test body and are reserved BEFORE the
+            # cited paths: on a large diff they used to be the first thing to drop (#1287).
+            if got and got[1] and not any(got[1] in block for block in lead[:-1]):
+                lead.append(
+                    f"--- defined in the same file as the cited test, used by it:\n{got[1]}"
+                )
         if row.get("note"):
             lead.append(f"--- agent's note: {row['note']}")
         head = "\n\n".join(lead)
@@ -425,8 +433,67 @@ def _verdict(raw: str) -> tuple[str, str]:
     return "unclear", reasoning or "cannot determine"
 
 
+async def _imported_files(box: SandboxSession, test: str, split: tuple[str, str]) -> set[str]:
+    """Every file an imported helper of the cited test could come from — their content goes
+    into the excerpt, so a change there must re-open the item."""
+    text = await _test_file(box, split[0])
+    body = cited_test_body(text, split[1]) if text is not None else None
+    if text is None or body is None:
+        return set()
+    used = f"{body}\n{cited_test_helpers(text, body)}"
+    return {p for paths, _name in imported_helper_sources(text, split[0], used) for p in paths}
+
+
+def file_content_key(box: SandboxSession) -> ContentKey:
+    """A key over what an item cites: its text, the cited paths and tests, and those files'
+    CONTENT \u2014 independent of how the excerpt happened to be cut or ordered."""
+
+    async def _key(row: Mapping[str, Any]) -> str:
+        files: set[str] = {str(p) for p in row.get("paths") or []}
+        for test in row.get("tests") or []:
+            split = split_test_id(str(test))
+            files.add(split[0] if split else str(test))
+            if split is not None:
+                files |= await _imported_files(box, str(test), split)
+        # The item's evidence (note, paths, tests) is part of what was judged too.
+        parts = [
+            str(row.get("text", "")),
+            f"note={row.get('note') or ''}",
+            f"status={row.get('status') or ''}",
+            *(f"path={p}" for p in sorted(str(p) for p in row.get("paths") or [])),
+            *(f"test={t}" for t in sorted(str(t) for t in row.get("tests") or [])),
+        ]
+        for path in sorted(files):
+            text = await _test_file(box, path)
+            parts.append(f"{path}\n{text if text is not None else '(unreadable)'}")
+        return _hash("\n#\n".join(parts))
+
+    return _key
+
+
 def _hash(excerpt: str) -> str:
     return hashlib.sha256(excerpt.encode()).hexdigest()[:16]
+
+
+async def _keep_done(
+    row: dict[str, Any],
+    content: str,
+    prior_done: Mapping[tuple[str, str], Mapping[str, Any]],
+    corrections: Sequence[str],
+) -> bool:
+    """Stamp ``row`` with its content hash; reuse the prior ``done`` for it when there is one."""
+    if corrections:
+        content = _hash(f"{content}\n#founder\n" + "\n".join(corrections))
+    row["content_hash"] = content
+    kept = prior_done.get((str(row["id"]), content))
+    if kept is None:
+        return False
+    row["status"], row["note"] = "done", str(kept.get("note") or "")
+    if kept.get("excerpt_hash"):
+        row["excerpt_hash"] = kept["excerpt_hash"]
+    if kept.get("founder_correction"):
+        row["founder_correction"] = True
+    return True
 
 
 async def judge_ledger(
@@ -441,6 +508,7 @@ async def judge_ledger(
     missing_tests: MissingTests | None = None,
     command_verdicts: Mapping[str, tuple[str, str]] | None = None,
     corrections: Sequence[str] = (),
+    content_key: ContentKey | None = None,
 ) -> list[dict[str, Any]]:
     """Verdict rows. ``judge=False`` (another check already failed) leaves grounded rows
     ``pending`` — the run fails anyway, and judging work that is about to change is waste.
@@ -462,6 +530,13 @@ async def judge_ledger(
         for r in prior_rows
         if r.get("status") in {"done", "rejected", "unclear"} and r.get("excerpt_hash")
     }
+    # An item that was ``done`` and cites the same content keeps that verdict, however the
+    # excerpt is cut this round (a cut that moves must not re-open a settled item).
+    prior_done = {
+        (str(r.get("id")), str(r.get("content_hash"))): r
+        for r in prior_rows
+        if r.get("status") == "done" and r.get("content_hash")
+    }
     gate = asyncio.Semaphore(_JUDGE_CONCURRENCY)
 
     async def _one(row: dict[str, Any]) -> None:
@@ -472,6 +547,10 @@ async def judge_ledger(
                 f"cited test(s) not found in their file: {', '.join(missing)} — cite the test "
                 "by the name it is defined with"
             )
+            return
+        if content_key is not None and await _keep_done(
+            row, await content_key(row), prior_done, corrections
+        ):
             return
         shown = await excerpt(row)
         # A correction changes what "satisfies" means, so it is part of the cache key
@@ -498,6 +577,7 @@ async def judge_ledger(
                 row["status"], row["note"] = "unclear", "judge unavailable"
                 # Not a verdict on this evidence — the next round must judge it again.
                 row.pop("excerpt_hash", None)
+                row.pop("content_hash", None)
                 return
         row["status"], reasoning = _verdict(raw)
         if reasoning:
@@ -570,6 +650,7 @@ async def ledger_rows_for_runs(
 __all__ = [
     "EvidenceReminder",
     "diff_excerpt",
+    "file_content_key",
     "gate_facts",
     "judge_ledger",
     "judge_messages",

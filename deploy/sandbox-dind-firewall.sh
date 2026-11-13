@@ -63,6 +63,11 @@
 set -eu
 
 NESTED_BRIDGE="docker0"
+# Interfaces the rules attach to. `docker0` is the default nested bridge; every
+# user-defined network (the per-run `sbxnet-*` created for the test-DB sidecar)
+# gets a `br-<id>` bridge, which `br+` (iptables wildcard) matches. Without it
+# the sidecar network escaped the rules entirely.
+SANDBOX_IFACES="$NESTED_BRIDGE br+"
 # The RFC1918 + link-local ranges. STATIC. A nested container must not reach any
 # of these: the compose subnet (postgres/redis/backend + the DinD's own eth0)
 # and the nested bridge gateway all live inside them.
@@ -100,19 +105,37 @@ apply_firewall() {
     #     Routed traffic from `docker0` out to any private range is DROPPED.
     #     Public destinations (PyPI/npm CDNs, founder APIs) are NOT in these
     #     ranges, so they fall through and are masqueraded out to the internet.
-    for cidr in $PRIVATE_RANGES; do
-        if ! iptables -w -C DOCKER-USER -i "$NESTED_BRIDGE" -d "$cidr" -j DROP 2>/dev/null; then
-            iptables -w -I DOCKER-USER -i "$NESTED_BRIDGE" -d "$cidr" -j DROP
+    for iface in $SANDBOX_IFACES; do
+        for cidr in $PRIVATE_RANGES; do
+            if ! iptables -w -C DOCKER-USER -i "$iface" -d "$cidr" -j DROP 2>/dev/null; then
+                iptables -w -I DOCKER-USER -i "$iface" -d "$cidr" -j DROP
+            fi
+        done
+        # (b) INPUT path: sandbox -> the daemon's own control socket on the
+        #     bridge gateway (<gateway>:2375). Destined to the DinD itself
+        #     (INPUT, not FORWARD). The backend's path (eth0) is untouched.
+        if ! iptables -w -C INPUT -i "$iface" -p tcp --dport "$DAEMON_PORT" -j DROP 2>/dev/null; then
+            iptables -w -I INPUT -i "$iface" -p tcp --dport "$DAEMON_PORT" -j DROP
         fi
     done
 
-    # (b) INPUT path: nested container -> the daemon's own control socket on the
-    #     bridge gateway (<gateway>:2375). This is destined to the DinD itself
-    #     (INPUT, not FORWARD), so DOCKER-USER does not cover it. Drop 2375
-    #     arriving on the nested bridge. The backend's path (arriving on eth0) is
-    #     untouched.
-    if ! iptables -w -C INPUT -i "$NESTED_BRIDGE" -p tcp --dport "$DAEMON_PORT" -j DROP 2>/dev/null; then
-        iptables -w -I INPUT -i "$NESTED_BRIDGE" -p tcp --dport "$DAEMON_PORT" -j DROP
+    # (c) Same-network traffic (sandbox <-> its test-DB sidecar) lives in a
+    #     private range too; with br_netfilter it traverses FORWARD and would hit
+    #     (a). Bridged (same-L2) traffic never leaves the network, so RETURN it
+    #     BEFORE the DROPs (inserted last => evaluated first).
+    #     OPTIONAL: `-m physdev` needs the xt_physdev kernel module. A host
+    #     without it must not take DinD down (set -e would kill every sandbox
+    #     run, sidecar on or off). The insert itself is the probe: if it is
+    #     rejected, warn and skip. The private-range DROPs and the :2375 block
+    #     above do NOT depend on this rule and stay in force on every network.
+    PHYSDEV_RETURN=0
+    if iptables -w -C DOCKER-USER -i br+ -m physdev --physdev-is-bridged -j RETURN 2>/dev/null; then
+        PHYSDEV_RETURN=1
+    elif iptables -w -I DOCKER-USER -i br+ -m physdev --physdev-is-bridged -j RETURN 2>/dev/null; then
+        PHYSDEV_RETURN=1
+    else
+        echo "[sbx-fw] WARN: xt_physdev unavailable - skipping the same-network RETURN rule;" \
+            "isolation DROPs stay in force (sidecar same-network traffic may be blocked)" >&2
     fi
 
     echo "[sbx-fw] nested-sandbox egress isolation applied (bridge=$NESTED_BRIDGE," \
@@ -123,12 +146,18 @@ apply_firewall() {
 # command was accepted; it says nothing about the table's state afterwards.
 verify_firewall() {
     missing=""
-    for cidr in $PRIVATE_RANGES; do
-        iptables -w -C DOCKER-USER -i "$NESTED_BRIDGE" -d "$cidr" -j DROP 2>/dev/null \
-            || missing="$missing FORWARD:$cidr"
+    for iface in $SANDBOX_IFACES; do
+        for cidr in $PRIVATE_RANGES; do
+            iptables -w -C DOCKER-USER -i "$iface" -d "$cidr" -j DROP 2>/dev/null \
+                || missing="$missing FORWARD:$iface:$cidr"
+        done
+        iptables -w -C INPUT -i "$iface" -p tcp --dport "$DAEMON_PORT" -j DROP 2>/dev/null \
+            || missing="$missing INPUT:$iface:$DAEMON_PORT"
     done
-    iptables -w -C INPUT -i "$NESTED_BRIDGE" -p tcp --dport "$DAEMON_PORT" -j DROP 2>/dev/null \
-        || missing="$missing INPUT:$DAEMON_PORT"
+    if [ "${PHYSDEV_RETURN:-0}" = "1" ]; then
+        iptables -w -C DOCKER-USER -i br+ -m physdev --physdev-is-bridged -j RETURN 2>/dev/null \
+            || missing="$missing FORWARD:br+:bridged-return"
+    fi
 
     if [ -n "$missing" ]; then
         echo "[sbx-fw] FATAL: rules absent after apply —$missing" >&2
