@@ -144,9 +144,7 @@ def build_merge_watch_conflict_escalate(
             payload.pop("merge_conflict", None)
             payload.pop("merge_conflict_resolving", None)
             run.payload = payload
-            # Pause the run ON the Decision (RUNNING → not re-picked by
-            # drive_once). A no-op when the run is already RUNNING; a wedged
-            # OPEN/other-state run is pulled out of the drive loop here.
+            # Pause the run ON the Decision (RUNNING → not re-picked by drive_once).
             runner = AgentRunner(session)
             await runner.transition(
                 run_id=run_id,
