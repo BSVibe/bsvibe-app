@@ -13,6 +13,7 @@ one-way inbound knowledge ingest.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,33 @@ p = plugin(
     # No external API credentials; the binding config carries vault_path.
     credentials=[],
 )
+
+
+def _allowed_root(context: Any) -> Path:
+    """The server-side import root from the context — refuse when there is none."""
+    raw = getattr(context, "import_root", None)
+    if not raw or not Path(raw).is_absolute():
+        raise ValueError(
+            "obsidian.import_vault: no allowed import root (an absolute"
+            " SkillContext.import_root is required) — refusing to import"
+        )
+    return Path(raw).resolve()
+
+
+def _confine(allowed_root: Path, requested: str) -> Path:
+    """Resolve ``requested`` (absolute, or relative to the root) and require it under the root.
+
+    ``..`` and symlinks are collapsed by ``resolve`` before the check.
+    """
+    candidate = Path(requested)
+    if not candidate.is_absolute():
+        candidate = allowed_root / candidate
+    resolved = candidate.resolve()
+    if resolved != allowed_root and allowed_root not in resolved.parents:
+        raise ValueError(
+            f"obsidian.import_vault: path {requested!r} is outside the allowed import root"
+        )
+    return resolved
 
 
 # ── actions (agent-loop tools) ─────────────────────────────────────────────
@@ -106,12 +134,17 @@ async def import_vault(
     if resolved_excludes is None:
         resolved_excludes = context.config.get("exclude_patterns")  # may be None
 
-    scanner = VaultScanner(Path(resolved_path), exclude_patterns=resolved_excludes)
+    allowed_root = _allowed_root(context)
+    vault_dir = _confine(allowed_root, str(resolved_path))
+
+    scanner = VaultScanner(vault_dir, exclude_patterns=resolved_excludes, allowed_root=allowed_root)
+    # The walk does blocking filesystem I/O — keep it off the event loop.
+    scanned_notes = await asyncio.to_thread(lambda: list(scanner.scan()))
 
     notes_count = 0
     scanned_count = 0
     skipped_count = 0
-    for note in scanner.scan():
+    for note in scanned_notes:
         scanned_count += 1
         try:
             metadata, body = parse_note(note.text)
@@ -160,13 +193,25 @@ async def import_vault(
         notes_count=notes_count,
         scanned_count=scanned_count,
         skipped_count=skipped_count,
+        skipped_outside_count=len(scanner.skipped_outside),
+        stop_reason=scanner.stop_reason,
     )
 
-    return {
+    result: dict[str, Any] = {
         "notes_count": notes_count,
         "scanned_count": scanned_count,
         "skipped_count": skipped_count,
     }
+    if scanner.skipped_outside:
+        logger.warning(
+            "obsidian_entries_outside_root_skipped",
+            entries=scanner.skipped_outside[:20],
+            total=len(scanner.skipped_outside),
+        )
+        result["skipped_outside_root"] = len(scanner.skipped_outside)
+    if scanner.stop_reason:
+        result["stopped"] = scanner.stop_reason
+    return result
 
 
 # ── setup ────────────────────────────────────────────────────────────────────

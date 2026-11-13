@@ -242,6 +242,10 @@ class Settings(BaseSettings):
     # Per-workspace vault lives at ``<knowledge_vault_root>/<region>/<workspace_id>/``.
     knowledge_vault_root: str = "var/vault"
     knowledge_default_region: str = "us-1"
+    # Server-side allow-list root for bulk file imports (Obsidian). Each workspace may only
+    # import from ``<import_root>/<workspace_id>/``. MUST be an absolute path; a relative value
+    # disables imports (the dispatcher refuses rather than guess a working directory).
+    import_root: str = "/var/lib/bsvibe/imports"
     # #929 stage 2 — where the vault and skills live: ``filesystem`` (the directories above) or
     # ``postgres`` (``vault_documents`` rows, shared by every machine). One factory reads it:
     # ``backend.knowledge.vault_store``. Flip only after ``python -m backend.knowledge.store import``.
