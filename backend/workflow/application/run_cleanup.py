@@ -684,8 +684,10 @@ async def cancel_run(
         return CancelOutcome(found=False, cancelled=False, status=None)
     if run.status not in _CANCELLABLE:
         return CancelOutcome(found=True, cancelled=False, status=run.status.value)
-    await _cancel(session, run, reason=reason)
+    # Resolve first: the move to a terminal status closes whatever is still pending
+    # with a generic reason, and this path has a better one (the cancel reason).
     resolved = await _resolve_pending_decisions(session, run, reason=reason, actor_id=actor_id)
+    await _cancel(session, run, reason=reason)
     sm_resolved = await resolve_pending_safe_mode_items(session, run)
     # Cancel leaves the run's worktree on disk (unlike discard, which removes it
     # entirely). If the run was cancelled while a verify-time ``merge main`` was
@@ -722,10 +724,10 @@ async def discard_run(
     if run is None or run.workspace_id != workspace_id:
         return None
 
-    cancelled = await _cancel(session, run, reason=reason)
     decisions_resolved = await _resolve_pending_decisions(
         session, run, reason=reason, actor_id=actor_id
     )
+    cancelled = await _cancel(session, run, reason=reason)
     safe_mode_resolved = await resolve_pending_safe_mode_items(session, run)
 
     deliverables = SqlAlchemyDeliverableRepository(session)
@@ -787,9 +789,9 @@ async def cancel_product_runs(
     rows = (await session.execute(stmt)).scalars().all()
     cancelled = 0
     for run in rows:
+        await _resolve_pending_decisions(session, run, reason=reason, actor_id=actor_id)
         if await _cancel(session, run, reason=reason):
             cancelled += 1
-        await _resolve_pending_decisions(session, run, reason=reason, actor_id=actor_id)
         await resolve_pending_safe_mode_items(session, run)
     return cancelled
 
