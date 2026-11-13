@@ -8,7 +8,6 @@ which reach ``delivery_runtime`` via the approval-callback chain). Keeping the
 import-linter contract (the inbound layer has zero plugin imports).
 
 Two pieces:
-
 * :func:`build_merge_watch_client_resolver` — the production per-row GitHub
   client resolver (workspace github binding → decrypted API token → a
   :class:`~plugin.github.client.GithubClient`), injected into the worker so the
