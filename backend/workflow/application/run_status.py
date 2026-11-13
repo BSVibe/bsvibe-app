@@ -38,6 +38,7 @@ import structlog
 from sqlalchemy import select, update
 from sqlalchemy.orm.attributes import set_committed_value
 
+from backend.common.decision_kinds import KEEP_PENDING_ON_TERMINAL_KINDS
 from backend.workflow.infrastructure.db import (
     Decision,
     DecisionStatus,
@@ -163,7 +164,11 @@ async def close_decisions_of_terminal_runs(session: AsyncSession) -> int:
 async def _close(session: AsyncSession, *conditions: object) -> int:
     result = await session.execute(
         update(Decision)
-        .where(Decision.status == DecisionStatus.PENDING, *conditions)  # type: ignore[arg-type]
+        .where(
+            Decision.status == DecisionStatus.PENDING,
+            Decision.decision.not_in(tuple(KEEP_PENDING_ON_TERMINAL_KINDS)),
+            *conditions,  # type: ignore[arg-type]
+        )
         .values(
             status=DecisionStatus.RESOLVED,
             resolution=RUN_REACHED_TERMINAL,
