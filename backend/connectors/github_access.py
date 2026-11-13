@@ -55,9 +55,9 @@ def reject_server_owned_installation(
         raise ValueError(
             "installation_id 는 서버가 설치 claim 때 기록하는 값이라 직접 설정할 수 없습니다"
         )
-    if connector == "github" and external_ref and external_ref.strip().isdigit():
+    if connector == "github" and external_ref is not None and external_ref.strip():
         raise ValueError(
-            "github 커넥터의 숫자 external_ref 는 설치 claim 이 기록하는 값이라 직접 설정할 수 없습니다"
+            "github 커넥터의 external_ref 는 설치 claim 이 서버에서 기록하는 값이라 직접 설정할 수 없습니다"
         )
 
 
