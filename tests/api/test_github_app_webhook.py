@@ -106,6 +106,7 @@ async def _seed_bound_repo(
     *,
     resource_id: str = REPO,
     is_active: bool = True,
+    installation_id: int | None = 12345,
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     """A workspace whose product is bound to ``resource_id`` through an active
     github connector account. Returns ``(workspace, product, account)`` ids."""
@@ -127,6 +128,8 @@ async def _seed_bound_repo(
             connector="github",
             webhook_token="wht_" + uuid.uuid4().hex,
             signing_secret_ciphertext=cipher.encrypt("pat-token"),
+            # 설치 id 는 설치 claim 이 서버에서 external_ref 에 기록한 값이다.
+            external_ref=str(installation_id) if installation_id else None,
             delivery_config={"repo": resource_id, "base_branch": "main"},
             is_active=is_active,
         )
@@ -370,3 +373,92 @@ def test_the_app_manifest_subscribes_to_issue_events_it_can_read() -> None:
     )
     assert {"issues", "issue_comment", "pull_request"} <= set(manifest["default_events"])
     assert manifest["default_permissions"]["issues"] in {"read", "write"}
+
+
+# ── 설치 id 대조: 저장소 이름만으로는 배분하지 않는다 ──────────────────────────
+
+
+async def test_webhook_skips_other_installation(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    """같은 저장소 이름을 바인딩했어도 설치 id 가 다른 워크스페이스에는 가지 않는다."""
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    await _seed_bound_repo(sf, cipher, installation_id=999)
+
+    resp = await _post(client, _issue_body())  # installation.id == 12345
+
+    assert resp.status_code == 202
+    assert await _rows(sf) == []
+
+
+async def test_webhook_skips_account_without_installation(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    await _seed_bound_repo(sf, cipher, installation_id=None)
+
+    resp = await _post(client, _issue_body())
+
+    assert resp.status_code == 202
+    assert await _rows(sf) == []
+
+
+async def test_webhook_delivers_same_installation_only(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    ws_ok, _, _ = await _seed_bound_repo(sf, cipher, installation_id=12345)
+    await _seed_bound_repo(sf, cipher, installation_id=999)
+
+    resp = await _post(client, _issue_body())
+
+    assert resp.status_code == 202
+    rows = await _rows(sf)
+    assert [r.workspace_id for r in rows] == [ws_ok]
+
+
+async def test_installation_id_in_delivery_config_is_not_trusted(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    """사용자가 쓸 수 있는 delivery_config 의 installation_id 로는 앱 웹훅을 받지 못한다."""
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    _, _, account_id = await _seed_bound_repo(sf, cipher, installation_id=None)
+    async with sf() as s:
+        row = await s.get(ConnectorAccountRow, account_id)
+        row.delivery_config = {**row.delivery_config, "installation_id": 12345}
+        await s.commit()
+
+    resp = await _post(client, _issue_body())
+
+    assert resp.status_code == 202
+    assert await _rows(sf) == []
+
+
+async def test_pat_account_without_installation_still_gets_events_on_its_own_webhook(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    """설치 기록이 없는 PAT 계정(delivery_config 에 repo/base_branch 만, external_ref 없음)은
+    앱 웹훅에서는 빠지지만 계정별 웹훅 경로로는 그대로 이벤트를 받는다."""
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    ws, _, account_id = await _seed_bound_repo(sf, cipher, installation_id=None)
+    async with sf() as s:
+        account = await s.get(ConnectorAccountRow, account_id)
+        assert account.external_ref is None
+        assert account.delivery_config == {"repo": REPO, "base_branch": "main"}
+        token = account.webhook_token
+
+    body = _issue_body()
+    resp = await client.post(
+        f"/api/webhooks/github/{token}",
+        content=body,
+        headers={
+            "X-GitHub-Event": "issues",
+            "X-GitHub-Delivery": "pat-delivery-1",
+            "X-Hub-Signature-256": _sign(body, "pat-token"),
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json().get("skipped") is not True
+    assert [r.workspace_id for r in await _rows(sf)] == [ws]

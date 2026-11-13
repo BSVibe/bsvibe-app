@@ -798,3 +798,47 @@ async def test_rotate_credential_cross_workspace_404(
             {"connector_id": cid, "signing_secret": "222222:new-token-BBBB"},
             tg=_Telegram(),
         )
+
+
+# ---------------------------------------------------------------------------
+# 설치 id 는 서버가 claim 때 기록한 값만 믿는다 — 사용자 입력으로는 주장 못 한다
+# ---------------------------------------------------------------------------
+async def test_create_rejects_installation_claims(db, workspace_id, user_id, registry) -> None:
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        for args in (
+            {"delivery_config": {"installation_id": 999}},
+            {"external_ref": "999"},
+        ):
+            with pytest.raises(Exception, match="installation|external_ref"):
+                await registry.call_tool(
+                    "bsvibe_connectors_create",
+                    {"connector": "github", "signing_secret": "shh", **args},
+                    ctx,
+                )
+
+
+async def test_set_delivery_config_rejects_installation_id(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    cid = await _create_github(
+        db, registry, workspace_id=workspace_id, user_id=user_id, delivery_config={"repo": "x"}
+    )
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        with pytest.raises(Exception, match="installation_id"):
+            await registry.call_tool(
+                "bsvibe_connectors_set_delivery_config",
+                {"connector_id": cid, "delivery_config": {"installation_id": 999}},
+                ctx,
+            )

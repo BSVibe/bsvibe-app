@@ -657,3 +657,29 @@ async def test_workspace_isolation_list_and_revoke(
         row = await s.get(ConnectorAccountRow, uuid.UUID(connector_id))
         assert row is not None
         assert row.is_active is True
+
+
+async def test_create_rejects_installation_claims(client: httpx.AsyncClient) -> None:
+    """설치 id 는 서버가 claim 때 기록한 값만 믿는다 — 생성 입력으로 주장할 수 없다."""
+    for extra in ({"delivery_config": {"installation_id": 999}}, {"external_ref": "999"}):
+        r = await client.post(
+            "/api/v1/connectors",
+            json={"connector": "github", "signing_secret": "shh", **extra},
+        )
+        assert r.status_code == 422, r.text
+
+
+async def test_patch_rejects_installation_id(
+    client: httpx.AsyncClient, sf: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
+) -> None:
+    account_id = await _seed_connector(
+        sf, workspace_id=workspace_id, connector="github", delivery_config={"repo": "o/r"}
+    )
+    r = await client.patch(
+        f"/api/v1/connectors/{account_id}", json={"delivery_config": {"installation_id": 999}}
+    )
+    assert r.status_code == 422, r.text
+    async with sf() as s:
+        row = await s.get(ConnectorAccountRow, account_id)
+        assert row is not None
+        assert "installation_id" not in row.delivery_config

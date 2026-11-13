@@ -18,6 +18,7 @@ import os
 from typing import Any
 
 from backend.extensions.plugin.context import SkillContext
+from backend.extensions.plugin.egress import check_connector_config
 from backend.workflow.domain.incoming import TriggerEvent
 from bsvibe_sdk import plugin
 from plugin.discord.client import DEFAULT_BASE_URL, DiscordClient
@@ -54,7 +55,7 @@ p = plugin(
 )
 
 
-def _client(context: SkillContext) -> DiscordClient:
+async def _client(context: SkillContext) -> DiscordClient:
     """Build an authed client from the injected credentials.
 
     ``config['discord_api_url']`` overrides the API base (testing / proxy).
@@ -64,6 +65,7 @@ def _client(context: SkillContext) -> DiscordClient:
     token = context.credentials.get("bot_token")
     if not token:
         raise ValueError("discord: missing required 'bot_token' credential")
+    await check_connector_config(context.config)
     base_url = context.config.get("discord_api_url", DEFAULT_BASE_URL)
     return DiscordClient(token, base_url=base_url)
 
@@ -106,7 +108,7 @@ async def deliver_message(context: SkillContext, event: dict[str, Any]) -> dict[
     audit-visible (no clean undo) → tier ``t2_trail`` (matches Slack/Telegram's
     deletable-message tier)."""
     channel_id = str(event["channel_id"])
-    client = _client(context)
+    client = await _client(context)
     data = await client.create_message(
         channel_id, event["content"], components=event.get("components")
     )
@@ -133,7 +135,7 @@ async def revert_message(context: SkillContext, handle: dict[str, Any]) -> dict[
     the deletion is not a clean undo). Idempotent: an already-deleted message
     (HTTP 404) yields a silent no-op success."""
     channel_id, message_id = str(handle["channel_id"]), str(handle["message_id"])
-    client = _client(context)
+    client = await _client(context)
     status = await client.delete_message(channel_id, message_id)
     already = status == 404
     return {
@@ -169,7 +171,7 @@ async def send_message(
     channel_id: str,
     content: str,
 ) -> dict[str, Any]:
-    client = _client(context)
+    client = await _client(context)
     data = await client.create_message(channel_id, content)
     message_id = str(data["id"])
     out_channel = str(data.get("channel_id", channel_id))
@@ -216,7 +218,7 @@ async def discord_followup(
     EPHEMERAL). This is how an unauthorized tapper is told "권한이 없어요" and how the
     acting founder gets a private confirmation — without editing the shared card.
     Best-effort UI ack."""
-    client = _client(context)
+    client = await _client(context)
     return await client.create_interaction_followup(
         application_id, interaction_token, content, flags=flags
     )
@@ -232,7 +234,7 @@ async def discord_edit_original(
 ) -> dict[str, Any]:
     """PATCH the original interaction response (``@original``) — keep the card body,
     append the approve/reject result line, and drop the buttons (``components=[]``)."""
-    client = _client(context)
+    client = await _client(context)
     return await client.edit_interaction_response(
         application_id, interaction_token, content, components=components
     )
