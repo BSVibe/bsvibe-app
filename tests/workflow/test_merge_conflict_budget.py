@@ -154,12 +154,13 @@ async def test_token_ceiling_makes_merge_conflict_review() -> None:
         usage_prompt_tokens=700_000,
         usage_completion_tokens=0,
         payload={
+            "merge_conflict_resolving": True,
             CONFLICT_BUDGET_KEY: {
                 "redispatches": 1,
                 "tokens_at_start": 100_000,
                 "token_ceiling": 600_000,
                 "history": [{"attempt": 1}],
-            }
+            },
         },
     )
     turn = SimpleNamespace(usage_prompt_tokens=1_000, usage_completion_tokens=0)
@@ -179,3 +180,87 @@ async def test_token_ceiling_makes_merge_conflict_review() -> None:
     assert kwargs["kind"] == CONFLICT_REVIEW_DECISION_KIND
     assert kwargs["payload"]["attempts"] == [{"attempt": 1}]
     assert "token_ceiling" not in run.payload[CONFLICT_BUDGET_KEY]
+
+
+def _orch() -> SimpleNamespace:
+    return SimpleNamespace(
+        _settings=SimpleNamespace(agent_max_run_tokens=2_000_000),
+        _audit=AsyncMock(),
+        _create_decision=AsyncMock(),
+        _session=SimpleNamespace(commit=AsyncMock()),
+        _decision_result=lambda *a, **k: "STOPPED",
+    )
+
+
+@pytest.mark.asyncio
+async def test_ceiling_not_applied_outside_conflict_resolution() -> None:
+    """해결 후(merge_conflict_resolving 없음) CI-fix 턴이 예전 상한을 넘어도 review 를 만들지 않는다."""
+    orch = _orch()
+    run = SimpleNamespace(
+        usage_prompt_tokens=700_000,
+        usage_completion_tokens=0,
+        payload={CONFLICT_BUDGET_KEY: {"redispatches": 1, "token_ceiling": 600_000}},
+    )
+    turn = SimpleNamespace(usage_prompt_tokens=1_000, usage_completion_tokens=0)
+    result = await account_and_enforce_token_cap(
+        orch,  # type: ignore[arg-type]
+        run=run,  # type: ignore[arg-type]
+        work_step=None,  # type: ignore[arg-type]
+        attempt=None,  # type: ignore[arg-type]
+        turn=turn,  # type: ignore[arg-type]
+        written_paths=[],
+        final_text="",
+    )
+    assert result is None
+    orch._create_decision.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_budget_cleared_after_resolution(sf) -> None:
+    """워커가 clean 을 보면 예산이 지워진다 (지우는 코드를 빼면 빨갛다)."""
+    from backend.workflow.infrastructure.workers.merge_watch_worker import MergeWatchWorker
+
+    ws, run_id = await _run(sf, tokens=100)
+    redispatch = build_merge_watch_conflict_redispatch(
+        session_factory=sf, max_total_redispatch=3, token_budget=500
+    )
+    await _conflict(redispatch, ws, run_id, 1)
+    assert CONFLICT_BUDGET_KEY in (await _fetch(sf, ws, run_id)).payload
+
+    async with sf() as s, workspace_session_scope(s, ws):
+        await MergeWatchWorker._clear_conflict_budget(None, s, run_id)  # type: ignore[arg-type]
+        await s.commit()
+    assert CONFLICT_BUDGET_KEY not in (await _fetch(sf, ws, run_id)).payload
+
+
+@pytest.mark.asyncio
+async def test_founder_retry_resets_budget(sf) -> None:
+    """merge_conflict_review 에 retry 하면 다음 충돌은 다시 자동 재디스패치된다."""
+    from backend.workflow.application._checkpoint_shared import ACTION_RETRY
+    from backend.workflow.application.checkpoint_resolution import _prepare_the_resume
+
+    ws, run_id = await _run(sf)
+    redispatch = build_merge_watch_conflict_redispatch(
+        session_factory=sf, max_total_redispatch=1, token_budget=0
+    )
+    assert await _conflict(redispatch, ws, run_id, 1) is None
+    await _reopen_as_running(sf, ws, run_id)
+    assert await _conflict(redispatch, ws, run_id, 2) is False  # 소진
+
+    await _reopen_as_running(sf, ws, run_id)
+    run = await _fetch(sf, ws, run_id)
+    payload = dict(run.payload)
+    await _prepare_the_resume(
+        None,  # type: ignore[arg-type]
+        payload,
+        run=run,
+        decision=SimpleNamespace(decision=CONFLICT_REVIEW_DECISION_KIND, payload={}),  # type: ignore[arg-type]
+        action_key=ACTION_RETRY,
+        answer="",
+    )
+    assert CONFLICT_BUDGET_KEY not in payload
+    async with sf() as s, workspace_session_scope(s, ws):
+        row = await s.get(ExecutionRun, run_id)
+        row.payload = payload
+        await s.commit()
+    assert await _conflict(redispatch, ws, run_id, 3) is None

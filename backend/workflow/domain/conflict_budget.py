@@ -22,6 +22,23 @@ def read_budget(payload: Any) -> dict[str, Any]:
     return dict(raw) if isinstance(raw, dict) else {}
 
 
+def clear_budget(payload: Any) -> dict[str, Any]:
+    """``payload`` without the conflict budget (the conflict is resolved / the founder retried).
+
+    The budget only lives for the conflict-resolution period: afterwards a CI-fix or review
+    turn must not be stopped by its ceiling, and the NEXT conflict starts a fresh budget."""
+    out = dict(payload) if isinstance(payload, dict) else {}
+    out.pop(CONFLICT_BUDGET_KEY, None)
+    return out
+
+
+def is_resolving(payload: Any) -> bool:
+    """Is conflict resolution in progress (directive pending or consumed by the drive loop)?"""
+    return isinstance(payload, dict) and bool(
+        payload.get("merge_conflict_resolving") or payload.get("merge_conflict")
+    )
+
+
 def exhausted_reason(
     budget: dict[str, Any], *, used_tokens: int, max_redispatch: int
 ) -> str | None:
@@ -76,7 +93,9 @@ def summarize(budget: dict[str, Any], *, used_tokens: int, reason: str) -> dict[
 __all__ = [
     "CONFLICT_BUDGET_KEY",
     "CONFLICT_REVIEW_DECISION_KIND",
+    "clear_budget",
     "exhausted_reason",
+    "is_resolving",
     "read_budget",
     "record_redispatch",
     "summarize",

@@ -302,6 +302,7 @@ def build_merge_watch_pr_concluded(
             if await move_run_status(session, run, to_status, reason=reason):
                 payload = dict(run.payload or {})
                 payload.pop(AWAITING_MERGE_KEY, None)
+                payload.pop("merge_conflict_budget", None)  # conflict period is over
                 if waiting:
                     payload[SHIPPED_WITH_WAITING_KEY] = [str(i) for i in waiting]
                 run.payload = payload

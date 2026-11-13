@@ -174,6 +174,10 @@ async def _prepare_the_resume(
     budget) and the unpicked model account (#1074 — set the workspace default)."""
     if action_key == ACTION_RETRY and decision.decision == TOKEN_CAP_DECISION_KIND:
         _grant_more_token_budget(payload, run=run, decision=decision)
+    if action_key == ACTION_RETRY and decision.decision == "merge_conflict_review":
+        # A founder retry starts a fresh conflict budget: the next conflict is
+        # re-dispatched automatically again instead of being refused as spent.
+        payload.pop("merge_conflict_budget", None)
     if action_key is None and decision.decision == DECISION_AMBIGUOUS_MODEL_ACCOUNT:
         await _make_picked_account_the_default(session, run=run, decision=decision, answer=answer)
 

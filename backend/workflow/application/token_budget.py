@@ -70,7 +70,7 @@ async def account_and_enforce_token_cap(
     # conflict nobody resolved is what this guards. Reaching it hands the run to the founder
     # as ``merge_conflict_review`` (with what was tried), not as ``run_token_cap_reached``.
     budget = cb.read_budget(run.payload)
-    ceiling = budget.get("token_ceiling")
+    ceiling = budget.get("token_ceiling") if cb.is_resolving(run.payload) else None
     if isinstance(ceiling, int) and ceiling > 0 and used >= ceiling:
         await orch._audit(
             run,
