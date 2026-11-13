@@ -1295,8 +1295,11 @@ class MergeWatchWorker(BaseWorker):
 
     async def _clear_conflict_budget(self, session: AsyncSession, run_id: uuid.UUID) -> None:
         """Drop ``merge_conflict_budget`` from the run payload (no-op when absent)."""
+        stored = await session.scalar(select(ExecutionRun.payload).where(ExecutionRun.id == run_id))
+        if not stored or "merge_conflict_budget" not in stored:
+            return
         run = await session.get(ExecutionRun, run_id)
-        if run is None or "merge_conflict_budget" not in (run.payload or {}):
+        if run is None:
             return
         payload = dict(run.payload or {})
         payload.pop("merge_conflict_budget", None)
