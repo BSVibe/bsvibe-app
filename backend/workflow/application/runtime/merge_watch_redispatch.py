@@ -78,7 +78,7 @@ def build_merge_watch_conflict_redispatch(
                     session,
                     run,
                     None,
-                    kind=cb.CONFLICT_REVIEW_DECISION_KIND,
+                    kind="merge_conflict_review",
                     payload={
                         "reason": "conflict_budget_exhausted",
                         "conflict_paths": list(conflict_paths),

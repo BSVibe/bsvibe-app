@@ -89,7 +89,7 @@ async def account_and_enforce_token_cap(
         decision = await orch._create_decision(
             run,
             work_step,
-            kind=cb.CONFLICT_REVIEW_DECISION_KIND,
+            kind="merge_conflict_review",
             payload={
                 "reason": "conflict_budget_exhausted",
                 "written_paths": written_paths,
