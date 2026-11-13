@@ -14,6 +14,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.workflow.domain import conflict_budget as cb
+from backend.workflow.domain.run_token_cap import effective_run_token_cap
 from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
 from backend.workflow.infrastructure.workers.merge_watch_worker import (
     CiRedispatch,
@@ -28,6 +29,7 @@ def build_merge_watch_conflict_redispatch(
     session_factory: async_sessionmaker[AsyncSession],
     max_total_redispatch: int = 0,
     token_budget: int = 0,
+    run_token_cap: int = 0,
 ) -> ConflictRedispatch:
     """Build the PR6 conflict re-dispatch callback for the MergeWatchWorker.
 
@@ -63,6 +65,16 @@ def build_merge_watch_conflict_redispatch(
             payload = dict(run.payload or {})
             used = run.usage_prompt_tokens + run.usage_completion_tokens
             budget = cb.read_budget(payload)
+            if budget.get(cb.EXHAUSTED_KEY):
+                # The in-turn ceiling already created the founder's merge_conflict_review:
+                # refuse (worker marks the row FAILED); no second decision, no re-open.
+                logger.warning(
+                    "merge_watch_conflict_redispatch_refused",
+                    run_id=str(run_id),
+                    pr_number=pr_number,
+                    reason=budget[cb.EXHAUSTED_KEY],
+                )
+                return False
             why = cb.exhausted_reason(budget, used_tokens=used, max_redispatch=max_total_redispatch)
             if why is not None:
                 # Run-wide cap (survives head changes): stop NOW, not at the run token cap.
@@ -105,6 +117,7 @@ def build_merge_watch_conflict_redispatch(
                 budget,
                 used_tokens=used,
                 token_budget=token_budget,
+                run_token_cap=effective_run_token_cap(run_token_cap, payload),
                 pr_number=pr_number,
                 conflict_paths=conflict_paths,
             )

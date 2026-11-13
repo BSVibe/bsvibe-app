@@ -372,6 +372,7 @@ def build_merge_watch_workers(
                 session_factory=session_factory,
                 max_total_redispatch=settings.github_conflict_max_total_redispatch,
                 token_budget=settings.github_conflict_token_budget,
+                run_token_cap=settings.agent_max_run_tokens,
             ),
             escalate_conflict=build_merge_watch_conflict_escalate(session_factory=session_factory),
             escalate_stall=build_merge_watch_stall_escalate(session_factory=session_factory),

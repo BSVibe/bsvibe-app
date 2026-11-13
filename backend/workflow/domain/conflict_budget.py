@@ -15,6 +15,8 @@ from typing import Any
 #: ``run.payload`` key holding the conflict-resolution budget state.
 CONFLICT_BUDGET_KEY = "merge_conflict_budget"
 CONFLICT_REVIEW_DECISION_KIND = "merge_conflict_review"
+#: Budget key set once the budget is spent (value = reason); refuses every further re-dispatch.
+EXHAUSTED_KEY = "exhausted"
 
 
 def read_budget(payload: Any) -> dict[str, Any]:
@@ -43,6 +45,11 @@ def exhausted_reason(
     budget: dict[str, Any], *, used_tokens: int, max_redispatch: int
 ) -> str | None:
     """Why the NEXT re-dispatch must not happen, or ``None`` when it may."""
+    marked = budget.get(EXHAUSTED_KEY)
+    if marked:
+        # The in-turn ceiling already handed the run to the founder: no re-dispatch (not even
+        # the stalled-head path) until a founder retry clears the budget and with it this mark.
+        return str(marked)
     if max_redispatch > 0 and int(budget.get("redispatches", 0)) >= max_redispatch:
         return "redispatch_limit"
     ceiling = budget.get("token_ceiling")
@@ -58,13 +65,19 @@ def record_redispatch(
     token_budget: int,
     pr_number: int,
     conflict_paths: list[str],
+    run_token_cap: int = 0,
 ) -> dict[str, Any]:
-    """The budget after one more re-dispatch (first one fixes the token baseline/ceiling)."""
+    """The budget after one more re-dispatch (first one fixes the token baseline/ceiling).
+
+    The ceiling never exceeds ``run_token_cap`` (the run's effective cap; ``<= 0`` = no cap)."""
     out = dict(budget)
     if "tokens_at_start" not in out:
         out["tokens_at_start"] = used_tokens
         if token_budget > 0:
-            out["token_ceiling"] = used_tokens + token_budget
+            ceiling = used_tokens + token_budget
+            if run_token_cap > 0:
+                ceiling = min(ceiling, run_token_cap)
+            out["token_ceiling"] = ceiling
     out["redispatches"] = int(out.get("redispatches", 0)) + 1
     history = list(out.get("history", []))
     history.append(
@@ -93,6 +106,7 @@ def summarize(budget: dict[str, Any], *, used_tokens: int, reason: str) -> dict[
 __all__ = [
     "CONFLICT_BUDGET_KEY",
     "CONFLICT_REVIEW_DECISION_KIND",
+    "EXHAUSTED_KEY",
     "clear_budget",
     "exhausted_reason",
     "is_resolving",

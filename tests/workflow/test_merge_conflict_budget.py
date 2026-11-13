@@ -179,7 +179,45 @@ async def test_token_ceiling_makes_merge_conflict_review() -> None:
     kwargs = orch._create_decision.await_args.kwargs
     assert kwargs["kind"] == CONFLICT_REVIEW_DECISION_KIND
     assert kwargs["payload"]["attempts"] == [{"attempt": 1}]
-    assert "token_ceiling" not in run.payload[CONFLICT_BUDGET_KEY]
+    assert run.payload[CONFLICT_BUDGET_KEY]["exhausted"] == "token_limit"
+
+
+@pytest.mark.asyncio
+async def test_exhausted_mark_refuses_redispatch(sf) -> None:
+    """in-turn 상한 발화 후 워커 재디스패치는 False, 런은 재오픈되지 않는다 (표식을 빼면 빨개진다)."""
+    ws, run_id = await _run(sf, tokens=700_000)
+    async with sf() as s, workspace_session_scope(s, ws):
+        run = await s.get(ExecutionRun, run_id)
+        run.payload = {
+            CONFLICT_BUDGET_KEY: {
+                "redispatches": 1,
+                "tokens_at_start": 100_000,
+                "token_ceiling": 600_000,
+                "exhausted": "token_limit",
+            }
+        }
+        await s.commit()
+    redispatch = build_merge_watch_conflict_redispatch(
+        session_factory=sf, max_total_redispatch=5, token_budget=500_000
+    )
+    assert await _conflict(redispatch, ws, run_id, 2) is False
+    run = await _fetch(sf, ws, run_id)
+    assert run.status is RunStatus.RUNNING
+    assert "merge_conflict" not in run.payload
+
+
+def test_ceiling_capped_at_run_cap() -> None:
+    from backend.workflow.domain.conflict_budget import record_redispatch
+
+    out = record_redispatch(
+        {},
+        used_tokens=1_900_000,
+        token_budget=500_000,
+        pr_number=1,
+        conflict_paths=[],
+        run_token_cap=2_000_000,
+    )
+    assert out["token_ceiling"] == 2_000_000
 
 
 def _orch() -> SimpleNamespace:

@@ -71,6 +71,9 @@ async def account_and_enforce_token_cap(
     # as ``merge_conflict_review`` (with what was tried), not as ``run_token_cap_reached``.
     budget = cb.read_budget(run.payload)
     ceiling = budget.get("token_ceiling") if cb.is_resolving(run.payload) else None
+    run_cap = effective_run_token_cap(orch._settings.agent_max_run_tokens, run.payload)
+    if isinstance(ceiling, int) and ceiling > 0 and run_cap > 0:
+        ceiling = min(ceiling, run_cap)  # never larger than the run's own cap
     if isinstance(ceiling, int) and ceiling > 0 and used >= ceiling:
         await orch._audit(
             run,
@@ -78,9 +81,11 @@ async def account_and_enforce_token_cap(
             LoopTerminal,
             {"outcome": "conflict_token_budget_reached", "tokens": used, "ceiling": ceiling},
         )
-        # One-shot: the founder's retry is not re-blocked by the ceiling it just reviewed.
+        # Mark the budget spent: the merge-watch row stays NEEDS_RESOLUTION, so without the
+        # mark the worker's next re-dispatch would re-open the run under the pending review
+        # with no conflict ceiling. A founder retry clears the whole budget (and the mark).
         spent = dict(budget)
-        spent.pop("token_ceiling", None)
+        spent[cb.EXHAUSTED_KEY] = "token_limit"
         payload = dict(run.payload or {})
         payload[cb.CONFLICT_BUDGET_KEY] = spent
         payload.pop("merge_conflict", None)
