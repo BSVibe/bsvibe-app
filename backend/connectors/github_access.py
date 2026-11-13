@@ -13,12 +13,15 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.auth.providers import get_provider
 from backend.connectors.auth.resolve import resolve_connector_credentials
 from backend.connectors.db import ConnectorAccountRow
 from backend.router.accounts.crypto import CredentialCipher, cipher_from_settings
+
+logger = structlog.get_logger(__name__)
 
 _API_BASE = "https://api.github.com"
 _HTTP_TIMEOUT = 10.0
@@ -66,6 +69,37 @@ def github_installation_id(account: ConnectorAccountRow) -> str | None:
     """
     ref = (account.external_ref or "").strip()
     return ref if ref.isdigit() else None
+
+
+async def confirm_unrecorded_installation(
+    account: ConnectorAccountRow, *, repo: str, installation_id: str
+) -> bool:
+    """Whether an account with NO recorded installation may take an App delivery for ``repo``.
+
+    Accounts bound before installations were recorded (this instance's own github connector
+    among them) have ``external_ref`` empty, and refusing every App delivery for them stopped
+    all intake (2026-11-13). The App itself is asked which installation covers ``repo``: when
+    that equals the delivery's ``installation.id`` the account is accepted and the id is
+    recorded on it server-side (``external_ref``), so later deliveries compare directly. Any
+    failure, or a different installation, refuses. A binding can only be created after a repo
+    access check, so the workspace has already shown it can reach the repo.
+    """
+    if github_installation_id(account) is not None:
+        return False
+    provider = get_provider("github")
+    lookup = getattr(provider, "repo_installation_id", None)
+    if provider is None or lookup is None or not getattr(provider, "supports_service_token", False):
+        return False
+    try:
+        covering = await lookup(repo_slug(repo))
+    except Exception:  # noqa: BLE001 — an unanswered lookup refuses, it never admits
+        logger.warning("github_installation_lookup_failed", repo=repo, exc_info=True)
+        return False
+    if covering != installation_id:
+        return False
+    account.external_ref = installation_id
+    logger.info("github_installation_recorded", account_id=str(account.id), repo=repo)
+    return True
 
 
 def repo_slug(repo: str) -> str:
@@ -137,6 +171,7 @@ async def verify_repo_access(
 
 
 __all__ = [
+    "confirm_unrecorded_installation",
     "RepoAccessError",
     "RepoAccessUnavailable",
     "github_installation_id",

@@ -462,3 +462,113 @@ async def test_pat_account_without_installation_still_gets_events_on_its_own_web
     assert resp.status_code == 202, resp.text
     assert resp.json().get("skipped") is not True
     assert [r.workspace_id for r in await _rows(sf)] == [ws]
+
+
+# ── an account with no recorded installation: the App itself vouches ────────────
+#
+# 2026-11-13 (prod): this instance's own github connector was bound before installs
+# were recorded (``external_ref`` empty). After the installation match went in, every
+# App delivery for it was dropped (``github_app_webhook_unbound``) and no issue on the
+# repo started a run. The App is asked which installation covers the repo; a match is
+# accepted and recorded, anything else is refused.
+
+
+@pytest.fixture
+def app_provider() -> Any:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from backend.connectors.auth import providers as providers_mod
+    from backend.connectors.auth.github import GitHubAppProvider
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ).decode()
+    snapshot = dict(providers_mod._REGISTRY)
+    providers_mod.register_provider(
+        GitHubAppProvider(
+            client_id="Iv1.test", client_secret="s", app_id="3980170", private_key_pem=pem
+        )
+    )
+    try:
+        yield
+    finally:
+        providers_mod._REGISTRY.clear()
+        providers_mod._REGISTRY.update(snapshot)
+
+
+_INSTALLATION_URL = f"https://api.github.com/repos/{REPO}/installation"
+
+
+async def _external_ref(sf: Any, account_id: uuid.UUID) -> str | None:
+    async with sf() as s:
+        row = await s.get(ConnectorAccountRow, account_id)
+        assert row is not None
+        return row.external_ref
+
+
+@pytest.mark.usefixtures("app_provider")
+async def test_unrecorded_account_is_accepted_and_recorded_when_the_app_covers_the_repo(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    import respx
+
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    ws, _, account_id = await _seed_bound_repo(sf, cipher, installation_id=None)
+    with respx.mock(assert_all_mocked=False) as mock:
+        route = mock.get(_INSTALLATION_URL).mock(
+            return_value=httpx.Response(200, json={"id": 12345})
+        )
+        resp = await _post(client, _issue_body())  # installation.id == 12345
+
+    assert resp.status_code == 202
+    assert route.called
+    assert [r.workspace_id for r in await _rows(sf)] == [ws]
+    assert await _external_ref(sf, account_id) == "12345"
+
+
+@pytest.mark.usefixtures("app_provider")
+@pytest.mark.parametrize(
+    "answer",
+    [
+        httpx.Response(200, json={"id": 999}),  # the repo belongs to another installation
+        httpx.Response(404),  # the App is not installed on the repo
+        httpx.Response(500),  # GitHub could not answer
+    ],
+)
+async def test_unrecorded_account_is_refused_unless_the_app_confirms(
+    sf: Any, client: Any, cipher: CredentialCipher, answer: httpx.Response
+) -> None:
+    import respx
+
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    _, _, account_id = await _seed_bound_repo(sf, cipher, installation_id=None)
+    with respx.mock(assert_all_mocked=False, assert_all_called=False) as mock:
+        mock.get(_INSTALLATION_URL).mock(return_value=answer)
+        resp = await _post(client, _issue_body())
+
+    assert resp.status_code == 202
+    assert await _rows(sf) == []
+    assert await _external_ref(sf, account_id) is None
+
+
+@pytest.mark.usefixtures("app_provider")
+async def test_a_recorded_account_is_never_relooked_up(
+    sf: Any, client: Any, cipher: CredentialCipher
+) -> None:
+    """A recorded installation is compared directly; a different one is not re-asked."""
+    import respx
+
+    await _seed_app(sf, cipher, webhook_secret=APP_SECRET)
+    await _seed_bound_repo(sf, cipher, installation_id=999)
+    with respx.mock(assert_all_mocked=False, assert_all_called=False) as mock:
+        route = mock.get(_INSTALLATION_URL).mock(
+            return_value=httpx.Response(200, json={"id": 12345})
+        )
+        await _post(client, _issue_body())
+
+    assert not route.called
+    assert await _rows(sf) == []
