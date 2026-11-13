@@ -35,10 +35,16 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm.attributes import set_committed_value
 
-from backend.workflow.infrastructure.db import ExecutionRun, ExecutionRunHistory, RunStatus
+from backend.workflow.infrastructure.db import (
+    Decision,
+    DecisionStatus,
+    ExecutionRun,
+    ExecutionRunHistory,
+    RunStatus,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -119,9 +125,53 @@ async def move_run_status(
         )
     )
     await session.flush()
+    if to_status in TERMINAL_RUN_STATUSES:
+        await close_pending_decisions(session, run.id, run.workspace_id)
     if to_status is RunStatus.SHIPPED:
         await _announce_shipped(session, run)
     return True
+
+
+#: Resolution recorded on a decision closed because its run ended.
+RUN_REACHED_TERMINAL = "run_reached_terminal"
+
+TERMINAL_RUN_STATUSES = frozenset({RunStatus.SHIPPED, RunStatus.FAILED, RunStatus.CANCELLED})
+
+
+async def close_pending_decisions(
+    session: AsyncSession, run_id: uuid.UUID, workspace_id: uuid.UUID
+) -> int:
+    """Close a run's PENDING decisions WITHOUT touching the run.
+
+    A run that ended has nothing left to answer; ``discard`` would cancel a shipped
+    run and ``retry`` would re-drive it, so the decision is only resolved with the
+    reason :data:`RUN_REACHED_TERMINAL`. Returns the number closed.
+    """
+    return await _close(session, Decision.run_id == run_id, Decision.workspace_id == workspace_id)
+
+
+async def close_decisions_of_terminal_runs(session: AsyncSession) -> int:
+    """Sweep: close PENDING decisions that already sit on a terminal run (backfill)."""
+    return await _close(
+        session,
+        Decision.run_id.in_(
+            select(ExecutionRun.id).where(ExecutionRun.status.in_(tuple(TERMINAL_RUN_STATUSES)))
+        ),
+    )
+
+
+async def _close(session: AsyncSession, *conditions: object) -> int:
+    result = await session.execute(
+        update(Decision)
+        .where(Decision.status == DecisionStatus.PENDING, *conditions)  # type: ignore[arg-type]
+        .values(
+            status=DecisionStatus.RESOLVED,
+            resolution=RUN_REACHED_TERMINAL,
+            resolved_at=datetime.now(tz=UTC),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
 
 async def _announce_shipped(session: AsyncSession, run: ExecutionRun) -> None:
@@ -173,4 +223,10 @@ async def _announce_shipped(session: AsyncSession, run: ExecutionRun) -> None:
     )
 
 
-__all__ = ["is_allowed_move", "move_run_status"]
+__all__ = [
+    "RUN_REACHED_TERMINAL",
+    "close_decisions_of_terminal_runs",
+    "close_pending_decisions",
+    "is_allowed_move",
+    "move_run_status",
+]

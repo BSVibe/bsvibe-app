@@ -391,6 +391,22 @@ async def resolve_checkpoint(  # noqa: PLR0912, PLR0915 — one branch per resol
         await _ship_decision_run(
             session, runner, run=run, decision=decision, deliverables=deliverables
         )
+    elif run.status in _TERMINAL_RUN_STATUSES and (
+        action_key == ACTION_DISCARD
+        or (
+            action_key == ACTION_RETRY
+            and decision.decision not in (DELIVERY_FAILED_DECISION_KIND, "merge_watch_stalled")
+        )
+    ):
+        # discard would cancel a shipped run, retry would re-drive a finished one:
+        # on an ended run only the decision is closed, the run is left as it is.
+        logger.info(
+            "checkpoint_closed_on_terminal_run",
+            run_id=str(run.id),
+            decision_id=str(decision.id),
+            run_status=run.status.value,
+            action_key=action_key,
+        )
     elif action_key == ACTION_DISCARD:
         await _discard_decision_run(runner, session, run=run, decision=decision)
     elif action_key == ACTION_RETRY and decision.decision == DELIVERY_FAILED_DECISION_KIND:
