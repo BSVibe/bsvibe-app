@@ -331,9 +331,9 @@ class DockerSandboxManager:
     async def _ensure_network(self, network: str) -> None:
         """Idempotently create the sandbox's user-defined bridge network.
 
-        The user-defined network is the DinD firewall escape: the DROP rule
-        that blocks private-range traffic is scoped to the DEFAULT bridge
-        (``-i docker0``), so a dedicated network reaches the sidecar. Tolerate
+        The DinD firewall (``deploy/sandbox-dind-firewall.sh``) covers this
+        network too: its rules match ``docker0`` AND ``br+`` (every
+        user-defined bridge), so 2375 and private ranges stay blocked. Tolerate
         the "already exists" race (a reused sidecar's network survives)."""
         code, _out, err = await self._docker(
             ["network", "create", network], timeout_s=_DOCKER_OP_TIMEOUT_S
