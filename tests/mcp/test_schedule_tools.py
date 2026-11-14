@@ -256,7 +256,7 @@ async def test_create_requires_write_scope(db, workspace_id, user_id, registry) 
         with pytest.raises(Exception, match="requires scope"):
             await registry.call_tool(
                 "bsvibe_schedules_create",
-                {"text": "x", "cron_expr": "* * * * *"},
+                {"text": "x", "cron_expr": "*/15 * * * *"},
                 ctx,
             )
 

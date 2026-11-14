@@ -80,6 +80,9 @@ class WorkspaceScheduleRepository(Protocol):
         first — the runner relies on that order to drain steady-state.
         """
 
+    async def has_unfinished_run(self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID) -> bool:
+        """True while a run this schedule started is not in a terminal status."""
+
     async def advance(
         self,
         row: WorkspaceScheduleRow,

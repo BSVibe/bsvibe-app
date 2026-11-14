@@ -96,7 +96,7 @@ async def test_create_lists_and_returns_view(client, db, workspace_id) -> None:
 async def test_kind_defaults_to_instruction(client) -> None:
     resp = await client.post(
         "/api/v1/schedules",
-        json={"text": "do the thing", "cron_expr": "*/5 * * * *"},
+        json={"text": "do the thing", "cron_expr": "*/15 * * * *"},
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["kind"] == "instruction"
@@ -154,7 +154,9 @@ async def test_create_product_tick_with_product_id(client, db, workspace_id) -> 
 
 
 async def test_patch_toggles_enabled(client) -> None:
-    created = await client.post("/api/v1/schedules", json={"text": "x", "cron_expr": "* * * * *"})
+    created = await client.post(
+        "/api/v1/schedules", json={"text": "x", "cron_expr": "*/15 * * * *"}
+    )
     sched_id = created.json()["id"]
 
     patched = await client.patch(f"/api/v1/schedules/{sched_id}", json={"enabled": False})
@@ -163,7 +165,9 @@ async def test_patch_toggles_enabled(client) -> None:
 
 
 async def test_delete_removes_and_404s_thereafter(client) -> None:
-    created = await client.post("/api/v1/schedules", json={"text": "x", "cron_expr": "* * * * *"})
+    created = await client.post(
+        "/api/v1/schedules", json={"text": "x", "cron_expr": "*/15 * * * *"}
+    )
     sched_id = created.json()["id"]
 
     deleted = await client.delete(f"/api/v1/schedules/{sched_id}")

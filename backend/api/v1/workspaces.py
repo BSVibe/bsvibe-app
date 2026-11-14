@@ -32,6 +32,7 @@ from backend.identity.domain.repositories import (
 )
 from backend.identity.roles import role_satisfies
 from backend.identity.workspaces_db import WorkspaceRow
+from backend.schedule.application.schedule_service import ScheduleService
 
 router = APIRouter()
 
@@ -192,4 +193,6 @@ async def delete_workspace(
     membership = await memberships.active_for_user_in_workspace(user.id, workspace_id)
     if membership is not None:
         membership.left_at = now
+    # A deleted workspace must stop running its schedules.
+    await ScheduleService(session).disable_for_workspace(workspace_id=workspace_id)
     await session.commit()
