@@ -424,6 +424,10 @@ class Settings(BaseSettings):
     # exactly (every prod workspace sits at 1); raise it only as far as the disk
     # genuinely allows.
     verify_stack_slots_total: int = 1
+    # How many live (non-deleted) workspaces one user may OWN. Concurrency, verify slots
+    # and the plan are all per-workspace, so without this a user multiplies every limit by
+    # creating workspaces. The owner of an ``operator``-plan workspace is exempt.
+    max_owned_workspaces: int = 3
     #: #929 — which machine this process runs on, for things bounded per machine (the
     #: verification disk bound). Set the SAME value for every container on one box, and a
     #: different one per box. Empty = single-box deployment, keys unchanged. Deliberately not
