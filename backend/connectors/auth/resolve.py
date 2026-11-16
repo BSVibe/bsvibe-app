@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.auth.db import ConnectorOAuthTokenRow
-from backend.connectors.auth.providers import get_provider
+from backend.connectors.auth.providers import OAuthProvider, get_provider
 from backend.connectors.auth.sentry import SentryProvider
 from backend.connectors.auth.store import upsert_token
 from backend.connectors.db import ConnectorAccountRow
@@ -59,67 +59,125 @@ class ConnectorReauthRequired(Exception):
         self.cause = cause
 
 
+async def _read_token_row(
+    session: AsyncSession, account_id: uuid.UUID, *, lock: bool = False
+) -> ConnectorOAuthTokenRow | None:
+    """Read the account's token row; ``lock`` takes ``FOR UPDATE`` and bypasses
+    the identity map so the values are the committed, current ones."""
+    stmt = select(ConnectorOAuthTokenRow).where(
+        ConnectorOAuthTokenRow.connector_account_id == account_id
+    )
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _refresh_in_own_transaction(
+    session: AsyncSession,
+    *,
+    account: ConnectorAccountRow,
+    cipher: CredentialCipher,
+    provider: OAuthProvider,
+) -> str | None:
+    """Refresh ``account``'s token under a row lock, in its OWN transaction.
+
+    ``resolve_connector_credentials`` runs inside the caller's transaction, so
+    the lock/commit cycle must never touch it: a separate session from the same
+    engine takes ``SELECT ... FOR UPDATE`` on the token row, re-reads it, and
+    commits only itself (releasing the lock). Returns the access token, or
+    ``None`` when the token row vanished.
+    """
+    async with AsyncSession(bind=session.bind, expire_on_commit=False) as own:
+        token_row = await _read_token_row(own, account.id, lock=True)
+        if token_row is None:
+            await own.rollback()
+            return None
+        if not token_row.refresh_token_ciphertext or not _expiring_soon(token_row):
+            # Someone else refreshed while we waited (or nothing to refresh).
+            access = cipher.decrypt(token_row.access_token_ciphertext)
+            await own.rollback()
+            return access
+        refresh_token = cipher.decrypt(token_row.refresh_token_ciphertext)
+        refreshed = None
+        if isinstance(provider, SentryProvider):
+            # Sentry refresh is installation-scoped; the installationId lives on
+            # the binding's external_ref (set at claim time).
+            if account.external_ref:
+                refreshed = await provider.refresh_installation(
+                    installation_id=account.external_ref, refresh_token=refresh_token
+                )
+        else:
+            try:
+                refreshed = await provider.refresh(refresh_token=refresh_token)
+            except Exception as exc:  # noqa: BLE001 — provider-specific; classify as reauth-needed
+                # Flag needs_reauth only if the refresh token (re-read under the
+                # lock) is still the one that just failed; if it rotated
+                # meanwhile, proceed with the new token.
+                current = await _read_token_row(own, account.id, lock=True)
+                if (
+                    current is not None
+                    and current.refresh_token_ciphertext
+                    and cipher.decrypt(current.refresh_token_ciphertext) != refresh_token
+                ):
+                    access = cipher.decrypt(current.access_token_ciphertext)
+                    await own.rollback()
+                    return access
+                if current is not None:
+                    current.status = "needs_reauth"
+                    await own.commit()
+                else:
+                    await own.rollback()
+                raise ConnectorReauthRequired(
+                    account_id=account.id,
+                    provider=token_row.provider,
+                    cause=str(exc),
+                ) from exc
+        if refreshed is not None:
+            token_row = await upsert_token(
+                own,
+                connector_account_id=account.id,
+                provider=token_row.provider,
+                token=refreshed,
+                cipher=cipher,
+            )
+            # A successful refresh clears any prior needs_reauth flag.
+            if token_row.status != "active":
+                token_row.status = "active"
+        access = cipher.decrypt(token_row.access_token_ciphertext)
+        await own.commit()  # persist the rotated token + release the row lock
+        return access
+
+
 async def resolve_connector_credentials(
     session: AsyncSession,
     *,
     account: ConnectorAccountRow,
     cipher: CredentialCipher,
 ) -> dict[str, str]:
-    """Return the API credential for ``account`` (OAuth token, else secret)."""
-    token_row = (
-        await session.execute(
-            select(ConnectorOAuthTokenRow).where(
-                ConnectorOAuthTokenRow.connector_account_id == account.id
-            )
-        )
-    ).scalar_one_or_none()
+    """Return the API credential for ``account`` (OAuth token, else secret).
+
+    Never commits or rolls back ``session`` — it runs inside the caller's
+    transaction. A needed refresh happens in a separate, locked transaction.
+    """
+    token_row = await _read_token_row(session, account.id)
 
     if token_row is not None:
         if _expiring_soon(token_row) and token_row.refresh_token_ciphertext:
             provider = get_provider(token_row.provider)
             if provider is not None and provider.refreshable:
-                refresh_token = cipher.decrypt(token_row.refresh_token_ciphertext)
-                refreshed = None
-                if isinstance(provider, SentryProvider):
-                    # Sentry refresh is installation-scoped; the installationId
-                    # lives on the binding's external_ref (set at claim time).
-                    if account.external_ref:
-                        refreshed = await provider.refresh_installation(
-                            installation_id=account.external_ref, refresh_token=refresh_token
-                        )
-                else:
-                    try:
-                        refreshed = await provider.refresh(refresh_token=refresh_token)
-                    except Exception as exc:  # noqa: BLE001 — provider-specific; classify as reauth-needed
-                        # Lift E46 — persist the needs_reauth state so the
-                        # connectors API + PWA card can surface a Reconnect
-                        # CTA. The flush + commit are the caller's
-                        # responsibility (mirrors the successful-refresh
-                        # ``upsert_token`` path); raising aborts the
-                        # transaction only when the caller has not yet
-                        # committed.
-                        token_row.status = "needs_reauth"
-                        await session.flush()
-                        await session.commit()
-                        raise ConnectorReauthRequired(
-                            account_id=account.id,
-                            provider=token_row.provider,
-                            cause=str(exc),
-                        ) from exc
-                if refreshed is not None:
-                    token_row = await upsert_token(
-                        session,
-                        connector_account_id=account.id,
-                        provider=token_row.provider,
-                        token=refreshed,
-                        cipher=cipher,
+                access = await _refresh_in_own_transaction(
+                    session, account=account, cipher=cipher, provider=provider
+                )
+                if access is None:
+                    return {"token": cipher.decrypt(account.signing_secret_ciphertext)}
+                # Let the caller's identity map see the committed values.
+                with session.no_autoflush:
+                    await session.execute(
+                        select(ConnectorOAuthTokenRow)
+                        .where(ConnectorOAuthTokenRow.connector_account_id == account.id)
+                        .execution_options(populate_existing=True)
                     )
-                    # Lift E46 — a successful refresh clears any prior
-                    # needs_reauth flag so a re-OAuth → first dispatch
-                    # returns the card to the active state in the PWA.
-                    if token_row.status != "active":
-                        token_row.status = "active"
-                        await session.flush()
+                return {"token": access}
         return {"token": cipher.decrypt(token_row.access_token_ciphertext)}
 
     # Legacy path — no OAuth token bound yet.
