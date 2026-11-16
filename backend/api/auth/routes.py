@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.auth.rate_limit import EmailRateLimited, enforce_auth_rate_limit
+from backend.api.auth.rate_limit import enforce_auth_rate_limit
 from backend.api.deps import get_db_session
 from backend.auth.client import (
     SignUpResult,
@@ -181,16 +181,17 @@ async def password_reset(
 ) -> None:
     """Request a password-recovery email. Always 204 — never leaks existence.
 
-    Over the per-mailbox budget it is STILL 204 and nothing is forwarded to GoTrue. Over the
-    per-IP budget it is 429 + Retry-After: that key is the caller's, never the account's,
-    so it reveals nothing about existence.
+    Over EITHER budget (per-IP or per-mailbox) it is STILL 204 and nothing is forwarded to
+    GoTrue (founder decision: reset never answers 429).
     """
     if payload.redirect_to is not None:
         _validate_redirect_to(payload.redirect_to)
     try:
         await enforce_auth_rate_limit(request, route="reset", email=payload.email)
-    except EmailRateLimited:
-        # Per-mailbox budget out: stay 204 (the "always 204" contract) but do not send.
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+        # Budget out: stay 204 (the "always 204" contract) but do not send.
         return
     try:
         await supabase.send_password_reset(payload.email, payload.redirect_to)
