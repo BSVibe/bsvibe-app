@@ -153,6 +153,28 @@ class RunVerification(BaseModel):
     review: dict[str, Any] | None = None
 
 
+class RunRoundItem(BaseModel):
+    """A ledger item that did not end ``done`` in one round."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    status: str
+    note: str | None = None
+    evidence_missing: bool | None = None
+
+
+class RunVerificationRound(BaseModel):
+    """One verification round, summarised: why it failed, without the full report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    round: int
+    outcome: VerificationOutcome
+    failed_checks: list[str] = []
+    open_items: list[RunRoundItem] = []
+
+
 class RunActivity(BaseModel):
     """One meaningful event on the run's timeline — the STORY of what the agent
     did ("What I did"). The ``type`` is the raw :class:`ExecutionRunActivity`
@@ -226,6 +248,8 @@ class RunDetailResponse(BaseModel):
     # Count of the run's VerificationResult rows, and the 1-based round it first passed on.
     verification_rounds: int = 0
     passed_on_round: int | None = None
+    # One summary per round, oldest first: outcome, failed commands, non-``done`` ledger items.
+    rounds: list[RunVerificationRound] = []
     deliverable_id: uuid.UUID | None = None
     partial_deliverables: list[RunPartialDeliverable] = []
     activities: list[RunActivity] = []

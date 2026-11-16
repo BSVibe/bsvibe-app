@@ -885,6 +885,7 @@ def public_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         "founder_correction",
         "counterfactual",
         "counterfactual_note",
+        "evidence_missing",
     )
     return [{k: r[k] for k in keep if k in r} for r in rows]
 
