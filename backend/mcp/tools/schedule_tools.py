@@ -137,11 +137,15 @@ async def _h_delete(args: ScheduleDeleteInput, ctx: ToolContext) -> Any:
 
 async def _h_set_enabled(args: ScheduleSetEnabledInput, ctx: ToolContext) -> Any:
     service = ScheduleService(ctx.session)
-    row = await service.set_enabled(
-        schedule_id=args.schedule_id,
-        workspace_id=ctx.principal.workspace_id,
-        enabled=args.enabled,
-    )
+    try:
+        row = await service.set_enabled(
+            schedule_id=args.schedule_id,
+            workspace_id=ctx.principal.workspace_id,
+            enabled=args.enabled,
+        )
+    except ScheduleValidationError as exc:
+        await ctx.session.rollback()
+        raise ToolError(str(exc)) from exc
     if row is None:
         raise ToolError(f"schedule {args.schedule_id} not found")
     await ctx.session.commit()

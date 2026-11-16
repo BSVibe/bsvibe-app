@@ -55,6 +55,25 @@ class SqlAlchemyWorkspaceRepository:
             result = await self._session.execute(stmt)
             return list(result.scalars().all())
 
+    async def count_owned_live(self, user_id: uuid.UUID) -> tuple[int, bool]:
+        """``(live workspaces the user owns, whether any of them is operator-plan)``.
+
+        Live = not soft-deleted and the owner membership not ended.
+        """
+        stmt = (
+            select(WorkspaceRow.id, WorkspaceRow.plan)
+            .join(MembershipRow, MembershipRow.workspace_id == WorkspaceRow.id)
+            .where(
+                MembershipRow.user_id == user_id,
+                MembershipRow.role == "owner",
+                MembershipRow.left_at.is_(None),
+                WorkspaceRow.deleted_at.is_(None),
+            )
+        )
+        async with cross_tenant_session_read(self._session):
+            rows = (await self._session.execute(stmt)).all()
+        return len(rows), any(plan == "operator" for _, plan in rows)
+
     async def list_active_policies(self) -> list[tuple[uuid.UUID, bool]]:
         """``(workspace_id, safe_mode)`` for every live workspace.
 

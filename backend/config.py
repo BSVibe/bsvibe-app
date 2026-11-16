@@ -373,6 +373,12 @@ class Settings(BaseSettings):
     # rather than after the PR exists (run 14e222a1 shipped a sandbox ``.pnpm-store/``).
     large_change_file_threshold: int = 200
 
+    # Schedules share the sandbox / run slots / DB, so authoring is bounded: at most this
+    # many ENABLED schedules per workspace, and consecutive fires at least this many
+    # minutes apart. Enforced in ``ScheduleService.create``.
+    schedule_max_per_workspace: int = 20
+    schedule_min_interval_minutes: int = 15
+
     # Executor-pool dispatch (executor-pool Lift 5b). A run whose resolved
     # ModelAccount is ``provider='executor'`` dispatches a task to an external
     # CLI worker instead of running the native LLM loop; this is how long the
@@ -424,6 +430,10 @@ class Settings(BaseSettings):
     # exactly (every prod workspace sits at 1); raise it only as far as the disk
     # genuinely allows.
     verify_stack_slots_total: int = 1
+    # How many live (non-deleted) workspaces one user may OWN. Concurrency, verify slots
+    # and the plan are all per-workspace, so without this a user multiplies every limit by
+    # creating workspaces. The owner of an ``operator``-plan workspace is exempt.
+    max_owned_workspaces: int = 3
     #: #929 — which machine this process runs on, for things bounded per machine (the
     #: verification disk bound). Set the SAME value for every container on one box, and a
     #: different one per box. Empty = single-box deployment, keys unchanged. Deliberately not

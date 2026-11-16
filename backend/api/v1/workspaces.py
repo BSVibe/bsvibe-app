@@ -16,6 +16,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user_row, get_db_session
@@ -23,6 +24,7 @@ from backend.api.v1._identity_deps import (
     get_membership_repository,
     get_workspace_repository,
 )
+from backend.config import get_settings
 from backend.data.rls import set_workspace_guc, workspace_session_scope
 from backend.data.scoping import set_current_workspace_id
 from backend.identity.db import MembershipRow, UserRow
@@ -32,6 +34,7 @@ from backend.identity.domain.repositories import (
 )
 from backend.identity.roles import role_satisfies
 from backend.identity.workspaces_db import WorkspaceRow
+from backend.schedule.application.schedule_service import ScheduleService
 
 router = APIRouter()
 
@@ -119,6 +122,20 @@ async def create_workspace(
     memberships: Annotated[MembershipRepository, Depends(get_membership_repository)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WorkspaceResponse:
+    # Per-user cap on owned workspaces. Lock the user row first so two concurrent
+    # creates serialise (the second counts after the first commits).
+    await session.execute(select(UserRow.id).where(UserRow.id == user.id).with_for_update())
+    limit = get_settings().max_owned_workspaces
+    owned, owns_operator = await workspaces.count_owned_live(user.id)
+    if not owns_operator and owned >= limit:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"workspace limit reached: you already own {owned} workspaces "
+                f"(max {limit}). Delete one before creating another."
+            ),
+        )
     row = WorkspaceRow(
         id=uuid.uuid4(),
         name=payload.name,
@@ -192,4 +209,6 @@ async def delete_workspace(
     membership = await memberships.active_for_user_in_workspace(user.id, workspace_id)
     if membership is not None:
         membership.left_at = now
+    # A deleted workspace must stop running its schedules.
+    await ScheduleService(session).disable_for_workspace(workspace_id=workspace_id)
     await session.commit()

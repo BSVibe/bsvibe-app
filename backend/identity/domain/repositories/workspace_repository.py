@@ -61,6 +61,9 @@ class WorkspaceRepository(Protocol):
         an axis that named a vault directory and nothing else.
         """
 
+    async def count_owned_live(self, user_id: uuid.UUID) -> tuple[int, bool]:
+        """``(live owned workspaces, any of them operator-plan)`` for ``user_id``."""
+
     async def list_with_audit_retention(self) -> list[tuple[uuid.UUID, int]]:
         """Every live workspace with a non-NULL ``audit_retention_days``.
 
