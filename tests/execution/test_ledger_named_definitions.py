@@ -3,6 +3,7 @@ relevant hunks (a config default, a constant, a function body)."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest import mock
 
@@ -38,7 +39,11 @@ class _Box:
     ) -> None:
         self.files, self.changed, self.untracked = files, changed, untracked or []
 
+    delay = 0.0
+
     async def exec(self, command: str, **_k: Any) -> SandboxResult:
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if "ls-files" in command:
             out = "\n".join(self.untracked)
         elif "--name-only" in command:
@@ -136,3 +141,12 @@ async def test_json_and_markdown_files_are_not_searched() -> None:
     box = _Box({"a.json": "LIMIT_X = 1\n", "a.md": "LIMIT_X = 1\n"}, ["a.json", "a.md"])
     shown = await _excerpt(box)(_row("R1", "`LIMIT_X`", paths=["a.json"]))
     assert "named definitions" not in shown
+
+
+async def test_concurrent_items_all_see_a_definition_in_an_uncited_changed_file() -> None:
+    box = _Box({"s.py": _SETTINGS, "other.py": "y = 2\n"}, ["s.py", "other.py"])
+    box.delay = 0.05
+    excerpt = _excerpt(box)
+    rows = [_row(f"R{i}", "`schedule_max_per_workspace` is 20") for i in range(3)]
+    shown = await asyncio.gather(*(excerpt(r) for r in rows))
+    assert all("schedule_max_per_workspace: int = 20" in s for s in shown)

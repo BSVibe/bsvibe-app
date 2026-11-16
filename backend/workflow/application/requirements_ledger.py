@@ -309,17 +309,21 @@ class _DefinitionFinder:
 
     def __init__(self, box: SandboxSession, baseline: str | None) -> None:
         self._box, self._baseline = box, baseline
-        # path -> (python index | None, text): a file is parsed ONCE however many names ask.
-        self._files: dict[str, tuple[dict[str, str] | None, str]] = {}
+        # path -> task of (python index | None, text): a file is read and parsed ONCE however
+        # many names, and however many concurrent items, ask for it.
+        self._files: dict[str, asyncio.Task[tuple[dict[str, str] | None, str]]] = {}
         self._found: dict[tuple[str, str], str | None] = {}
-        self._changed: list[str] | None = None
+        self._changed: asyncio.Task[list[str]] | None = None
 
     async def _changed_files(self) -> list[str]:
-        if self._changed is not None:
-            return self._changed
-        self._changed = []
+        # One computation, awaited by every concurrent caller: none sees a half-built list.
+        if self._changed is None:
+            self._changed = asyncio.ensure_future(self._compute_changed())
+        return await self._changed
+
+    async def _compute_changed(self) -> list[str]:
         if not self._baseline:
-            return self._changed
+            return []
         box = self._box
         mount = shlex.quote(box.workspace_mount)
         names: list[str] = []
@@ -333,29 +337,29 @@ class _DefinitionFinder:
                 result = await box.exec(cmd, timeout_s=10.0, shell=True)  # noqa: S604
                 if result.exit_code == 0 and not result.timed_out:
                     names += [ln.strip() for ln in (result.stdout or "").splitlines()]
-        self._changed = list(
+        return list(
             dict.fromkeys(
                 n
                 for n in names
                 if n and not n.startswith(("+", "-", "@")) and " " not in n and _is_code(n)
             )
         )[:_MAX_SEARCHED_FILES]
-        return self._changed
+
+    async def _load(self, path: str) -> tuple[dict[str, str] | None, str]:
+        text = await _test_file(self._box, path)
+        if text is None:
+            return None, ""
+        if is_python_path(path):
+            # Parsed off the event loop, once per file.
+            return await asyncio.to_thread(py_definition_index, text), text
+        return None, text
 
     async def _definition(self, path: str, name: str) -> str | None:
         if (path, name) in self._found:
             return self._found[(path, name)]
         if path not in self._files:
-            text = await _test_file(self._box, path)
-            if text is None:
-                self._files[path] = (None, "")
-            elif is_python_path(path):
-                # Parsed off the event loop, once per file: a name that is nowhere used to
-                # re-parse every searched file.
-                self._files[path] = (await asyncio.to_thread(py_definition_index, text), text)
-            else:
-                self._files[path] = (None, text)
-        index, text = self._files[path]
+            self._files[path] = asyncio.ensure_future(self._load(path))
+        index, text = await self._files[path]
         if index is not None:
             found = definition_from_index(index, name)
         elif text:
