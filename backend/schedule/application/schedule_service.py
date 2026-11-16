@@ -27,16 +27,17 @@ it without updating the prose turns that test red.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import get_settings
 from backend.identity.domain.repositories.resource_binding_repository import (
     OUTPUT_MODES as _BINDING_OUTPUT_MODES,
 )
 from backend.schedule.domain.advancer import CronScheduleAdvancer
-from backend.schedule.domain.cron import CronParseError, parse_cron
+from backend.schedule.domain.cron import CronParseError, next_cron_time, parse_cron
 from backend.schedule.infrastructure.repositories.workspace_schedule_repository_sql import (
     SqlAlchemyWorkspaceScheduleRepository,
 )
@@ -81,6 +82,30 @@ def _check_output_mode(kind: str, output_mode: str) -> None:
         raise ScheduleValidationError(
             "a product_tick schedule always waits for approval — it cannot be direct"
         )
+
+
+#: How many consecutive fires are sampled to find a cron's tightest gap (covers the
+#: wrap-around of patterns like ``*/7`` whose smallest gap is at the hour boundary).
+_INTERVAL_SAMPLE = 120
+
+
+def _check_min_interval(cron_expr: str, after: datetime, min_minutes: int) -> None:
+    """Refuse a cron whose consecutive fires are closer than ``min_minutes``."""
+    limit = timedelta(minutes=min_minutes)
+    try:
+        previous = next_cron_time(cron_expr, after)
+        for _ in range(_INTERVAL_SAMPLE):
+            following = next_cron_time(cron_expr, previous)
+            if following - previous < limit:
+                raise ScheduleValidationError(
+                    f"schedule runs too often: consecutive runs are "
+                    f"{int((following - previous).total_seconds() // 60)} min apart "
+                    f"(minimum {min_minutes} min)"
+                )
+            previous = following
+    except CronParseError:
+        # No further match within the search horizon → effectively one-shot; fine.
+        return
 
 
 class ScheduleService:
@@ -129,7 +154,18 @@ class ScheduleService:
         except CronParseError as exc:
             raise ScheduleValidationError(f"invalid cron expression: {exc}") from exc
 
+        settings = get_settings()
         after = now or datetime.now(tz=UTC)
+        _check_min_interval(cron_expr, after, settings.schedule_min_interval_minutes)
+        active = sum(
+            1 for r in await self._repo.list_for_workspace(workspace_id=workspace_id) if r.enabled
+        )
+        if active >= settings.schedule_max_per_workspace:
+            raise ScheduleValidationError(
+                f"too many schedules: this workspace already has {active} active "
+                f"(limit {settings.schedule_max_per_workspace}) — delete or disable one first"
+            )
+
         next_run_at = self._advancer.next_after(cron_expr=cron_expr, after=after)
         # ``product_tick`` stores no ``text`` (unused); ``instruction`` stores the
         # founder's task text the framer reads.
@@ -166,6 +202,26 @@ class ScheduleService:
     async def set_enabled(
         self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID, enabled: bool
     ) -> WorkspaceScheduleRow | None:
+        if enabled:
+            # Re-enabling must pass the same limits as create, else disable→create→re-enable
+            # bypasses them. Already-enabled is a no-op that passes.
+            row = await self._repo.get(schedule_id=schedule_id, workspace_id=workspace_id)
+            if row is not None and not row.enabled:
+                settings = get_settings()
+                _check_min_interval(
+                    row.cron_expr, datetime.now(tz=UTC), settings.schedule_min_interval_minutes
+                )
+                active = sum(
+                    1
+                    for r in await self._repo.list_for_workspace(workspace_id=workspace_id)
+                    if r.enabled
+                )
+                if active + 1 > settings.schedule_max_per_workspace:
+                    raise ScheduleValidationError(
+                        f"too many schedules: this workspace already has {active} active "
+                        f"(limit {settings.schedule_max_per_workspace}) — "
+                        "delete or disable one first"
+                    )
         return await self._repo.set_enabled(
             schedule_id=schedule_id, workspace_id=workspace_id, enabled=enabled
         )
@@ -191,6 +247,18 @@ class ScheduleService:
                 disabled += 1
         await self._session.flush()
         return deleted, disabled
+
+    async def disable_for_workspace(self, *, workspace_id: uuid.UUID) -> int:
+        """The workspace is being deleted: switch off every schedule it owns → count.
+
+        Flush-only — the caller's delete owns the transaction."""
+        disabled = 0
+        for row in await self._repo.list_for_workspace(workspace_id=workspace_id):
+            if row.enabled:
+                row.enabled = False
+                disabled += 1
+        await self._session.flush()
+        return disabled
 
     async def set_output_mode(
         self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID, output_mode: str

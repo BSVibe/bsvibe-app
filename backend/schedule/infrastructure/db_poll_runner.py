@@ -135,6 +135,23 @@ class DbPollScheduleRunner:
         the wall clock would re-key per tick and the constraint couldn't
         help us.)
         """
+        # The next window is always computed from NOW: a backlog of missed windows
+        # (server down for an hour) collapses into this one fire, not one per window.
+        next_run_at = self._advancer.next_after(cron_expr=sched.cron_expr, after=now)
+
+        if await repo.has_unfinished_run(schedule_id=sched.id, workspace_id=sched.workspace_id):
+            # The previous run is still going — never stack a second one on it.
+            skipped_window = sched.next_run_at
+            sched.next_run_at = next_run_at
+            await session.flush()
+            logger.info(
+                "schedule_skipped_run_in_flight",
+                schedule_id=str(sched.id),
+                workspace_id=str(sched.workspace_id),
+                skipped_window=skipped_window.isoformat(),
+            )
+            return False
+
         trigger = ScheduleTrigger(session)
         outcome = await trigger.fire(
             workspace_id=sched.workspace_id,
@@ -152,7 +169,6 @@ class DbPollScheduleRunner:
         # spawn site just means another worker already fired the SAME
         # window, and advancing here is still correct (we've consumed
         # our turn).
-        next_run_at = self._advancer.next_after(cron_expr=sched.cron_expr, after=sched.next_run_at)
         # ``WorkspaceScheduleRepository.advance`` flushes so the row update
         # stays inside the same transaction as the trigger insert — partial
         # failure rolls both back.

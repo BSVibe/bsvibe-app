@@ -54,8 +54,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 if TYPE_CHECKING:
     # Annotation-only: the planner imports account_resolution, which reaches
@@ -769,17 +770,59 @@ class AgentWorker(BaseWorker):
         ``'*'`` opens ``USING`` only, and ``WITH CHECK`` wants each row's own
         workspace (#959). ``workspace_id`` is returned so the drive can scope on
         it too."""
-        candidates = (
-            select(ExecutionRun.id, ExecutionRun.workspace_id)
+        take = self._cfg.batch_size if limit is None else limit
+        # Fair pick: a workspace's n-th OPEN run (oldest first) is ranked
+        # ``running_now + n``, so the least-loaded workspace's oldest run goes
+        # first and one workspace's backlog cannot crowd out the others. Ties
+        # fall back to ``created_at``. ``FOR UPDATE`` cannot be combined with a
+        # window function, so the ranking is a plain read and the rows it chose
+        # are then locked with SKIP LOCKED.
+        run_alias = aliased(ExecutionRun)
+        running = (
+            select(func.count())
+            .select_from(run_alias)
+            .where(
+                run_alias.status == RunStatus.RUNNING,
+                run_alias.workspace_id == ExecutionRun.workspace_id,
+            )
+            .correlate(ExecutionRun)
+            .scalar_subquery()
+        )
+        nth = (
+            func.row_number()
+            .over(partition_by=ExecutionRun.workspace_id, order_by=ExecutionRun.created_at.asc())
+            .label("nth")
+        )
+        ranked = (
+            select(
+                ExecutionRun.id.label("id"),
+                ExecutionRun.created_at.label("created_at"),
+                (running + nth).label("rank"),
+            )
             .where(ExecutionRun.status == RunStatus.OPEN)
-            .order_by(ExecutionRun.created_at.asc())
-            .limit(self._cfg.batch_size if limit is None else limit)
-            .with_for_update(skip_locked=True)
+            .subquery()
+        )
+        fair_ids = (
+            select(ranked.c.id).order_by(ranked.c.rank.asc(), ranked.c.created_at.asc()).limit(take)
         )
         claimed: list[tuple[uuid.UUID, uuid.UUID]] = []
         async with self._session_factory() as session:
             async with cross_tenant_session_read(session):
-                locked = (await session.execute(candidates)).all()
+                chosen = [r[0] for r in (await session.execute(fair_ids)).all()]
+                locked: list[Any] = []
+                if chosen:
+                    rows = (
+                        await session.execute(
+                            select(ExecutionRun.id, ExecutionRun.workspace_id)
+                            .where(
+                                ExecutionRun.id.in_(chosen),
+                                ExecutionRun.status == RunStatus.OPEN,
+                            )
+                            .with_for_update(skip_locked=True)
+                        )
+                    ).all()
+                    order = {rid: i for i, rid in enumerate(chosen)}
+                    locked = sorted(rows, key=lambda r: order[r[0]])
             for run_id, workspace_id in locked:
                 async with workspace_session_scope(session, workspace_id):
                     await session.execute(
