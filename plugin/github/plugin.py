@@ -254,7 +254,8 @@ async def compare_branch(
     context: SkillContext, repo: str, head: str, base: str = "main"
 ) -> dict[str, Any]:
     owner, name = _split_repo(repo)
-    return await _client(context).compare_branch(owner, name, base=base, head=head)
+    client = await _client(context)
+    return await client.compare_branch(owner, name, base=base, head=head)
 
 
 @p.action(
