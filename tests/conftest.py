@@ -89,11 +89,14 @@ def _reset_oauth_rate_limit_buckets() -> Iterator[None]:
     for a reason that has nothing to do with what it is testing.
     """
     # Lazy import: not every test needs the OAuth module loaded.
+    from backend.api.auth.rate_limit import _reset_auth_rate_limits_for_tests
     from backend.api.oauth import _reset_oauth_rate_limits_for_tests
 
     _reset_oauth_rate_limits_for_tests()
+    _reset_auth_rate_limits_for_tests()
     yield
     _reset_oauth_rate_limits_for_tests()
+    _reset_auth_rate_limits_for_tests()
 
 
 # ---------------------------------------------------------------------------
