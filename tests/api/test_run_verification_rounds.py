@@ -59,7 +59,7 @@ async def client(db, workspace_id: uuid.UUID):
         yield c
 
 
-async def _seed(db, workspace_id, outcomes) -> uuid.UUID:
+async def _seed(db, workspace_id, outcomes, results=None) -> uuid.UUID:
     run_id = uuid.uuid4()
     base = datetime.now(UTC)
     async with db() as s:
@@ -81,7 +81,7 @@ async def _seed(db, workspace_id, outcomes) -> uuid.UUID:
                     workspace_id=workspace_id,
                     outcome=outcome,
                     contract={},
-                    result={},
+                    result=results[i] if results else {},
                     created_at=base + timedelta(minutes=i),
                 )
             )
@@ -142,3 +142,54 @@ async def test_list_reads_every_runs_rounds_in_one_query(
 
     assert sorted(r["verification_rounds"] for r in listed) == [0, 1, 2, 3]
     assert sum("verification_results" in s for s in statements) == 1
+
+
+def _ledger_result(*rows: tuple[str, str, str, bool], failed_cmd: str | None = None) -> dict:
+    result: dict = {
+        "requirements": [
+            {
+                "id": i,
+                "text": "t",
+                "kind": "do",
+                "status": status,
+                "note": note,
+                "evidence_missing": missing,
+            }
+            for i, status, note, missing in rows
+        ]
+    }
+    if failed_cmd:
+        result["derived_gate"] = {"commands": [{"command": failed_cmd, "status": "failed"}]}
+    return result
+
+
+async def test_detail_lists_every_round_with_its_failed_checks_and_open_items(
+    client, db, workspace_id
+) -> None:
+    run_id = await _seed(
+        db,
+        workspace_id,
+        [F, F, P],
+        [
+            _ledger_result(("R1", "missing", "no evidence", False), ("R2", "done", "", False)),
+            _ledger_result(("R1", "rejected", "cut off", True), failed_cmd="pytest -q"),
+            _ledger_result(("R1", "done", "", False), ("R2", "done", "", False)),
+        ],
+    )
+
+    detail = (await client.get(f"/api/v1/runs/{run_id}/detail")).json()
+
+    rounds = detail["rounds"]
+    assert [(r["round"], r["outcome"]) for r in rounds] == [
+        (1, "failed"),
+        (2, "failed"),
+        (3, "passed"),
+    ]
+    assert [(i["id"], i["status"], i["note"]) for i in rounds[0]["open_items"]] == [
+        ("R1", "missing", "no evidence")
+    ]
+    assert rounds[1]["failed_checks"] == ["pytest -q"]
+    assert rounds[1]["open_items"][0]["evidence_missing"] is True
+    assert rounds[2]["open_items"] == []
+    # the latest-round ``verification`` is unchanged
+    assert detail["verification"]["outcome"] == "passed"

@@ -66,7 +66,10 @@ _MIN_PATH_CHARS = 600
 
 _JUDGE_SYSTEM = (
     "You check ONE requirement against the evidence a coding agent cited for it. Answer with "
-    'ONE JSON object: {"passed": true|false|"cannot_determine", "reasoning": "<one sentence>"}. '
+    'ONE JSON object: {"passed": true|false|"cannot_determine", "reasoning": "<one sentence>", '
+    '"evidence_missing": true|false}. evidence_missing=true when your verdict hangs on something '
+    "the evidence shown does not contain (cut off, a definition not shown, a file not quoted); "
+    "otherwise false. "
     "passed=true only when the evidence shown plainly satisfies the requirement. passed=false "
     "ONLY when the evidence shown CONFLICTS with the requirement (wrong behaviour, a different "
     "thing, or only part of it). A definition or hunk missing from the excerpt is not a "
@@ -417,6 +420,16 @@ def _followed_correction(raw: str) -> bool:
     return isinstance(data, dict) and data.get("followed_correction") is True
 
 
+def _evidence_missing(raw: str) -> bool:
+    """The judge's ``evidence_missing`` flag; a judge that omits it means ``False``."""
+    start, end = raw.find("{"), raw.rfind("}")
+    try:
+        data = json.loads(raw[start : end + 1]) if start != -1 and end > start else {}
+    except ValueError:
+        return False
+    return isinstance(data, dict) and data.get("evidence_missing") is True
+
+
 def _verdict(raw: str) -> tuple[str, str]:
     text = raw.strip()
     start, end = text.find("{"), text.rfind("}")
@@ -564,6 +577,8 @@ async def judge_ledger(
             row["status"], row["note"] = str(cached["status"]), str(cached.get("note") or "")
             if cached.get("founder_correction"):
                 row["founder_correction"] = True
+            if "evidence_missing" in cached:
+                row["evidence_missing"] = cached["evidence_missing"] is True
             return
         if not judge:
             return
@@ -580,6 +595,7 @@ async def judge_ledger(
                 row.pop("content_hash", None)
                 return
         row["status"], reasoning = _verdict(raw)
+        row["evidence_missing"] = _evidence_missing(raw)
         if reasoning:
             row["note"] = reasoning
         if corrections and row["status"] == "done" and _followed_correction(raw):

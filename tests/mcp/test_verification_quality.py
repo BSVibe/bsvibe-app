@@ -470,3 +470,55 @@ async def test_no_reviews_reads_zero(db, workspace_id, registry, seeded) -> None
         0,
     )
     assert out["review_findings_by_severity"] == {"high": 0, "medium": 0, "low": 0}
+
+
+async def test_ledger_only_failures_are_broken_down_by_status_and_evidence(
+    db, workspace_id, registry, seeded
+) -> None:
+    def _row(status: str, missing: bool | None = None) -> dict[str, Any]:
+        row = _req(status)
+        if missing is not None:
+            row["evidence_missing"] = missing
+        return row
+
+    await _seed_run(
+        db,
+        workspace_id,
+        [
+            (F, _result(_row("rejected", True), _row("missing"), _row("done"))),
+            (F, _result(_row("rejected", False))),
+            (F, _result(_row("rejected", True), failed_command=True)),
+            (P, _result(_row("done"))),
+        ],
+    )
+
+    out = await _mcp(db, workspace_id=workspace_id, registry=registry)
+
+    assert out["ledger_only_failures"] == 2
+    assert out["ledger_only_failure_causes"] == {
+        "rounds": 2,
+        "items": 3,
+        "by_status": {"missing": 1, "rejected": 2},
+        "evidence_missing": 1,
+    }
+
+
+async def test_the_runs_detail_tool_carries_the_round_list(
+    db, workspace_id, registry, seeded
+) -> None:
+    run_id = await _seed_run(
+        db,
+        workspace_id,
+        [
+            (F, _result(_req("missing"))),
+            (F, _result(_req("rejected"))),
+            (P, _result(_req("done"))),
+        ],
+    )
+    async with db() as s:
+        out = await registry.call_tool(
+            "bsvibe_runs_detail", {"run_id": str(run_id)}, _ctx(s, workspace_id)
+        )
+
+    assert [r["round"] for r in out["rounds"]] == [1, 2, 3]
+    assert [len(r["open_items"]) for r in out["rounds"]] == [1, 1, 0]
