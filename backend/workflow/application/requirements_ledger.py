@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import shlex
@@ -35,10 +36,13 @@ from backend.workflow.domain.requirements import (
     check_ledger,
     cited_test_body,
     cited_test_helpers,
+    definition_from_index,
     definition_in,
     imported_helper_sources,
+    is_python_path,
     named_definition,
     named_identifiers,
+    py_definition_index,
     relevant_hunks,
     split_test_id,
 )
@@ -63,6 +67,8 @@ _EVIDENCE_CHARS = 10000
 _DEFINITIONS_CHARS = 6000
 #: How many changed files are searched for the names an item mentions.
 _MAX_SEARCHED_FILES = 200
+#: Only code is searched for a definition; a .json or .md never holds one.
+_CODE_EXTS = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 #: How much of a cited file with no diff is read to find what the item names.
 _FILE_READ_BYTES = 200_000
 #: Lines per chunk of such a file — the unit ``relevant_hunks`` ranks and keeps.
@@ -291,6 +297,10 @@ def cited_tests(box: SandboxSession) -> MissingTests:
     return _missing
 
 
+def _is_code(path: str) -> bool:
+    return path.lower().endswith(_CODE_EXTS)
+
+
 class _DefinitionFinder:
     """Finds the definitions an item names, in the cited paths and the files this run changed.
 
@@ -299,7 +309,8 @@ class _DefinitionFinder:
 
     def __init__(self, box: SandboxSession, baseline: str | None) -> None:
         self._box, self._baseline = box, baseline
-        self._texts: dict[str, str | None] = {}
+        # path -> (python index | None, text): a file is parsed ONCE however many names ask.
+        self._files: dict[str, tuple[dict[str, str] | None, str]] = {}
         self._found: dict[tuple[str, str], str | None] = {}
         self._changed: list[str] | None = None
 
@@ -310,29 +321,49 @@ class _DefinitionFinder:
         if not self._baseline:
             return self._changed
         box = self._box
-        try:
-            result = await box.exec(  # noqa: S604 — quoted, as in ``_path_diff``
-                f"git -C {shlex.quote(box.workspace_mount)} diff --name-only"
-                f" {shlex.quote(self._baseline)}",
-                timeout_s=10.0,
-                shell=True,
+        mount = shlex.quote(box.workspace_mount)
+        names: list[str] = []
+        # Tracked edits since the baseline AND untracked new files: a module the run just
+        # created is not in ``git diff`` but must be found too.
+        for cmd in (
+            f"git -C {mount} diff --name-only {shlex.quote(self._baseline)}",
+            f"git -C {mount} ls-files --others --exclude-standard",
+        ):
+            with contextlib.suppress(Exception):  # no file list: only cited paths are searched
+                result = await box.exec(cmd, timeout_s=10.0, shell=True)  # noqa: S604
+                if result.exit_code == 0 and not result.timed_out:
+                    names += [ln.strip() for ln in (result.stdout or "").splitlines()]
+        self._changed = list(
+            dict.fromkeys(
+                n
+                for n in names
+                if n and not n.startswith(("+", "-", "@")) and " " not in n and _is_code(n)
             )
-        except Exception:  # noqa: BLE001 — no file list: only the cited paths are searched
-            return self._changed
-        if result.exit_code == 0 and not result.timed_out:
-            names = (ln.strip() for ln in (result.stdout or "").splitlines())
-            self._changed = [
-                n for n in names if n and not n.startswith(("+", "-", "@")) and " " not in n
-            ][:_MAX_SEARCHED_FILES]
+        )[:_MAX_SEARCHED_FILES]
         return self._changed
 
     async def _definition(self, path: str, name: str) -> str | None:
-        if (path, name) not in self._found:
-            if path not in self._texts:
-                self._texts[path] = await _test_file(self._box, path)
-            text = self._texts[path]
-            self._found[(path, name)] = named_definition(text, name, path) if text else None
-        return self._found[(path, name)]
+        if (path, name) in self._found:
+            return self._found[(path, name)]
+        if path not in self._files:
+            text = await _test_file(self._box, path)
+            if text is None:
+                self._files[path] = (None, "")
+            elif is_python_path(path):
+                # Parsed off the event loop, once per file: a name that is nowhere used to
+                # re-parse every searched file.
+                self._files[path] = (await asyncio.to_thread(py_definition_index, text), text)
+            else:
+                self._files[path] = (None, text)
+        index, text = self._files[path]
+        if index is not None:
+            found = definition_from_index(index, name)
+        elif text:
+            found = await asyncio.to_thread(named_definition, text, name, path)
+        else:
+            found = None
+        self._found[(path, name)] = found
+        return found
 
     async def block(self, row: Mapping[str, Any], paths: list[str]) -> str:
         names = named_identifiers(
@@ -343,7 +374,11 @@ class _DefinitionFinder:
         if not names:
             return ""
         test_files = [s[0] for t in row.get("tests") or [] if (s := split_test_id(str(t)))]
-        scope = list(dict.fromkeys([*paths, *test_files, *await self._changed_files()]))
+        scope = [
+            p
+            for p in dict.fromkeys([*paths, *test_files, *await self._changed_files()])
+            if _is_code(p)
+        ]
         header = "--- named definitions (looked up in the changed tree):"
         shown: list[str] = []
         skipped: list[str] = []

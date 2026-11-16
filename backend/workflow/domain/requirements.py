@@ -645,13 +645,16 @@ def named_identifiers(*texts: str) -> list[str]:
     return list(out)[:_MAX_IDENTIFIERS]
 
 
-def _py_named_definition(text: str, name: str) -> str | None:
+def py_definition_index(text: str) -> dict[str, str]:
+    """Every field/constant/function definition in a Python file, name -> source, from ONE
+    ``ast.parse``. A field or constant wins over a function of the same name. An unparsable
+    file has an empty index (never a guess)."""
     import ast  # noqa: PLC0415
 
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
-        return None
+        return {}
     lines = text.splitlines()
 
     def span(node: ast.AST, first: int) -> str:
@@ -661,12 +664,12 @@ def _py_named_definition(text: str, name: str) -> str | None:
             start -= 1  # the comment right above belongs to the definition
         return "\n".join(lines[start - 1 : end])
 
-    funcs: list[str] = []
-    fields: list[str] = []
+    funcs: dict[str, str] = {}
+    fields: dict[str, str] = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
-            funcs.append(span(node, first))
+            funcs.setdefault(node.name, span(node, first))
         elif isinstance(node, ast.Module | ast.ClassDef):
             for stmt in node.body:
                 targets: list[ast.expr] = []
@@ -674,17 +677,26 @@ def _py_named_definition(text: str, name: str) -> str | None:
                     targets = [stmt.target]
                 elif isinstance(stmt, ast.Assign):
                     targets = list(stmt.targets)
-                if any(isinstance(t, ast.Name) and t.id == name for t in targets):
-                    fields.append(span(stmt, stmt.lineno))
-    found = fields or funcs
-    return found[0] if found else None
+                for t in targets:
+                    if isinstance(t, ast.Name):
+                        fields.setdefault(t.id, span(stmt, stmt.lineno))
+    return {**funcs, **fields}
+
+
+def is_python_path(path: str) -> bool:
+    return path.endswith((".py", ".pyi"))
+
+
+def definition_from_index(index: dict[str, str], name: str) -> str | None:
+    found = index.get(name)
+    return found[:_DEFINITION_CHARS] if found else None
 
 
 def named_definition(text: str, name: str, path: str) -> str | None:
     """The definition of ``name`` in ``text``: a field/constant's statement (with the comment
     above it) or a function/test's whole body. ``None`` when it is not found — never a guess."""
-    if path.endswith((".py", ".pyi")):
-        found = _py_named_definition(text, name)
+    if is_python_path(path):
+        found = py_definition_index(text).get(name)
     else:
         found = definition_in(text, name)
         if found is None:
@@ -976,7 +988,10 @@ __all__ = [
     "cited_test_body",
     "cited_test_helpers",
     "definition_in",
+    "definition_from_index",
+    "is_python_path",
     "named_definition",
+    "py_definition_index",
     "named_identifiers",
     "imported_helper_sources",
     "relevant_hunks",
