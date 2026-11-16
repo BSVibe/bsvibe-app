@@ -59,6 +59,19 @@ class ConnectorReauthRequired(Exception):
         self.cause = cause
 
 
+async def _read_token_row(
+    session: AsyncSession, account_id: uuid.UUID, *, lock: bool = False
+) -> ConnectorOAuthTokenRow | None:
+    """Read the account's token row; ``lock`` takes ``FOR UPDATE`` and bypasses
+    the identity map so the values are the committed, current ones."""
+    stmt = select(ConnectorOAuthTokenRow).where(
+        ConnectorOAuthTokenRow.connector_account_id == account_id
+    )
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 async def resolve_connector_credentials(
     session: AsyncSession,
     *,
@@ -66,18 +79,28 @@ async def resolve_connector_credentials(
     cipher: CredentialCipher,
 ) -> dict[str, str]:
     """Return the API credential for ``account`` (OAuth token, else secret)."""
-    token_row = (
-        await session.execute(
-            select(ConnectorOAuthTokenRow).where(
-                ConnectorOAuthTokenRow.connector_account_id == account.id
-            )
-        )
-    ).scalar_one_or_none()
+    token_row = await _read_token_row(session, account.id)
 
     if token_row is not None:
         if _expiring_soon(token_row) and token_row.refresh_token_ciphertext:
             provider = get_provider(token_row.provider)
             if provider is not None and provider.refreshable:
+                # Serialise refreshes of this account across processes: lock
+                # the token row (SELECT ... FOR UPDATE) and re-read it. A
+                # single-use refresh token must be exchanged exactly once; the
+                # lock is held until the commit below, so a concurrent caller
+                # waits and then sees the already-refreshed token.
+                token_row = await _read_token_row(session, account.id, lock=True)
+                if token_row is None or not token_row.refresh_token_ciphertext:
+                    await session.rollback()
+                    return await resolve_connector_credentials(
+                        session, account=account, cipher=cipher
+                    )
+                if not _expiring_soon(token_row):
+                    # Someone else refreshed while we waited — use their token.
+                    access = cipher.decrypt(token_row.access_token_ciphertext)
+                    await session.commit()  # release the row lock
+                    return {"token": access}
                 refresh_token = cipher.decrypt(token_row.refresh_token_ciphertext)
                 refreshed = None
                 if isinstance(provider, SentryProvider):
@@ -98,6 +121,18 @@ async def resolve_connector_credentials(
                         # ``upsert_token`` path); raising aborts the
                         # transaction only when the caller has not yet
                         # committed.
+                        # Only flag when the refresh token (re-read under the
+                        # lock) is still the one that just failed; if it was
+                        # rotated meanwhile, proceed with the new token.
+                        current = await _read_token_row(session, account.id, lock=True)
+                        if (
+                            current is not None
+                            and current.refresh_token_ciphertext
+                            and cipher.decrypt(current.refresh_token_ciphertext) != refresh_token
+                        ):
+                            access = cipher.decrypt(current.access_token_ciphertext)
+                            await session.commit()
+                            return {"token": access}
                         token_row.status = "needs_reauth"
                         await session.flush()
                         await session.commit()
@@ -120,6 +155,9 @@ async def resolve_connector_credentials(
                     if token_row.status != "active":
                         token_row.status = "active"
                         await session.flush()
+                # Persist the rotated token and release the row lock now, so
+                # waiting callers read the new token rather than the old one.
+                await session.commit()
         return {"token": cipher.decrypt(token_row.access_token_ciphertext)}
 
     # Legacy path — no OAuth token bound yet.
