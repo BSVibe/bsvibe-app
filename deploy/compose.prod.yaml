@@ -145,6 +145,11 @@ services:
       # container leaks and "reclaiming the slot reclaims the stack" stops
       # holding. Empty is legitimate only on a single-daemon host.
       BSVIBE_VERIFY_DOCKER_CONTEXT: ${BSVIBE_VERIFY_DOCKER_CONTEXT:-}
+      # Drive/sandbox/verify concurrency. Defaults equal the code defaults, so
+      # leaving these unset behaves exactly as before.
+      BSVIBE_AGENT_DRIVE_CONCURRENCY: ${BSVIBE_AGENT_DRIVE_CONCURRENCY:-0}
+      BSVIBE_SANDBOX_MAX_CONCURRENT: ${BSVIBE_SANDBOX_MAX_CONCURRENT:-2}
+      BSVIBE_VERIFY_STACK_SLOTS_TOTAL: ${BSVIBE_VERIFY_STACK_SLOTS_TOTAL:-1}
     volumes:
       - appdata:/app/var
 
@@ -231,6 +236,11 @@ services:
       # container leaks and "reclaiming the slot reclaims the stack" stops
       # holding. Empty is legitimate only on a single-daemon host.
       BSVIBE_VERIFY_DOCKER_CONTEXT: ${BSVIBE_VERIFY_DOCKER_CONTEXT:-}
+      # Drive/sandbox/verify concurrency. Defaults equal the code defaults, so
+      # leaving these unset behaves exactly as before.
+      BSVIBE_AGENT_DRIVE_CONCURRENCY: ${BSVIBE_AGENT_DRIVE_CONCURRENCY:-0}
+      BSVIBE_SANDBOX_MAX_CONCURRENT: ${BSVIBE_SANDBOX_MAX_CONCURRENT:-2}
+      BSVIBE_VERIFY_STACK_SLOTS_TOTAL: ${BSVIBE_VERIFY_STACK_SLOTS_TOTAL:-1}
     volumes:
       - appdata:/app/var
 
