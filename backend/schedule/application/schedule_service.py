@@ -202,6 +202,26 @@ class ScheduleService:
     async def set_enabled(
         self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID, enabled: bool
     ) -> WorkspaceScheduleRow | None:
+        if enabled:
+            # Re-enabling must pass the same limits as create, else disable→create→re-enable
+            # bypasses them. Already-enabled is a no-op that passes.
+            row = await self._repo.get(schedule_id=schedule_id, workspace_id=workspace_id)
+            if row is not None and not row.enabled:
+                settings = get_settings()
+                _check_min_interval(
+                    row.cron_expr, datetime.now(tz=UTC), settings.schedule_min_interval_minutes
+                )
+                active = sum(
+                    1
+                    for r in await self._repo.list_for_workspace(workspace_id=workspace_id)
+                    if r.enabled
+                )
+                if active + 1 > settings.schedule_max_per_workspace:
+                    raise ScheduleValidationError(
+                        f"too many schedules: this workspace already has {active} active "
+                        f"(limit {settings.schedule_max_per_workspace}) — "
+                        "delete or disable one first"
+                    )
         return await self._repo.set_enabled(
             schedule_id=schedule_id, workspace_id=workspace_id, enabled=enabled
         )

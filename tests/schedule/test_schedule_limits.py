@@ -233,3 +233,39 @@ async def test_deleting_a_workspace_disables_its_schedules() -> None:
         assert await ScheduleService(session).disable_for_workspace(workspace_id=ws) == 1
         assert mine.enabled is False
         assert theirs.enabled is True
+
+
+# -- re-enable goes through the same limits --------------------------------------
+
+
+async def test_enabling_a_disabled_schedule_at_the_cap_is_refused() -> None:
+    cap = get_settings().schedule_max_per_workspace
+    async with memory_session() as session:
+        service = ScheduleService(session)
+        ws = uuid.uuid4()
+        for _ in range(cap):
+            await _seed_schedule(session, ws, next_run_at=_NOW)
+        off = await _seed_schedule(session, ws, next_run_at=_NOW)
+        off.enabled = False
+        await session.flush()
+        with pytest.raises(ScheduleValidationError, match="too many schedules"):
+            await service.set_enabled(schedule_id=off.id, workspace_id=ws, enabled=True)
+        # Already-enabled stays a passing no-op.
+        enabled = await service.list(workspace_id=ws)
+        on = next(r for r in enabled if r.enabled)
+        assert (
+            await service.set_enabled(schedule_id=on.id, workspace_id=ws, enabled=True)
+        ) is not None
+
+
+async def test_enabling_a_disabled_every_minute_schedule_is_refused() -> None:
+    async with memory_session() as session:
+        ws = uuid.uuid4()
+        row = await _seed_schedule(session, ws, next_run_at=_NOW)
+        row.cron_expr = "* * * * *"
+        row.enabled = False
+        await session.flush()
+        with pytest.raises(ScheduleValidationError, match="too often"):
+            await ScheduleService(session).set_enabled(
+                schedule_id=row.id, workspace_id=ws, enabled=True
+            )
