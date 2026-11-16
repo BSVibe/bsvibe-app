@@ -13,10 +13,11 @@ from __future__ import annotations
 from typing import Annotated
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.api.auth.rate_limit import enforce_auth_rate_limit
 from backend.api.deps import get_db_session
 from backend.auth.client import (
     SignUpResult,
@@ -126,8 +127,9 @@ async def _bootstrap(session: AsyncSession, supa: SupabaseSession) -> None:
 
 @router.post("/login")
 async def login(
-    payload: LoginRequest, supabase: SupabaseDep, session: SessionDep
+    request: Request, payload: LoginRequest, supabase: SupabaseDep, session: SessionDep
 ) -> SupabaseSession:
+    await enforce_auth_rate_limit(request, route="login", email=payload.email)
     try:
         supa = await supabase.password_login(payload.email, payload.password)
     except SupabaseAuthError as exc:
@@ -174,10 +176,20 @@ async def oauth_authorize(
 
 
 @router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
-async def password_reset(payload: PasswordResetRequest, supabase: SupabaseDep) -> None:
-    """Request a password-recovery email. Always 204 — never leaks existence."""
+async def password_reset(
+    request: Request, payload: PasswordResetRequest, supabase: SupabaseDep
+) -> None:
+    """Request a password-recovery email. Always 204 — never leaks existence.
+
+    Over the limit it is STILL 204 (a 429 here would not leak account existence, but the
+    contract is "always 204"); the request just is not forwarded to GoTrue.
+    """
     if payload.redirect_to is not None:
         _validate_redirect_to(payload.redirect_to)
+    try:
+        await enforce_auth_rate_limit(request, route="reset", email=payload.email)
+    except HTTPException:
+        return
     try:
         await supabase.send_password_reset(payload.email, payload.redirect_to)
     except SupabaseAuthError:
@@ -231,7 +243,7 @@ def _signup_http_error(exc: SupabaseAuthError) -> HTTPException:
 
 @router.post("/signup")
 async def signup(
-    payload: SignUpRequest, supabase: SupabaseDep, session: SessionDep
+    request: Request, payload: SignUpRequest, supabase: SupabaseDep, session: SessionDep
 ) -> SignUpResponse:
     """Create an account with email + password.
 
@@ -246,6 +258,7 @@ async def signup(
     """
     if payload.redirect_to is not None:
         _validate_redirect_to(payload.redirect_to)
+    await enforce_auth_rate_limit(request, route="signup", email=payload.email)
     try:
         result: SignUpResult = await supabase.sign_up(
             payload.email, payload.password, payload.redirect_to

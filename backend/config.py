@@ -484,6 +484,16 @@ class Settings(BaseSettings):
         description="Comma-separated CORS allow_origins for the browser PWA.",
     )
 
+    # Abuse limits on the proxied sign-up / login / password-reset routes. GoTrue only sees
+    # THIS backend's IP, so without our own per-client budget one caller drains the shared
+    # GoTrue limit for everybody (and can mass-send confirmation mail). Per route.
+    auth_rate_limit_ip_per_minute: int = 10
+    auth_rate_limit_email_per_hour: int = 5
+    # The ONLY header the client IP is read from. Production ingress is a Cloudflare Tunnel,
+    # which SETS (overwrites) ``CF-Connecting-IP``; ``X-Forwarded-For`` is client-appendable
+    # and is never used as a rate-limit key (see ``backend.shared.client_ip``).
+    trusted_client_ip_header: str = "CF-Connecting-IP"
+
     @model_validator(mode="after")
     def _prod_must_declare_its_sandbox_mode(self) -> Settings:
         """In prod, an UNSET sandbox flag is refused — silence is not a decision.
