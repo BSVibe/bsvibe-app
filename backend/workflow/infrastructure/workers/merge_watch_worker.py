@@ -1302,7 +1302,13 @@ class MergeWatchWorker(BaseWorker):
         if run is None:
             return
         payload = dict(run.payload or {})
-        payload.pop("merge_conflict_budget", None)
+        # An ``exhausted`` mark survives: it blocks re-dispatch until the founder answers
+        # merge_conflict_review with retry (``_prepare_the_resume`` clears it then).
+        marked = (payload.get("merge_conflict_budget") or {}).get("exhausted")
+        if marked:
+            payload["merge_conflict_budget"] = {"exhausted": marked}
+        else:
+            payload.pop("merge_conflict_budget", None)
         run.payload = payload
         await session.flush()
 
