@@ -140,7 +140,7 @@ async def test_delete_and_set_enabled_are_workspace_scoped() -> None:
         ws = uuid.uuid4()
         other_ws = uuid.uuid4()
         row = await service.create(
-            workspace_id=ws, kind="instruction", text="x", cron_expr="* * * * *"
+            workspace_id=ws, kind="instruction", text="x", cron_expr="*/15 * * * *"
         )
         await session.commit()
 

@@ -118,7 +118,7 @@ async def test_due_schedule_becomes_real_run_with_submitted_instruction(
             json={
                 "kind": "instruction",
                 "text": _INSTRUCTION,
-                "cron_expr": "* * * * *",
+                "cron_expr": "*/15 * * * *",
             },
         )
     assert resp.status_code == 201, resp.text

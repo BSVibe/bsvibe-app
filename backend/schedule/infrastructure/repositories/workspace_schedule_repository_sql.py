@@ -15,8 +15,12 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.identity.workspaces_db import WorkspaceRow
 from backend.schedule.channels import WORKSPACE_SCHEDULES
 from backend.schedule.infrastructure.schedule_db import WorkspaceScheduleRow
+from backend.workflow.application.run_status import TERMINAL_RUN_STATUSES
+from backend.workflow.infrastructure.db import ExecutionRun
+from backend.workflow.infrastructure.intake.db import RequestRow, TriggerEventRow
 
 
 class SqlAlchemyWorkspaceScheduleRepository:
@@ -88,12 +92,37 @@ class SqlAlchemyWorkspaceScheduleRepository:
             .where(
                 WorkspaceScheduleRow.enabled.is_(True),
                 WorkspaceScheduleRow.next_run_at <= now,
+                # A soft-deleted workspace's schedules never fire (belt and braces:
+                # deletion also disables them).
+                WorkspaceScheduleRow.workspace_id.not_in(
+                    select(WorkspaceRow.id).where(WorkspaceRow.deleted_at.is_not(None))
+                ),
             )
             .order_by(WorkspaceScheduleRow.next_run_at.asc())
             .with_for_update(skip_locked=True)
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def has_unfinished_run(self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID) -> bool:
+        """True while a run started by this schedule is not in a terminal status.
+
+        A schedule's trigger events are keyed ``<schedule_id>:<window>``; the chain
+        trigger event → request → execution run tells where each one got to.
+        """
+        stmt = (
+            select(ExecutionRun.id)
+            .join(RequestRow, ExecutionRun.request_id == RequestRow.id)
+            .join(TriggerEventRow, RequestRow.trigger_event_id == TriggerEventRow.id)
+            .where(
+                TriggerEventRow.workspace_id == workspace_id,
+                TriggerEventRow.source == "schedule",
+                TriggerEventRow.idempotency_key.like(f"{schedule_id}:%"),
+                ExecutionRun.status.not_in(tuple(TERMINAL_RUN_STATUSES)),
+            )
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).first() is not None
 
     async def advance(
         self,
