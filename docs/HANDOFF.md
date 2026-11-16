@@ -393,6 +393,14 @@ body from reviewer text (#1333), a metric on a different basis than the card (#1
   string binds; it was run once on a throwaway `postgres:16-alpine` over asyncpg (correct rows closed, exclusions
   kept). That container ran on `colima` for under a minute and was removed — §Ⅳ has one bullet against throwaway
   containers on this box and one describing them; 형님 to decide which stands.
+* **Making a helper `async` broke one of its nine call sites** (#1374 → found 11-16). `_client()` became async and one
+  caller kept `await _client(ctx).compare_branch(...)` — the `await` binds to the method call on the coroutine, so it
+  always raised. Every in-place delivery that checks for commits failed; the weekly report raised `delivery_failed`.
+  Neither the tests nor the review ran that path. Fixed by hand (#1400) with tests that dispatch the action through
+  `PluginRunner`. When a helper changes colour, grep every caller for `await helper(...).attr`.
+* **Two drives refreshing one OAuth token at once** (11-14): GitHub refresh tokens are single-use, so the second
+  refresh failed and flagged the connector `needs_reauth`; the retry passed. Concurrent drives (#1315) made it
+  reachable — #1397 serialises the refresh in its own locked transaction.
 * **A Monitor filter without the failure events goes silent** — a 30-minute watch on a run listed only success and
   card events and delivered nothing while the run failed two rounds. Include `verification_failed` / `run_failed`.
 
