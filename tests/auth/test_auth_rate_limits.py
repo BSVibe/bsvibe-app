@@ -146,7 +146,25 @@ async def test_reset_stays_204_but_is_not_sent_once_limited(
     client: httpx.AsyncClient, gotrue: Gotrue
 ) -> None:
     body = {"email": "victim@example.com"}
-    for _ in range(4):
-        resp = await client.post("/api/auth/password/reset", json=body, headers={CF: "203.0.113.7"})
+    for i in range(4):
+        resp = await client.post(
+            "/api/auth/password/reset", json=body, headers={CF: f"203.0.113.{20 + i}"}
+        )
         assert resp.status_code == 204
     assert len(gotrue.requests) == 2
+
+
+async def test_reset_ip_limit_is_429_with_retry_after(
+    client: httpx.AsyncClient, gotrue: Gotrue
+) -> None:
+    last = None
+    for i in range(4):
+        last = await client.post(
+            "/api/auth/password/reset",
+            json={"email": f"user{i}@example.com"},
+            headers={CF: "203.0.113.9"},
+        )
+    assert last is not None
+    assert last.status_code == 429
+    assert "Retry-After" in last.headers
+    assert len(gotrue.requests) == 3

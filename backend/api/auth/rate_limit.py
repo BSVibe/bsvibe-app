@@ -67,6 +67,10 @@ def _too_many(retry_after: int) -> HTTPException:
     )
 
 
+class EmailRateLimited(HTTPException):
+    """The per-mailbox budget is out (the per-IP one is a plain 429)."""
+
+
 async def enforce_auth_rate_limit(request: Request, *, route: str, email: str) -> None:
     """Spend one unit of the IP and email budget for ``route``; raise 429 when either is out."""
     settings = get_settings()
@@ -81,4 +85,7 @@ async def enforce_auth_rate_limit(request: Request, *, route: str, email: str) -
         f"{route}_email", _EMAIL_WINDOW_SECS, settings.auth_rate_limit_email_per_hour
     )
     if not await email_limiter.check_and_record(digest):
-        raise _too_many(_EMAIL_WINDOW_SECS)
+        limited = _too_many(_EMAIL_WINDOW_SECS)
+        raise EmailRateLimited(
+            status_code=limited.status_code, detail=limited.detail, headers=limited.headers
+        )
