@@ -114,7 +114,9 @@ class SupabaseAuthClient:
         )
         if resp.status_code >= 400:
             logger.warning("supabase_token_failed", grant_type=grant_type, status=resp.status_code)
-            raise SupabaseAuthError(f"supabase {grant_type} failed ({resp.status_code})")
+            raise SupabaseAuthError(
+                f"supabase {grant_type} failed ({resp.status_code})", status=resp.status_code
+            )
         return _session_from_gotrue(resp.json())
 
     async def health(self) -> bool:
