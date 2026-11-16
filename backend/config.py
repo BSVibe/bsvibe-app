@@ -373,6 +373,12 @@ class Settings(BaseSettings):
     # rather than after the PR exists (run 14e222a1 shipped a sandbox ``.pnpm-store/``).
     large_change_file_threshold: int = 200
 
+    # Schedules share the sandbox / run slots / DB, so authoring is bounded: at most this
+    # many ENABLED schedules per workspace, and consecutive fires at least this many
+    # minutes apart. Enforced in ``ScheduleService.create``.
+    schedule_max_per_workspace: int = 20
+    schedule_min_interval_minutes: int = 15
+
     # Executor-pool dispatch (executor-pool Lift 5b). A run whose resolved
     # ModelAccount is ``provider='executor'`` dispatches a task to an external
     # CLI worker instead of running the native LLM loop; this is how long the
