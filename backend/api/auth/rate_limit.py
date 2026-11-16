@@ -67,6 +67,26 @@ def _too_many(retry_after: int) -> HTTPException:
     )
 
 
+def _digest(email: str) -> str:
+    return hashlib.sha256(normalize_email(email).encode()).hexdigest()
+
+
+def _login_failure_limiter() -> _SlidingWindowLimiter:
+    return _LIMITERS.get(
+        "login_failures", _EMAIL_WINDOW_SECS, get_settings().auth_login_failures_per_email_per_hour
+    )
+
+
+async def record_login_failure(email: str) -> None:
+    """Charge one failed login (GoTrue rejected the credentials) to this mailbox."""
+    await _login_failure_limiter().record(_digest(email))
+
+
+async def clear_login_failures(email: str) -> None:
+    """A successful login wipes the mailbox's failure record."""
+    await _login_failure_limiter().clear(_digest(email))
+
+
 class EmailRateLimited(HTTPException):
     """The per-mailbox budget is out (the per-IP one is a plain 429)."""
 
@@ -80,7 +100,13 @@ async def enforce_auth_rate_limit(request: Request, *, route: str, email: str) -
     )
     if not await ip_limiter.check_and_record(ip):
         raise _too_many(_IP_WINDOW_SECS)
-    digest = hashlib.sha256(normalize_email(email).encode()).hexdigest()
+    digest = _digest(email)
+    if route == "login":
+        # Login's mailbox budget counts FAILURES only (``record_login_failure``): charging every
+        # attempt would let anyone lock a victim out by spending tries on their address.
+        if await _login_failure_limiter().exhausted(digest):
+            raise _too_many(_EMAIL_WINDOW_SECS)
+        return
     email_limiter = _LIMITERS.get(
         f"{route}_email", _EMAIL_WINDOW_SECS, settings.auth_rate_limit_email_per_hour
     )

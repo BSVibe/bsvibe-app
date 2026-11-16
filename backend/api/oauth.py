@@ -297,6 +297,18 @@ class _SlidingWindowLimiter:
             return
         self._local_record(key, time.monotonic() if now is None else now)
 
+    async def clear(self, key: str) -> None:
+        """Forget ``key``'s count everywhere — per-process and shared."""
+        with self._lock:
+            self._buckets.pop(key, None)
+        redis = _rate_limit_redis()
+        if redis is None:
+            return
+        try:
+            await redis.delete(f"bsvibe:ratelimit:{self._name}:{key}")
+        except Exception:  # noqa: BLE001 — a failed clear only leaves the stricter count
+            logger.warning("oauth_rate_limit_redis_unavailable", limiter=self._name, exc_info=True)
+
     def reset(self) -> None:
         with self._lock:
             self._buckets.clear()

@@ -17,7 +17,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.auth.rate_limit import enforce_auth_rate_limit
+from backend.api.auth.rate_limit import (
+    clear_login_failures,
+    enforce_auth_rate_limit,
+    record_login_failure,
+)
 from backend.api.deps import get_db_session
 from backend.auth.client import (
     SignUpResult,
@@ -133,9 +137,14 @@ async def login(
     try:
         supa = await supabase.password_login(payload.email, payload.password)
     except SupabaseAuthError as exc:
+        # Only an authentication failure spends the mailbox budget; a GoTrue outage or its own
+        # 429 is not the user's wrong password.
+        if exc.status is not None and 400 <= exc.status < 500 and exc.status != 429:
+            await record_login_failure(payload.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials"
         ) from exc
+    await clear_login_failures(payload.email)
     await _bootstrap(session, supa)
     return supa
 

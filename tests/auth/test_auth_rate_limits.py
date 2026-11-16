@@ -28,6 +28,10 @@ class Gotrue:
         self.requests.append(request.url.path)
         if request.url.path.endswith("/recover"):
             return httpx.Response(200, json={})
+        if b"wrong" in request.content:
+            return httpx.Response(
+                400, json={"error_code": "invalid_credentials", "msg": "Invalid login credentials"}
+            )
         return httpx.Response(
             200,
             json={
@@ -70,12 +74,20 @@ def _small_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "auth_rate_limit_ip_per_minute", 3)
     monkeypatch.setattr(settings, "auth_rate_limit_email_per_hour", 2)
+    monkeypatch.setattr(settings, "auth_login_failures_per_email_per_hour", 3)
 
 
-def _login(client: httpx.AsyncClient, *, ip: str, email: str, extra: dict | None = None):
+def _login(
+    client: httpx.AsyncClient,
+    *,
+    ip: str,
+    email: str,
+    extra: dict | None = None,
+    password: str = "pw",
+):
     return client.post(
         "/api/auth/login",
-        json={"email": email, "password": "pw"},
+        json={"email": email, "password": password},
         headers={CF: ip, **(extra or {})},
     )
 
@@ -121,15 +133,57 @@ async def test_a_forged_x_forwarded_for_does_not_buy_a_new_bucket(
     assert len(gotrue.requests) == 3
 
 
-async def test_the_email_budget_is_shared_across_case_and_ips(
+async def test_the_signup_email_budget_is_shared_across_case_and_ips(
     client: httpx.AsyncClient, gotrue: Gotrue
 ) -> None:
-    assert (await _login(client, ip="198.51.100.1", email="Bob@Example.com")).status_code == 200
-    assert (await _login(client, ip="198.51.100.2", email=" bob@example.com ")).status_code == 200
-    resp = await _login(client, ip="198.51.100.3", email="BOB@EXAMPLE.COM")
+    for ip, email in (("198.51.100.1", "Bob@Example.com"), ("198.51.100.2", " bob@example.com ")):
+        resp = await client.post(
+            "/api/auth/signup", json={"email": email, "password": "pw"}, headers={CF: ip}
+        )
+        assert resp.status_code == 200
+    resp = await client.post(
+        "/api/auth/signup",
+        json={"email": "BOB@EXAMPLE.COM", "password": "pw"},
+        headers={CF: "198.51.100.3"},
+    )
     assert resp.status_code == 429
     assert "Retry-After" in resp.headers
     assert len(gotrue.requests) == 2
+
+
+async def test_successful_logins_beyond_the_failure_budget_all_return_200(
+    client: httpx.AsyncClient, gotrue: Gotrue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "auth_rate_limit_ip_per_minute", 1000)
+    for i in range(6):  # budget is 3 failures; 6 successes from several "devices"
+        resp = await _login(client, ip=f"198.51.100.{i}", email="multi@example.com")
+        assert resp.status_code == 200
+    assert len(gotrue.requests) == 6
+
+
+async def test_failed_logins_reaching_the_budget_return_429_without_gotrue(
+    client: httpx.AsyncClient, gotrue: Gotrue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "auth_rate_limit_ip_per_minute", 1000)
+    for i in range(3):
+        resp = await _login(client, ip=f"198.51.100.{i}", email="v@example.com", password="wrong")
+        assert resp.status_code == 401
+    resp = await _login(client, ip="198.51.100.9", email="V@Example.com", password="wrong")
+    assert resp.status_code == 429
+    assert int(resp.headers["Retry-After"]) > 0
+    assert len(gotrue.requests) == 3
+
+
+async def test_a_successful_login_resets_the_failure_count(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "auth_rate_limit_ip_per_minute", 1000)
+    for _ in range(2):
+        await _login(client, ip="198.51.100.1", email="r@example.com", password="wrong")
+    assert (await _login(client, ip="198.51.100.1", email="r@example.com")).status_code == 200
+    for _ in range(2):  # would be the 3rd/4th failure had the success not cleared the record
+        resp = await _login(client, ip="198.51.100.1", email="r@example.com", password="wrong")
+        assert resp.status_code == 401
 
 
 async def test_signup_is_limited_before_gotrue(client: httpx.AsyncClient, gotrue: Gotrue) -> None:
