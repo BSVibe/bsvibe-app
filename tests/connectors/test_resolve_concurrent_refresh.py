@@ -128,3 +128,42 @@ async def test_truly_expired_refresh_token_flags_needs_reauth(sf, cipher) -> Non
 
     assert provider.calls == 1
     assert await _status(sf, account_id) == "needs_reauth"
+
+
+async def test_refresh_does_not_touch_callers_pending_transaction(sf, cipher) -> None:
+    """호출자 세션의 미커밋 변경은 갱신 중에 커밋/롤백되지 않는다."""
+    provider = _SingleUseProvider(name="txn-stub")
+    register_provider(provider)
+    account_id = await _seed(sf, cipher, "txn-stub")
+
+    async with sf() as caller, sf() as other:
+        acct = await caller.get(ConnectorAccountRow, account_id)
+        acct.delivery_config = {"pending": "yes"}
+        await caller.flush()  # 미커밋 변경
+
+        creds = await resolve_connector_credentials(caller, account=acct, cipher=cipher)
+        assert creds["token"] == "new-access"
+        assert provider.calls == 1
+
+        # 다른 세션에서는 호출자가 커밋하기 전까지 변경이 보이지 않는다.
+        seen = (
+            await other.execute(
+                select(ConnectorAccountRow.delivery_config).where(
+                    ConnectorAccountRow.id == account_id
+                )
+            )
+        ).scalar_one()
+        assert seen != {"pending": "yes"}
+
+        # 호출자의 변경은 여전히 살아 있고, 커밋하면 그때 보인다.
+        assert acct.delivery_config == {"pending": "yes"}
+        await caller.commit()
+        await other.rollback()
+        seen = (
+            await other.execute(
+                select(ConnectorAccountRow.delivery_config).where(
+                    ConnectorAccountRow.id == account_id
+                )
+            )
+        ).scalar_one()
+        assert seen == {"pending": "yes"}
