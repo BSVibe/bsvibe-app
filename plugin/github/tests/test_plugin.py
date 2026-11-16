@@ -385,6 +385,36 @@ class TestActions:
         called_url = str(route.calls[0].request.url)
         assert "per_page=50" in called_url
 
+    # compare_branch is how delivery tells "nothing to open a PR from" (#1340). #1374 made
+    # ``_client`` async and this one call site kept ``await _client(ctx).compare_branch``,
+    # which awaits an attribute of the coroutine — every in-place report delivery failed.
+    @respx.mock
+    async def test_compare_branch_action_reports_ahead_by(self):
+        route = respx.get(f"{API}/repos/o/r/compare/main...feat").mock(
+            return_value=httpx.Response(200, json={"ahead_by": 3})
+        )
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="compare_branch",
+            context=_Ctx(),
+            kwargs={"repo": "o/r", "head": "feat"},
+        )
+        assert route.called
+        assert result == {"exists": True, "ahead_by": 3}
+
+    @respx.mock
+    async def test_compare_branch_action_unknown_head_is_absent(self):
+        respx.get(f"{API}/repos/o/r/compare/main...gone").mock(
+            return_value=httpx.Response(404, json={"message": "Not Found"})
+        )
+        result = await _runner().dispatch_action(
+            P.meta,
+            action_name="compare_branch",
+            context=_Ctx(),
+            kwargs={"repo": "o/r", "head": "gone"},
+        )
+        assert result == {"exists": False, "ahead_by": 0}
+
     # PR1 — internal merge_pr action (not mcp_exposed)
     @respx.mock
     async def test_merge_pr_action_dispatches_and_returns_result(self):
