@@ -81,10 +81,15 @@ async def review_passed_round(
         await release()
         if prior is not None:
             return {REVIEW_KEY: prior, REVIEW_TREE_KEY: tree}
-        sources = await _read_files(box, changed_source_paths(diff)[:MAX_SOURCE_FILES])
+        changed = changed_source_paths(diff)
+        sources = await _read_files(box, changed[:MAX_SOURCE_FILES])
         symbols = new_public_symbols(diff, sources)
         masks = _Masks(box)
-        calls = {sym: await _production_calls(box, sym, masks) for sym in symbols[:MAX_SYMBOLS]}
+        calls = {
+            sym: None if sym.unconfirmed else await _production_calls(box, sym, masks)
+            for sym in symbols[:MAX_SYMBOLS]
+        }
+        unmasked = sorted({*masks.skipped, *(p for p in changed if p not in sources)})
         payload = run.payload if isinstance(run.payload, dict) else {}
         messages = build_review_messages(
             request=str(payload.get("intent_text") or payload.get("text") or ""),
@@ -93,7 +98,7 @@ async def review_passed_round(
             calls=calls,
             gate_commands=[*((derived_gate or {}).get("commands") or []), *command_results],
             symbols_cut=max(len(symbols) - MAX_SYMBOLS, 0),
-            files_unmasked=len(masks.skipped),
+            files_unmasked=unmasked,
         )
         turn = await asyncio.wait_for(complete(run, messages), timeout=_REVIEW_TIMEOUT_S)
         review = parse_review(str(getattr(turn, "content", "") or ""))
@@ -157,7 +162,9 @@ class _Masks:
             self._tried.add(path)
             text = await _read_file(self._box, path)
             masked = masked_lines(path, text) if text is not None else None
-            if masked is not None:
+            if masked is None:
+                self.skipped.add(path)  # unreadable, git show failed or tokenize failed
+            else:
                 self.lines[path] = masked
 
 

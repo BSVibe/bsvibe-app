@@ -21,6 +21,8 @@ from typing import Any
 
 SEVERITIES = ("high", "medium", "low")
 NO_PRODUCTION_CALL = "운영 호출 없음"
+UNCONFIRMED = "확인 불가"
+UNCONFIRMED_NAME = "(새 심볼)"
 LOOKUP_FAILED = "호출 위치 조회 실패"
 TRUNCATED = "\n[... TRUNCATED ...] — 예산 초과로 여기서 잘렸다."
 
@@ -69,6 +71,7 @@ class NewSymbol:
     name: str
     file: str
     is_method: bool = False
+    unconfirmed: bool = False  # the file's new definitions could not be confirmed
 
 
 @dataclass
@@ -158,11 +161,6 @@ def _py_symbols(tree: ast.AST) -> list[tuple[int, str, bool]]:
     return out
 
 
-def _side_text(side: _FileSide) -> str:
-    top = max(side.lines, default=0)
-    return "\n".join(side.lines.get(i, "") for i in range(1, top + 1))
-
-
 def _matches(side: _FileSide, source: str) -> bool:
     """The file text really is the post-change file: every added line sits where the diff says."""
     rows = source.split("\n")
@@ -171,29 +169,36 @@ def _matches(side: _FileSide, source: str) -> bool:
     )
 
 
-def _defined_here(path: str, side: _FileSide, source: str | None) -> list[tuple[str, bool]]:
-    """Names defined on lines this diff added, in file order, with their method flag."""
-    text = source if source and _matches(side, source) else _side_text(side)
+def _defined_here(path: str, side: _FileSide, source: str | None) -> list[tuple[str, bool]] | None:
+    """Names defined on lines this diff added, in file order, with their method flag.
+
+    ``None`` when the definitions cannot be CONFIRMED: the post-change file was not read (or is
+    not the file the diff describes), or it does not parse. A hunk's partial text is never
+    guessed at with a per-line regex — that is what mistook ``class or constant`` in a wrapped
+    docstring for a class.
+    """
+    if not source or not _matches(side, source):
+        return None
     if path.endswith(".py"):
         try:
-            tree = ast.parse(text)
+            tree = ast.parse(source)
         except (SyntaxError, ValueError):
-            pass
-        else:
-            return [
-                (name, is_method)
-                for lineno, name, is_method in sorted(_py_symbols(tree))
-                if lineno in side.added
-            ]
-    masked = masked_lines(path, text)
+            return None
+        return [
+            (name, is_method)
+            for lineno, name, is_method in sorted(_py_symbols(tree))
+            if lineno in side.added
+        ]
+    masked = masked_lines(path, source)
+    if masked is None:
+        return None
     out: list[tuple[str, bool]] = []
     for lineno in sorted(side.added):
-        raw = side.lines[lineno]
-        code = masked[lineno - 1] if masked and lineno <= len(masked) else raw
-        match = _TS_DEF.match(code) or (_PY_DEF.match(code) if path.endswith(".py") else None)
+        if lineno > len(masked):
+            continue
+        match = _TS_DEF.match(masked[lineno - 1])
         if match is not None:
-            is_method = raw[:1] in (" ", "\t") and match.re is _PY_DEF
-            out.append((match.group(1), is_method))
+            out.append((match.group(1), False))
     return out
 
 
@@ -206,10 +211,11 @@ def changed_source_paths(diff: str) -> list[str]:
 def new_public_symbols(diff: str, files: Mapping[str, str] | None = None) -> list[NewSymbol]:
     """Public functions / classes / methods / constants the diff ADDS, outside the test files.
 
-    Definitions come from parsing the file AFTER the change (``files``: path -> text; without
-    it, the new side the diff itself shows), so a docstring line that merely looks like
-    ``class or ...`` is never a symbol. A name also removed in the same file is a move or an
-    edit, not a new symbol.
+    Definitions come from parsing the file AFTER the change (``files``: path -> text), so a
+    docstring line that merely looks like ``class or ...`` is never a symbol. A file whose
+    post-change text is missing or unparseable yields one ``unconfirmed`` placeholder symbol
+    (reported as "확인 불가") instead of a guess. A name also removed in the same file is a
+    move or an edit, not a new symbol.
     """
     sides, removed = _parse_diff(diff)
     seen: set[tuple[str, str]] = set()
@@ -217,7 +223,12 @@ def new_public_symbols(diff: str, files: Mapping[str, str] | None = None) -> lis
     for path, side in sides.items():
         if is_test_path(path):
             continue
-        for name, is_method in _defined_here(path, side, (files or {}).get(path)):
+        defined = _defined_here(path, side, (files or {}).get(path))
+        if defined is None:
+            if side.added:
+                out.append(NewSymbol(UNCONFIRMED_NAME, path, unconfirmed=True))
+            continue
+        for name, is_method in defined:
             key = (path, name)
             if name.startswith("_") or key in removed or key in seen:
                 continue
@@ -430,7 +441,11 @@ def _calls_section(calls: Mapping[NewSymbol, list[str] | None]) -> str:
         return "(새 공개 함수·클래스·메서드 없음)"
     lines = []
     for sym, hits in calls.items():
-        if hits is None:
+        if sym.unconfirmed:
+            lines.append(
+                f"- {sym.file}: 새 심볼 {UNCONFIRMED} (변경 후 파일을 읽거나 분석하지 못함)"
+            )
+        elif hits is None:
             lines.append(f"- {sym.name} ({sym.file}): {LOOKUP_FAILED}")
         elif not hits:
             lines.append(f"- {sym.name} ({sym.file}): {NO_PRODUCTION_CALL}")
@@ -461,7 +476,7 @@ def build_review_messages(
     calls: Mapping[NewSymbol, list[str] | None],
     gate_commands: Sequence[Mapping[str, Any]],
     symbols_cut: int = 0,
-    files_unmasked: int = 0,
+    files_unmasked: Sequence[str] = (),
 ) -> list[dict[str, str]]:
     """A fresh conversation: the review system prompt and one user message of gathered facts."""
     calls_text = _calls_section(calls)
@@ -471,8 +486,9 @@ def build_review_messages(
         )
     if files_unmasked:
         calls_text += (
-            f"\n(파일 {files_unmasked}개는 읽는 파일 수 상한 때문에 한 줄 단위로만 주석·문자열을"
-            " 판정했다 — 독스트링 안의 이름이 호출로 잡혔을 수 있다.)"
+            f"\nfiles_unmasked ({len(files_unmasked)}개): {', '.join(files_unmasked)}"
+            " — 읽기·구문 분석 실패 또는 파일 수 상한 때문에 한 줄 단위로만 주석·문자열을"
+            " 판정했다. 독스트링 안의 이름이 호출로 잡혔을 수 있다."
         )
     user = "\n\n".join(
         [
