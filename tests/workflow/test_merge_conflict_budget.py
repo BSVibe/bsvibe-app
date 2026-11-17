@@ -302,3 +302,35 @@ async def test_founder_retry_resets_budget(sf) -> None:
         row.payload = payload
         await s.commit()
     assert await _conflict(redispatch, ws, run_id, 3) is None
+
+
+@pytest.mark.asyncio
+async def test_exhausted_mark_survives_clean_and_refuses_redispatch(sf) -> None:
+    """표시가 있는 런은 clean 이후에도 표시가 남아, 새 충돌 재디스패치는 False 이고 런은 재오픈되지 않는다."""
+    from backend.workflow.infrastructure.workers.merge_watch_worker import MergeWatchWorker
+
+    ws, run_id = await _run(sf, tokens=700_000)
+    async with sf() as s, workspace_session_scope(s, ws):
+        run = await s.get(ExecutionRun, run_id)
+        run.payload = {
+            CONFLICT_BUDGET_KEY: {
+                "redispatches": 1,
+                "token_ceiling": 600_000,
+                "exhausted": "token_limit",
+            }
+        }
+        await s.commit()
+    async with sf() as s, workspace_session_scope(s, ws):
+        await MergeWatchWorker._clear_conflict_budget(None, s, run_id)  # type: ignore[arg-type]
+        await s.commit()
+    payload = (await _fetch(sf, ws, run_id)).payload
+    assert payload[CONFLICT_BUDGET_KEY] == {"exhausted": "token_limit"}
+
+    redispatch = build_merge_watch_conflict_redispatch(
+        session_factory=sf, max_total_redispatch=5, token_budget=500_000
+    )
+    assert await _conflict(redispatch, ws, run_id, 2) is False
+    run = await _fetch(sf, ws, run_id)
+    assert run.status is RunStatus.RUNNING
+    assert "merge_conflict" not in run.payload
+    assert await _review_decisions(sf, ws, run_id) == []

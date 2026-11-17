@@ -54,7 +54,9 @@ CF_CONNECTING_IP_HEADER = "CF-Connecting-IP"
 UNKNOWN_CLIENT_IP = "unknown"
 
 
-def resolve_client_ip(request: Request, *, route: str) -> str:
+def resolve_client_ip(
+    request: Request, *, route: str, header: str = CF_CONNECTING_IP_HEADER
+) -> str:
     """Return the rate-limit key for ``request``.
 
     Prefers :data:`CF_CONNECTING_IP_HEADER`. Falls back to the socket peer
@@ -65,12 +67,12 @@ def resolve_client_ip(request: Request, *, route: str) -> str:
     spoofable key is back on a rate-limited route and nobody would know. Only
     the fact and the route are logged, never the caller's headers.
     """
-    forwarded = request.headers.get(CF_CONNECTING_IP_HEADER)
+    forwarded = request.headers.get(header)
     if forwarded is not None:
         candidate = forwarded.strip()
         if candidate:
             return candidate
-    logger.warning("client_ip.cf_header_missing", route=route, header=CF_CONNECTING_IP_HEADER)
+    logger.warning("client_ip.cf_header_missing", route=route, header=header)
     return request.client.host if request.client else UNKNOWN_CLIENT_IP
 
 

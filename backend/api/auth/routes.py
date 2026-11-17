@@ -13,10 +13,15 @@ from __future__ import annotations
 from typing import Annotated
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.api.auth.rate_limit import (
+    clear_login_failures,
+    enforce_auth_rate_limit,
+    record_login_failure,
+)
 from backend.api.deps import get_db_session
 from backend.auth.client import (
     SignUpResult,
@@ -126,14 +131,20 @@ async def _bootstrap(session: AsyncSession, supa: SupabaseSession) -> None:
 
 @router.post("/login")
 async def login(
-    payload: LoginRequest, supabase: SupabaseDep, session: SessionDep
+    request: Request, payload: LoginRequest, supabase: SupabaseDep, session: SessionDep
 ) -> SupabaseSession:
+    await enforce_auth_rate_limit(request, route="login", email=payload.email)
     try:
         supa = await supabase.password_login(payload.email, payload.password)
     except SupabaseAuthError as exc:
+        # Only an authentication failure spends the mailbox budget; a GoTrue outage or its own
+        # 429 is not the user's wrong password.
+        if exc.status is not None and 400 <= exc.status < 500 and exc.status != 429:
+            await record_login_failure(payload.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials"
         ) from exc
+    await clear_login_failures(payload.email)
     await _bootstrap(session, supa)
     return supa
 
@@ -174,10 +185,23 @@ async def oauth_authorize(
 
 
 @router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
-async def password_reset(payload: PasswordResetRequest, supabase: SupabaseDep) -> None:
-    """Request a password-recovery email. Always 204 — never leaks existence."""
+async def password_reset(
+    request: Request, payload: PasswordResetRequest, supabase: SupabaseDep
+) -> None:
+    """Request a password-recovery email. Always 204 — never leaks existence.
+
+    Over EITHER budget (per-IP or per-mailbox) it is STILL 204 and nothing is forwarded to
+    GoTrue (founder decision: reset never answers 429).
+    """
     if payload.redirect_to is not None:
         _validate_redirect_to(payload.redirect_to)
+    try:
+        await enforce_auth_rate_limit(request, route="reset", email=payload.email)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+        # Budget out: stay 204 (the "always 204" contract) but do not send.
+        return
     try:
         await supabase.send_password_reset(payload.email, payload.redirect_to)
     except SupabaseAuthError:
@@ -231,7 +255,7 @@ def _signup_http_error(exc: SupabaseAuthError) -> HTTPException:
 
 @router.post("/signup")
 async def signup(
-    payload: SignUpRequest, supabase: SupabaseDep, session: SessionDep
+    request: Request, payload: SignUpRequest, supabase: SupabaseDep, session: SessionDep
 ) -> SignUpResponse:
     """Create an account with email + password.
 
@@ -246,6 +270,7 @@ async def signup(
     """
     if payload.redirect_to is not None:
         _validate_redirect_to(payload.redirect_to)
+    await enforce_auth_rate_limit(request, route="signup", email=payload.email)
     try:
         result: SignUpResult = await supabase.sign_up(
             payload.email, payload.password, payload.redirect_to

@@ -164,3 +164,14 @@ def test_judge_prompt_reserves_rejected_for_conflict() -> None:
     system = judge_messages(_ROW, "x")[0]["content"]
     assert "CONFLICTS" in system
     assert "missing from the excerpt is not a conflict" in system
+
+
+async def test_the_judges_evidence_missing_flag_is_stored_and_defaults_to_false() -> None:
+    box = _Box({_PATH: _PY})
+    flagged, _ = await _round(
+        box, '{"passed": "cannot_determine", "reasoning": "cut", "evidence_missing": true}'
+    )
+    omitted, _ = await _round(box, '{"passed": false, "reasoning": "wrong"}')
+
+    assert flagged[0]["evidence_missing"] is True
+    assert omitted[0]["evidence_missing"] is False

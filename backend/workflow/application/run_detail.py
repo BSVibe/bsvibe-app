@@ -47,9 +47,11 @@ from backend.workflow.serialization.run_views import (
     RunDetailResponse,
     RunPartialDeliverable,
     RunRequirement,
+    RunRoundItem,
     RunTriggerContext,
     RunVerification,
     RunVerificationCheck,
+    RunVerificationRound,
 )
 
 
@@ -464,6 +466,48 @@ def _run_verification(row: VerificationResult) -> RunVerification:
     )
 
 
+def _failed_command_labels(result: Any) -> list[str]:
+    if not isinstance(result, dict):
+        return []
+    gate = result.get("derived_gate")
+    gate_commands = gate.get("commands") if isinstance(gate, dict) else None
+    commands = [
+        *(gate_commands if isinstance(gate_commands, list) else []),
+        *(result.get("command_results") or []),
+    ]
+    labels = (
+        str(c.get("command") or c.get("cmd") or "").strip() for c in failed_commands(commands)
+    )
+    return [label[:_CHECK_COMMAND_CHARS] for label in labels if label]
+
+
+def _round_summaries(rows: Sequence[VerificationResult]) -> list[RunVerificationRound]:
+    """Every round, oldest first — the latest-only ``verification`` hides why earlier ones failed."""
+    out: list[RunVerificationRound] = []
+    for n, row in enumerate(rows, 1):
+        items = [
+            RunRoundItem(
+                id=str(r.get("id")),
+                status=str(r.get("status")),
+                note=(_opt_str(r.get("note")) or "")[:_REQUIREMENT_NOTE_CHARS] or None,
+                evidence_missing=r["evidence_missing"]
+                if isinstance(r.get("evidence_missing"), bool)
+                else None,
+            )
+            for r in _ledger_rows(row.result)
+            if r.get("status") != "done"
+        ]
+        out.append(
+            RunVerificationRound(
+                round=n,
+                outcome=row.outcome,
+                failed_checks=_failed_command_labels(row.result),
+                open_items=items,
+            )
+        )
+    return out
+
+
 class VerificationRounds(NamedTuple):
     """How many verifications a run needed: how many were recorded, and the
     1-based round on which it first passed (``None`` while it has not)."""
@@ -573,6 +617,10 @@ class VerificationQuality(NamedTuple):
     counterfactual_vacuous_rate: float | None
     failed_rounds: int
     ledger_only_failures: int
+    #: Why those rounds failed: ``{"rounds", "items", "by_status", "evidence_missing"}`` —
+    #: ``items`` = failed (missing / rejected) ledger items in them, ``evidence_missing`` = how many
+    #: of those the judge said hung on evidence it was not shown.
+    ledger_only_failure_causes: dict[str, Any]
     rounds_with_leftovers: int
     leftover_dirs: list[dict[str, Any]]
     #: Independent review (report-only), counted per ROUND that ran one: ``reviews_done`` /
@@ -605,11 +653,14 @@ def _has_failed_command(result: Any) -> bool:
     return bool(failed_commands(commands))
 
 
+_FAILING_ITEM_STATUSES = frozenset({"missing", "rejected"})
+
+
 def _is_ledger_only_failure(row: Any) -> bool:
     """A failed round whose only cause is a ``missing`` / ``rejected`` ledger item."""
     if row.outcome is not VerificationOutcome.FAILED or _has_failed_command(row.result):
         return False
-    return any(r.get("status") in {"missing", "rejected"} for r in _ledger_rows(row.result))
+    return any(r.get("status") in _FAILING_ITEM_STATUSES for r in _ledger_rows(row.result))
 
 
 def _tally_reviews(
@@ -684,6 +735,8 @@ async def verification_quality(
 
     rounds = sum(len(v) for v in by_run.values())
     items = unclear = checked = vacuous = failed = ledger_only = leftover_rounds = 0
+    cause_status: Counter[str] = Counter()
+    cause_missing = 0
     leftover_dirs: Counter[str] = Counter()
     reviews_done = reviews_unavailable = runs_with_high = 0
     by_severity = dict.fromkeys(("high", "medium", "low"), 0)
@@ -703,7 +756,12 @@ async def verification_quality(
         for v in verifications:
             if v.outcome is VerificationOutcome.FAILED:
                 failed += 1
-                ledger_only += _is_ledger_only_failure(v)
+                if _is_ledger_only_failure(v):
+                    ledger_only += 1
+                    for r in _ledger_rows(v.result):
+                        if r.get("status") in _FAILING_ITEM_STATUSES:
+                            cause_status[str(r["status"])] += 1
+                            cause_missing += r.get("evidence_missing") is True
             blob = v.result.get("leftovers_excluded") if isinstance(v.result, dict) else None
             if isinstance(blob, dict):
                 leftover_rounds += 1
@@ -725,6 +783,12 @@ async def verification_quality(
         counterfactual_vacuous_rate=_ratio(vacuous, checked),
         failed_rounds=failed,
         ledger_only_failures=ledger_only,
+        ledger_only_failure_causes={
+            "rounds": ledger_only,
+            "items": sum(cause_status.values()),
+            "by_status": {k: cause_status.get(k, 0) for k in sorted(_FAILING_ITEM_STATUSES)},
+            "evidence_missing": cause_missing,
+        },
         rounds_with_leftovers=leftover_rounds,
         leftover_dirs=[{"path": path, "count": n} for path, n in top_dirs],
         reviews_done=reviews_done,
@@ -772,6 +836,15 @@ async def build_run_detail(
         .limit(1)
     )
     verification_row = (await session.execute(latest_verification_stmt)).scalars().first()
+    all_rounds_stmt = (
+        select(VerificationResult)
+        .where(
+            VerificationResult.run_id == run_id,
+            VerificationResult.workspace_id == workspace_id,
+        )
+        .order_by(VerificationResult.created_at.asc())
+    )
+    round_rows = list((await session.execute(all_rounds_stmt)).scalars().all())
     verification_rounds = (await verification_rounds_by_run(session, workspace_id, [run_id])).get(
         run_id, NO_VERIFICATION_ROUNDS
     )
@@ -862,6 +935,7 @@ async def build_run_detail(
             _run_verification(verification_row) if verification_row is not None else None
         ),
         verification_rounds=verification_rounds.rounds,
+        rounds=_round_summaries(round_rows),
         passed_on_round=verification_rounds.passed_on_round,
         deliverable_id=deliverable_id,
         partial_deliverables=partial_deliverables,
