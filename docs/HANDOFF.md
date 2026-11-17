@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-11-13
+# BSVibe session handoff — 2026-11-17
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,7 +21,33 @@
 
 ---
 
-## §0 — One line: **The re-audit's five cross-tenant security findings are fixed and deployed; BSVibe is still not ready for strangers**
+## §0 — One line: **The audit's non-security blockers that are code are fixed; the ledger judge now sees the definitions it was missing**
+
+11-13 → 11-17. Every card was reviewed (diff read, review findings checked against the code) before approve / deny.
+"Rounds" is `passed_on_round` / all rounds of the run, across denials.
+
+| Issue → PR | What | Rounds |
+|---|---|---|
+| #1391 → #1398 | **schedules bounded**: ≤ 20 enabled per workspace, ≥ 15 min between fires (create AND re-enable), missed windows collapse to one fire computed from now, no fire while the schedule's previous run is unfinished, a deleted workspace's schedules disabled and never claimed | 1 / 2 (a denial: re-enable bypassed the limits) |
+| #1392 → #1396 | a user may own ≤ 3 live workspaces (operator exempt), counted under a lock on the user row | 1 / 1 |
+| #1393 → #1395 | **fair drive claim**: a workspace's n-th OPEN run ranks `running_now + n`; prod compose now passes the drive / sandbox / verify concurrency knobs (defaults unchanged) | 1 / 1 |
+| #1394 → #1402 | sign-up / login / reset limited per client IP (`CF-Connecting-IP`) and per mailbox; login counts FAILED attempts only (a success clears them); reset stays 204 when limited and is not forwarded | 3 / 4 (a founder answer on reset; a denial: counting every login attempt let anyone lock an account) |
+| #1397 → #1399 | **one OAuth refresh at a time per connector account**, in its own locked transaction, never committing the caller's session | 1 / 2 (a denial: it committed the caller's transaction) |
+| by hand → #1400 | `await (await _client(ctx)).compare_branch` — #1374 had made `_client` async and one call site awaited an attribute of the coroutine; every in-place report delivery failed. 11-16's weekly report was re-sent after the fix | — |
+| #1401 → #1405 | a conflict budget's `exhausted` mark survives the PR turning `clean` | 1 / 1 |
+| #1403 → #1406 | **every round's ledger is visible**: run detail `rounds[]` (outcome, failed checks, open items), the judge's `evidence_missing` flag, `verification_quality.ledger_only_failure_causes` | 1 / 1 |
+| #1404 → #1407 | **named definitions in the judge's evidence**: backticked names in the item / note / cited tests are looked up in the changed tree (files parsed once, off the event loop, untracked files included) and shown in a block with its own 6,000-char room | 1 / 3 (two denials: re-parsing per name on the event loop; a race that gave concurrent items an empty file list) |
+| #1408 → #1409 (open) | a definition cut at the cap says so; `Class.name` keeps its qualifier; a bare name with several locations shows them all | 2 / 2 (round 1 lost to `deriver_error: TimeoutError`) |
+
+**Why #1403/#1404**: of 41 non-done items in the last-round ledgers of 20 runs, 21 (51 %) were "evidence not shown" (80 %
+counting secondary mentions); only 2 (5 %) were code the judge found wrong. The missing evidence split evenly between
+cut implementation bodies, cut test bodies and setting defaults / constants. Re-measure once `rounds[]` and
+`evidence_missing` have a sample: `bsvibe_runs_verification_quality` → `ledger_only_failure_causes`.
+
+**Round-1 pass rate** (product, last 30 finished runs, 11-16): 19 / 30. Reviews: 49 cards reviewed; findings 16 high,
+48 medium, 54 low.
+
+## §0-b — previous session (11-11 → 11-13): **The re-audit's five cross-tenant security findings are fixed and deployed; BSVibe is still not ready for strangers**
 
 11-11 → 11-13. Every card below was reviewed (diff read, review findings checked against the code) before it was
 approved or denied. "Rounds" is `passed_on_round` / all verification rounds of the run, across denials.
@@ -49,50 +75,6 @@ done on the founder's denial reason, not the issue's sentence.
 **Security status**: the three blocker and two high cross-tenant findings of the 11-12 re-audit (#1367–#1371) are
 merged and deployed, plus the two follow-ups they exposed (#1376, #1380). The audit's other blockers are not security
 and are not filed yet (§Ⅲ).
-
-## §0-b — previous session (11-04 → 11-11): **A worker restart mid-run is now proven safe in prod; a founder's denial reason now corrects the ledger**
-
-11-04 → 11-11. Decision 11-04: HANDOFF §Ⅲ items go up as issues for BSVibe. Each run below was reviewed before its
-Safe Mode card was approved; one was denied with a reason and re-driven.
-
-| Issue → PR | What | Rounds |
-|---|---|---|
-| #1314 → #1315 | **the agent worker drives runs concurrently** (`agent_drive_concurrency`, 0 = `sandbox_max_concurrent`) — proven live 11-05: #1316 and #1317 claimed at the same second and driven side by side | 2 |
-| #1309 → #1312 | `leftovers_excluded` stored on the verification result — **proven in the DB** on #1316's run (`{"count": 1, "dirs": [{"path": "var"}]}`) | 1 |
-| #1317 → #1318 | `verification_quality` counts `rounds_with_leftovers` and the top `leftover_dirs`; `verification_feedback._failed` is public (`failed_commands`) | **1** |
-| #1316 → #1319 | the PWA run detail shows the files verification kept out of the commit | 2 |
-| #1320 → #1321 | **a ledger item that asks for commands to pass is decided by running them** — the deriver returns the repo's runnable form tagged `covers` (`cd apps/pwa && …`); the request's string is never run as written; an unplaceable command is not guessed | 1 (denied once: it ran the string at the repo root, where the PWA commands always fail) |
-| #1322 → #1324 | no runnable form → the judge's verdict stands (with a note); `covers` honoured only when the form carries the command's words | 4 (one orphaned by a deploy, retried) |
-| #1325 → #1326 | `covers` must sit in the command position, and a form that hides the exit code (`\|\| true`, `; true`, a pipe, `&& true`) is refused | **1** |
-| #1327 → #1328 | **the ledger keeps a checklist item's sub-list** (`head — sub1; sub2`, 800 chars, `…` when cut); a sub-checkbox is no longer an item of its own | **1** |
-| #1330 → #1331 | **R5 independent review (report-only)** — every PASSED round (after the final checks) gets one fresh-context review: request + ledger + whole `baseline..HEAD` diff + where non-test code calls each new public symbol ("운영 호출 없음") + the gate's commands; stored as `result["review"]` (`done` + findings `{severity, file, line, claim, failure_scenario}` / `unavailable`); the same tree is not reviewed twice | 1 (+ a CI flake the run fixed itself) |
-| #1332 → #1333 | the review shows on the Safe Mode card (`review_status` / `review_counts` / top 5), in the PR body ("## Independent review" after the ledger) and in `verification_quality` (`reviews_done` / `_unavailable`, `review_findings_by_severity`, `runs_reviewed_with_high`) — **live from #1334's card and PR #1335** | 2 |
-| #1334 → #1335 | the review's own first two findings: PR-body lines made one inert line; `runs_reviewed_with_high` judged on the last passed round, like the card | **1** |
-| #1336 → #1337 | the review's next finding: `file` / `line` validated when stored, the location flattened in the PR body | 2 |
-| #1339 → #1340 | **a non-code artifact with no commits is a clean skip, not `delivery_failed`** — #1266 had made every "no PR opened" a failure, so the weekly BStockReport (`direct_output`) raised a spurious decision on 11-02 and 11-09 although the report reached Telegram; both decisions discarded | 4 (three lost to a GitHub Releases 504 in the parser download → #1341) |
-| #1341 → #1348 | **tree-sitter parsers prefetched at image build** (backend + sandbox, `/opt/tree-sitter-parsers`, backend `BSVIBE_PARSER_OFFLINE=1`), version pinned, CI cache — runtime never downloads. Delivered **by hand**: the GitHub App lacked `workflows` permission (now granted) | 1 (+ a denial led by the review) |
-| #1343 → #1344 | **a delivery that fails right after a Safe Mode approval raises `delivery_failed`** — the decision factory was wired only in the worker process, so approvals (backend: REST / MCP / Telegram) logged `delivery_failure_decision_unwired` and left the run stuck with nothing to resend | 4 (three lost to the gate's duplicate coverage run timing out → #1346) |
-| #1345 → #1349 | **checkpoints work for a GitHub run's own `--depth 1` clone** (#929): thin bundle with no network/auth at save; restore = clone like the provisioner (credential, token-free origin) + fetch the checkpoint; the branch is rebuilt from the snapshot's parent and its recorded name | 1 (+ two denials, both led by the review: no `origin` after restore; an uncommitted run's branch dropped from the bundle) |
-| #1346 → #1347 | the derived gate drops a whole-suite `pytest` that only re-flags the product's own final run, and a timed-out command is listed apart instead of "re-emit verbatim" | **1** |
-| #1350 → #1352 | the "send again" test checks that exactly one new delivery event (founder-approved, same run) is added, and that resolving the decision twice adds none | **1** |
-| #1353 → #1354 | `covers_rejection` refuses `\|\|` / `;` / `\|` anywhere after the ledger command and a lone background `&`; an env prefix (`CI=true …`) is skipped like a launcher | **1** |
-| #1356 → #1357 | **a turn that outlives its job is cut off**: the run-scoped task token carries the run's claim and the work tools refuse it once the run is no longer RUNNING under that claim (`mcp_work_claim_lost`); a cancelled job kills its executor session (`cancel_task`); a sandbox name conflict is cleared and retried once | **1** |
-| #1355 → #1358 | `duplicates_product_run` knows the pytest-cov value flags; `--cov` takes the next word only when it is not an option or a test path | 3 (one forced fail by a worker restart before #1357; one denial led by two high review findings — the issue's own wording was wrong; one round lost to the ledger holding that wording → #1359) |
-| #1359 → #1360 | **a founder's `rejected_approach` reason corrects the ledger**: recorded on the run (`founder_corrections`, founder-typed text only, numbered), given to the item judge as FOUNDER CORRECTIONS that outrank the request (later supersedes earlier); an item done by a correction is marked (`founder_correction`, PR table "✎ 창업자 정정 반영", card `ledger_corrected`) | 1 (+ a denial: the card had no mark, corrections had no order) |
-| #1361 → #1362 | the PWA card lists `ledger_corrected` items as info, not an alert | **1** |
-| by hand → #1323 | **a worker restart gives its drives back**: `stop()` cancels in-flight drives (their cancel path releases the claim), then releases whatever it still holds; on start a worker takes back the claims a previous process left on its own machine | — |
-
-Rounds per issue run this session: #1314 2 · #1316 2 · #1317 **1** · #1320 1 (+ a denial) · #1322 4 · #1325 **1** ·
-#1327 **1** · #1330 **1** · #1332 2 · #1334 **1** · #1336 2. #1332's and #1336's first rounds failed on the full
-`pytest -q` final check (an existing test the change broke) — not on the ledger.
-
-**The independent review's sample (11-06 → 11-10): every finding so far was real.** The first three (low) were
-fixed by the next runs. On 11-10 it caught what the founder's own review would have: the #1341 test re-introduced the
-network dependency it was meant to remove (3 medium), and #1345's restore had no `origin` (high) and dropped an
-uncommitted run's branch (high) — both cards were denied with the review's findings as the reason, and the re-work
-passed. Earlier sample: markdown injection into the PR
-body from reviewer text (#1333), a metric on a different basis than the card (#1333), an unflattened `file` field
-(#1335). None was a false alarm; two were fixed by the next run.
 
 ## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28 · 10-29 · 10-30 · 11-03 · 11-11)
 
@@ -404,29 +386,47 @@ body from reviewer text (#1333), a metric on a different basis than the card (#1
 * **A Monitor filter without the failure events goes silent** — a 30-minute watch on a run listed only success and
   card events and delivered nothing while the run failed two rounds. Include `verification_failed` / `run_failed`.
 
+## §Ⅱ-m — What 11-13/11-17 found
+
+* **An issue that builds on an unmerged PR stalls its run.** #1408 was filed right after #1404's card was approved;
+  its run started before #1407 merged, found none of the code it was asked to change, and asked the founder. File a
+  follow-up only once the PR it extends is on `main`.
+* **The review is right about what it sees and wrong about what it does not.** Three findings this stretch were
+  false or overstated: a REST handler "not catching" an error it already turned into a 400 (outside the diff),
+  `MissingGreenlet` under `expire_on_commit=True` (every prod session is `False`), a conflict loop "unbounded" that a
+  second cap bounded. Every denial was still led by a finding — after reading the code it pointed at.
+* **`main` requires an up-to-date branch and the repo has no auto-merge.** Two ready PRs merge one at a time: each
+  merge puts the other BEHIND, and its update re-runs the 23-minute suite. Merge the urgent one first.
+* **A wait loop with `exit 1` inside `until …; do` exits the shell on the first miss.** Put the check in a function
+  that `return`s.
+* **After an autodeploy, intake's verdict on events filed just before it is in the old container's logs, gone.**
+  Check `bsvibe_runs_list` for new runs instead of grepping for `receive_filtered_out`.
+* **`deriver_error: TimeoutError`** cost #1408 its first round (the gate deriver timed out, every declared check had
+  passed). One sample; watch `rounds[]` for another.
+
 ## §Ⅲ — Next
 
-1. **Close #1387 when #1389 merges** (pause window). Small follow-up: the merge watch clears the whole conflict budget
-   when a PR turns `clean`, including the `exhausted` mark; a conflict that resolves itself and recurs before the
-   founder answers would re-open the run.
-2. **Not ready for strangers — the 11-12 audit's remaining blockers are not filed yet** (none is security):
-   schedules have no count / interval floor / overlap guard and fire after a workspace is deleted · unlimited
-   workspaces per user multiply every per-workspace limit · 2 global drive slots and 1 verify slot, FIFO across
-   tenants, while plans promise 3 / 10 runs · the GitHub App is private (strangers cannot install it) · sign-up has no
-   abuse control and runs on Supabase's default SMTP limit · the alert path is one person (the 5.5-day auth outage) ·
-   no off-box copy of the KMS / MCP OAuth signing keys · restore never rehearsed, 24 h recovery point.
-3. **11-16 weekly BStockReport**: ships with one Telegram message and no `delivery_failed` (#1340); tick
-   `requirements-ledger-checklist.md` D.
-4. **#1323 leftovers**: `mcp_work_claim_lost` firing for a turn that survives its job; a run paused on a founder
+1. **Close #1408 when #1409 merges** (pause window).
+2. **Not ready for strangers — what is left is the founder's, not code**: an alert path that is more than one person
+   (the 5.5-day auth outage) · an off-box copy of the KMS and MCP OAuth signing keys · the GitHub App made public ·
+   sign-up mail off Supabase's default SMTP limit · a rehearsed restore (24 h recovery point) · the infra items in the
+   private audit report. The code blockers of the 11-12 audit are done (#1395 #1396 #1398 #1402).
+3. **11-23 weekly BStockReport**: first week after #1400 — it must ship with one Telegram message and no
+   `delivery_failed`; then tick `requirements-ledger-checklist.md` D.
+4. **Re-measure the ledger** once `rounds[]` / `evidence_missing` have ~20 runs: `ledger_only_failure_causes` and the
+   round-1 pass rate (19 / 30 on 11-16). If "evidence missing" still dominates, the next lever is the evidence room.
+5. **R5 stage 2**: 49 reviewed cards (≥ 20). Recommendation: keep the review report-only — some of its high / medium
+   findings were false once the code outside the diff was read, so gating on them would block good cards. 형님 to confirm.
+6. **#1267 layer 2**: `leftover_dirs` saw 3 rounds in 60 runs (`var` ×2, one probe cache), all caught by layer 1.
+   Recommendation: close layer 2 unbuilt. 형님 to confirm.
+7. **#1323 leftovers**: `mcp_work_claim_lost` firing for a turn that survives its job; a run paused on a founder
    decision across a restart. Then the rest of the #929 second-box list (`docs/runbook/vault-to-postgres.md`).
-5. **R5 stage 2 decision** — once ≥ 20 reviewed cards, compare deny rates with / without a medium-or-high finding.
-6. Once `leftover_dirs` has a sample, decide **#1267 layer 2**.
-7. Low priority: `git grep -w` counts common names as called; `--cov ./tests/x` is read as `--cov`'s value; a vague
-   denial reason re-judges every ledger item; the sandbox image has no `BSVIBE_PARSER_OFFLINE`; #1380's review lows
-   (the stop-reason test checks only the no-stop case; every `OSError` is counted as a symlink skip).
-8. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap · #937 outside the repo · the infra items in
-   the private audit report · confirm the key escrow and the alert path above.
-9. E2E checklists still open: `requirements-ledger-checklist.md` (A1, B, C2, D1/D2/D3, E), `ci-parity-checklist.md`
+8. Low priority: named definitions keep no qualifier for TS/JS and list no locations when none fits; `git grep -w`
+   counts common names as called; `--cov ./tests/x` is read as `--cov`'s value; a vague denial reason re-judges every
+   ledger item; the sandbox image has no `BSVIBE_PARSER_OFFLINE`; #1380's review lows.
+9. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap · #937 outside the repo · which §Ⅳ bullet on
+   throwaway containers stands.
+10. E2E checklists still open: `requirements-ledger-checklist.md` (A1, B, C2, D1/D2/D3, E), `ci-parity-checklist.md`
    (C, E1/E3, F), `counterfactual-guard-checklist.md`, `intake-trust-by-repo-permission-checklist.md` (non-writer
    comment), `worker-restart-releases-claims-checklist.md` (claim-lost, paused run).
 
