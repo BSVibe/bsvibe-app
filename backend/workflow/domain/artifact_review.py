@@ -9,6 +9,7 @@ in ``application/artifact_review.py``.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import json
@@ -51,6 +52,7 @@ _TEST_FILE = re.compile(
     r"(^|/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py|[^/]*\.(test|spec)\.[jt]sx?)$"
 )
 _PY_DEF = re.compile(r"^\s*(?:async\s+)?(?:def|class)\s+([A-Za-z_]\w*)")
+_HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 _TS_DEF = re.compile(
     r"^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)"
 )
@@ -69,36 +71,158 @@ class NewSymbol:
     is_method: bool = False
 
 
-def new_public_symbols(diff: str) -> list[NewSymbol]:
-    """Public functions / classes / methods the diff ADDS, outside the test files.
+@dataclass
+class _FileSide:
+    """The post-change side of one file as the diff shows it."""
 
-    A name that is also removed in the same file is a move or an edit, not a new symbol.
-    """
-    added: list[NewSymbol] = []
+    lines: dict[int, str]
+    added: set[int]
+
+
+def _parse_diff(diff: str) -> tuple[dict[str, _FileSide], set[tuple[str, str]]]:
+    """Per file: new-side lines (by new line number) and the added line numbers; plus the
+    ``(file, name)`` definitions the diff removes."""
+    sides: dict[str, _FileSide] = {}
     removed: set[tuple[str, str]] = set()
     path = ""
+    n = 1
+    old_left = new_left = 0
     for line in diff.splitlines():
-        if line.startswith("+++ "):
-            path = line[4:].removeprefix("b/").strip()
+        in_hunk = old_left > 0 or new_left > 0
+        if not in_hunk:
+            if line.startswith("+++ "):
+                path = line[4:].removeprefix("b/").strip()
+                n = 1
+                continue
+            if line.startswith("@@"):
+                m = _HUNK.match(line)
+                if m:
+                    old_left = int(m.group(1) or 1) if m.group(1) != "0" else 0
+                    n = int(m.group(2))
+                    new_left = int(m.group(3) or 1) if m.group(3) != "0" else 0
+                continue
+            if line.startswith("--- "):
+                continue
+        if not path or path == "/dev/null" or not line or line[0] not in "+- ":
             continue
-        if line.startswith("--- ") or not line or line[0] not in "+-":
-            continue
-        match = _PY_DEF.match(line[1:]) or _TS_DEF.match(line[1:])
-        if match is None or not path or path == "/dev/null":
-            continue
-        name = match.group(1)
+        side = sides.setdefault(path, _FileSide({}, set()))
+        body = line[1:]
         if line[0] == "-":
-            removed.add((path, name))
-        elif not name.startswith("_") and not is_test_path(path):
-            is_method = line[1:2] in (" ", "\t") and match.re is _PY_DEF
-            added.append(NewSymbol(name, path, is_method))
+            old_left = max(old_left - 1, 0)
+            match = _PY_DEF.match(body) or _TS_DEF.match(body)
+            if match:
+                removed.add((path, match.group(1)))
+            continue
+        if line[0] == "+":
+            side.added.add(n)
+            new_left = max(new_left - 1, 0)
+        else:
+            old_left = max(old_left - 1, 0)
+            new_left = max(new_left - 1, 0)
+        side.lines[n] = body
+        n += 1
+    return sides, removed
+
+
+def _py_symbols(tree: ast.AST) -> list[tuple[int, str, bool]]:
+    """``(line, name, is_method)`` of module-level and class-body definitions and assignments.
+
+    Whether something is a method depends only on the enclosing block being a ``class``;
+    ``if``/``try``/``with`` blocks are looked through, function bodies are not entered.
+    """
+    out: list[tuple[int, str, bool]] = []
+
+    def walk(body: Sequence[ast.stmt], in_class: bool) -> None:
+        for node in body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                out.append((node.lineno, node.name, in_class))
+            elif isinstance(node, ast.ClassDef):
+                out.append((node.lineno, node.name, in_class))
+                walk(node.body, True)
+            elif isinstance(node, ast.Assign):
+                out.extend(
+                    (node.lineno, t.id, in_class) for t in node.targets if isinstance(t, ast.Name)
+                )
+            elif isinstance(node, ast.AnnAssign):
+                if node.value is not None and isinstance(node.target, ast.Name):
+                    out.append((node.lineno, node.target.id, in_class))
+            else:
+                for field in ("body", "orelse", "finalbody"):
+                    sub = getattr(node, field, None)
+                    if isinstance(sub, list):
+                        walk(sub, in_class)
+                for sub in (*getattr(node, "handlers", ()), *getattr(node, "cases", ())):
+                    walk(sub.body, in_class)
+
+    walk(getattr(tree, "body", []), False)
+    return out
+
+
+def _side_text(side: _FileSide) -> str:
+    top = max(side.lines, default=0)
+    return "\n".join(side.lines.get(i, "") for i in range(1, top + 1))
+
+
+def _matches(side: _FileSide, source: str) -> bool:
+    """The file text really is the post-change file: every added line sits where the diff says."""
+    rows = source.split("\n")
+    return all(
+        n <= len(rows) and rows[n - 1].rstrip() == side.lines[n].rstrip() for n in side.added
+    )
+
+
+def _defined_here(path: str, side: _FileSide, source: str | None) -> list[tuple[str, bool]]:
+    """Names defined on lines this diff added, in file order, with their method flag."""
+    text = source if source and _matches(side, source) else _side_text(side)
+    if path.endswith(".py"):
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            pass
+        else:
+            return [
+                (name, is_method)
+                for lineno, name, is_method in sorted(_py_symbols(tree))
+                if lineno in side.added
+            ]
+    masked = masked_lines(path, text)
+    out: list[tuple[str, bool]] = []
+    for lineno in sorted(side.added):
+        raw = side.lines[lineno]
+        code = masked[lineno - 1] if masked and lineno <= len(masked) else raw
+        match = _TS_DEF.match(code) or (_PY_DEF.match(code) if path.endswith(".py") else None)
+        if match is not None:
+            is_method = raw[:1] in (" ", "\t") and match.re is _PY_DEF
+            out.append((match.group(1), is_method))
+    return out
+
+
+def changed_source_paths(diff: str) -> list[str]:
+    """Non-test files the diff adds lines to — the ones whose post-change text is worth reading."""
+    sides, _ = _parse_diff(diff)
+    return [p for p, side in sides.items() if side.added and not is_test_path(p)]
+
+
+def new_public_symbols(diff: str, files: Mapping[str, str] | None = None) -> list[NewSymbol]:
+    """Public functions / classes / methods / constants the diff ADDS, outside the test files.
+
+    Definitions come from parsing the file AFTER the change (``files``: path -> text; without
+    it, the new side the diff itself shows), so a docstring line that merely looks like
+    ``class or ...`` is never a symbol. A name also removed in the same file is a move or an
+    edit, not a new symbol.
+    """
+    sides, removed = _parse_diff(diff)
     seen: set[tuple[str, str]] = set()
     out: list[NewSymbol] = []
-    for sym in added:
-        key = (sym.file, sym.name)
-        if key not in removed and key not in seen:
+    for path, side in sides.items():
+        if is_test_path(path):
+            continue
+        for name, is_method in _defined_here(path, side, (files or {}).get(path)):
+            key = (path, name)
+            if name.startswith("_") or key in removed or key in seen:
+                continue
             seen.add(key)
-            out.append(sym)
+            out.append(NewSymbol(name, path, is_method))
     return out
 
 
@@ -172,10 +296,79 @@ def code_part(path: str, text: str) -> str:
     return _scan_code(text)
 
 
+def _blank_spans(text: str, spans: Sequence[tuple[int, int]]) -> str:
+    """Blank ``spans`` (absolute offsets) but keep newlines so line numbers survive."""
+    chars = list(text)
+    for start, end in spans:
+        for i in range(start, min(end, len(chars))):
+            if chars[i] != "\n":
+                chars[i] = " "
+    return "".join(chars)
+
+
+def _python_masked(text: str) -> str | None:
+    starts = [0]
+    for line in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    skipped = {tokenize.COMMENT, tokenize.STRING}
+    for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"):
+        if hasattr(tokenize, name):
+            skipped.add(getattr(tokenize, name))
+    spans: list[tuple[int, int]] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type in skipped:
+                begin = starts[tok.start[0] - 1] + tok.start[1]
+                end = starts[tok.end[0] - 1] + tok.end[1]
+                spans.append((begin, end))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return None
+    return _blank_spans(text, spans)
+
+
+def _generic_masked(text: str) -> str:
+    """TS/JS-ish: ``//`` and ``/* */`` comments, quoted strings and multi-line template
+    literals become blanks."""
+    spans: list[tuple[int, int]] = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            spans.append((i, end))
+            i = end
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            spans.append((i, end))
+            i = end
+        elif ch in "'\"`":
+            j = i + 1
+            while j < n and text[j] != ch and (ch == "`" or text[j] != "\n"):
+                j += 2 if text[j] == "\\" else 1
+            spans.append((i, min(j + 1, n)))
+            i = j + 1
+        else:
+            i += 1
+    return _blank_spans(text, spans)
+
+
+def masked_lines(path: str, text: str) -> list[str] | None:
+    """The whole file with comments and string literals (multi-line ones too) blanked,
+    one entry per line; ``None`` when it cannot be tokenized."""
+    masked = _python_masked(text) if path.endswith(".py") else _generic_masked(text)
+    return None if masked is None else masked.split("\n")
+
+
 METHOD_UNCERTAIN = "이름만 같은 다른 클래스의 호출일 수 있음"
 
 
-def production_calls(symbol: NewSymbol, grep_output: str) -> list[str]:
+def production_calls(
+    symbol: NewSymbol,
+    grep_output: str,
+    masked: Mapping[str, Sequence[str]] | None = None,
+) -> list[str]:
     """``path:line:text`` hits of ``git grep -n`` that really call ``symbol`` in production code.
 
     Comments and string literals (so ``__all__`` entries too) are blanked first. A function,
@@ -183,6 +376,10 @@ def production_calls(symbol: NewSymbol, grep_output: str) -> list[str]:
     and not preceded by ``.`` — a call, an argument passed without parentheses
     (``factory=build_x``), or a line of a multi-line import. A method counts as ``.name(`` or a
     bare ``.name`` reference (a bound method used as a callback).
+
+    ``masked`` maps a path to its whole-file masked lines (``masked_lines``): a hit on such a
+    file is judged against the file, so a line in the middle of a multi-line docstring is
+    string, not code. Other files fall back to judging the single grep line.
     """
     hits: list[str] = []
     name = re.escape(symbol.name)
@@ -196,8 +393,12 @@ def production_calls(symbol: NewSymbol, grep_output: str) -> list[str]:
         if not rest or is_test_path(path):
             continue
         # ``git grep -n`` prefixes the line number: path:LINE:text
-        _, _, text = rest.partition(":")
-        code = code_part(path, text)
+        lineno, _, text = rest.partition(":")
+        whole = (masked or {}).get(path)
+        if whole is not None and lineno.isdigit() and 1 <= int(lineno) <= len(whole):
+            code = whole[int(lineno) - 1]
+        else:
+            code = code_part(path, text)
         if definition.search(code):
             continue
         if use.search(code):
@@ -260,12 +461,18 @@ def build_review_messages(
     calls: Mapping[NewSymbol, list[str] | None],
     gate_commands: Sequence[Mapping[str, Any]],
     symbols_cut: int = 0,
+    files_unmasked: int = 0,
 ) -> list[dict[str, str]]:
     """A fresh conversation: the review system prompt and one user message of gathered facts."""
     calls_text = _calls_section(calls)
     if symbols_cut:
         calls_text += (
             f"\n(새 심볼 {symbols_cut}개는 예산 때문에 호출 위치를 조회하지 않았다.){TRUNCATED}"
+        )
+    if files_unmasked:
+        calls_text += (
+            f"\n(파일 {files_unmasked}개는 읽는 파일 수 상한 때문에 한 줄 단위로만 주석·문자열을"
+            " 판정했다 — 독스트링 안의 이름이 호출로 잡혔을 수 있다.)"
         )
     user = "\n\n".join(
         [

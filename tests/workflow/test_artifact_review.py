@@ -19,6 +19,7 @@ from backend.workflow.domain.artifact_review import (
     NO_PRODUCTION_CALL,
     NewSymbol,
     _calls_section,
+    masked_lines,
     new_public_symbols,
     parse_review,
     production_calls,
@@ -329,3 +330,99 @@ def test_run_detail_exposes_the_review() -> None:
     assert _run_verification(row).review == review
     row.result = {}
     assert _run_verification(row).review is None
+
+
+_WIDGET_FILE = (
+    "def run():\n"
+    '    """Closes things.\n'
+    "\n"
+    "    close_widget(x) is what the caller does.\n"
+    '    """\n'
+    "    return 1\n"
+)
+
+
+def test_multiline_docstring_middle_line_is_not_a_production_call() -> None:
+    sym = NewSymbol("close_widget", "backend/w.py")
+    grep = "backend/a.py:4:    close_widget(x) is what the caller does.\n"
+
+    # one line alone cannot tell it is inside a docstring ...
+    assert production_calls(sym, grep) == [grep.strip()]
+    # ... the whole file can
+    masked = {"backend/a.py": masked_lines("backend/a.py", _WIDGET_FILE)}
+    assert production_calls(sym, grep, masked) == []
+
+
+def test_a_real_call_after_a_docstring_is_still_found() -> None:
+    sym = NewSymbol("close_widget", "backend/w.py")
+    text = _WIDGET_FILE + "close_widget(x)\n"
+    masked = {"backend/a.py": masked_lines("backend/a.py", text)}
+    grep = "backend/a.py:4:    close_widget(x) is what\nbackend/a.py:7:close_widget(x)\n"
+
+    assert production_calls(sym, grep, masked) == ["backend/a.py:7:close_widget(x)"]
+
+
+def test_ts_template_literal_lines_are_masked() -> None:
+    text = "const s = `\n  close_widget(x)\n`;\n/* a\n close_widget(y) */\nclose_widget(z);\n"
+    masked = masked_lines("a.ts", text)
+    assert masked is not None
+    assert [bool(line.strip()) for line in masked[:6]] == [True, False, True, False, False, True]
+    assert "close_widget(z)" in masked[5]
+
+
+_WRAPPED = """\
+--- a/backend/w.py
++++ b/backend/w.py
+@@ -1,2 +1,7 @@
+ import os
++
++def fresh():
++    \"\"\"Takes a thing: a class
++    or constant of the module.
++    \"\"\"
++    return 1
+"""
+
+
+def test_wrapped_docstring_class_or_is_not_a_new_symbol() -> None:
+    text = "import os\n\ndef fresh():\n" + _WRAPPED.split("def fresh():\n")[1].replace("+", "")
+    source = text.replace("\\", "")
+    assert new_public_symbols(_WRAPPED.replace("\\", "")) == [NewSymbol("fresh", "backend/w.py")]
+    assert new_public_symbols(_WRAPPED.replace("\\", ""), {"backend/w.py": source}) == [
+        NewSymbol("fresh", "backend/w.py")
+    ]
+
+    diff = (
+        '+++ b/a.py\n+def g():\n+    """A class\n+    class or constant\n+    """\n+    return 1\n'
+    )
+    assert [s.name for s in new_public_symbols(diff)] == ["g"]
+
+
+def test_nested_function_is_not_new_and_conditional_function_is_not_a_method() -> None:
+    diff = (
+        "+++ b/a.py\n"
+        "+from typing import TYPE_CHECKING\n"
+        "+if TYPE_CHECKING:\n"
+        "+    def foo(): ...\n"
+        "+def outer():\n"
+        "+    def inner(): ...\n"
+        "+class K:\n"
+        "+    def m(self): ...\n"
+        "+LIMIT = 3\n"
+    )
+
+    assert new_public_symbols(diff) == [
+        NewSymbol("foo", "a.py", False),
+        NewSymbol("outer", "a.py", False),
+        NewSymbol("K", "a.py", False),
+        NewSymbol("m", "a.py", True),
+        NewSymbol("LIMIT", "a.py", False),
+    ]
+
+
+def test_type_checking_function_call_is_found() -> None:
+    [foo] = new_public_symbols("+++ b/a.py\n+if True:\n+    def foo(): ...\n")
+    assert not foo.is_method
+    grep = "backend/b.py:3:    foo()\n"
+
+    assert production_calls(foo, grep) == ["backend/b.py:3:    foo()"]
