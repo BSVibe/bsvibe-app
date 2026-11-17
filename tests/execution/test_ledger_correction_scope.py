@@ -104,3 +104,26 @@ def test_the_scope_is_stored_with_the_correction() -> None:
     assert payload["founder_corrections"][1]["items"] == []
     assert founder_corrections(payload) == ["R2 는 틀렸다", "전부 틀렸다"]
     assert founder_correction_items(payload) == [("R2",), ()]
+
+
+async def _asked_for(text: str) -> int:
+    first, _ = await _round([], [])
+    items = infer_correction_items(text, _REQS)
+    _, calls = await _round([text], [tuple(items)], first)
+    return _asked(calls)
+
+
+async def test_a_range_rejudges_every_item_in_it() -> None:
+    for text in ("R1~R4 는 틀렸다", "R1-R4 는 틀렸다", "R1–R4 는 틀렸다", "R1부터 R4까지 틀렸다"):
+        assert infer_correction_items(text, _REQS) == ["R1", "R2", "R3", "R4"], text
+    assert await _asked_for("R1~R4 는 틀렸다") == 4
+    assert await _asked_for("R1~R3 는 틀렸다") == 3
+
+
+async def test_uncertain_scope_rejudges_everything() -> None:
+    assert await _asked_for("Cloudflare R2 버킷을 쓴다") == 4
+    assert await _asked_for("R2 말고 나머지") == 4
+    assert await _asked_for("everything except R2") == 4
+    assert await _asked_for("R1~ 는 틀렸다") == 4
+    assert await _asked_for("R9 는 틀렸다") == 4
+    assert await _asked_for("R2 는 틀렸다") == 1
