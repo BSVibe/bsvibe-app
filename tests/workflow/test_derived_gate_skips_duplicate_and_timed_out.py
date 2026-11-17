@@ -114,7 +114,18 @@ def test_a_result_that_ended_without_an_exit_code_counts_as_timed_out() -> None:
         ("uv run pytest --cov -n 4", True),
         ("uv run pytest --cov --cov-report term-missing", True),
         ("uv run pytest --cov --cov-fail-under 80", True),
-        ("uv run pytest --cov tests/unit", False),
+        # pytest-cov's ``--cov`` takes an OPTIONAL value, so pytest reads the word right after it
+        # as that value even when it looks like a path. Measured on the pinned pytest:
+        #   pytest --cov tests/schedule --collect-only    -> 8,682 collected (the whole suite)
+        #   pytest --cov ./tests/schedule --collect-only  -> 8,682 collected (the whole suite)
+        #   pytest tests/schedule --collect-only          -> 47 collected (narrowed)
+        # So ``--cov tests/unit`` is a whole-suite run, i.e. a duplicate.
+        ("uv run pytest --cov tests/unit", True),
+        ("uv run pytest --cov tests/x", True),
+        ("uv run pytest --cov ./tests/x", True),
+        ("uv run pytest --cov x.py", True),
+        # A word AFTER the value is a test path: the run is narrowed.
+        ("uv run pytest --cov backend tests/x", False),
         (_NARROW, False),
         ("uv run pytest -k money", False),
         ("uv run ruff check backend", False),
