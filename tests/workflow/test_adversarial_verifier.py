@@ -7,9 +7,15 @@ output); the model's own opinion of its finding never counts. Stage 1 is report-
 from __future__ import annotations
 
 import json
+import re
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from backend.workflow.application import adversarial_verifier
 from backend.workflow.application.adversarial_verifier import run_adversarial_round
 from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn
 from backend.workflow.application.run_detail import _tally_adversarial
@@ -63,32 +69,25 @@ def _res(code: int = 0, out: str = "", *, timed_out: bool = False) -> SandboxRes
 
 
 class _AdvBox(_GitBox):
-    """A git box whose pytest / repro commands are scripted and whose writes are recorded."""
+    """A git box whose pytest / repro commands are scripted and whose commands are recorded."""
 
     def __init__(self, *, pytest: SandboxResult | None = None, **scripted: SandboxResult) -> None:
         super().__init__()
         self.pytest = pytest or _res(0, "1 passed")
         self.scripted = scripted
-        self.writes: dict[str, bytes] = {}
         self.commands: list[str] = []
-        self.status_out = ""
-        self.status_calls = 0
 
     async def exec(self, command: str, **kwargs: Any) -> SandboxResult:
         self.commands.append(command)
-        if "status --porcelain" in command:
-            self.status_calls += 1
-            # the first call is the "before" snapshot; later ones see whatever a stray write left
-            return _res(0, "" if self.status_calls == 1 else self.status_out)
-        if "pytest" in command:
+        if "status --porcelain" in command or "tar --exclude" in command or "rm -rf" in command:
+            return _res(0, "")  # fingerprint (unchanged) / the copy / its removal
+        inner = re.sub(r"^cd \S+ && ", "", command)  # the copy wrapper
+        if "pytest" in inner:
             return self.pytest
-        bare = command.removeprefix(CI_PREFIX)
+        bare = inner.removeprefix(CI_PREFIX)
         if bare in self.scripted:
             return self.scripted[bare]
         return await super().exec(command, **kwargs)
-
-    async def write_file(self, rel_path: str, content: bytes) -> None:
-        self.writes[rel_path] = content
 
 
 def _run() -> Any:
@@ -186,7 +185,7 @@ async def test_long_repro_output_is_cut() -> None:
     assert len(blob["findings"][0]["output"]) < 2000
 
 
-async def test_non_test_write_refused_and_scratch_removed() -> None:
+async def test_non_test_write_refused_and_copy_removed() -> None:
     box = _AdvBox(pytest=_res(1, "failed"))
     llm = StubLlm(
         [
@@ -197,27 +196,16 @@ async def test_non_test_write_refused_and_scratch_removed() -> None:
     )
     blob = await _round(llm, box)
 
-    assert "backend/svc.py" not in box.writes
-    assert list(box.writes) == [f"{SCRATCH_ROOT}/run-1/test_ok.py"]
+    writes = [c for c in box.commands if "base64 -d" in c]
+    assert len(writes) == 1 and f"{SCRATCH_ROOT}/run-1/test_ok.py" in writes[0]
+    assert not any("backend/svc.py" in c for c in writes)
     refused = [m for m in llm.calls[1]["messages"] if m.get("role") == "tool"]
     assert refused[0]["content"].startswith("REFUSED")
     assert any("(거절)" in c for c in blob["checks"])
-    # the harness deletes the scratch directory when it is done, and only then
-    removals = [c for c in box.commands if "rm -rf" in c]
-    assert removals and SCRATCH_ROOT in removals[0]
-    assert box.commands.index(removals[0]) > max(
-        i for i, c in enumerate(box.commands) if "pytest" in c
-    )
-
-
-async def test_a_stray_write_by_shell_is_undone() -> None:
-    box = _AdvBox()
-    box.status_out = " M backend/svc.py\n?? notes.txt"
-    llm = StubLlm([_tool("shell_exec", command="echo x >> backend/svc.py"), _answer()])
-    await _round(llm, box)
-
-    assert any("checkout -- backend/svc.py" in c for c in box.commands)
-    assert any("rm -rf -- notes.txt" in c for c in box.commands)
+    # the harness deletes the whole copy (scratch dir included) when it is done, and only then
+    removals = [i for i, c in enumerate(box.commands) if "rm -rf" in c]
+    assert len(removals) == 1
+    assert removals[0] > max(i for i, c in enumerate(box.commands) if "pytest" in c)
 
 
 async def test_artifact_number_mismatch_is_confirmed() -> None:
@@ -298,7 +286,7 @@ async def test_without_a_verifier_session_nothing_runs() -> None:
     assert "adversarial" not in vr.result
 
 
-def test_quality_counts_adversarial() -> None:
+def test_quality_counts_adversarial_and_keeps_unavailable_apart() -> None:
     def _round_with(*confirmed: bool) -> Any:
         findings = [{"claim": "c", "confirmed": c} for c in confirmed]
         return SimpleNamespace(result={"adversarial": {"status": "done", "findings": findings}})
@@ -307,9 +295,11 @@ def test_quality_counts_adversarial() -> None:
         SimpleNamespace(result={}),  # no adversarial run -> not counted
         _round_with(True, False, False),
         _round_with(),  # ran, nothing found
+        SimpleNamespace(result={"adversarial": {"status": "unavailable", "findings": []}}),
     ]
-    assert _tally_adversarial(rounds) == (2, 1, 2)
-    assert _tally_adversarial([]) == (0, 0, 0)
+    # (runs, unavailable, confirmed, unconfirmed): an unavailable round is NOT a run
+    assert _tally_adversarial(rounds) == (2, 1, 1, 2)
+    assert _tally_adversarial([]) == (0, 0, 0, 0)
 
 
 def test_card_shows_confirmed_first_and_unconfirmed_as_suspected() -> None:
@@ -326,3 +316,166 @@ def test_card_shows_confirmed_first_and_unconfirmed_as_suspected() -> None:
     assert [f.claim for f in suspected] == ["maybe"]
     assert _adversarial_summary({})[0] == "none"
     assert _adversarial_summary({"adversarial": {"status": "unavailable"}})[0] == "unavailable"
+
+
+# -- isolation: a real filesystem, a real git --------------------------------------------------
+
+
+class _LocalBox:
+    """A sandbox that is just a directory on this machine: commands really run, really write."""
+
+    def __init__(self, workspace: Path) -> None:
+        self.workspace = workspace
+
+    @property
+    def workspace_mount(self) -> str:
+        return str(self.workspace)
+
+    async def exec(self, command: str, **kwargs: Any) -> SandboxResult:
+        done = subprocess.run(  # noqa: S602, ASYNC221
+            command, shell=True, cwd=self.workspace, capture_output=True, text=True, timeout=60
+        )
+        return SandboxResult(done.returncode, done.stdout, done.stderr, False)
+
+    async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
+        return (self.workspace / rel_path).read_bytes()[:max_bytes]
+
+    async def write_file(self, rel_path: str, content: bytes) -> None:
+        (self.workspace / rel_path).write_bytes(content)
+
+    async def list_dir(self, rel_path: str) -> list[str]:
+        return []
+
+
+@pytest.fixture(autouse=True)
+def _git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    for who in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{who}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{who}_EMAIL", "t@t")
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(  # noqa: S603
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],  # noqa: S607
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+
+def _real_tree(tmp_path: Path) -> Path:
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "src.py").write_text("def f():\n    return 1\n")
+    (repo / "other.py").write_text("x = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    (repo / "src.py").write_text("def f():\n    return 2\n")
+    _git(repo, "commit", "-qam", "change")
+    (repo / "other.py").write_text("x = 99  # uncommitted\n")  # already-modified file
+    (repo / "scratch_notes.txt").write_text("untracked\n")
+    return repo
+
+
+def _tree_state(repo: Path) -> tuple[str, str, str, str]:
+    return (
+        _git(repo, "rev-parse", "HEAD"),
+        _git(repo, "status", "--porcelain"),
+        _git(repo, "diff", "HEAD"),
+        notes.read_text() if (notes := repo / "scratch_notes.txt").exists() else "<gone>",
+    )
+
+
+_HOSTILE = (
+    "echo hacked >> src.py; echo hacked >> other.py; rm scratch_notes.txt; "
+    "git add -A; git commit -qm evil; git reset -q --hard HEAD~1; git checkout -q -- .; "
+    "git commit -q --allow-empty -m again"
+)
+
+
+async def _local_round(repo: Path, llm: StubLlm) -> dict[str, Any]:
+    async def release() -> None:
+        return None
+
+    base = _git(repo, "rev-parse", "HEAD~1").strip()
+    return await run_adversarial_round(
+        llm=llm,
+        run=_run(),
+        box=_LocalBox(repo),  # type: ignore[arg-type]
+        baseline=base,
+        surface="code",
+        release=release,
+    )
+
+
+async def test_hostile_shell_leaves_the_real_tree_untouched(tmp_path: Path) -> None:
+    repo = _real_tree(tmp_path)
+    before = _tree_state(repo)
+    probe = {
+        "kind": "command",
+        "command": "grep -c uncommitted other.py",
+        "expect": {"contains": "1"},
+    }
+    llm = StubLlm([_tool("shell_exec", command=_HOSTILE), _answer(_finding(probe))])
+
+    blob = await _local_round(repo, llm)
+
+    assert _tree_state(repo) == before  # HEAD, status, diff, untracked content: all identical
+    assert blob["status"] == "done"
+    # the repro ran against a copy of the VERIFIED state, uncommitted edit included
+    assert blob["findings"][0]["confirmed"] is True
+    assert not list(tmp_path.glob("**/.bsvibe_adversarial"))  # the scratch dir is gone
+    assert not list(Path("/tmp").glob("bsvibe-adversarial-run-1-*"))  # noqa: S108 — and the copy
+
+
+async def test_without_isolation_the_hostile_shell_would_be_caught(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Pointing the copy at the real tree (no isolation) must turn the guard red."""
+    repo = _real_tree(tmp_path)
+
+    async def no_copy(box: Any, copy: Any) -> None:
+        copy.root = str(repo)  # the verifier now works in the REAL tree
+
+    async def no_cleanup(box: Any, copy: Any, budget: Any) -> None:
+        return None  # the "copy" is the real tree: do not delete it
+
+    monkeypatch.setattr(adversarial_verifier, "_make_copy", no_copy)
+    monkeypatch.setattr(adversarial_verifier, "_cleanup", no_cleanup)
+    before = _tree_state(repo)
+    blob = await _local_round(repo, StubLlm([_tool("shell_exec", command=_HOSTILE), _answer()]))
+
+    assert _tree_state(repo) != before  # the damage really happened...
+    assert blob["status"] == "unavailable"  # ...and the harness discarded the result
+    assert blob["reason"].startswith("harness_error")
+    assert blob["findings"] == []
+
+
+async def test_an_absolute_path_escape_is_a_harness_error(tmp_path: Path) -> None:
+    repo = _real_tree(tmp_path)
+    escape = f"echo hacked >> {repo}/src.py"
+    blob = await _local_round(repo, StubLlm([_tool("shell_exec", command=escape), _answer()]))
+    assert blob["status"] == "unavailable"
+    assert blob["reason"].startswith("harness_error")
+
+
+async def test_when_the_time_budget_runs_out_remaining_repros_are_unconfirmed(
+    monkeypatch: Any,
+) -> None:
+    box = _AdvBox(pytest=_res(1, "failed"))
+    first_done = {"n": 0}
+    real_judge = adversarial_verifier._judge
+
+    async def spend_budget(copy: Any, scratch: str, finding: Any, budget: Any) -> Any:
+        out = await real_judge(copy, scratch, finding, budget)
+        first_done["n"] += 1
+        monkeypatch.setattr(budget, "remaining", lambda: 0.0)  # the clock runs out after #1
+        return out
+
+    monkeypatch.setattr(adversarial_verifier, "_judge", spend_budget)
+    blob = await _round(StubLlm([_answer(_finding(), _finding(), _finding())]), box)
+
+    assert [f["confirmed"] for f in blob["findings"]] == [True, False, False]
+    assert sum("pytest" in c for c in box.commands) == 1  # #2 and #3 never ran

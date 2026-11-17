@@ -1256,5 +1256,13 @@
   "reviewStatus": {
     "counts": "독립 리뷰: 높음 {high} · 중간 {medium} · 낮음 {low}",
     "unavailable": "독립 리뷰를 하지 못했습니다"
+  },
+  "adversarialStatus": {
+    "title": "깨 보는 검증",
+    "confirmed": "확인됨 ({count})",
+    "suspected": "의심 ({count})",
+    "unavailable": "깨 보는 검증을 하지 못했습니다",
+    "none": "지적 없음",
+    "round": "{round}번째 검증"
   }
 }

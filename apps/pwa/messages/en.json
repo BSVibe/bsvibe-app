@@ -1256,5 +1256,13 @@
   "reviewStatus": {
     "counts": "Independent review: high {high} · medium {medium} · low {low}",
     "unavailable": "The independent review could not be done"
+  },
+  "adversarialStatus": {
+    "title": "Adversarial check",
+    "confirmed": "Confirmed ({count})",
+    "suspected": "Suspected ({count})",
+    "unavailable": "The adversarial check could not be done",
+    "none": "No findings",
+    "round": "Verification {round}"
   }
 }

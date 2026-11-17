@@ -1,5 +1,6 @@
 "use client";
 
+import AdversarialStatus from "@/components/decisions/AdversarialStatus";
 import LedgerStatus from "@/components/decisions/LedgerStatus";
 import ReviewStatus from "@/components/decisions/ReviewStatus";
 import ChangeFootprint from "@/components/deliverables/ChangeFootprint";
@@ -81,6 +82,11 @@ export default function DeliveryRow({
       <ChangeFootprint footprint={item.change} />
       <LedgerStatus ledger={item.ledger} />
       <ReviewStatus review={item.review} />
+      <AdversarialStatus
+        status={item.review?.adversarial_status}
+        confirmed={item.review?.adversarial_confirmed}
+        suspected={item.review?.adversarial_suspected}
+      />
       <div className="need-card__actions tap-card__above">
         <button
           type="button"

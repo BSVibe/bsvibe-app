@@ -1,15 +1,23 @@
 """The adversarial verifier — a separate agent session that tries to break a passed round.
 
 Report-only (stage 1): this never changes the round's verdict. The model proposes findings, each
-with a repro; the HARNESS runs every repro on the changed tree and decides confirmed /
-unconfirmed from the exit code and output (``domain.adversarial``). The model never judges.
+with a repro; the HARNESS runs every repro and decides confirmed / unconfirmed from the exit code
+and output (``domain.adversarial``). The model never judges.
+
+Isolation: the session AND the repros run in a throwaway COPY of the verified state (committed and
+uncommitted changes, with its own fresh ``.git``), never in the real working tree. The real tree
+is fingerprinted (HEAD + ``git status`` + a hash of the diff and of untracked files) before and
+after; a difference discards the result and records a harness error.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import shlex
+import time
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -29,12 +37,15 @@ from backend.workflow.domain.adversarial import (
     repro_runner,
     write_refusal,
 )
-from backend.workflow.infrastructure.sandbox import SandboxSession
+from backend.workflow.infrastructure.sandbox import SandboxResult, SandboxSession
 
 logger = structlog.get_logger(__name__)
 
-#: Same ceiling as the existing review's single call; turns/tokens bound the tool loop.
-_TIMEOUT_S = 180.0
+#: ONE time budget for the whole stage — the copy, the session, every repro and the cleanup.
+#: Same ceiling as the existing review's single call; turns/tokens bound the tool loop. The last
+#: ``_RESERVE_S`` is held back so the cleanup and the real-tree check always get to run.
+_BUDGET_S = 180.0
+_RESERVE_S = 30.0
 _MAX_TURNS = 12
 _TOKEN_CAP = 120_000
 _EXEC_TIMEOUT_S = 60.0
@@ -42,8 +53,71 @@ _REPRO_TIMEOUT_S = 120.0
 _TOOL_OUTPUT_CHARS = 4000
 _CHECKS_SHOWN = 30
 _DIFF_CHARS = 30_000
+_COPY_ROOT = "/tmp/bsvibe-adversarial"  # noqa: S108 — outside the workspace on purpose
+_UNTRACKED_HASH = (
+    "git ls-files -o --exclude-standard -z | xargs -0 -r sha256sum 2>/dev/null | sha256sum"
+)
 
 Llm = Any  # JudgeLlm: ``complete(messages=..., tools=...)`` → a turn with usage fields
+
+
+class _Budget:
+    """The stage's single clock. Everything that takes time asks it how much is left."""
+
+    def __init__(self, total_s: float = _BUDGET_S, reserve_s: float = _RESERVE_S) -> None:
+        self._start = time.monotonic()
+        self._total = total_s
+        self._reserve = reserve_s
+
+    def remaining(self) -> float:
+        """Seconds left for the work (session + repros); the reserve is not counted."""
+        return self._total - self._reserve - (time.monotonic() - self._start)
+
+    def cleanup_s(self) -> float:
+        """What the cleanup may take: whatever is left, but never less than the reserve's half."""
+        left = self._total - (time.monotonic() - self._start)
+        return max(left, self._reserve / 2)
+
+
+class _Copy:
+    """The verifier's view of the workspace: a copy at ``root``, driven through the real box.
+
+    Looks like a ``SandboxSession`` whose workspace is the copy, so every command — the model's
+    shell, its greps, the repros — lands there. Nothing it does reaches the real tree through
+    this object (an absolute path in a shell command still could; the fingerprint catches that).
+    """
+
+    def __init__(self, box: SandboxSession, root: str) -> None:
+        self._box = box
+        self.root = root
+
+    @property
+    def workspace_mount(self) -> str:
+        return self.root
+
+    async def exec(self, command: str, *, timeout_s: float) -> SandboxResult:
+        # The verifier's tools ARE a shell (that is the point); the copy is the boundary.
+        return await self._box.exec(  # noqa: S604
+            f"cd {shlex.quote(self.root)} && {command}", timeout_s=timeout_s, shell=True
+        )
+
+    async def read_file(self, rel_path: str, max_bytes: int) -> bytes:
+        res = await self.exec(
+            f"head -c {int(max_bytes)} -- {shlex.quote(rel_path)}", timeout_s=_EXEC_TIMEOUT_S
+        )
+        if res.exit_code != 0:
+            raise FileNotFoundError(rel_path)
+        return (res.stdout or "").encode()
+
+    async def write_file(self, rel_path: str, content: bytes) -> None:
+        quoted = shlex.quote(rel_path)
+        body = base64.b64encode(content).decode()
+        res = await self.exec(
+            f'mkdir -p -- "$(dirname {quoted})" && echo {body} | base64 -d > {quoted}',
+            timeout_s=_EXEC_TIMEOUT_S,
+        )
+        if res.exit_code != 0:
+            raise OSError(f"write failed: {rel_path}")
 
 
 async def run_adversarial_round(
@@ -56,24 +130,63 @@ async def run_adversarial_round(
     release: Callable[[], Awaitable[None]],
 ) -> dict[str, Any]:
     """The ``result["adversarial"]`` blob. Never raises: a hiccup is ``status: unavailable``."""
+    budget = _Budget()
     scratch = f"{SCRATCH_ROOT}/{str(run.id)[:12]}"
     checks: list[str] = []
+    copy = _Copy(box, f"{_COPY_ROOT}-{str(run.id)[:12]}-{uuid.uuid4().hex[:8]}")
+    blob: dict[str, Any]
     try:
-        before = await _status(box)
+        before = await _fingerprint(box)
         try:
             await release()
-            findings = await asyncio.wait_for(
-                _session(llm, run, box, baseline, surface, scratch, checks), _TIMEOUT_S
+            diff = await _sh(
+                box,
+                f"git -C {shlex.quote(box.workspace_mount)} diff {shlex.quote(baseline)} HEAD",
+            )
+            await _make_copy(box, copy)
+            findings = await _bounded(
+                _session(llm, run, copy, diff, surface, scratch, checks, budget), budget
             )
             if findings is None:
-                return _blob("unavailable", surface, [], checks, "검증자 출력을 해석하지 못했다")
-            judged = [await _judge(box, scratch, f) for f in findings]
-            return _blob("done", surface, judged, checks)
+                blob = _blob(
+                    "unavailable",
+                    surface,
+                    [],
+                    checks,
+                    "검증자가 끝내지 못했거나 출력을 해석하지 못했다",
+                )
+            else:
+                judged = [await _judge(copy, scratch, f, budget) for f in findings]
+                blob = _blob("done", surface, judged, checks)
         finally:
-            await _cleanup(box, scratch, before)
+            await _cleanup(box, copy, budget)
+        if await _fingerprint(box) != before:
+            logger.error("adversarial_real_tree_changed", run_id=str(run.id))
+            return _blob(
+                "unavailable",
+                surface,
+                [],
+                checks,
+                "harness_error: 검증 단계 중 실제 작업 트리가 바뀌어 결과를 버렸다",
+            )
+        return blob
     except Exception as exc:  # noqa: BLE001 — report-only: must never change the verdict
         logger.warning("adversarial_unavailable", run_id=str(run.id), error=repr(exc)[:200])
         return _blob("unavailable", surface, [], checks, f"{type(exc).__name__}: {exc}"[:300])
+
+
+async def _bounded(coro: Awaitable[Any], budget: _Budget) -> Any:
+    """Run ``coro`` within what the budget has left; out of time → ``None`` (not an error)."""
+    left = budget.remaining()
+    if left <= 0:
+        close = getattr(coro, "close", None)
+        if close:
+            close()
+        return None
+    try:
+        return await asyncio.wait_for(coro, left)
+    except TimeoutError:
+        return None
 
 
 def _blob(
@@ -94,15 +207,13 @@ def _blob(
 async def _session(
     llm: Llm,
     run: Any,
-    box: SandboxSession,
-    baseline: str,
+    copy: _Copy,
+    diff: str,
     surface: str,
     scratch: str,
     checks: list[str],
+    budget: _Budget,
 ) -> list[Finding] | None:
-    diff = await _sh(
-        box, f"git -C {shlex.quote(box.workspace_mount)} diff {shlex.quote(baseline)} HEAD"
-    )
     payload = run.payload if isinstance(run.payload, dict) else {}
     messages: list[dict[str, Any]] = [
         {
@@ -146,7 +257,7 @@ async def _session(
             }
         )
         for call in calls:
-            output = await _dispatch(box, scratch, call.name, call.arguments, checks)
+            output = await _dispatch(copy, scratch, call.name, call.arguments, checks, budget)
             messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
     # Out of turns: ask for the answer without tools.
     messages.append({"role": "user", "content": "Stop investigating. Give the final JSON now."})
@@ -163,26 +274,32 @@ async def _turn(llm: Llm, run: Any, messages: list[dict[str, Any]], tools: Any) 
 
 
 async def _dispatch(  # noqa: PLR0911 — one return per tool, flat on purpose
-    box: SandboxSession, scratch: str, name: str, args: dict[str, Any], checks: list[str]
+    copy: _Copy,
+    scratch: str,
+    name: str,
+    args: dict[str, Any],
+    checks: list[str],
+    budget: _Budget,
 ) -> str:
-    """One verifier tool call. Read/exec reuse the sandbox; writes go through the guard."""
+    """One verifier tool call, always against the copy. Writes go through the guard."""
     try:
         if name == "file_read":
             path = str(args.get("path", ""))
             checks.append(f"file_read {path}"[:200])
             return clip(
-                (await box.read_file(path, _TOOL_OUTPUT_CHARS)).decode(errors="replace"),
+                (await copy.read_file(path, _TOOL_OUTPUT_CHARS)).decode(errors="replace"),
                 _TOOL_OUTPUT_CHARS,
             )
         if name == "grep":
             pattern = str(args.get("pattern", ""))
             checks.append(f"grep {pattern}"[:200])
-            cmd = f"git -C {shlex.quote(box.workspace_mount)} grep -n -e {shlex.quote(pattern)}"
-            return clip(await _sh(box, cmd, ok=(0, 1)), _TOOL_OUTPUT_CHARS)
+            cmd = f"git -C {shlex.quote(copy.root)} grep -n -e {shlex.quote(pattern)}"
+            res = await copy.exec(cmd, timeout_s=_step_timeout(budget, _EXEC_TIMEOUT_S))
+            return clip(res.stdout or "", _TOOL_OUTPUT_CHARS)
         if name == "shell_exec":
             command = str(args.get("command", ""))
             checks.append(f"$ {command}"[:200])
-            result = await _exec(box, command, _EXEC_TIMEOUT_S)
+            result = await copy.exec(command, timeout_s=_step_timeout(budget, _EXEC_TIMEOUT_S))
             body = f"exit={result.exit_code}{' (timeout)' if result.timed_out else ''}\n"
             return clip(body + (result.stdout or "") + (result.stderr or ""), _TOOL_OUTPUT_CHARS)
         if name == "write_test":
@@ -192,17 +309,43 @@ async def _dispatch(  # noqa: PLR0911 — one return per tool, flat on purpose
                 checks.append(f"write_test {path} (거절)"[:200])
                 return f"REFUSED: {refusal}"
             checks.append(f"write_test {path}"[:200])
-            await box.write_file(path, str(args.get("content", "")).encode())
+            await copy.write_file(path, str(args.get("content", "")).encode())
             return "written"
     except Exception as exc:  # noqa: BLE001 — a tool error is the model's to read, not ours to raise
         return f"ERROR: {type(exc).__name__}: {exc}"[:500]
     return f"ERROR: unknown tool {name}"
 
 
-async def _judge(box: SandboxSession, scratch: str, finding: Finding) -> dict[str, Any]:
-    """Run the repro on the changed tree; the verdict is the exit code / output, nothing else."""
+def _step_timeout(budget: _Budget, cap: float) -> float:
+    """A single command's timeout: its own cap, never more than the budget has left."""
+    return max(min(cap, budget.remaining()), 1.0)
+
+
+def _unconfirmed(finding: Finding, reason: str, output: str = "") -> dict[str, Any]:
     repro = finding.repro
+    return {
+        "severity": finding.severity,
+        "claim": finding.claim,
+        "file": finding.file,
+        "line": finding.line,
+        "repro": {
+            "kind": repro.kind,
+            **({"path": repro.path} if repro.path else {}),
+            **({"command": repro.command, "expect": repro.expect} if repro.command else {}),
+        },
+        "confirmed": False,
+        "reason": reason,
+        "output": clip(output),
+    }
+
+
+async def _judge(copy: _Copy, scratch: str, finding: Finding, budget: _Budget) -> dict[str, Any]:
+    """Run the repro on the changed tree (the copy); the verdict is the exit code / output."""
+    repro = finding.repro
+    if budget.remaining() <= 0:
+        return _unconfirmed(finding, "시간 예산이 소진되어 실행하지 못했다")
     confirmed, reason, output = False, "", ""
+    timeout = _step_timeout(budget, _REPRO_TIMEOUT_S)
     try:
         if repro.kind == "test":
             path = repro.path or ""
@@ -213,7 +356,7 @@ async def _judge(box: SandboxSession, scratch: str, finding: Finding) -> dict[st
                 reason = "이 파일 형식의 테스트 실행기를 알 수 없다"
             else:
                 command, failed_code = runner
-                res = await _exec(box, command, _REPRO_TIMEOUT_S)
+                res = await copy.exec(command, timeout_s=timeout)
                 output = (res.stdout or "") + (res.stderr or "")
                 confirmed = judge_test(
                     exit_code=res.exit_code, failed_code=failed_code, timed_out=res.timed_out
@@ -226,7 +369,7 @@ async def _judge(box: SandboxSession, scratch: str, finding: Finding) -> dict[st
                     else "재현 테스트가 통과했거나 실행되지 않았다"
                 )
         else:
-            res = await _exec(box, repro.command or "", _REPRO_TIMEOUT_S)
+            res = await copy.exec(repro.command or "", timeout_s=timeout)
             output = (res.stdout or "") + (res.stderr or "")
             confirmed = judge_command(
                 repro.expect, exit_code=res.exit_code, output=output, timed_out=res.timed_out
@@ -240,59 +383,50 @@ async def _judge(box: SandboxSession, scratch: str, finding: Finding) -> dict[st
             )
     except Exception as exc:  # noqa: BLE001 — a repro that cannot run is unconfirmed
         reason = f"재현을 실행할 수 없다: {type(exc).__name__}"
-    return {
-        "severity": finding.severity,
-        "claim": finding.claim,
-        "file": finding.file,
-        "line": finding.line,
-        "repro": {
-            "kind": repro.kind,
-            **({"path": repro.path} if repro.path else {}),
-            **({"command": repro.command, "expect": repro.expect} if repro.command else {}),
-        },
-        "confirmed": confirmed,
-        "reason": reason,
-        "output": clip(output),
-    }
+    return {**_unconfirmed(finding, reason, output), "confirmed": confirmed}
 
 
-async def _exec(box: SandboxSession, command: str, timeout_s: float) -> Any:
-    # The verifier's tools ARE a shell (that is the point); the sandbox is the boundary.
+async def _real(box: SandboxSession, command: str, timeout_s: float = _EXEC_TIMEOUT_S) -> Any:
     return await box.exec(command, timeout_s=timeout_s, shell=True)  # noqa: S604
 
 
-async def _sh(box: SandboxSession, command: str, ok: tuple[int, ...] = (0,)) -> str:
-    res = await _exec(box, command, _EXEC_TIMEOUT_S)
-    if res.timed_out or res.exit_code not in ok:
+async def _sh(box: SandboxSession, command: str) -> str:
+    res = await _real(box, command)
+    if res.timed_out or res.exit_code != 0:
         raise RuntimeError(f"command failed (exit {res.exit_code}): {command[:80]}")
     return res.stdout or ""
 
 
-async def _status(box: SandboxSession) -> set[str]:
-    out = await _sh(box, f"git -C {shlex.quote(box.workspace_mount)} status --porcelain")
-    return {ln for ln in out.splitlines() if SCRATCH_ROOT not in ln}
+async def _fingerprint(box: SandboxSession) -> str:
+    """HEAD + ``git status --porcelain`` + a hash of ``git diff HEAD`` and of the untracked files.
+
+    Any of: a moved HEAD, an edit to an already-modified file, a reverted edit, a new or changed
+    untracked file shows up as a different string."""
+    mount = shlex.quote(box.workspace_mount)
+    return await _sh(
+        box,
+        f"cd {mount} && git rev-parse HEAD && git status --porcelain && "
+        f"git diff HEAD | sha256sum && {_UNTRACKED_HASH}",
+    )
 
 
-async def _cleanup(box: SandboxSession, scratch: str, before: set[str]) -> None:
-    """Remove the scratch dir and undo any write outside it (a shell command can write too).
+async def _make_copy(box: SandboxSession, copy: _Copy) -> None:
+    """Copy the verified state — uncommitted changes included, ``.git`` excluded — to a fresh
+    directory and give it its OWN repository, so the verifier's git commands cannot touch the
+    real one (a worktree's ``.git`` file would point back at the shared gitdir)."""
+    mount, root = shlex.quote(box.workspace_mount), shlex.quote(copy.root)
+    await _sh(
+        box,
+        f"mkdir -p {root} && cd {mount} && tar --exclude=./.git -cf - . | tar -xf - -C {root} && "
+        f"cd {root} && git init -q && git add -A -f && "
+        "git -c user.name=harness -c user.email=harness@localhost commit -q --no-verify "
+        "--allow-empty -m verified-state",
+    )
 
-    The verified tree must come out exactly as it went in."""
+
+async def _cleanup(box: SandboxSession, copy: _Copy, budget: _Budget) -> None:
+    """Delete the copy — and with it the scratch test directory. Never raises."""
     try:
-        mount = shlex.quote(box.workspace_mount)
-        await _exec(
-            box,
-            f"cd {mount} && rm -rf {shlex.quote(scratch)} && rmdir {SCRATCH_ROOT} 2>/dev/null; true",
-            _EXEC_TIMEOUT_S,
-        )
-        for line in sorted(await _status(box) - before):
-            status, path = line[:2], line[3:].strip().strip('"')
-            if " -> " in path:
-                path = path.split(" -> ", 1)[1]
-            quoted = shlex.quote(path)
-            fix = (
-                f"rm -rf -- {quoted}" if status == "??" else f"git -C {mount} checkout -- {quoted}"
-            )
-            await _exec(box, f"cd {mount} && {fix}", _EXEC_TIMEOUT_S)
-            logger.warning("adversarial_stray_write_undone", path=path[:200])
+        await _real(box, f"rm -rf -- {shlex.quote(copy.root)}", budget.cleanup_s())
     except Exception as exc:  # noqa: BLE001 — cleanup must not break the round
         logger.warning("adversarial_cleanup_failed", error=repr(exc)[:200])
