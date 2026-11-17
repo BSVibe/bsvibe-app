@@ -209,6 +209,9 @@ async def import_vault(
             total=len(scanner.skipped_outside),
         )
         result["skipped_outside_root"] = len(scanner.skipped_outside)
+    if scanner.skipped_unreadable:
+        logger.warning("obsidian_entries_unreadable_skipped", total=scanner.skipped_unreadable)
+        result["skipped_unreadable"] = scanner.skipped_unreadable
     if scanner.stop_reason:
         result["stopped"] = scanner.stop_reason
     return result
