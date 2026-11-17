@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 from typing import Any
@@ -151,6 +152,8 @@ def test_file_swapped_for_symlink_is_not_opened(layout):
     link.symlink_to(outside / "secret.md")
     scanner = VaultScanner(root, allowed_root=root)
     assert scanner._read(link) is None  # O_NOFOLLOW refuses
+    assert scanner.skipped_symlinks == 1
+    assert scanner.skipped_unreadable == 0
 
 
 def test_note_cap_stops_with_reason(layout):
@@ -197,3 +200,43 @@ async def test_result_reports_stop_reason(layout):
     _md(root, "a.md")
     result = await _run(_ctx(_Knowledge(), root), vault_path=str(root))
     assert "stopped" not in result
+
+
+@pytest.mark.asyncio
+async def test_result_reports_stop_reason_when_capped(layout, monkeypatch):
+    root, _ = layout
+    for i in range(5):
+        _md(root, f"n{i}.md")
+    monkeypatch.setattr(
+        obsidian_module,
+        "VaultScanner",
+        lambda *a, **k: VaultScanner(*a, **k, max_notes=3),
+    )
+    result = await _run(_ctx(_Knowledge(), root), vault_path=str(root))
+    assert result["notes_count"] == 3
+    assert "note limit" in result["stopped"]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_note_counted_unreadable_not_outside(layout, monkeypatch):
+    root, _ = layout
+    _md(root, "ok.md")
+    bad = root / "locked.md"
+    _md(root, "locked.md")
+    bad.chmod(0o000)
+    if os.access(bad, os.R_OK):  # root ignores modes: emulate the EACCES the kernel would give
+        real_open = os.open
+
+        def _deny(path, *a, **k):
+            if str(path).endswith("locked.md"):
+                raise PermissionError(errno.EACCES, "denied")
+            return real_open(path, *a, **k)
+
+        monkeypatch.setattr(os, "open", _deny)
+    try:
+        result = await _run(_ctx(_Knowledge(), root), vault_path=str(root))
+    finally:
+        bad.chmod(0o644)
+    assert result["notes_count"] == 1
+    assert result["skipped_unreadable"] == 1
+    assert result.get("skipped_outside_root", 0) == 0
