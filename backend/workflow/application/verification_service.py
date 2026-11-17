@@ -83,6 +83,7 @@ from backend.workflow.domain.outcome_demonstration import (
     summarize,
 )
 from backend.workflow.domain.requirements import (
+    founder_correction_items,
     founder_corrections,
     ledger_passed,
     public_rows,
@@ -1046,6 +1047,9 @@ class VerificationService:
             judge=judge,
             missing_tests=cited_tests(box),
             corrections=founder_corrections(run.payload if isinstance(run.payload, dict) else {}),
+            correction_items=founder_correction_items(
+                run.payload if isinstance(run.payload, dict) else {}
+            ),
             command_verdicts=command_verdicts(
                 ledger_command_plan(requirements),
                 [*((derived_gate or {}).get("commands") or []), *command_results],

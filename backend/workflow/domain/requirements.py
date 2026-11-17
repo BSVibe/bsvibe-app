@@ -34,17 +34,123 @@ FOUNDER_CORRECTIONS_KEY = "founder_corrections"
 _CORRECTION_MAX_CHARS = 1500
 
 
-def founder_corrections(payload: Mapping[str, Any] | None) -> list[str]:
-    """The founder's denial reasons recorded on a run's payload (``[]`` when none)."""
+def _correction_entries(payload: Mapping[str, Any] | None) -> list[tuple[str, tuple[str, ...]]]:
     raw = (payload or {}).get(FOUNDER_CORRECTIONS_KEY)
     if not isinstance(raw, list):
         return []
-    out: list[str] = []
+    out: list[tuple[str, tuple[str, ...]]] = []
     for entry in raw:
         text = entry.get("text") if isinstance(entry, Mapping) else None
         if isinstance(text, str) and text.strip():
-            out.append(text.strip()[:_CORRECTION_MAX_CHARS])
+            items = entry.get("items") if isinstance(entry, Mapping) else None
+            ids = tuple(str(i) for i in items) if isinstance(items, list) else ()
+            out.append((text.strip()[:_CORRECTION_MAX_CHARS], ids))
     return out
+
+
+def founder_corrections(payload: Mapping[str, Any] | None) -> list[str]:
+    """The founder's denial reasons recorded on a run's payload (``[]`` when none)."""
+    return [text for text, _ in _correction_entries(payload)]
+
+
+def founder_correction_items(payload: Mapping[str, Any] | None) -> list[tuple[str, ...]]:
+    """Per correction (same order as :func:`founder_corrections`): the ledger ids it is about.
+
+    An empty tuple means the correction is not tied to an item - it concerns every row.
+    """
+    return [ids for _, ids in _correction_entries(payload)]
+
+
+_ITEM_ID_RE = re.compile(r"(?<![A-Za-z0-9_])R(\d+)(?![A-Za-z0-9_])")
+_RANGE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])R(\d+)\s*(?:~|\u223c|-|\u2013|\u2014|\uff5e|\ubd80\ud130|\s(?:to|through)\s)\s*R?(\d+)"
+    r"(?:\s*\uae4c\uc9c0)?(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+# an operator left next to an id after the parsable ranges were removed: a range we cannot read
+_DANGLING_RE = re.compile(
+    r"R\d+\s*(?:~|\u223c|-|\u2013|\u2014|\uff5e|\ubd80\ud130)|(?:~|\u223c|\u2013|\u2014|\uff5e|\uae4c\uc9c0)\s*R?\d+"
+)
+# negation / exclusion: the correction is about everything EXCEPT the named item
+_EXCLUSION_RE = re.compile(
+    r"\ub9d0\uace0|\uc81c\uc678|\ube7c\uace0|\ubab0\ub77c\ub3c4|\ub098\uba38\uc9c0|\uc544\ub2cc|\uc544\ub2c8\ub2e4|\ubb34\uad00|"
+    r"\bexcept\b|\bexcluding\b|\bother than\b|\bbesides\b|\bnot\b|\bbut\b|\bwithout\b|\brest\b|\bothers\b",
+    re.IGNORECASE,
+)
+# "Cloudflare R2", "R2 bucket": the token is a name from outside the ledger
+_FOREIGN_BEFORE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*\s+$")
+_FOREIGN_AFTER_RE = re.compile(
+    r"^\s*(?:\ubc84\ud0b7|\uc2a4\ud1a0\ub9ac\uc9c0|\ud0a4\uac12|bucket|storage|object|api|endpoint|token|key)",
+    re.IGNORECASE,
+)
+_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+
+
+def _named_ids(text: str) -> list[str] | None:
+    """Ledger ids the sentence names, ranges expanded; ``None`` when it is not certain."""
+    taken: list[tuple[int, int]] = []
+    nums: list[int] = []
+    for m in _RANGE_RE.finditer(text):
+        lo, hi = int(m.group(1)), int(m.group(2))
+        if lo > hi or hi - lo > 200:
+            return None
+        nums.extend(range(lo, hi + 1))
+        taken.append(m.span())
+    rest = list(text)
+    for a, b in taken:
+        rest[a:b] = " " * (b - a)
+    remaining = "".join(rest)
+    if _DANGLING_RE.search(remaining):
+        return None
+    for m in _ITEM_ID_RE.finditer(remaining):
+        if _FOREIGN_BEFORE_RE.search(remaining[: m.start()]) or _FOREIGN_AFTER_RE.search(
+            remaining[m.end() :]
+        ):
+            return None
+        nums.append(int(m.group(1)))
+    return [f"R{n}" for n in dict.fromkeys(nums)]
+
+
+def infer_correction_items(text: str, requirements: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Which ledger items a correction is about - deterministic, ``[]`` = all of them.
+
+    Narrow only when certain; every doubt falls toward ``[]`` (re-judge everything):
+    an id outside this ledger, a negation/exclusion, an unreadable range, an id that is
+    really some other name ("Cloudflare R2").
+
+    1. ledger ids named in the sentence (``R2``, ranges ``R1~R4`` expanded);
+    2. else the items whose text shares a backticked identifier with the sentence.
+    """
+    if _EXCLUSION_RE.search(text):
+        return []
+    ids = [str(r.get("id")) for r in requirements if r.get("id")]
+    named = _named_ids(text)
+    if named is None:
+        return []
+    if named:
+        if any(i not in ids for i in named):
+            return []
+        return [i for i in ids if i in named]
+    idents = {m.strip() for m in _BACKTICK_RE.findall(text) if m.strip()}
+    if not idents:
+        return []
+    out: list[str] = []
+    for r in requirements:
+        theirs = {m.strip() for m in _BACKTICK_RE.findall(str(r.get("text") or ""))}
+        if r.get("id") and idents & theirs:
+            out.append(str(r["id"]))
+    return out
+
+
+def append_founder_correction(payload: dict[str, Any], decision_id: str, text: str) -> None:
+    """Record a correction with the items it is about (``items`` empty = every item)."""
+    ledger = payload.get(REQUIREMENTS_KEY)
+    reqs = [i for i in ledger if isinstance(i, Mapping)] if isinstance(ledger, list) else []
+    corrections = list(payload.get(FOUNDER_CORRECTIONS_KEY) or [])
+    corrections.append(
+        {"decision_id": decision_id, "text": text, "items": infer_correction_items(text, reqs)}
+    )
+    payload[FOUNDER_CORRECTIONS_KEY] = corrections
 
 
 REQUIREMENT_KINDS = ("do", "guard", "done", "constraint")
