@@ -41,11 +41,11 @@ from backend.workflow.domain.requirements import (
     definition_in,
     imported_helper_sources,
     is_python_path,
-    named_definition,
     named_identifiers,
     py_definition_index,
     relevant_hunks,
     split_test_id,
+    ts_definition_candidates,
 )
 
 if TYPE_CHECKING:
@@ -373,8 +373,8 @@ class _DefinitionFinder:
         if index is not None:
             found = [(c, cap_definition(b) or "") for c, b in definition_candidates(index, name)]
         elif text:
-            one = await asyncio.to_thread(named_definition, text, name, path)
-            found = [("", one)] if one else []
+            cands = await asyncio.to_thread(ts_definition_candidates, text, name)
+            found = [(c, cap_definition(b) or "") for c, b in cands]
         else:
             found = []
         self._found[(path, name)] = found
@@ -425,7 +425,7 @@ class _DefinitionFinder:
                 used += len(entry) + 2
                 fitted += 1
             if not fitted:
-                skipped.append(name)
+                skipped.append(f"{name} ({', '.join(where)})")
             elif fitted < len(hits):
                 left = len(hits) - fitted
                 notes.append(

@@ -195,3 +195,44 @@ async def test_concurrent_items_all_see_a_definition_in_an_uncited_changed_file(
     rows = [_row(f"R{i}", "`schedule_max_per_workspace` is 20") for i in range(3)]
     shown = await asyncio.gather(*(excerpt(r) for r in rows))
     assert all("schedule_max_per_workspace: int = 20" in s for s in shown)
+
+
+_TS_TWO = """\
+class Foo {
+  run() {
+    return 'foo-run';
+  }
+}
+
+class Bar {
+  run() {
+    return 'bar-run';
+  }
+}
+"""
+
+
+async def test_ts_qualified_name_gets_that_classes_definition() -> None:
+    box = _Box({"a.ts": _TS_TWO}, ["a.ts"])
+    shown = await _excerpt(box)(_row("R1", "`Bar.run` works", paths=["a.ts"]))
+    assert "bar-run" in shown
+    assert "foo-run" not in shown
+
+
+async def test_ts_bare_name_reveals_both_locations() -> None:
+    box = _Box({"a.ts": _TS_TWO}, ["a.ts"])
+    shown = await _excerpt(box)(_row("R1", "`run` works", paths=["a.ts"]))
+    assert "foo-run" in shown
+    assert "bar-run" in shown
+    assert "a.ts (Foo)" in shown
+    assert "a.ts (Bar)" in shown
+
+
+async def test_out_of_room_names_still_give_locations() -> None:
+    big = "".join(f"const CONST_{i:03d} = '{'x' * 400}';\n" for i in range(30))
+    box = _Box({"s.ts": big + _TS_TWO.replace("'bar-run'", repr("y" * 7000))}, ["s.ts"])
+    shown = await _excerpt(box)(
+        _row("R1", "`Bar.run` " + " ".join(f"`CONST_{i:03d}`" for i in range(30)), paths=["s.ts"])
+    )
+    assert "out of room:" in shown
+    assert "s.ts (Bar)" in shown or "s.ts (module level)" in shown
