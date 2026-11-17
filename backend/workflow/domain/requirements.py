@@ -624,6 +624,95 @@ def definition_in(text: str, name: str) -> str | None:
     return _top_level_definition(text.splitlines(), name)
 
 
+_TICKED_TOKEN = re.compile(r"`([^`\n]+)`")
+_IDENT_PATH = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\(\))?$")
+_MAX_IDENTIFIERS = 40
+_DEFINITION_CHARS = 2000
+
+
+def named_identifiers(*texts: str) -> list[str]:
+    """Identifiers backticked in ``texts`` (``Settings.max_x`` -> ``max_x``; ``f.py::test_x``
+    -> ``test_x``), in first-seen order. Prose and paths with slashes are not identifiers."""
+    out: dict[str, None] = {}
+    for text in texts:
+        for raw in _TICKED_TOKEN.findall(text or ""):
+            token = raw.strip().rpartition("::")[2].strip()
+            if not _IDENT_PATH.match(token):
+                continue
+            name = token.removesuffix("()").rpartition(".")[2]
+            if len(name) >= 3:
+                out.setdefault(name, None)
+    return list(out)[:_MAX_IDENTIFIERS]
+
+
+def py_definition_index(text: str) -> dict[str, str]:
+    """Every field/constant/function definition in a Python file, name -> source, from ONE
+    ``ast.parse``. A field or constant wins over a function of the same name. An unparsable
+    file has an empty index (never a guess)."""
+    import ast  # noqa: PLC0415
+
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return {}
+    lines = text.splitlines()
+
+    def span(node: ast.AST, first: int) -> str:
+        end = getattr(node, "end_lineno", None) or first
+        start = first
+        while start > 1 and lines[start - 2].lstrip().startswith("#"):
+            start -= 1  # the comment right above belongs to the definition
+        return "\n".join(lines[start - 1 : end])
+
+    funcs: dict[str, str] = {}
+    fields: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+            funcs.setdefault(node.name, span(node, first))
+        elif isinstance(node, ast.Module | ast.ClassDef):
+            for stmt in node.body:
+                targets: list[ast.expr] = []
+                if isinstance(stmt, ast.AnnAssign):
+                    targets = [stmt.target]
+                elif isinstance(stmt, ast.Assign):
+                    targets = list(stmt.targets)
+                for t in targets:
+                    if isinstance(t, ast.Name):
+                        fields.setdefault(t.id, span(stmt, stmt.lineno))
+    return {**funcs, **fields}
+
+
+def is_python_path(path: str) -> bool:
+    return path.endswith((".py", ".pyi"))
+
+
+def definition_from_index(index: dict[str, str], name: str) -> str | None:
+    found = index.get(name)
+    return found[:_DEFINITION_CHARS] if found else None
+
+
+def named_definition(text: str, name: str, path: str) -> str | None:
+    """The definition of ``name`` in ``text``: a field/constant's statement (with the comment
+    above it) or a function/test's whole body. ``None`` when it is not found — never a guess."""
+    if is_python_path(path):
+        found = py_definition_index(text).get(name)
+    else:
+        found = definition_in(text, name)
+        if found is None:
+            lines = text.splitlines()
+            field = re.compile(
+                rf"^\s+(?:readonly\s+|public\s+|private\s+)*{re.escape(name)}\s*[?!]?\s*[:=]"
+            )
+            at = next((i for i, ln in enumerate(lines) if field.search(ln)), None)
+            if at is not None:
+                first = at
+                while first > 0 and lines[first - 1].lstrip().startswith(("//", "#", "*", "/*")):
+                    first -= 1
+                found = "\n".join(lines[first : at + 1])
+    return found[:_DEFINITION_CHARS] if found else None
+
+
 _PY_FROM = re.compile(r"^from\s+([.\w]+)\s+import\s+(\([^)]*\)|[^\n#]+)", re.M)
 _PY_IMPORT = re.compile(r"^import\s+([\w.]+)(?:\s+as\s+(\w+))?", re.M)
 _TS_NAMED = re.compile(r"^import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+[\"']([^\"']+)[\"']", re.M)
@@ -900,6 +989,11 @@ __all__ = [
     "cited_test_body",
     "cited_test_helpers",
     "definition_in",
+    "definition_from_index",
+    "is_python_path",
+    "named_definition",
+    "py_definition_index",
+    "named_identifiers",
     "imported_helper_sources",
     "relevant_hunks",
     "unevidenced",

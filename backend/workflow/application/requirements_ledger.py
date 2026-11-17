@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import shlex
@@ -35,8 +36,13 @@ from backend.workflow.domain.requirements import (
     check_ledger,
     cited_test_body,
     cited_test_helpers,
+    definition_from_index,
     definition_in,
     imported_helper_sources,
+    is_python_path,
+    named_definition,
+    named_identifiers,
+    py_definition_index,
     relevant_hunks,
     split_test_id,
 )
@@ -57,6 +63,12 @@ _JUDGE_CONCURRENCY = 3
 #: What the judge reads of the cited evidence, per path and in total.
 _PATH_EXCERPT_CHARS = 5000
 _EVIDENCE_CHARS = 10000
+#: The "named definitions" block has its own room — it never takes from the lead or the paths.
+_DEFINITIONS_CHARS = 6000
+#: How many changed files are searched for the names an item mentions.
+_MAX_SEARCHED_FILES = 200
+#: Only code is searched for a definition; a .json or .md never holds one.
+_CODE_EXTS = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 #: How much of a cited file with no diff is read to find what the item names.
 _FILE_READ_BYTES = 200_000
 #: Lines per chunk of such a file — the unit ``relevant_hunks`` ranks and keeps.
@@ -288,9 +300,123 @@ def cited_tests(box: SandboxSession) -> MissingTests:
     return _missing
 
 
+def _is_code(path: str) -> bool:
+    return path.lower().endswith(_CODE_EXTS)
+
+
+class _DefinitionFinder:
+    """Finds the definitions an item names, in the cited paths and the files this run changed.
+
+    Lookups are cached for the life of the finder (one judging round), so every item naming
+    the same thing is shown the same definition."""
+
+    def __init__(self, box: SandboxSession, baseline: str | None) -> None:
+        self._box, self._baseline = box, baseline
+        # path -> task of (python index | None, text): a file is read and parsed ONCE however
+        # many names, and however many concurrent items, ask for it.
+        self._files: dict[str, asyncio.Task[tuple[dict[str, str] | None, str]]] = {}
+        self._found: dict[tuple[str, str], str | None] = {}
+        self._changed: asyncio.Task[list[str]] | None = None
+
+    async def _changed_files(self) -> list[str]:
+        # One computation, awaited by every concurrent caller: none sees a half-built list.
+        if self._changed is None:
+            self._changed = asyncio.ensure_future(self._compute_changed())
+        return await self._changed
+
+    async def _compute_changed(self) -> list[str]:
+        if not self._baseline:
+            return []
+        box = self._box
+        mount = shlex.quote(box.workspace_mount)
+        names: list[str] = []
+        # Tracked edits since the baseline AND untracked new files: a module the run just
+        # created is not in ``git diff`` but must be found too.
+        for cmd in (
+            f"git -C {mount} diff --name-only {shlex.quote(self._baseline)}",
+            f"git -C {mount} ls-files --others --exclude-standard",
+        ):
+            with contextlib.suppress(Exception):  # no file list: only cited paths are searched
+                result = await box.exec(cmd, timeout_s=10.0, shell=True)  # noqa: S604
+                if result.exit_code == 0 and not result.timed_out:
+                    names += [ln.strip() for ln in (result.stdout or "").splitlines()]
+        return list(
+            dict.fromkeys(
+                n
+                for n in names
+                if n and not n.startswith(("+", "-", "@")) and " " not in n and _is_code(n)
+            )
+        )[:_MAX_SEARCHED_FILES]
+
+    async def _load(self, path: str) -> tuple[dict[str, str] | None, str]:
+        text = await _test_file(self._box, path)
+        if text is None:
+            return None, ""
+        if is_python_path(path):
+            # Parsed off the event loop, once per file.
+            return await asyncio.to_thread(py_definition_index, text), text
+        return None, text
+
+    async def _definition(self, path: str, name: str) -> str | None:
+        if (path, name) in self._found:
+            return self._found[(path, name)]
+        if path not in self._files:
+            self._files[path] = asyncio.ensure_future(self._load(path))
+        index, text = await self._files[path]
+        if index is not None:
+            found = definition_from_index(index, name)
+        elif text:
+            found = await asyncio.to_thread(named_definition, text, name, path)
+        else:
+            found = None
+        self._found[(path, name)] = found
+        return found
+
+    async def block(self, row: Mapping[str, Any], paths: list[str]) -> str:
+        names = named_identifiers(
+            str(row.get("text", "")),
+            str(row.get("note", "")),
+            *(f"`{t}`" for t in row.get("tests") or []),
+        )
+        if not names:
+            return ""
+        test_files = [s[0] for t in row.get("tests") or [] if (s := split_test_id(str(t)))]
+        scope = [
+            p
+            for p in dict.fromkeys([*paths, *test_files, *await self._changed_files()])
+            if _is_code(p)
+        ]
+        header = "--- named definitions (looked up in the changed tree):"
+        shown: list[str] = []
+        skipped: list[str] = []
+        used = len(header)
+        for name in names:
+            for path in scope:
+                body = await self._definition(path, name)
+                if body is None:
+                    continue
+                entry = f"# {path}\n{body}"
+                if used + len(entry) + 2 > _DEFINITIONS_CHARS:
+                    skipped.append(name)
+                else:
+                    shown.append(entry)
+                    used += len(entry) + 2
+                break
+        if not shown and not skipped:
+            return ""
+        out = [header, *shown]
+        if skipped:
+            out.append(f"[... not shown, out of room: {', '.join(skipped)} ...]")
+        return "\n\n".join(out)
+
+
 def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
     """The judge's view of a row: the diff of each cited path against the run's baseline
     (working tree, so uncommitted edits show), or the file itself when git has nothing."""
+
+    # One round's lookups, shared by every item judged with this excerpt: two items naming
+    # the same thing are shown the same definition, not each their own cut.
+    finder = _DefinitionFinder(box, baseline)
 
     async def _excerpt(row: Mapping[str, Any]) -> str:
         # The cited tests and the agent's note come FIRST and are never cut by the paths'
@@ -331,7 +457,8 @@ def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
             room -= len(part) + 2
         if not_shown:
             parts.append(f"[... not shown, out of room: {', '.join(not_shown)} ...]")
-        return "\n\n".join(x for x in (head, "\n\n".join(parts)) if x)
+        definitions = await finder.block(row, paths)
+        return "\n\n".join(x for x in (head, "\n\n".join(parts), definitions) if x)
 
     async def _path_diff(path: str) -> str:
         """``path`` against the baseline (working tree), or its head when git has nothing."""
