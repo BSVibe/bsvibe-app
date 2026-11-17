@@ -17,6 +17,7 @@ Safety properties (the vault path is founder/agent-supplied, the host is the ser
 
 from __future__ import annotations
 
+import errno
 import fnmatch
 import os
 from collections.abc import Iterator
@@ -70,6 +71,7 @@ class VaultScanner:
             self._exclude_patterns = tuple(exclude_patterns)
         self.skipped_outside: list[str] = []
         self.skipped_symlinks: int = 0
+        self.skipped_unreadable: int = 0
         self.entries_visited: int = 0
         self.bytes_read: int = 0
         self.stop_reason: str | None = None
@@ -86,7 +88,7 @@ class VaultScanner:
         stack: list[Path] = [root]
         while stack:
             directory = stack.pop()
-            entries = _list_dir(directory)
+            entries = self._entries(directory)
             subdirs: list[Path] = []
             for entry in entries:
                 self.entries_visited += 1
@@ -95,8 +97,7 @@ class VaultScanner:
                     return
                 path = Path(entry.path)
                 rel = path.relative_to(root).as_posix()
-                if not _resolves_within(path, boundary):
-                    self.skipped_outside.append(rel)
+                if not self._admit(path, rel, boundary):
                     continue
                 if entry.is_symlink():
                     # Never followed, even when the target is inside the root.
@@ -123,6 +124,25 @@ class VaultScanner:
             # Reverse so the stack pops in sorted order.
             stack.extend(reversed(subdirs))
 
+    def _entries(self, directory: Path) -> list[os.DirEntry[str]]:
+        """Directory entries; an unlistable directory is counted, not silently dropped."""
+        listed = _list_dir(directory)
+        if listed is None:
+            self.skipped_unreadable += 1
+            return []
+        return listed
+
+    def _admit(self, path: Path, rel: str, boundary: Path) -> bool:
+        """True when ``path`` resolves inside the boundary; otherwise count why not."""
+        within = _resolves_within(path, boundary)
+        if within is None:
+            self.skipped_unreadable += 1
+            return False
+        if not within:
+            self.skipped_outside.append(rel)
+            return False
+        return True
+
     def _prepare_root(self) -> tuple[Path, Path]:
         if not self._root.exists():
             raise FileNotFoundError(f"obsidian: vault root not found: {self._root}")
@@ -139,8 +159,11 @@ class VaultScanner:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         try:
             fd = os.open(path, flags)
-        except OSError:
-            self.skipped_symlinks += 1
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                self.skipped_symlinks += 1  # O_NOFOLLOW refused a symlink
+            else:
+                self.skipped_unreadable += 1
             return None
         remaining = self._max_bytes - self.bytes_read
         with os.fdopen(fd, "rb") as fh:
@@ -169,19 +192,21 @@ class VaultScanner:
         return False
 
 
-def _list_dir(directory: Path) -> list[os.DirEntry[str]]:
+def _list_dir(directory: Path) -> list[os.DirEntry[str]] | None:
+    """Sorted entries, or ``None`` when the directory cannot be listed."""
     try:
         with os.scandir(directory) as it:
             return sorted(it, key=lambda e: e.name)
     except OSError:
-        return []
+        return None
 
 
-def _resolves_within(path: Path, boundary: Path) -> bool:
+def _resolves_within(path: Path, boundary: Path) -> bool | None:
+    """True/False for inside/outside; ``None`` when resolving failed (unreadable)."""
     try:
         return _is_within(path.resolve(), boundary)
     except (OSError, RuntimeError):
-        return False
+        return None
 
 
 def _is_within(path: Path, boundary: Path) -> bool:

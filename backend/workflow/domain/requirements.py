@@ -838,6 +838,93 @@ def definition_from_index(index: dict[str, str], name: str) -> str | None:
     return cap_definition(found[0][1]) if found else None
 
 
+_TS_CLASS = re.compile(
+    r"^(\s*)(?:export\s+)?(?:default\s+)?(?:declare\s+)?"
+    r"(?:(?:abstract\s+)?class\s+|interface\s+|type\s+(?=[A-Za-z_$][\w$]*[^=\n]*=\s*\{?\s*$))"
+    r"([A-Za-z_$][\w$]*)"
+)
+_TS_COMMENT = ("//", "#", "*", "/*", "@")
+
+
+def _indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _ts_field_anywhere(lines: list[str], bare: str) -> list[tuple[str, str]]:
+    """Last resort: an indented field anywhere (an object literal, a nested type), owner ``""``."""
+    field = re.compile(rf"^[ \t]+{re.escape(bare)}\s*[?!]?\s*[:=]")
+    out: list[tuple[str, str]] = []
+    for i, line in enumerate(lines):
+        if not field.match(line):
+            continue
+        last = i
+        while last + 1 < len(lines) and _indent_of(lines[last + 1]) > _indent_of(line):
+            last += 1
+        first = i
+        while first > 0 and lines[first - 1].lstrip().startswith(_TS_COMMENT):
+            first -= 1
+        out.append(("", "\n".join(lines[first : last + 1]).rstrip()))
+    return out
+
+
+def ts_definition_candidates(text: str, name: str) -> list[tuple[str, str]]:
+    """``(class, source)`` for every definition of ``name`` in one TS/JS file.
+
+    Top level -> class ``""``; a field or method in a class body -> that class's name.
+    ``Class.name`` -> that class's definition only (``[]`` when it has none: the caller then
+    falls back to the bare name). A bare name -> every definition."""
+    want_cls, _, bare = name.rpartition(".")
+    want_cls = want_cls.rpartition(".")[2]
+    lines = text.splitlines()
+    out: list[tuple[str, str]] = []
+    if not want_cls:
+        top = definition_in(text, bare)
+        if top:
+            out.append(("", top))
+    member = re.compile(
+        r"^\s*(?:(?:public|private|protected|static|async|readonly|override|abstract|get|set)\s+)*"
+        rf"\*?\s*{re.escape(bare)}\s*[?!]?\s*(?:\(|<|[:=;])"
+    )
+    for i, line in enumerate(lines):
+        m = _TS_CLASS.match(line)
+        if not m or (want_cls and want_cls != m.group(2)):
+            continue
+        indent, cls = len(m.group(1)), m.group(2)
+        end = i + 1
+        while end < len(lines) and (not lines[end].strip() or _indent_of(lines[end]) > indent):
+            end += 1
+        body_indent = next(
+            (
+                _indent_of(ln)
+                for ln in lines[i + 1 : end]
+                if ln.strip() and not ln.lstrip().startswith(_TS_COMMENT)
+            ),
+            None,
+        )
+        if body_indent is None:
+            continue
+        at = i + 1
+        while at < end:
+            ln = lines[at]
+            if ln.strip() and _indent_of(ln) == body_indent and member.match(ln):
+                first = at
+                while first > i + 1 and lines[first - 1].lstrip().startswith(_TS_COMMENT):
+                    first -= 1
+                last = at
+                while last + 1 < end and (
+                    not lines[last + 1].strip()
+                    or _indent_of(lines[last + 1]) > body_indent
+                    or lines[last + 1].lstrip().startswith(_CLOSERS)
+                ):
+                    last += 1
+                out.append((cls, "\n".join(lines[first : last + 1]).rstrip()))
+                at = last
+            at += 1
+    if out or want_cls:
+        return out
+    return _ts_field_anywhere(lines, bare)
+
+
 def named_definition(text: str, name: str, path: str) -> str | None:
     """The definition of ``name`` in ``text``: a field/constant's statement (with the comment
     above it) or a function/test's whole body. ``None`` when it is not found — never a guess."""
@@ -847,19 +934,10 @@ def named_definition(text: str, name: str, path: str) -> str | None:
             cands = definition_candidates(py_definition_index(text), name.rpartition(".")[2])
         found = cands[0][1] if cands else None
     else:
-        name = name.rpartition(".")[2]
-        found = definition_in(text, name)
-        if found is None:
-            lines = text.splitlines()
-            field = re.compile(
-                rf"^\s+(?:readonly\s+|public\s+|private\s+)*{re.escape(name)}\s*[?!]?\s*[:=]"
-            )
-            at = next((i for i, ln in enumerate(lines) if field.search(ln)), None)
-            if at is not None:
-                first = at
-                while first > 0 and lines[first - 1].lstrip().startswith(("//", "#", "*", "/*")):
-                    first -= 1
-                found = "\n".join(lines[first : at + 1])
+        cands = ts_definition_candidates(text, name)
+        if not cands and "." in name:
+            cands = ts_definition_candidates(text, name.rpartition(".")[2])
+        found = cands[0][1] if cands else None
     return cap_definition(found)
 
 
@@ -1144,6 +1222,7 @@ __all__ = [
     "definition_from_index",
     "is_python_path",
     "named_definition",
+    "ts_definition_candidates",
     "py_definition_index",
     "named_identifiers",
     "imported_helper_sources",

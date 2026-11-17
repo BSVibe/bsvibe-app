@@ -15,10 +15,13 @@ from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.application.run_detail import _run_verification
 from backend.workflow.application.verification_service import VerificationService
 from backend.workflow.domain.artifact_review import (
+    METHOD_UNCERTAIN,
     NO_PRODUCTION_CALL,
     NewSymbol,
+    _calls_section,
     new_public_symbols,
     parse_review,
+    production_calls,
 )
 from backend.workflow.domain.requirements import REQUIREMENTS_KEY
 from backend.workflow.domain.verifier_contract import VerificationCheck, VerificationContract
@@ -215,6 +218,79 @@ def test_the_symbol_scan_skips_tests_privates_and_moved_definitions() -> None:
     )
 
     assert new_public_symbols(diff) == [NewSymbol("fresh", "a.py")]
+
+
+def test_a_symbol_only_in_comments_and_strings_has_no_production_call() -> None:
+    sym = NewSymbol("close_widget", "backend/w.py")
+    grep = (
+        "backend/w.py:1:def close_widget(x):\n"
+        "backend/a.py:3:    # close_widget(x) later\n"
+        'backend/a.py:4:    msg = "call close_widget(x) now"\n'
+        "backend/a.py:5:    note = 'close_widget'\n"
+        "backend/a.py:6:    close_widget_all = 1\n"
+        "backend/a.py:7:    obj.close_widget\n"
+        "web/a.ts:2:  // close_widget(x)\n"
+        "web/a.ts:3:  const s = `close_widget(x)`;\n"
+        "web/a.ts:4:  const t = 'it\\'s close_widget(x)';\n"
+    )
+
+    assert production_calls(sym, grep) == []
+
+
+def test_a_call_in_a_production_file_is_reported() -> None:
+    sym = NewSymbol("close_widget", "backend/w.py")
+    grep = (
+        "backend/a.py:3:    # close_widget(x) later\n"
+        "backend/b.py:9:    close_widget(x)\n"
+        "backend/c.py:2:    close_widget (x)  # trailing\n"
+        "backend/d.py:1:from backend.w import close_widget\n"
+        "web/e.ts:5:  close_widget(x); // call\n"
+        "tests/test_w.py:1:close_widget(x)\n"
+    )
+
+    assert production_calls(sym, grep) == [
+        "backend/b.py:9:    close_widget(x)",
+        "backend/c.py:2:    close_widget (x)  # trailing",
+        "backend/d.py:1:from backend.w import close_widget",
+        "web/e.ts:5:  close_widget(x); // call",
+    ]
+
+
+def test_a_method_counts_only_dot_calls_and_is_flagged_uncertain() -> None:
+    diff = "+++ b/backend/w.py\n+class W:\n+    def run(self):\n"
+    [_, method] = new_public_symbols(diff)
+    assert method == NewSymbol("run", "backend/w.py", True)
+
+    grep = "backend/a.py:1:    run(x)\nbackend/a.py:2:    job.run()\nbackend/a.py:3:    x = 'a.run()'\n"
+    assert production_calls(method, grep) == ["backend/a.py:2:    job.run()"]
+    section = _calls_section({method: ["backend/a.py:2:    job.run()"]})
+    assert METHOD_UNCERTAIN in section
+
+
+def test_a_bare_reference_and_multiline_import_count_as_uses() -> None:
+    sym = NewSymbol("on_event", "backend/w.py")
+    grep = (
+        "backend/w.py:1:def on_event(e):\n"
+        "backend/a.py:4:    register(handler=on_event)\n"
+        "backend/b.py:2:    handlers = [on_event]\n"
+        "backend/c.py:3:    on_event,\n"
+        '    backend/d.py:1:__all__ = ["on_event"]\n'.lstrip()
+        + "backend/e.py:5:    other.on_event\n"
+        "backend/f.py:6:    # on_event is wired later\n"
+    )
+
+    assert production_calls(sym, grep) == [
+        "backend/a.py:4:    register(handler=on_event)",
+        "backend/b.py:2:    handlers = [on_event]",
+        "backend/c.py:3:    on_event,",
+    ]
+
+
+def test_a_bound_method_reference_counts_for_a_method() -> None:
+    method = NewSymbol("run", "backend/w.py", True)
+    grep = "backend/a.py:2:    spawn(job.run)\nbackend/a.py:3:    run(x)\n"
+
+    assert production_calls(method, grep) == ["backend/a.py:2:    spawn(job.run)"]
 
 
 def test_unparseable_review_output_is_dropped() -> None:
