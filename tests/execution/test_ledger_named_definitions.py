@@ -107,9 +107,54 @@ async def test_names_past_the_cap_are_declared_not_shown() -> None:
 
 def test_identifier_extraction() -> None:
     assert named_identifiers("`a/b.py` `Foo.bar_baz()` `t.py::test_it` `two words`") == [
-        "bar_baz",
+        "Foo.bar_baz",
         "test_it",
     ]
+
+
+_TWO_CLASSES = "class A:\n    limit: int = 1\n\n\nclass B:\n    limit: int = 2\n"
+
+
+async def test_a_definition_cut_at_the_cap_says_so() -> None:
+    body = "".join(f"    x{i} = {i}\n" for i in range(400))
+    box = _Box({"s.py": f"def big():\n{body}"}, ["s.py"])
+    shown = await _excerpt(box)(_row("R1", "`big` does it"))
+    assert "[... truncated, " in shown
+    assert " more chars ...]" in shown
+    assert "x399" not in shown
+    whole = await _excerpt(_Box({"s.py": _SETTINGS}, ["s.py"]))(_row("R1", "`resolve_credentials`"))
+    assert "[... truncated" not in whole
+
+
+async def test_a_qualified_name_gets_that_classes_definition() -> None:
+    box = _Box({"s.py": _TWO_CLASSES}, ["s.py"])
+    shown = await _excerpt(box)(_row("R1", "`B.limit` is 2"))
+    assert "limit: int = 2" in shown
+    assert "limit: int = 1" not in shown
+
+
+async def test_a_bare_name_with_two_locations_shows_both() -> None:
+    box = _Box({"s.py": _TWO_CLASSES}, ["s.py"])
+    shown = await _excerpt(box)(_row("R1", "`limit` is 2"))
+    assert "s.py (A)" in shown
+    assert "s.py (B)" in shown
+    assert "limit: int = 1" in shown
+    assert "limit: int = 2" in shown
+
+
+async def test_a_bare_name_with_a_location_left_out_declares_it() -> None:
+    big = "class A:\n    limit = '" + "x" * 1500 + "'\n"
+    files = {f"m{i}.py": big.replace("class A", f"class C{i}") for i in range(6)}
+    box = _Box(files, list(files))
+    shown = await _excerpt(box)(_row("R1", "`limit` is set", paths=list(files)))
+    assert "다른 정의" in shown
+    assert "m5.py (C5)" in shown
+
+
+async def test_a_qualifier_with_no_such_class_falls_back_to_the_bare_name() -> None:
+    box = _Box({"s.py": _SETTINGS}, ["s.py"])
+    shown = await _excerpt(box)(_row("R1", "`mod.schedule_max_per_workspace` is 20"))
+    assert "schedule_max_per_workspace: int = 20" in shown
 
 
 def test_typescript_definitions_are_found_without_ast() -> None:

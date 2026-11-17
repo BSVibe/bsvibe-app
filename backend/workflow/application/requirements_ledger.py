@@ -33,10 +33,11 @@ from backend.workflow.domain.requirements import (
     REQUIREMENTS_KEY,
     GateFacts,
     build_ledger,
+    cap_definition,
     check_ledger,
     cited_test_body,
     cited_test_helpers,
-    definition_from_index,
+    definition_candidates,
     definition_in,
     imported_helper_sources,
     is_python_path,
@@ -86,7 +87,11 @@ _JUDGE_SYSTEM = (
     "ONLY when the evidence shown CONFLICTS with the requirement (wrong behaviour, a different "
     "thing, or only part of it). A definition or hunk missing from the excerpt is not a "
     "conflict: use "
-    '"cannot_determine" when the excerpt is cut off or does not show enough to tell.'
+    '"cannot_determine" when the excerpt is cut off or does not show enough to tell. '
+    'A definition that ends in "[... truncated, N more chars ...]" is NOT the whole '
+    "definition: do not judge what the cut-off part might contain. When a name has several "
+    "definitions at different locations, only the one at the location the requirement means "
+    'counts; a note about "other definitions" means some were not shown.'
 )
 
 ContentKey = Callable[[Mapping[str, Any]], Awaitable[str]]
@@ -315,7 +320,7 @@ class _DefinitionFinder:
         # path -> task of (python index | None, text): a file is read and parsed ONCE however
         # many names, and however many concurrent items, ask for it.
         self._files: dict[str, asyncio.Task[tuple[dict[str, str] | None, str]]] = {}
-        self._found: dict[tuple[str, str], str | None] = {}
+        self._found: dict[tuple[str, str], list[tuple[str, str]]] = {}
         self._changed: asyncio.Task[list[str]] | None = None
 
     async def _changed_files(self) -> list[str]:
@@ -357,20 +362,33 @@ class _DefinitionFinder:
             return await asyncio.to_thread(py_definition_index, text), text
         return None, text
 
-    async def _definition(self, path: str, name: str) -> str | None:
+    async def _definition(self, path: str, name: str) -> list[tuple[str, str]]:
+        """``(class, source)`` for each definition of ``name`` in ``path`` (class ``""`` when
+        it is not in one)."""
         if (path, name) in self._found:
             return self._found[(path, name)]
         if path not in self._files:
             self._files[path] = asyncio.ensure_future(self._load(path))
         index, text = await self._files[path]
         if index is not None:
-            found = definition_from_index(index, name)
+            found = [(c, cap_definition(b) or "") for c, b in definition_candidates(index, name)]
         elif text:
-            found = await asyncio.to_thread(named_definition, text, name, path)
+            one = await asyncio.to_thread(named_definition, text, name, path)
+            found = [("", one)] if one else []
         else:
-            found = None
+            found = []
         self._found[(path, name)] = found
         return found
+
+    async def _hits(self, scope: list[str], name: str) -> list[tuple[str, str, str]]:
+        """``(path, class, source)`` for every definition of ``name`` in the searched files:
+        a qualified name's own first, and the bare name only when it has none."""
+        wants = (name, name.rpartition(".")[2]) if "." in name else (name,)
+        for want in wants:
+            hits = [(p, c, b) for p in scope for c, b in await self._definition(p, want)]
+            if hits:
+                return hits
+        return []
 
     async def block(self, row: Mapping[str, Any], paths: list[str]) -> str:
         names = named_identifiers(
@@ -390,21 +408,33 @@ class _DefinitionFinder:
         shown: list[str] = []
         skipped: list[str] = []
         used = len(header)
+        notes: list[str] = []
         for name in names:
-            for path in scope:
-                body = await self._definition(path, name)
-                if body is None:
-                    continue
-                entry = f"# {path}\n{body}"
+            hits = await self._hits(scope, name)
+            if not hits:
+                continue
+            many = len(hits) > 1
+            where = [f"{p} ({c or 'module level'})" for p, c, _ in hits]
+            fitted = 0
+            for (path, _cls, body), loc in zip(hits, where, strict=True):
+                # Several locations are all named: none is passed off as THE definition.
+                entry = f"# {loc}\n{body}" if many else f"# {path}\n{body}"
                 if used + len(entry) + 2 > _DEFINITIONS_CHARS:
-                    skipped.append(name)
-                else:
-                    shown.append(entry)
-                    used += len(entry) + 2
-                break
+                    continue
+                shown.append(entry)
+                used += len(entry) + 2
+                fitted += 1
+            if not fitted:
+                skipped.append(name)
+            elif fitted < len(hits):
+                left = len(hits) - fitted
+                notes.append(
+                    f"[... `{name}`: 다른 정의 {left}개 있음, not shown; "
+                    f"all locations: {', '.join(where)} ...]"
+                )
         if not shown and not skipped:
             return ""
-        out = [header, *shown]
+        out = [header, *shown, *notes]
         if skipped:
             out.append(f"[... not shown, out of room: {', '.join(skipped)} ...]")
         return "\n\n".join(out)
