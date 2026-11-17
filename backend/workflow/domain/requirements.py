@@ -631,17 +631,19 @@ _DEFINITION_CHARS = 2000
 
 
 def named_identifiers(*texts: str) -> list[str]:
-    """Identifiers backticked in ``texts`` (``Settings.max_x`` -> ``max_x``; ``f.py::test_x``
-    -> ``test_x``), in first-seen order. Prose and paths with slashes are not identifiers."""
+    """Identifiers backticked in ``texts``, in first-seen order. A qualifier is kept
+    (``Settings.max_x`` -> ``Settings.max_x``; ``a.b.C.name`` -> ``C.name``): dropping it
+    showed another class's field of the same name. ``f.py::test_x`` -> ``test_x``. Prose and
+    paths with slashes are not identifiers."""
     out: dict[str, None] = {}
     for text in texts:
         for raw in _TICKED_TOKEN.findall(text or ""):
             token = raw.strip().rpartition("::")[2].strip()
             if not _IDENT_PATH.match(token):
                 continue
-            name = token.removesuffix("()").rpartition(".")[2]
-            if len(name) >= 3:
-                out.setdefault(name, None)
+            parts = token.removesuffix("()").split(".")
+            if len(parts[-1]) >= 3:
+                out.setdefault(".".join(parts[-2:]), None)
     return list(out)[:_MAX_IDENTIFIERS]
 
 
@@ -664,14 +666,20 @@ def py_definition_index(text: str) -> dict[str, str]:
             start -= 1  # the comment right above belongs to the definition
         return "\n".join(lines[start - 1 : end])
 
+    def func_span(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+        return span(node, min([node.lineno, *(d.lineno for d in node.decorator_list)]))
+
     funcs: dict[str, str] = {}
     fields: dict[str, str] = {}
+    qualified: dict[str, str] = {}  # ``Class.name`` -> source, fields and methods
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
-            funcs.setdefault(node.name, span(node, first))
+            funcs.setdefault(node.name, func_span(node))
         elif isinstance(node, ast.Module | ast.ClassDef):
+            owner = node.name if isinstance(node, ast.ClassDef) else None
             for stmt in node.body:
+                if owner and isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef):
+                    qualified.setdefault(f"{owner}.{stmt.name}", func_span(stmt))
                 targets: list[ast.expr] = []
                 if isinstance(stmt, ast.AnnAssign):
                     targets = [stmt.target]
@@ -679,25 +687,61 @@ def py_definition_index(text: str) -> dict[str, str]:
                     targets = list(stmt.targets)
                 for t in targets:
                     if isinstance(t, ast.Name):
-                        fields.setdefault(t.id, span(stmt, stmt.lineno))
-    return {**funcs, **fields}
+                        body = span(stmt, stmt.lineno)
+                        fields.setdefault(t.id, body)
+                        if owner:
+                            qualified.setdefault(f"{owner}.{t.id}", body)
+    return {**funcs, **fields, **qualified}
 
 
 def is_python_path(path: str) -> bool:
     return path.endswith((".py", ".pyi"))
 
 
+def cap_definition(found: str | None) -> str | None:
+    """``found`` cut at the cap, with the cut declared: a judge must not take a cut function
+    or test body for the whole definition."""
+    if not found:
+        return None
+    if len(found) <= _DEFINITION_CHARS:
+        return found
+    more = len(found) - _DEFINITION_CHARS
+    return f"{found[:_DEFINITION_CHARS]}\n[... truncated, {more} more chars ...]"
+
+
+def definition_candidates(index: dict[str, str], name: str) -> list[tuple[str, str]]:
+    """``(class, source)`` for every definition of ``name`` in one indexed Python file.
+
+    ``Class.name`` -> that class's definition only (``[]`` when it has none: the caller then
+    falls back to the bare name). A bare name -> every distinct definition: one per class
+    that has it, plus a module-level one (class ``""``)."""
+    if "." in name:
+        found = index.get(name)
+        return [(name.rpartition(".")[0], found)] if found else []
+    out = [
+        (key.rpartition(".")[0], body) for key, body in index.items() if key.endswith(f".{name}")
+    ]
+    plain = index.get(name)
+    if plain and not any(body == plain for _, body in out):
+        out.insert(0, ("", plain))
+    return out
+
+
 def definition_from_index(index: dict[str, str], name: str) -> str | None:
-    found = index.get(name)
-    return found[:_DEFINITION_CHARS] if found else None
+    found = definition_candidates(index, name)
+    return cap_definition(found[0][1]) if found else None
 
 
 def named_definition(text: str, name: str, path: str) -> str | None:
     """The definition of ``name`` in ``text``: a field/constant's statement (with the comment
     above it) or a function/test's whole body. ``None`` when it is not found — never a guess."""
     if is_python_path(path):
-        found = py_definition_index(text).get(name)
+        cands = definition_candidates(py_definition_index(text), name)
+        if not cands and "." in name:
+            cands = definition_candidates(py_definition_index(text), name.rpartition(".")[2])
+        found = cands[0][1] if cands else None
     else:
+        name = name.rpartition(".")[2]
         found = definition_in(text, name)
         if found is None:
             lines = text.splitlines()
@@ -710,7 +754,7 @@ def named_definition(text: str, name: str, path: str) -> str | None:
                 while first > 0 and lines[first - 1].lstrip().startswith(("//", "#", "*", "/*")):
                     first -= 1
                 found = "\n".join(lines[first : at + 1])
-    return found[:_DEFINITION_CHARS] if found else None
+    return cap_definition(found)
 
 
 _PY_FROM = re.compile(r"^from\s+([.\w]+)\s+import\s+(\([^)]*\)|[^\n#]+)", re.M)
@@ -989,6 +1033,8 @@ __all__ = [
     "cited_test_body",
     "cited_test_helpers",
     "definition_in",
+    "cap_definition",
+    "definition_candidates",
     "definition_from_index",
     "is_python_path",
     "named_definition",
