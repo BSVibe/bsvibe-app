@@ -421,7 +421,7 @@ def test_nested_function_is_not_new_and_conditional_function_is_not_a_method() -
 
 
 def test_type_checking_function_call_is_found() -> None:
-    [foo] = new_public_symbols("+++ b/a.py\n+if True:\n+    def foo(): ...\n")
+    [foo] = new_public_symbols("+++ b/a.py\n+if TYPE_CHECKING:\n+    def foo(): ...\n")
     assert not foo.is_method
     grep = "backend/b.py:3:    foo()\n"
 
