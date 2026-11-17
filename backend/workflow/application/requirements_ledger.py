@@ -645,6 +645,22 @@ def _hash(excerpt: str) -> str:
     return hashlib.sha256(excerpt.encode()).hexdigest()[:16]
 
 
+def _relevant_corrections(
+    row: Mapping[str, Any],
+    corrections: Sequence[str],
+    correction_items: Sequence[Sequence[str]] | None,
+) -> list[str]:
+    """The corrections that belong in ``row``'s cache key (an unscoped one belongs in all)."""
+    if correction_items is None or len(correction_items) != len(corrections):
+        return list(corrections)
+    rid = str(row.get("id"))
+    return [
+        c
+        for c, items in zip(corrections, correction_items, strict=True)
+        if not items or rid in items
+    ]
+
+
 async def _keep_done(
     row: dict[str, Any],
     content: str,
@@ -678,6 +694,7 @@ async def judge_ledger(
     missing_tests: MissingTests | None = None,
     command_verdicts: Mapping[str, tuple[str, str]] | None = None,
     corrections: Sequence[str] = (),
+    correction_items: Sequence[Sequence[str]] | None = None,
     content_key: ContentKey | None = None,
 ) -> list[dict[str, Any]]:
     """Verdict rows. ``judge=False`` (another check already failed) leaves grounded rows
@@ -710,6 +727,9 @@ async def judge_ledger(
     gate = asyncio.Semaphore(_JUDGE_CONCURRENCY)
 
     async def _one(row: dict[str, Any]) -> None:
+        # Only the corrections about THIS row (or about no row in particular) are part of
+        # its cache key; the judge still sees them all.
+        relevant = _relevant_corrections(row, corrections, correction_items)
         missing = await missing_tests(row) if missing_tests is not None else []
         if missing:
             row["status"] = "rejected"
@@ -719,15 +739,15 @@ async def judge_ledger(
             )
             return
         if content_key is not None and await _keep_done(
-            row, await content_key(row), prior_done, corrections
+            row, await content_key(row), prior_done, relevant
         ):
             return
         shown = await excerpt(row)
         # A correction changes what "satisfies" means, so it is part of the cache key
         # (and absent from it when there is none — those verdicts are unchanged).
-        founder_key = "\n".join(corrections)
+        founder_key = "\n".join(relevant)
         row["excerpt_hash"] = _hash(
-            f"{row['text']}\n{shown}" + (f"\n#founder\n{founder_key}" if corrections else "")
+            f"{row['text']}\n{shown}" + (f"\n#founder\n{founder_key}" if relevant else "")
         )
         cached = prior.get((str(row["id"]), row["excerpt_hash"]))
         if cached is not None:
