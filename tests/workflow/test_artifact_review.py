@@ -267,6 +267,32 @@ def test_a_method_counts_only_dot_calls_and_is_flagged_uncertain() -> None:
     assert METHOD_UNCERTAIN in section
 
 
+def test_a_bare_reference_and_multiline_import_count_as_uses() -> None:
+    sym = NewSymbol("on_event", "backend/w.py")
+    grep = (
+        "backend/w.py:1:def on_event(e):\n"
+        "backend/a.py:4:    register(handler=on_event)\n"
+        "backend/b.py:2:    handlers = [on_event]\n"
+        "backend/c.py:3:    on_event,\n"
+        '    backend/d.py:1:__all__ = ["on_event"]\n'.lstrip()
+        + "backend/e.py:5:    other.on_event\n"
+        "backend/f.py:6:    # on_event is wired later\n"
+    )
+
+    assert production_calls(sym, grep) == [
+        "backend/a.py:4:    register(handler=on_event)",
+        "backend/b.py:2:    handlers = [on_event]",
+        "backend/c.py:3:    on_event,",
+    ]
+
+
+def test_a_bound_method_reference_counts_for_a_method() -> None:
+    method = NewSymbol("run", "backend/w.py", True)
+    grep = "backend/a.py:2:    spawn(job.run)\nbackend/a.py:3:    run(x)\n"
+
+    assert production_calls(method, grep) == ["backend/a.py:2:    spawn(job.run)"]
+
+
 def test_unparseable_review_output_is_dropped() -> None:
     assert parse_review("not json") is None
     assert parse_review('{"findings": "x"}') is None

@@ -178,18 +178,19 @@ METHOD_UNCERTAIN = "이름만 같은 다른 클래스의 호출일 수 있음"
 def production_calls(symbol: NewSymbol, grep_output: str) -> list[str]:
     """``path:line:text`` hits of ``git grep -n`` that really call ``symbol`` in production code.
 
-    Not a bare word match: comments and string literals are dropped, and only ``name(`` (spaces
-    allowed) or an import of the name counts. A method counts only as ``.name(``.
+    Comments and string literals (so ``__all__`` entries too) are blanked first. A function,
+    class or constant then counts on any occurrence of the name that is not its definition line
+    and not preceded by ``.`` — a call, an argument passed without parentheses
+    (``factory=build_x``), or a line of a multi-line import. A method counts as ``.name(`` or a
+    bare ``.name`` reference (a bound method used as a callback).
     """
     hits: list[str] = []
     name = re.escape(symbol.name)
     definition = re.compile(rf"\b(?:def|class|function)\s+{name}\b")
     if symbol.is_method:
-        call = re.compile(rf"\.\s*{name}\s*\(")
-        imported = None
+        use = re.compile(rf"\.\s*{name}(?![\w$])")
     else:
-        call = re.compile(rf"(?<![\w$]){name}\s*\(")
-        imported = re.compile(rf"^\s*(?:from\s+\S+\s+)?import\b.*(?<![\w$.]){name}(?![\w$])")
+        use = re.compile(rf"(?<![\w$.]){name}(?![\w$])")
     for raw in grep_output.splitlines():
         path, _, rest = raw.partition(":")
         if not rest or is_test_path(path):
@@ -199,7 +200,7 @@ def production_calls(symbol: NewSymbol, grep_output: str) -> list[str]:
         code = code_part(path, text)
         if definition.search(code):
             continue
-        if call.search(code) or (imported is not None and imported.search(code)):
+        if use.search(code):
             hits.append(raw.strip())
     return hits
 
