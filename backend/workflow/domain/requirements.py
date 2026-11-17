@@ -34,17 +34,68 @@ FOUNDER_CORRECTIONS_KEY = "founder_corrections"
 _CORRECTION_MAX_CHARS = 1500
 
 
-def founder_corrections(payload: Mapping[str, Any] | None) -> list[str]:
-    """The founder's denial reasons recorded on a run's payload (``[]`` when none)."""
+def _correction_entries(payload: Mapping[str, Any] | None) -> list[tuple[str, tuple[str, ...]]]:
     raw = (payload or {}).get(FOUNDER_CORRECTIONS_KEY)
     if not isinstance(raw, list):
         return []
-    out: list[str] = []
+    out: list[tuple[str, tuple[str, ...]]] = []
     for entry in raw:
         text = entry.get("text") if isinstance(entry, Mapping) else None
         if isinstance(text, str) and text.strip():
-            out.append(text.strip()[:_CORRECTION_MAX_CHARS])
+            items = entry.get("items") if isinstance(entry, Mapping) else None
+            ids = tuple(str(i) for i in items) if isinstance(items, list) else ()
+            out.append((text.strip()[:_CORRECTION_MAX_CHARS], ids))
     return out
+
+
+def founder_corrections(payload: Mapping[str, Any] | None) -> list[str]:
+    """The founder's denial reasons recorded on a run's payload (``[]`` when none)."""
+    return [text for text, _ in _correction_entries(payload)]
+
+
+def founder_correction_items(payload: Mapping[str, Any] | None) -> list[tuple[str, ...]]:
+    """Per correction (same order as :func:`founder_corrections`): the ledger ids it is about.
+
+    An empty tuple means the correction is not tied to an item - it concerns every row.
+    """
+    return [ids for _, ids in _correction_entries(payload)]
+
+
+_ITEM_ID_RE = re.compile(r"(?<![A-Za-z0-9_])R(\d+)(?![A-Za-z0-9_])")
+_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+
+
+def infer_correction_items(text: str, requirements: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Which ledger items a correction is about - deterministic, ``[]`` = all of them.
+
+    1. ledger ids named in the sentence (``R2``) that exist in the ledger;
+    2. else the items whose text shares a backticked identifier with the sentence.
+    """
+    ids = [str(r.get("id")) for r in requirements if r.get("id")]
+    named = {f"R{n}" for n in _ITEM_ID_RE.findall(text)}
+    hit = [i for i in ids if i in named]
+    if hit:
+        return hit
+    idents = {m.strip() for m in _BACKTICK_RE.findall(text) if m.strip()}
+    if not idents:
+        return []
+    out: list[str] = []
+    for r in requirements:
+        theirs = {m.strip() for m in _BACKTICK_RE.findall(str(r.get("text") or ""))}
+        if r.get("id") and idents & theirs:
+            out.append(str(r["id"]))
+    return out
+
+
+def append_founder_correction(payload: dict[str, Any], decision_id: str, text: str) -> None:
+    """Record a correction with the items it is about (``items`` empty = every item)."""
+    ledger = payload.get(REQUIREMENTS_KEY)
+    reqs = [i for i in ledger if isinstance(i, Mapping)] if isinstance(ledger, list) else []
+    corrections = list(payload.get(FOUNDER_CORRECTIONS_KEY) or [])
+    corrections.append(
+        {"decision_id": decision_id, "text": text, "items": infer_correction_items(text, reqs)}
+    )
+    payload[FOUNDER_CORRECTIONS_KEY] = corrections
 
 
 REQUIREMENT_KINDS = ("do", "guard", "done", "constraint")
