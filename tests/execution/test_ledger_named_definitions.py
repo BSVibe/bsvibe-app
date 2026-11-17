@@ -232,10 +232,22 @@ async def test_out_of_room_names_still_give_locations() -> None:
     big = "".join(f"const CONST_{i:03d} = '{'x' * 400}';\n" for i in range(30))
     box = _Box({"s.ts": big + _TS_TWO.replace("'bar-run'", repr("y" * 7000))}, ["s.ts"])
     shown = await _excerpt(box)(
-        _row("R1", "`Bar.run` " + " ".join(f"`CONST_{i:03d}`" for i in range(30)), paths=["s.ts"])
+        _row("R1", " ".join(f"`CONST_{i:03d}`" for i in range(30)) + " `Bar.run`", paths=["s.ts"])
     )
     assert "out of room:" in shown
-    assert "s.ts (Bar)" in shown or "s.ts (module level)" in shown
+    room = shown.split("not shown, out of room:")[-1]
+    assert "s.ts (Bar)" in room
+
+
+async def test_ts_qualified_miss_is_never_shown_as_that_classes_definition() -> None:
+    src = "class Bar {\n  go() {}\n}\n\nconst cfg = {\n  limit: 5,\n};\n"
+    from backend.workflow.domain.requirements import ts_definition_candidates
+
+    assert ts_definition_candidates(src, "Bar.limit") == []
+    box = _Box({"b.ts": src}, ["b.ts"])
+    shown = await _excerpt(box)(_row("R1", "`Bar.limit` is 5", paths=["b.ts"]))
+    if "limit: 5" in shown:
+        assert "b.ts" in shown
 
 
 _TS_IFACE = """\

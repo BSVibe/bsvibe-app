@@ -814,7 +814,9 @@ def ts_definition_candidates(text: str, name: str) -> list[tuple[str, str]]:
                 out.append((cls, "\n".join(lines[first : last + 1]).rstrip()))
                 at = last
             at += 1
-    return out or _ts_field_anywhere(lines, bare)
+    if out or want_cls:
+        return out
+    return _ts_field_anywhere(lines, bare)
 
 
 def named_definition(text: str, name: str, path: str) -> str | None:
