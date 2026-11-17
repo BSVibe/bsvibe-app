@@ -76,7 +76,7 @@ done on the founder's denial reason, not the issue's sentence.
 merged and deployed, plus the two follow-ups they exposed (#1376, #1380). The audit's other blockers are not security
 and are not filed yet (§Ⅲ).
 
-## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28 · 10-29 · 10-30 · 11-03 · 11-11)
+## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28 · 10-29 · 10-30 · 11-03 · 11-11 · 11-17)
 
 | | |
 |---|---|
@@ -103,8 +103,10 @@ and are not filed yet (§Ⅲ).
 | **Harness issues are filed record-only, fixed by hand** (10-29) | A verification-harness defect found on a run goes up with the binding filter paused and is implemented here; a product defect goes up as a normal issue for BSVibe |
 | **The run payload has one writer: the drive** (11-03) | Anything sent to a running run (issue edit, issue comment, PR comment) goes to its inbox (`run_inbox.post_to_inbox`); never write `run.payload` from intake or any path that runs beside a live drive |
 | **Harness items run through BSVibe too** (11-04) | "handoff 내용들을 bsvibe로 돌려서 표본을 늘려보자" — the HANDOFF §Ⅲ items go up as issues for BSVibe, which also grows the round-1 sample. Supersedes "Reliability work by hand" (10-26) for new items; a harness hole a run exposes may still be fixed by hand when it blocks the loop (#1311) |
-| **Leftovers are excluded, not deleted** (10-30) | What verification leaves in a checkout goes into that checkout's `.git/info/exclude`; the model-derived layer 2 of #1267 waits until layer 1's logs have been seen |
+| **Leftovers are excluded, not deleted** (10-30) | What verification leaves in a checkout goes into that checkout's `.git/info/exclude`; #1267's model-derived layer 2 was dropped on 11-17 (below) |
 | **No platform token limit** (11-11) | "우리는 서버에서 ai 돌려주는게 아니라, 사용자 ai를 쓰는거라 토큰 상한을 걸 이유가 없지 않나?" — tokens are BYO, so the monthly budget is unlimited by default and only a spend limit the owner chooses (#1365). The per-run cap (2M) stays as a runaway guard; #930 closed |
+| **The independent review stays report-only** (11-17) | R5 stage 2 decided: 49 reviewed cards; findings are a reason to read the code they point at, never a gate — several high / medium findings were false once the code outside the diff was read |
+| **#1267 layer 2 not built** (11-17) | Layer 1 (`.git/info/exclude` of what verification left) caught every leftover seen (3 rounds in 60 runs); the model-derived cache list is dropped |
 
 ## §Ⅱ — What this session found that the issues had wrong
 
@@ -415,10 +417,8 @@ and are not filed yet (§Ⅲ).
    `delivery_failed`; then tick `requirements-ledger-checklist.md` D.
 4. **Re-measure the ledger** once `rounds[]` / `evidence_missing` have ~20 runs: `ledger_only_failure_causes` and the
    round-1 pass rate (19 / 30 on 11-16). If "evidence missing" still dominates, the next lever is the evidence room.
-5. **R5 stage 2**: 49 reviewed cards (≥ 20). Recommendation: keep the review report-only — some of its high / medium
-   findings were false once the code outside the diff was read, so gating on them would block good cards. 형님 to confirm.
-6. **#1267 layer 2**: `leftover_dirs` saw 3 rounds in 60 runs (`var` ×2, one probe cache), all caught by layer 1.
-   Recommendation: close layer 2 unbuilt. 형님 to confirm.
+5. ~~R5 stage 2~~ — decided 11-17: report-only (§Ⅰ).
+6. ~~#1267 layer 2~~ — decided 11-17: not built, issue closed (§Ⅰ).
 7. **#1323 leftovers**: `mcp_work_claim_lost` firing for a turn that survives its job; a run paused on a founder
    decision across a restart. Then the rest of the #929 second-box list (`docs/runbook/vault-to-postgres.md`).
 8. Low priority: named definitions keep no qualifier for TS/JS and list no locations when none fits; `git grep -w`
