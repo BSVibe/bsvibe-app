@@ -236,3 +236,35 @@ async def test_out_of_room_names_still_give_locations() -> None:
     )
     assert "out of room:" in shown
     assert "s.ts (Bar)" in shown or "s.ts (module level)" in shown
+
+
+_TS_IFACE = """\
+export interface Props {
+  /** max rows */
+  limit: number;
+}
+
+export type Opts = {
+  depth: number;
+};
+"""
+
+
+async def test_ts_interface_and_type_fields_are_found() -> None:
+    box = _Box({"p.ts": _TS_IFACE}, ["p.ts"])
+    for ident, expect in (
+        ("Props.limit", "limit: number"),
+        ("limit", "limit: number"),
+        ("Opts.depth", "depth: number"),
+    ):
+        shown = await _excerpt(box)(_row("R1", f"`{ident}` ok", paths=["p.ts"]))
+        assert expect in shown, ident
+    from backend.workflow.domain.requirements import ts_definition_candidates
+
+    assert [c for c, _ in ts_definition_candidates(_TS_IFACE, "limit")] == ["Props"]
+
+
+async def test_ts_object_literal_field_found_as_last_resort() -> None:
+    box = _Box({"o.ts": "const cfg = {\n  retries: 3,\n};\n"}, ["o.ts"])
+    shown = await _excerpt(box)(_row("R1", "`retries` is 3", paths=["o.ts"]))
+    assert "retries: 3" in shown

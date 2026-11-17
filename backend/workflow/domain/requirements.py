@@ -733,13 +733,32 @@ def definition_from_index(index: dict[str, str], name: str) -> str | None:
 
 
 _TS_CLASS = re.compile(
-    r"^(\s*)(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)"
+    r"^(\s*)(?:export\s+)?(?:default\s+)?(?:declare\s+)?"
+    r"(?:(?:abstract\s+)?class\s+|interface\s+|type\s+(?=[A-Za-z_$][\w$]*[^=\n]*=\s*\{?\s*$))"
+    r"([A-Za-z_$][\w$]*)"
 )
 _TS_COMMENT = ("//", "#", "*", "/*", "@")
 
 
 def _indent_of(line: str) -> int:
     return len(line) - len(line.lstrip())
+
+
+def _ts_field_anywhere(lines: list[str], bare: str) -> list[tuple[str, str]]:
+    """Last resort: an indented field anywhere (an object literal, a nested type), owner ``""``."""
+    field = re.compile(rf"^[ \t]+{re.escape(bare)}\s*[?!]?\s*[:=]")
+    out: list[tuple[str, str]] = []
+    for i, line in enumerate(lines):
+        if not field.match(line):
+            continue
+        last = i
+        while last + 1 < len(lines) and _indent_of(lines[last + 1]) > _indent_of(line):
+            last += 1
+        first = i
+        while first > 0 and lines[first - 1].lstrip().startswith(_TS_COMMENT):
+            first -= 1
+        out.append(("", "\n".join(lines[first : last + 1]).rstrip()))
+    return out
 
 
 def ts_definition_candidates(text: str, name: str) -> list[tuple[str, str]]:
@@ -795,7 +814,7 @@ def ts_definition_candidates(text: str, name: str) -> list[tuple[str, str]]:
                 out.append((cls, "\n".join(lines[first : last + 1]).rstrip()))
                 at = last
             at += 1
-    return out
+    return out or _ts_field_anywhere(lines, bare)
 
 
 def named_definition(text: str, name: str, path: str) -> str | None:
