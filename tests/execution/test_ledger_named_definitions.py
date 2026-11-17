@@ -195,3 +195,88 @@ async def test_concurrent_items_all_see_a_definition_in_an_uncited_changed_file(
     rows = [_row(f"R{i}", "`schedule_max_per_workspace` is 20") for i in range(3)]
     shown = await asyncio.gather(*(excerpt(r) for r in rows))
     assert all("schedule_max_per_workspace: int = 20" in s for s in shown)
+
+
+_TS_TWO = """\
+class Foo {
+  run() {
+    return 'foo-run';
+  }
+}
+
+class Bar {
+  run() {
+    return 'bar-run';
+  }
+}
+"""
+
+
+async def test_ts_qualified_name_gets_that_classes_definition() -> None:
+    box = _Box({"a.ts": _TS_TWO}, ["a.ts"])
+    shown = await _excerpt(box)(_row("R1", "`Bar.run` works", paths=["a.ts"]))
+    assert "bar-run" in shown
+    assert "foo-run" not in shown
+
+
+async def test_ts_bare_name_reveals_both_locations() -> None:
+    box = _Box({"a.ts": _TS_TWO}, ["a.ts"])
+    shown = await _excerpt(box)(_row("R1", "`run` works", paths=["a.ts"]))
+    assert "foo-run" in shown
+    assert "bar-run" in shown
+    assert "a.ts (Foo)" in shown
+    assert "a.ts (Bar)" in shown
+
+
+async def test_out_of_room_names_still_give_locations() -> None:
+    big = "".join(f"const CONST_{i:03d} = '{'x' * 400}';\n" for i in range(30))
+    box = _Box({"s.ts": big + _TS_TWO.replace("'bar-run'", repr("y" * 7000))}, ["s.ts"])
+    shown = await _excerpt(box)(
+        _row("R1", " ".join(f"`CONST_{i:03d}`" for i in range(30)) + " `Bar.run`", paths=["s.ts"])
+    )
+    assert "out of room:" in shown
+    room = shown.split("not shown, out of room:")[-1]
+    assert "s.ts (Bar)" in room
+
+
+async def test_ts_qualified_miss_is_never_shown_as_that_classes_definition() -> None:
+    src = "class Bar {\n  go() {}\n}\n\nconst cfg = {\n  limit: 5,\n};\n"
+    from backend.workflow.domain.requirements import ts_definition_candidates
+
+    assert ts_definition_candidates(src, "Bar.limit") == []
+    box = _Box({"b.ts": src}, ["b.ts"])
+    shown = await _excerpt(box)(_row("R1", "`Bar.limit` is 5", paths=["b.ts"]))
+    if "limit: 5" in shown:
+        assert "b.ts" in shown
+
+
+_TS_IFACE = """\
+export interface Props {
+  /** max rows */
+  limit: number;
+}
+
+export type Opts = {
+  depth: number;
+};
+"""
+
+
+async def test_ts_interface_and_type_fields_are_found() -> None:
+    box = _Box({"p.ts": _TS_IFACE}, ["p.ts"])
+    for ident, expect in (
+        ("Props.limit", "limit: number"),
+        ("limit", "limit: number"),
+        ("Opts.depth", "depth: number"),
+    ):
+        shown = await _excerpt(box)(_row("R1", f"`{ident}` ok", paths=["p.ts"]))
+        assert expect in shown, ident
+    from backend.workflow.domain.requirements import ts_definition_candidates
+
+    assert [c for c, _ in ts_definition_candidates(_TS_IFACE, "limit")] == ["Props"]
+
+
+async def test_ts_object_literal_field_found_as_last_resort() -> None:
+    box = _Box({"o.ts": "const cfg = {\n  retries: 3,\n};\n"}, ["o.ts"])
+    shown = await _excerpt(box)(_row("R1", "`retries` is 3", paths=["o.ts"]))
+    assert "retries: 3" in shown

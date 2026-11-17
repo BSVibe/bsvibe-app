@@ -10,8 +10,10 @@ in ``application/artifact_review.py``.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
+import tokenize
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -64,6 +66,7 @@ def is_test_path(path: str) -> bool:
 class NewSymbol:
     name: str
     file: str
+    is_method: bool = False
 
 
 def new_public_symbols(diff: str) -> list[NewSymbol]:
@@ -87,7 +90,8 @@ def new_public_symbols(diff: str) -> list[NewSymbol]:
         if line[0] == "-":
             removed.add((path, name))
         elif not name.startswith("_") and not is_test_path(path):
-            added.append(NewSymbol(name, path))
+            is_method = line[1:2] in (" ", "\t") and match.re is _PY_DEF
+            added.append(NewSymbol(name, path, is_method))
     seen: set[tuple[str, str]] = set()
     out: list[NewSymbol] = []
     for sym in added:
@@ -98,15 +102,106 @@ def new_public_symbols(diff: str) -> list[NewSymbol]:
     return out
 
 
+def _blank(text: str, spans: Sequence[tuple[int, int]]) -> str:
+    chars = list(text)
+    for start, end in spans:
+        for i in range(start, min(end, len(chars))):
+            chars[i] = " "
+    return "".join(chars)
+
+
+def _scan_code(line: str) -> str:
+    """Generic (TS/JS-ish) mask: ``//`` comments and quoted strings become blanks."""
+    stripped = line.lstrip()
+    if stripped.startswith(("*", "/*")):
+        return ""
+    spans: list[tuple[int, int]] = []
+    quote = ""
+    start = 0
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                spans.append((start, i + 1))
+                quote = ""
+        elif ch in "'\"`":
+            quote, start = ch, i
+        elif line.startswith("//", i):
+            spans.append((i, len(line)))
+            break
+        i += 1
+    if quote:  # unterminated on this line (multi-line template literal): rest is string
+        spans.append((start, len(line)))
+    return _blank(line, spans)
+
+
+def _python_code(line: str) -> str:
+    """Mask comments and string literals of one Python line using ``tokenize``."""
+    text = line.strip()
+    skipped = {tokenize.COMMENT, tokenize.STRING}
+    for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"):
+        if hasattr(tokenize, name):
+            skipped.add(getattr(tokenize, name))
+    spans: list[tuple[int, int]] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type in skipped and tok.start[0] == tok.end[0] == 1:
+                spans.append((tok.start[1], tok.end[1]))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return _scan_code_py(text)
+    return _blank(text, spans)
+
+
+def _scan_code_py(text: str) -> str:
+    """Fallback when a single line is not tokenizable alone (e.g. inside a docstring)."""
+    return _scan_code(text.split("#", 1)[0] if "#" in text and not _has_quote(text) else text)
+
+
+def _has_quote(text: str) -> bool:
+    return "'" in text or '"' in text
+
+
+def code_part(path: str, text: str) -> str:
+    """``text`` with comments and string-literal contents blanked out."""
+    if path.endswith(".py"):
+        return _python_code(text)
+    return _scan_code(text)
+
+
+METHOD_UNCERTAIN = "이름만 같은 다른 클래스의 호출일 수 있음"
+
+
 def production_calls(symbol: NewSymbol, grep_output: str) -> list[str]:
-    """``path:line:text`` hits of ``git grep -n`` that are neither tests nor the definition."""
+    """``path:line:text`` hits of ``git grep -n`` that really call ``symbol`` in production code.
+
+    Comments and string literals (so ``__all__`` entries too) are blanked first. A function,
+    class or constant then counts on any occurrence of the name that is not its definition line
+    and not preceded by ``.`` — a call, an argument passed without parentheses
+    (``factory=build_x``), or a line of a multi-line import. A method counts as ``.name(`` or a
+    bare ``.name`` reference (a bound method used as a callback).
+    """
     hits: list[str] = []
-    definition = re.compile(rf"\b(?:def|class|function)\s+{re.escape(symbol.name)}\b")
+    name = re.escape(symbol.name)
+    definition = re.compile(rf"\b(?:def|class|function)\s+{name}\b")
+    if symbol.is_method:
+        use = re.compile(rf"\.\s*{name}(?![\w$])")
+    else:
+        use = re.compile(rf"(?<![\w$.]){name}(?![\w$])")
     for raw in grep_output.splitlines():
         path, _, rest = raw.partition(":")
-        if not rest or is_test_path(path) or definition.search(rest):
+        if not rest or is_test_path(path):
             continue
-        hits.append(raw.strip())
+        # ``git grep -n`` prefixes the line number: path:LINE:text
+        _, _, text = rest.partition(":")
+        code = code_part(path, text)
+        if definition.search(code):
+            continue
+        if use.search(code):
+            hits.append(raw.strip())
     return hits
 
 
@@ -141,7 +236,8 @@ def _calls_section(calls: Mapping[NewSymbol, list[str] | None]) -> str:
         else:
             shown = hits[:MAX_CALLS_PER_SYMBOL]
             more = f" (+{len(hits) - len(shown)}곳 더)" if len(hits) > len(shown) else ""
-            lines.append(f"- {sym.name} ({sym.file}): " + " | ".join(shown) + more)
+            note = f" [{METHOD_UNCERTAIN}]" if sym.is_method else ""
+            lines.append(f"- {sym.name} ({sym.file}): " + " | ".join(shown) + more + note)
     return "\n".join(lines)
 
 
