@@ -100,23 +100,52 @@ def _parse_repro(raw: Any) -> Repro | None:
     return None
 
 
-def parse_findings(raw: str) -> list[Finding] | None:
-    """The verifier's final message → findings (≤ ``MAX_FINDINGS``); a finding without a
-    runnable repro is dropped. ``None`` = the output was not the expected JSON at all."""
+def _load_json(raw: str) -> Any:
+    """The JSON value inside a model reply (bare, fenced, or embedded in prose); ``None`` if none."""
     text = raw.strip()
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
     if fenced:
         text = fenced.group(1)
     try:
-        data = json.loads(text)
+        return json.loads(text)
     except ValueError:
         start, end = text.find("{"), text.rfind("}")
         if start < 0 or end <= start:
             return None
         try:
-            data = json.loads(text[start : end + 1])
+            return json.loads(text[start : end + 1])
         except ValueError:
             return None
+
+
+@dataclass(frozen=True)
+class ToolRequest:
+    """One tool the model asked the HARNESS to run (in the copy)."""
+
+    name: str
+    args: dict[str, Any]
+
+
+def parse_reply(raw: str) -> ToolRequest | list[Finding] | None:
+    """A verifier turn \u2192 a tool request, the final findings, or ``None`` (malformed).
+
+    The model never calls tools itself: it answers ``{"tool": ..., "args": {...}}`` or
+    ``{"findings": [...]}`` as plain text, so this works the same on any chat backend."""
+    data = _load_json(raw)
+    if not isinstance(data, dict):
+        return None
+    if "findings" in data:
+        return parse_findings(raw)
+    name, args = data.get("tool"), data.get("args", {})
+    if name in TOOL_NAMES and isinstance(args, dict):
+        return ToolRequest(name=name, args=args)
+    return None
+
+
+def parse_findings(raw: str) -> list[Finding] | None:
+    """The verifier's final message → findings (≤ ``MAX_FINDINGS``); a finding without a
+    runnable repro is dropped. ``None`` = the output was not the expected JSON at all."""
+    data = _load_json(raw)
     items = data.get("findings") if isinstance(data, dict) else None
     if not isinstance(items, list):
         return None
@@ -192,6 +221,8 @@ Rule: a claim counts only if you attach a repro the harness can run itself. The 
 on the changed tree: a repro test that FAILS, or a command whose result matches `expect`, makes \
 the claim "confirmed"; anything else is discarded as "unconfirmed". No repro, no finding.
 
+{protocol}
+
 Surface for this change: {surface}.
 {checklist}
 
@@ -222,27 +253,12 @@ def checklist(surface: str) -> str:
     return ARTIFACT_CHECKLIST if surface == "artifact" else CODE_CHECKLIST
 
 
-TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": desc,
-            "parameters": {
-                "type": "object",
-                "properties": props,
-                "required": list(props),
-            },
-        },
-    }
-    for name, desc, props in (
-        ("file_read", "Read a file in the workspace.", {"path": {"type": "string"}}),
-        ("grep", "git grep -n for a pattern.", {"pattern": {"type": "string"}}),
-        ("shell_exec", "Run a shell command in the workspace.", {"command": {"type": "string"}}),
-        (
-            "write_test",
-            "Write a TEST file into the scratch directory only.",
-            {"path": {"type": "string"}, "content": {"type": "string"}},
-        ),
-    )
-]
+TOOL_NAMES = ("file_read", "grep", "shell_exec", "write_test")
+
+PROTOCOL = """\
+You have no native tools. Every reply is ONE JSON object and nothing else \u2014 either a tool request
+{"tool": "file_read", "args": {"path": "..."}}      read a file in the workspace
+{"tool": "grep", "args": {"pattern": "..."}}        git grep -n for a pattern
+{"tool": "shell_exec", "args": {"command": "..."}}  run a shell command in the workspace
+{"tool": "write_test", "args": {"path": "...", "content": "..."}}  write a TEST file (scratch dir only)
+or the final answer (below). The harness runs a tool request and replies with its output."""

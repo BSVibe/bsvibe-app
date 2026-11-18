@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import shlex
 import time
 import uuid
@@ -25,15 +24,16 @@ import structlog
 
 from backend.workflow.domain.adversarial import (
     MAX_FINDINGS,
+    PROTOCOL,
     SCRATCH_ROOT,
     SYSTEM_PROMPT,
-    TOOLS,
     Finding,
+    ToolRequest,
     checklist,
     clip,
     judge_command,
     judge_test,
-    parse_findings,
+    parse_reply,
     repro_runner,
     write_refusal,
 )
@@ -272,6 +272,7 @@ async def _session(
                 surface=surface,
                 checklist=checklist(surface),
                 limit=MAX_FINDINGS,
+                protocol=PROTOCOL,
             ),
         },
         {
@@ -284,37 +285,50 @@ async def _session(
     ]
     spent = 0
     for _ in range(_MAX_TURNS):
-        turn = await _turn(llm, run, messages, TOOLS)
-        spent += int(getattr(turn, "usage_prompt_tokens", 0) or 0) + int(
-            getattr(turn, "usage_completion_tokens", 0) or 0
-        )
-        calls = tuple(getattr(turn, "tool_calls", ()) or ())
-        if not calls:
-            return parse_findings(str(getattr(turn, "content", "") or ""))
+        reply, used = await _ask(llm, run, messages)
+        spent += used
+        if reply is None:
+            return None  # malformed twice: this round is unavailable
+        if isinstance(reply, list):
+            return reply
         if spent >= _TOKEN_CAP:
             # A real stop: no further tool call runs and no further model call is made.
             raise _TokenCapExceeded
+        output = await _dispatch(copy, scratch, reply.name, reply.args, checks, budget)
         messages.append(
-            {
-                "role": "assistant",
-                "content": getattr(turn, "content", None) or None,
-                "tool_calls": [
-                    {
-                        "id": c.id,
-                        "type": "function",
-                        "function": {"name": c.name, "arguments": json.dumps(c.arguments)},
-                    }
-                    for c in calls
-                ],
-            }
+            {"role": "user", "content": f"TOOL RESULT ({reply.name}):\n{output}"},
         )
-        for call in calls:
-            output = await _dispatch(copy, scratch, call.name, call.arguments, checks, budget)
-            messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
-    # Out of turns: ask for the answer without tools.
+    # Out of turns: ask for the answer.
     messages.append({"role": "user", "content": "Stop investigating. Give the final JSON now."})
-    turn = await _turn(llm, run, messages, None)
-    return parse_findings(str(getattr(turn, "content", "") or ""))
+    reply, _ = await _ask(llm, run, messages)
+    return reply if isinstance(reply, list) else None
+
+
+async def _ask(
+    llm: Llm, run: Any, messages: list[dict[str, Any]]
+) -> tuple[ToolRequest | list[Finding] | None, int]:
+    """One plain chat turn (no ``tools``: the harness runs the tool loop itself). A reply that is
+    not the agreed JSON is asked for again ONCE; still wrong \u2192 ``None``. Appends to ``messages``."""
+    spent = 0
+    for attempt in range(2):
+        turn = await _turn(llm, run, messages, None)
+        spent += int(getattr(turn, "usage_prompt_tokens", 0) or 0) + int(
+            getattr(turn, "usage_completion_tokens", 0) or 0
+        )
+        content = str(getattr(turn, "content", "") or "")
+        messages.append({"role": "assistant", "content": content})
+        parsed = parse_reply(content)
+        if parsed is not None:
+            return parsed, spent
+        if attempt == 0:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "FORMAT ERROR: reply with ONE JSON object only \u2014 "
+                    '{"tool": ..., "args": {...}} or {"findings": [...]}.',
+                }
+            )
+    return None, spent
 
 
 async def _turn(llm: Llm, run: Any, messages: list[dict[str, Any]], tools: Any) -> Any:
