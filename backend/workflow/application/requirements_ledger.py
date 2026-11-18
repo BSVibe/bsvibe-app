@@ -409,6 +409,8 @@ class _DefinitionFinder:
         skipped: list[str] = []
         used = len(header)
         notes: list[str] = []
+        # The same definition reached by two names (`B.limit` and `limit`) goes in once.
+        seen: set[tuple[str, str, str]] = set()
         for name in names:
             hits = await self._hits(scope, name)
             if not hits:
@@ -416,12 +418,20 @@ class _DefinitionFinder:
             many = len(hits) > 1
             where = [f"{p} ({c or 'module level'})" for p, c, _ in hits]
             fitted = 0
-            for (path, _cls, body), loc in zip(hits, where, strict=True):
+            for (path, cls, body), loc in zip(hits, where, strict=True):
+                if (path, cls, body) in seen:
+                    entry = f"# {name} → same as above"
+                    if entry not in shown and used + len(entry) + 2 <= _DEFINITIONS_CHARS:
+                        shown.append(entry)
+                        used += len(entry) + 2
+                    fitted += 1
+                    continue
                 # Several locations are all named: none is passed off as THE definition.
                 entry = f"# {loc}\n{body}" if many else f"# {path}\n{body}"
                 if used + len(entry) + 2 > _DEFINITIONS_CHARS:
                     continue
                 shown.append(entry)
+                seen.add((path, cls, body))
                 used += len(entry) + 2
                 fitted += 1
             if not fitted:
