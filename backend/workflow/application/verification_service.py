@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.knowledge.retrieval.knowledge_item import RetrievedKnowledge
+from backend.workflow.application.adversarial_verifier import run_adversarial_round
 from backend.workflow.application.artifact_review import review_passed_round
 from backend.workflow.application.counterfactual_check import check_guards
 from backend.workflow.application.gate_commands import (
@@ -476,9 +477,12 @@ class VerificationService:
         session: AsyncSession,
         llm: JudgeLlm,
         retriever: CanonRetriever | None = None,
+        verifier_llm: JudgeLlm | None = None,
     ) -> None:
         self._session = session
         self._llm = llm
+        # The adversarial verifier's own session; ``None`` = it does not run (stage 1, opt-in).
+        self._verifier_llm = verifier_llm
         self._retriever = retriever
 
     async def _complete(self, run: ExecutionRun, messages: list[dict[str, Any]]) -> Any:
@@ -866,6 +870,21 @@ class VerificationService:
             # work still proceeds (no regression).
             command_gate_pass = all_cmd_pass
 
+        # The adversarial verifier (report-only, stage 1): only a round whose gate passed, and it
+        # never feeds ``passed`` below — its repros are run by the harness, then stored.
+        adversarial = (
+            await run_adversarial_round(
+                llm=self._verifier_llm,
+                run=run,
+                box=box,
+                baseline=baseline,
+                surface=(demonstration or {}).get("surface") or "code",
+                release=lambda: self._release_connection(run),
+            )
+            if self._verifier_llm is not None and baseline and command_gate_pass
+            else None
+        )
+
         # The requirements ledger: every item the request asked for needs evidence the gate
         # can confirm. Judged last, over what actually ran and passed above — and only judged
         # when everything else passed (a failing run is about to change anyway).
@@ -882,6 +901,10 @@ class VerificationService:
         ledger_pass = ledger is None or ledger_passed(ledger)
 
         passed = command_gate_pass and judge_pass and demo_pass and ledger_pass
+        if (adversarial or {}).get("tree_unrestored"):
+            # The verifier stage polluted the real tree and it could not be restored: nothing
+            # may flow on from it (the only way the stage touches ``passed``).
+            passed = False
         if passed and declared.final and derived_gate is not None:
             # The product's CI-equivalent run: last, and only for a round that passed
             # everything else — so a change that would turn CI red fails HERE.
@@ -940,6 +963,7 @@ class VerificationService:
                 "outcome_demonstration": demonstration,
                 "scope": scope,
                 **({} if ledger is None else {"requirements": public_rows(ledger)}),
+                **({} if adversarial is None else {"adversarial": adversarial}),
                 "gate_expected": gate_expected,
                 # Does the repo-gate concept apply at all (a product run on a
                 # real worktree)? A Direct scratch answer has no gate to be

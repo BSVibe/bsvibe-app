@@ -60,6 +60,9 @@ def _to_item_response(
         review_status=ledger.review_status if ledger is not None else "none",
         review_counts=ledger.review_counts if ledger is not None else {},
         review_findings=ledger.review_findings if ledger is not None else [],
+        adversarial_status=ledger.adversarial_status if ledger is not None else "none",
+        adversarial_confirmed=ledger.adversarial_confirmed if ledger is not None else [],
+        adversarial_suspected=ledger.adversarial_suspected if ledger is not None else [],
         id=item.id,  # type: ignore[attr-defined]
         workspace_id=item.workspace_id,  # type: ignore[attr-defined]
         deliverable_id=item.deliverable_id,  # type: ignore[attr-defined]

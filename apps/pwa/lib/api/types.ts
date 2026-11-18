@@ -358,6 +358,8 @@ export interface RunDetail {
   verification_rounds?: number;
   /** The 1-based verification round the run first passed on; `null` while it has not. */
   passed_on_round?: number | null;
+  /** One entry per verification round, oldest first. Absent on older servers. */
+  rounds?: RunVerificationRound[];
   deliverable_id: string | null;
   partial_deliverables: RunPartialDeliverable[];
   activities: RunActivity[];
@@ -448,6 +450,45 @@ export interface ReviewFields {
     line: number | null;
     claim: string;
   }[];
+  /** The adversarial verifier of the same round (report-only). Confirmed = the harness
+   *  reproduced it; suspected ("의심") = it could not. `none` = it did not run. */
+  adversarial_status?: "done" | "unavailable" | "none";
+  adversarial_confirmed?: AdversarialFindingItem[];
+  adversarial_suspected?: AdversarialFindingItem[];
+}
+
+export interface AdversarialFindingItem {
+  severity: "high" | "medium" | "low";
+  file: string | null;
+  line: number | null;
+  claim: string;
+}
+
+/** One finding of `result.adversarial` as stored (run detail rounds). */
+export interface AdversarialStoredFinding extends AdversarialFindingItem {
+  confirmed: boolean;
+  reason?: string;
+  /** The repro's output, already cut by the harness. */
+  output?: string;
+}
+
+/** `result.adversarial` on a verification round (report-only). */
+export interface RunAdversarial {
+  status: "done" | "unavailable";
+  surface?: "code" | "artifact";
+  findings?: AdversarialStoredFinding[];
+  confirmed?: number;
+  unconfirmed?: number;
+  checks?: string[];
+  reason?: string;
+}
+
+/** One verification round of a run (backend RunVerificationRound). */
+export interface RunVerificationRound {
+  round: number;
+  outcome: VerificationOutcome;
+  failed_checks?: string[];
+  adversarial?: RunAdversarial | null;
 }
 
 /** One `VerificationResult` in a delivery report (backend VerificationReport).

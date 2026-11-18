@@ -73,6 +73,10 @@ class SafeModeItem(_Output):
     review_status: str = "none"
     review_counts: dict[str, int] = {}
     review_findings: list[ReviewFindingItem] = []
+    #: The adversarial verifier (report-only): confirmed first, unconfirmed as "suspected".
+    adversarial_status: str = "none"
+    adversarial_confirmed: list[ReviewFindingItem] = []
+    adversarial_suspected: list[ReviewFindingItem] = []
 
 
 class SafeModeListPendingOutput(_Output):
@@ -91,6 +95,9 @@ def _item_to_dict(
         review_status=ledger.review_status if ledger is not None else "none",
         review_counts=ledger.review_counts if ledger is not None else {},
         review_findings=ledger.review_findings if ledger is not None else [],
+        adversarial_status=ledger.adversarial_status if ledger is not None else "none",
+        adversarial_confirmed=ledger.adversarial_confirmed if ledger is not None else [],
+        adversarial_suspected=ledger.adversarial_suspected if ledger is not None else [],
         id=str(item.id),
         deliverable_id=str(item.deliverable_id),
         run_id=str(item.run_id) if item.run_id else None,

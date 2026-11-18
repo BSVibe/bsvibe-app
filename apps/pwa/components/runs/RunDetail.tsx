@@ -1,5 +1,6 @@
 "use client";
 
+import AdversarialRounds from "@/components/runs/AdversarialRounds";
 import { resolveCheckpoint } from "@/lib/api/checkpoints";
 import { ApiError } from "@/lib/api/client";
 import { cancelRun, getRunDetail, retryRun } from "@/lib/api/runs";
@@ -11,6 +12,7 @@ import type {
   RunRequirement,
   RunStatus,
   RunVerification,
+  RunVerificationRound,
 } from "@/lib/api/types";
 import { useSession } from "@/lib/auth/session";
 import { useEventStream } from "@/lib/live-events/use-event-stream";
@@ -197,7 +199,11 @@ function DetailBody({
         <DecisionBlock key={decision.id} decision={decision} onResolved={onResolved} />
       ))}
 
-      <VerificationBlock verification={verification} passedOnRound={detail.passed_on_round} />
+      <VerificationBlock
+        verification={verification}
+        passedOnRound={detail.passed_on_round}
+        rounds={detail.rounds}
+      />
 
       <DeliverablesBlock partials={partials} verifiedFinalId={deliverable_id} />
     </article>
@@ -616,7 +622,12 @@ function RequirementsLedger({ items }: { items: RunRequirement[] }) {
 function VerificationBlock({
   verification,
   passedOnRound,
-}: { verification: RunVerification | null; passedOnRound?: number | null }) {
+  rounds,
+}: {
+  verification: RunVerification | null;
+  passedOnRound?: number | null;
+  rounds?: RunVerificationRound[];
+}) {
   const t = useTranslations("run");
   return (
     <section className="run-verification" aria-label={t("verification")}>
@@ -646,6 +657,7 @@ function VerificationBlock({
             </div>
           ) : null}
           <VerificationChecks verification={verification} />
+          <AdversarialRounds rounds={rounds} />
         </>
       ) : (
         <p className="run-verification__empty">{t("noVerification")}</p>
