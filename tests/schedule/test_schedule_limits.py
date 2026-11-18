@@ -269,3 +269,108 @@ async def test_enabling_a_disabled_every_minute_schedule_is_refused() -> None:
             await ScheduleService(session).set_enabled(
                 schedule_id=row.id, workspace_id=ws, enabled=True
             )
+
+
+# -- concurrent creates share one cap (Postgres) ------------------------------------
+
+
+async def test_concurrent_creates_at_the_cap_admit_only_one() -> None:
+    """Two creates on a workspace with cap-1 active both count cap-1 unless serialised."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from tests._support import db_engine
+
+    cap = get_settings().schedule_max_per_workspace
+    async with db_engine() as (engine, is_pg):
+        if not is_pg:
+            pytest.skip("the advisory lock only exists on Postgres")
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        ws = uuid.uuid4()
+        async with maker() as seed:
+            for _ in range(cap - 1):
+                await ScheduleService(seed).create(
+                    workspace_id=ws,
+                    kind="instruction",
+                    text="x",
+                    cron_expr="0 9 * * 1",
+                    now=_NOW,
+                )
+            await seed.commit()
+
+        async def _create() -> str:
+            async with maker() as session:
+                try:
+                    await ScheduleService(session).create(
+                        workspace_id=ws,
+                        kind="instruction",
+                        text="x",
+                        cron_expr="0 9 * * 1",
+                        now=_NOW,
+                    )
+                    # Widen the race window: the lock must hold until commit.
+                    await asyncio.sleep(0.2)
+                    await session.commit()
+                except ScheduleValidationError:
+                    await session.rollback()
+                    return "refused"
+                return "created"
+
+        outcomes = await asyncio.gather(_create(), _create())
+        assert sorted(outcomes) == ["created", "refused"]
+        async with maker() as check:
+            rows = await ScheduleService(check).list(workspace_id=ws)
+        assert len(rows) == cap
+
+
+# -- pre-existing violations are flagged, never auto-disabled -------------------------
+
+
+async def test_existing_every_minute_schedule_is_flagged_in_the_list() -> None:
+    async with memory_session() as session:
+        ws = uuid.uuid4()
+        every_minute = await _seed_schedule(session, ws, next_run_at=_NOW)
+        every_minute.cron_expr = "* * * * *"
+        weekly = await _seed_schedule(session, ws, next_run_at=_NOW)
+        weekly.cron_expr = "0 9 * * 1"
+        await session.flush()
+
+        views = {v.id: v for v in await ScheduleService(session).list_views(workspace_id=ws)}
+
+        assert views[every_minute.id].below_minimum_interval is True
+        assert views[every_minute.id].enabled is True  # never auto-disabled
+        assert views[weekly.id].below_minimum_interval is False
+
+
+async def test_schedules_beyond_the_cap_are_flagged_over_the_limit() -> None:
+    cap = get_settings().schedule_max_per_workspace
+    async with memory_session() as session:
+        ws = uuid.uuid4()
+        rows = []
+        for i in range(cap + 2):
+            row = await _seed_schedule(session, ws, next_run_at=_NOW)
+            row.created_at = _NOW + timedelta(minutes=i)
+            rows.append(row)
+        await session.flush()
+
+        views = {v.id: v for v in await ScheduleService(session).list_views(workspace_id=ws)}
+
+        assert sum(v.over_workspace_limit for v in views.values()) == 2
+        assert views[rows[-1].id].over_workspace_limit is True
+        assert views[rows[0].id].over_workspace_limit is False
+        assert all(v.enabled for v in views.values())
+
+
+async def test_worker_warns_each_time_it_fires_a_below_minimum_schedule() -> None:
+    from structlog.testing import capture_logs
+
+    async with memory_session() as session:
+        sched = await _seed_schedule(session, uuid.uuid4(), next_run_at=_NOW - timedelta(seconds=5))
+        sched.cron_expr = "* * * * *"
+        await session.flush()
+        with capture_logs() as logs:
+            assert await _fire(session, _NOW) == 1
+        events = [e for e in logs if e["event"] == "schedule_below_minimum_interval"]
+        assert len(events) == 1
+        assert events[0]["log_level"] == "warning"
