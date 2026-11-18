@@ -36,6 +36,11 @@ class ScheduleView(BaseModel):
     enabled: bool
     #: #1072 — ``safe`` follows the workspace's Safe Mode; ``direct`` skips the queue.
     output_mode: str = "safe"
+    #: Pre-existing schedule firing more often than the minimum interval. Never
+    #: auto-disabled (user data) — only reported.
+    below_minimum_interval: bool = False
+    #: Active schedule beyond the per-workspace cap. Reported, not auto-disabled.
+    over_workspace_limit: bool = False
 
 
 class ScheduleRowLike(Protocol):
@@ -58,7 +63,12 @@ class ScheduleRowLike(Protocol):
     enabled: bool
 
 
-def schedule_view_from_row(row: ScheduleRowLike) -> ScheduleView:
+def schedule_view_from_row(
+    row: ScheduleRowLike,
+    *,
+    below_minimum_interval: bool = False,
+    over_workspace_limit: bool = False,
+) -> ScheduleView:
     """행을 응답 모양으로.
 
     ``payload["text"]`` 가 문자열이 아니면 **빈 문자열**로 떨어진다 — 두 표면이 각자
@@ -77,4 +87,6 @@ def schedule_view_from_row(row: ScheduleRowLike) -> ScheduleView:
         last_fired_at=row.last_fired_at,
         enabled=row.enabled,
         output_mode="direct" if payload.get("output_mode") == "direct" else "safe",
+        below_minimum_interval=below_minimum_interval,
+        over_workspace_limit=over_workspace_limit,
     )

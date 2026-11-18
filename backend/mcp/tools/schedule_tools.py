@@ -120,8 +120,7 @@ async def _h_create(args: ScheduleCreateInput, ctx: ToolContext) -> Any:
 
 async def _h_list(_args: SchedulesListInput, ctx: ToolContext) -> Any:
     service = ScheduleService(ctx.session)
-    rows = await service.list(workspace_id=ctx.principal.workspace_id)
-    return SchedulesListOutput([_to_view(row) for row in rows])
+    return SchedulesListOutput(await service.list_views(workspace_id=ctx.principal.workspace_id))
 
 
 async def _h_delete(args: ScheduleDeleteInput, ctx: ToolContext) -> Any:

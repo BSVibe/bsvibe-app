@@ -36,10 +36,12 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.config import get_settings
 from backend.data.rls import workspace_session_scope
 from backend.schedule.application.emitter import ScheduleTrigger
 from backend.schedule.channels import WORKSPACE_SCHEDULES
 from backend.schedule.domain.advancer import CronScheduleAdvancer, ScheduleAdvancer
+from backend.schedule.domain.limits import over_limit_ids, tightest_gap_below
 from backend.schedule.domain.repositories.workspace_schedule_repository import (
     WorkspaceScheduleRepository,
 )
@@ -119,6 +121,33 @@ class DbPollScheduleRunner:
             await session.commit()
             return fired
 
+    async def _warn_if_over_limits(
+        self,
+        repo: WorkspaceScheduleRepository,
+        sched: WorkspaceScheduleRow,
+        now: datetime,
+    ) -> None:
+        """Schedules that predate the limits are never auto-disabled — warn on every fire."""
+        settings = get_settings()
+        gap = tightest_gap_below(sched.cron_expr, now, settings.schedule_min_interval_minutes)
+        if gap is not None:
+            logger.warning(
+                "schedule_below_minimum_interval",
+                schedule_id=str(sched.id),
+                workspace_id=str(sched.workspace_id),
+                cron_expr=sched.cron_expr,
+                gap_minutes=gap,
+                minimum_minutes=settings.schedule_min_interval_minutes,
+            )
+        rows = await repo.list_for_workspace(workspace_id=sched.workspace_id)
+        if sched.id in over_limit_ids(reversed(rows), settings.schedule_max_per_workspace):
+            logger.warning(
+                "schedule_over_workspace_limit",
+                schedule_id=str(sched.id),
+                workspace_id=str(sched.workspace_id),
+                limit=settings.schedule_max_per_workspace,
+            )
+
     async def _fire_one(
         self,
         session: AsyncSession,
@@ -138,6 +167,7 @@ class DbPollScheduleRunner:
         # The next window is always computed from NOW: a backlog of missed windows
         # (server down for an hour) collapses into this one fire, not one per window.
         next_run_at = self._advancer.next_after(cron_expr=sched.cron_expr, after=now)
+        await self._warn_if_over_limits(repo, sched, now)
 
         if await repo.has_unfinished_run(schedule_id=sched.id, workspace_id=sched.workspace_id):
             # The previous run is still going — never stack a second one on it.
