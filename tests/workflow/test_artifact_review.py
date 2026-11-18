@@ -396,6 +396,35 @@ def test_ts_template_literal_lines_are_masked() -> None:
     assert "close_widget(z)" in masked[5]
 
 
+def test_ts_template_interpolation_is_code_but_literal_text_is_masked() -> None:
+    text = (
+        "const a = `prefix ${run_job(x)} suffix`;\n"
+        "const b = `run_job(x) 는 문자열`;\n"
+        "const c = `n ${ {k: run_job(1)}.k } ${`in ${run_job(2)}`} end`;\n"
+    )
+    masked = masked_lines("a.ts", text)
+    assert masked is not None
+    assert "run_job(" in masked[0] and "prefix" not in masked[0] and "suffix" not in masked[0]
+    assert "run_job(" not in masked[1]
+    assert masked[2].count("run_job(") == 2 and " end" not in masked[2]
+
+    sym = NewSymbol("run_job", "backend/w.py")
+    grep = "web/a.ts:1:x\nweb/a.ts:2:x\n"
+    assert production_calls(sym, grep, {"web/a.ts": masked}) == ["web/a.ts:1:x"]
+
+
+async def test_code_files_are_read_before_other_files_when_the_cap_bites() -> None:
+    docs = "".join(f"+++ b/docs/n{i}.md\n+text {i}\n" for i in range(41))
+    diff = docs + "+++ b/backend/late.py\n+def late_fn():\n+    return 1\n"
+    llm = StubLlm([_review_turn()])
+    await _verify(llm, box=_GitBox(diff))
+    text = str(llm.calls[0]["messages"][-1]["content"]).split("## 새 공개 심볼")[1]
+
+    assert "- late_fn (backend/late.py)" in text  # the .py was read, not cut by the cap
+    assert "files_unmasked (2개): docs/n39.md, docs/n40.md" in text
+    assert "- backend/late.py: 새 심볼" not in text  # not "확인 불가"
+
+
 _WRAPPED = """\
 --- a/backend/w.py
 +++ b/backend/w.py
