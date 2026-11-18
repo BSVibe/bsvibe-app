@@ -23,6 +23,7 @@ from backend.extensions.skill.loader import SkillLoader
 from backend.extensions.skill.tool_binding import INVOKE_SKILL_NAME, register_invoke_skill
 from backend.workflow.application.agent_briefing import (
     _ASK_SYSTEM_PROMPT,
+    _CLIENT_ATTACH_SYSTEM_PROMPT,
     _SYSTEM_PROMPT,
 )
 from backend.workflow.application.tool_registry import (
@@ -221,7 +222,7 @@ def _is_ask(run: ExecutionRun) -> bool:
     return frame.get("path_classification") == "knowledge_only"
 
 
-def system_prompt_for(run: ExecutionRun) -> str:
+def system_prompt_for(run: ExecutionRun, *, client_attach: bool = False) -> str:
     """The identity this run works under — investigator for an ASK, engineer
     otherwise.
 
@@ -230,7 +231,10 @@ def system_prompt_for(run: ExecutionRun) -> str:
     "do not change the product" directive, and edited four files anyway. A run
     with no frame keeps the engineer prompt — a missing classification must
     never silently downgrade a build into an investigation."""
-    return _ASK_SYSTEM_PROMPT if _is_ask(run) else _SYSTEM_PROMPT
+    if _is_ask(run):
+        return _ASK_SYSTEM_PROMPT
+    # Only a client_attach run opens the disposable stack; a server run must not be promised one.
+    return _CLIENT_ATTACH_SYSTEM_PROMPT if client_attach else _SYSTEM_PROMPT
 
 
 def prior_step_message(run: ExecutionRun, *, settings: Settings) -> dict[str, Any] | None:

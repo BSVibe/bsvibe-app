@@ -149,8 +149,11 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
         EMIT_DELIVERABLE_TOOL,
         _review.REQUEST_REVIEW_TOOL,  # a second opinion on this run's OWN failure history
     ]
+    # #692 — a client_attach run works in the founder's own directory (server holds no copy
+    # of the source) and settles on the in-place gate. Consumed at the "done" branch below.
+    client_attach = await is_client_attach_run(orch._session, run)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt_for(run)},
+        {"role": "system", "content": system_prompt_for(run, client_attach=client_attach)},
         _initial_user_message(run),
     ]
     # B6 — seed canon relevant to the run intent.
@@ -189,9 +192,6 @@ async def drive_loop(  # noqa: PLR0911, PLR0912, PLR0915 — preserved cycle bod
     fail_streak = 0
     stall = StallTracker()  # failed rounds running that moved nothing (``verify_stall``)
     evidence, prechecks = EvidenceReminder(), 0  # both are asked BEFORE a round is spent
-    # #692 — a client_attach run works in the founder's own directory (server holds no copy
-    # of the source) and settles on the in-place gate. Consumed at the "done" branch below.
-    client_attach = await is_client_attach_run(orch._session, run)
     # Where the tree stood BEFORE the agent touched it — knowable only here, since
     # the agent's commits then move HEAD. Two consumers: the in-place gate, and the
     # JUDGE (which read ``HEAD~1 HEAD`` — only the agent's LAST commit — so work
