@@ -165,3 +165,15 @@ async def test_rebuilt_ledger_makes_correction_global() -> None:
 
     # R2 is gone from the ledger -> everything
     assert founder_correction_items(payload, [r for r in _REQS if r["id"] != "R2"]) == [()]
+
+
+async def test_expansion_with_particles_rejudges_everything() -> None:
+    # dropping the particle handling makes "R2 등도 틀렸다" narrow to R2 and go red
+    for text in (
+        "R2 등도 틀렸다",
+        "R2 와 다른 항목도 고쳐라",
+        "R2 와 다른 것들도 고쳐라",
+        "나머지 항목도 같은 식으로",
+    ):
+        assert await _asked_for(text) == 4, text
+    assert await _asked_for("R2 는 틀렸다") == 1

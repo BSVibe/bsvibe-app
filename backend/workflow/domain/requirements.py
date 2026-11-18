@@ -105,7 +105,8 @@ _EXCLUSION_RE = re.compile(
 )
 # an expansion ("the same way for the others too"): the correction reaches beyond the named item
 _EXPANSION_RE = re.compile(
-    r"모두|전부|전체|나머지도|다른\s*것도|같은\s*방식|같은\s*식|(?<![가-힣])등(?![가-힣])|"
+    r"모두|전부|전체|(?:나머지|다른)(?:\s*[가-힣]{1,4}){0,2}?\s*도|[가-힣]들도|같은\s*방식|같은\s*식|"
+    r"(?<![가-힣])등(?:(?:도|을|를|은|는|의|이|가|과|와)(?![가-힣])|(?![가-힣]))|"
     r"\ball\b|\bevery\w*|\beach\b|\bothers?\s+too\b|\bthe\s+same\s+way\b",
     re.IGNORECASE,
 )
