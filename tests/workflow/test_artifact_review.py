@@ -17,8 +17,11 @@ from backend.workflow.application.verification_service import VerificationServic
 from backend.workflow.domain.artifact_review import (
     METHOD_UNCERTAIN,
     NO_PRODUCTION_CALL,
+    UNCONFIRMED,
     NewSymbol,
     _calls_section,
+    _parse_diff,
+    masked_lines,
     new_public_symbols,
     parse_review,
     production_calls,
@@ -74,20 +77,44 @@ _FINDING = {
 }
 
 
-class _GitBox(FakeBox):
-    """Answers the git diff and git grep the review asks; everything else like FakeBox."""
+def _post_change(diff: str) -> dict[str, str]:
+    """The post-change text of every file a whole-file-add diff describes."""
+    sides, _ = _parse_diff(diff)
+    return {
+        path: "\n".join(side.lines[i] for i in sorted(side.lines)) + "\n"
+        for path, side in sides.items()
+    }
 
-    def __init__(self, *diffs: str) -> None:
+
+class _GitBox(FakeBox):
+    """Answers the git diff, git show and git grep the review asks; the rest like FakeBox."""
+
+    def __init__(
+        self,
+        *diffs: str,
+        show: dict[str, str] | None = None,
+        grep: dict[str, tuple[int, str]] | None = None,
+    ) -> None:
         super().__init__()
         self.diffs = list(diffs or (_DIFF,))
+        # post-change file contents that ``git show HEAD:<path>`` serves
+        self.show = show if show is not None else _post_change(self.diffs[0])
+        self.grep = grep if grep is not None else _GREP
 
     async def exec(self, command: str, **kwargs: Any) -> SandboxResult:
         if " diff " in command and " HEAD" in command:
             diff = self.diffs.pop(0) if len(self.diffs) > 1 else self.diffs[0]
             return SandboxResult(exit_code=0, stdout=diff, stderr="", timed_out=False)
+        if " show " in command:
+            path = command.split(" show ")[1].strip().strip("'").removeprefix("HEAD:")
+            if path in self.show:
+                return SandboxResult(
+                    exit_code=0, stdout=self.show[path], stderr="", timed_out=False
+                )
+            return SandboxResult(exit_code=128, stdout="", stderr="bad object", timed_out=False)
         if " grep " in command:
             name = command.split(" -e ")[1].split()[0].strip("'")
-            code, out = _GREP.get(name, (1, ""))
+            code, out = self.grep.get(name, (1, ""))
             return SandboxResult(exit_code=code, stdout=out, stderr="", timed_out=False)
         return await super().exec(command, **kwargs)
 
@@ -213,11 +240,11 @@ async def test_a_changed_tree_is_reviewed_again() -> None:
 
 def test_the_symbol_scan_skips_tests_privates_and_moved_definitions() -> None:
     diff = (
-        "+++ b/a.py\n+def fresh():\n+def _hidden():\n-def moved():\n+def moved():\n"
+        "+++ b/a.py\n+def fresh(): ...\n+def _hidden(): ...\n-def moved(): ...\n+def moved(): ...\n"
         "+++ b/tests/test_a.py\n+def test_x():\n"
     )
 
-    assert new_public_symbols(diff) == [NewSymbol("fresh", "a.py")]
+    assert new_public_symbols(diff, _post_change(diff)) == [NewSymbol("fresh", "a.py")]
 
 
 def test_a_symbol_only_in_comments_and_strings_has_no_production_call() -> None:
@@ -257,8 +284,8 @@ def test_a_call_in_a_production_file_is_reported() -> None:
 
 
 def test_a_method_counts_only_dot_calls_and_is_flagged_uncertain() -> None:
-    diff = "+++ b/backend/w.py\n+class W:\n+    def run(self):\n"
-    [_, method] = new_public_symbols(diff)
+    diff = "+++ b/backend/w.py\n+class W:\n+    def run(self): ...\n"
+    [_, method] = new_public_symbols(diff, _post_change(diff))
     assert method == NewSymbol("run", "backend/w.py", True)
 
     grep = "backend/a.py:1:    run(x)\nbackend/a.py:2:    job.run()\nbackend/a.py:3:    x = 'a.run()'\n"
@@ -329,3 +356,156 @@ def test_run_detail_exposes_the_review() -> None:
     assert _run_verification(row).review == review
     row.result = {}
     assert _run_verification(row).review is None
+
+
+_WIDGET_FILE = (
+    "def run():\n"
+    '    """Closes things.\n'
+    "\n"
+    "    close_widget(x) is what the caller does.\n"
+    '    """\n'
+    "    return 1\n"
+)
+
+
+def test_multiline_docstring_middle_line_is_not_a_production_call() -> None:
+    sym = NewSymbol("close_widget", "backend/w.py")
+    grep = "backend/a.py:4:    close_widget(x) is what the caller does.\n"
+
+    # one line alone cannot tell it is inside a docstring ...
+    assert production_calls(sym, grep) == [grep.strip()]
+    # ... the whole file can
+    masked = {"backend/a.py": masked_lines("backend/a.py", _WIDGET_FILE)}
+    assert production_calls(sym, grep, masked) == []
+
+
+def test_a_real_call_after_a_docstring_is_still_found() -> None:
+    sym = NewSymbol("close_widget", "backend/w.py")
+    text = _WIDGET_FILE + "close_widget(x)\n"
+    masked = {"backend/a.py": masked_lines("backend/a.py", text)}
+    grep = "backend/a.py:4:    close_widget(x) is what\nbackend/a.py:7:close_widget(x)\n"
+
+    assert production_calls(sym, grep, masked) == ["backend/a.py:7:close_widget(x)"]
+
+
+def test_ts_template_literal_lines_are_masked() -> None:
+    text = "const s = `\n  close_widget(x)\n`;\n/* a\n close_widget(y) */\nclose_widget(z);\n"
+    masked = masked_lines("a.ts", text)
+    assert masked is not None
+    assert [bool(line.strip()) for line in masked[:6]] == [True, False, True, False, False, True]
+    assert "close_widget(z)" in masked[5]
+
+
+_WRAPPED = """\
+--- a/backend/w.py
++++ b/backend/w.py
+@@ -1,2 +1,7 @@
+ import os
++
++def fresh():
++    \"\"\"Takes a thing: a class
++    or constant of the module.
++    \"\"\"
++    return 1
+"""
+
+
+def test_wrapped_docstring_class_or_is_not_a_new_symbol() -> None:
+    text = "import os\n\ndef fresh():\n" + _WRAPPED.split("def fresh():\n")[1].replace("+", "")
+    source = text.replace("\\", "")
+    assert new_public_symbols(_WRAPPED.replace("\\", ""), {"backend/w.py": source}) == [
+        NewSymbol("fresh", "backend/w.py")
+    ]
+
+    diff = (
+        '+++ b/a.py\n+def g():\n+    """A class\n+    class or constant\n+    """\n+    return 1\n'
+    )
+    assert [s.name for s in new_public_symbols(diff, _post_change(diff))] == ["g"]
+    # without the post-change file nothing is guessed from the diff's lines
+    [unknown] = new_public_symbols(diff)
+    assert unknown.unconfirmed and unknown.file == "a.py"
+
+
+def test_nested_function_is_not_new_and_conditional_function_is_not_a_method() -> None:
+    diff = (
+        "+++ b/a.py\n"
+        "+from typing import TYPE_CHECKING\n"
+        "+if TYPE_CHECKING:\n"
+        "+    def foo(): ...\n"
+        "+def outer():\n"
+        "+    def inner(): ...\n"
+        "+class K:\n"
+        "+    def m(self): ...\n"
+        "+LIMIT = 3\n"
+    )
+
+    assert new_public_symbols(diff, _post_change(diff)) == [
+        NewSymbol("foo", "a.py", False),
+        NewSymbol("outer", "a.py", False),
+        NewSymbol("K", "a.py", False),
+        NewSymbol("m", "a.py", True),
+        NewSymbol("LIMIT", "a.py", False),
+    ]
+
+
+def test_type_checking_function_call_is_found() -> None:
+    diff = "+++ b/a.py\n+if TYPE_CHECKING:\n+    def foo(): ...\n"
+    [foo] = new_public_symbols(diff, _post_change(diff))
+    assert not foo.is_method
+    grep = "backend/b.py:3:    foo()\n"
+
+    assert production_calls(foo, grep) == ["backend/b.py:3:    foo()"]
+
+
+_DOC_DIFF = (
+    "--- /dev/null\n"
+    "+++ b/backend/w.py\n"
+    "@@ -0,0 +1,5 @@\n"
+    "+def close_widget(x):\n"
+    '+    """Closes it.\n'
+    "+    class or constant of the module.\n"
+    '+    """\n'
+    "+    return x\n"
+)
+_DOC_FILE = '"""Module docs.\n\n    close_widget(x) is what the caller does.\n"""\n'
+_DOC_GREP = {
+    "close_widget": (
+        0,
+        "backend/doc.py:3:    close_widget(x) is what the caller does.\n"
+        "backend/w.py:1:def close_widget(x):\n",
+    ),
+}
+
+
+async def _calls_text(box: FakeBox) -> str:
+    llm = StubLlm([_review_turn()])
+    await _verify(llm, box=box)
+    return str(llm.calls[0]["messages"][-1]["content"]).split("## 새 공개 심볼")[1]
+
+
+async def test_review_entry_masks_docstring_and_skips_fake_symbol() -> None:
+    """Through ``review_passed_round``: ``git show`` feeds the symbol parse and the file masks."""
+    show = {**_post_change(_DOC_DIFF), "backend/doc.py": _DOC_FILE}
+    text = await _calls_text(_GitBox(_DOC_DIFF, show=show, grep=_DOC_GREP))
+
+    # named only on the middle line of a multi-line docstring -> not a production call
+    assert f"- close_widget (backend/w.py): {NO_PRODUCTION_CALL}" in text
+    # the docstring line `class or constant` is not a new class
+    assert "- or " not in text
+    assert "files_unmasked" not in text
+
+
+async def test_unreadable_post_change_file_is_unconfirmed_not_guessed() -> None:
+    # git show fails for backend/w.py: no raw-line regex, the symbol is "확인 불가"
+    text = await _calls_text(_GitBox(_DOC_DIFF, show={}, grep=_DOC_GREP))
+
+    assert f"- backend/w.py: 새 심볼 {UNCONFIRMED}" in text
+    assert "- or " not in text and "- close_widget (" not in text
+    assert "files_unmasked (1개): backend/w.py" in text
+
+
+async def test_a_file_that_cannot_be_masked_is_listed_by_name() -> None:
+    show = {**_post_change(_DOC_DIFF), "backend/doc.py": "x = '''\n"}
+    text = await _calls_text(_GitBox(_DOC_DIFF, show=show, grep=_DOC_GREP))
+
+    assert "files_unmasked (1개): backend/doc.py" in text

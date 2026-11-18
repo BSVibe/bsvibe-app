@@ -51,7 +51,7 @@ from backend.workflow.domain.model_account_decision import (
     ACCOUNT_CHOICES_KEY,
     DECISION_AMBIGUOUS_MODEL_ACCOUNT,
 )
-from backend.workflow.domain.requirements import FOUNDER_CORRECTIONS_KEY
+from backend.workflow.domain.requirements import append_founder_correction
 from backend.workflow.domain.run_token_cap import (
     TOKEN_CAP_DECISION_KIND,
     TOKEN_CAP_GRANT_KEY,
@@ -369,9 +369,7 @@ async def resolve_checkpoint(  # noqa: PLR0912, PLR0915 — one branch per resol
         and typed
         and typed not in {o.strip() for o in offered}
     ):
-        corrections = list(payload.get(FOUNDER_CORRECTIONS_KEY) or [])
-        corrections.append({"decision_id": str(decision.id), "text": typed})
-        payload[FOUNDER_CORRECTIONS_KEY] = corrections
+        append_founder_correction(payload, str(decision.id), typed)
     await _prepare_the_resume(
         session, payload, run=run, decision=decision, action_key=action_key, answer=answer
     )
