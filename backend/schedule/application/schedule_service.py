@@ -26,10 +26,12 @@ it without updating the prose turns that test red.
 
 from __future__ import annotations
 
+import builtins
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
@@ -37,7 +39,8 @@ from backend.identity.domain.repositories.resource_binding_repository import (
     OUTPUT_MODES as _BINDING_OUTPUT_MODES,
 )
 from backend.schedule.domain.advancer import CronScheduleAdvancer
-from backend.schedule.domain.cron import CronParseError, next_cron_time, parse_cron
+from backend.schedule.domain.cron import CronParseError, parse_cron
+from backend.schedule.domain.limits import over_limit_ids, tightest_gap_below
 from backend.schedule.infrastructure.repositories.workspace_schedule_repository_sql import (
     SqlAlchemyWorkspaceScheduleRepository,
 )
@@ -46,6 +49,7 @@ from backend.schedule.infrastructure.schedule_db import (
     SCHEDULE_KIND_PRODUCT_TICK,
     WorkspaceScheduleRow,
 )
+from backend.schedule.serialization import ScheduleView, schedule_view_from_row
 
 #: The schedule kinds the authoring surface accepts. ``instruction`` carries the
 #: founder's ``text``; ``product_tick`` carries only the cadence + ``product_id``
@@ -84,28 +88,30 @@ def _check_output_mode(kind: str, output_mode: str) -> None:
         )
 
 
-#: How many consecutive fires are sampled to find a cron's tightest gap (covers the
-#: wrap-around of patterns like ``*/7`` whose smallest gap is at the hour boundary).
-_INTERVAL_SAMPLE = 120
-
-
 def _check_min_interval(cron_expr: str, after: datetime, min_minutes: int) -> None:
     """Refuse a cron whose consecutive fires are closer than ``min_minutes``."""
-    limit = timedelta(minutes=min_minutes)
-    try:
-        previous = next_cron_time(cron_expr, after)
-        for _ in range(_INTERVAL_SAMPLE):
-            following = next_cron_time(cron_expr, previous)
-            if following - previous < limit:
-                raise ScheduleValidationError(
-                    f"schedule runs too often: consecutive runs are "
-                    f"{int((following - previous).total_seconds() // 60)} min apart "
-                    f"(minimum {min_minutes} min)"
-                )
-            previous = following
-    except CronParseError:
-        # No further match within the search horizon → effectively one-shot; fine.
+    gap = tightest_gap_below(cron_expr, after, min_minutes)
+    if gap is not None:
+        raise ScheduleValidationError(
+            f"schedule runs too often: consecutive runs are {gap} min apart "
+            f"(minimum {min_minutes} min)"
+        )
+
+
+async def _lock_workspace_schedules(session: AsyncSession, workspace_id: uuid.UUID) -> None:
+    """Serialise count-then-write per workspace for the rest of this transaction.
+
+    Without it two concurrent creates both count 19 active and both insert → 21. A
+    transaction-scoped advisory lock keyed on the workspace id (not a workspace row lock:
+    the row need not exist) is released on commit/rollback. SQLite is single-writer, so
+    it needs nothing."""
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
         return
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"workspace_schedules:{workspace_id}"},
+    )
 
 
 class ScheduleService:
@@ -157,6 +163,7 @@ class ScheduleService:
         settings = get_settings()
         after = now or datetime.now(tz=UTC)
         _check_min_interval(cron_expr, after, settings.schedule_min_interval_minutes)
+        await _lock_workspace_schedules(self._session, workspace_id)
         active = sum(
             1 for r in await self._repo.list_for_workspace(workspace_id=workspace_id) if r.enabled
         )
@@ -191,6 +198,29 @@ class ScheduleService:
     async def list(self, *, workspace_id: uuid.UUID) -> list[WorkspaceScheduleRow]:
         return await self._repo.list_for_workspace(workspace_id=workspace_id)
 
+    async def list_views(
+        self, *, workspace_id: uuid.UUID, now: datetime | None = None
+    ) -> builtins.list[ScheduleView]:
+        """The list response for REST + MCP, with the limit flags.
+
+        Schedules that predate the limits keep running (never auto-disabled); the flags
+        make that visible. ``over_workspace_limit`` marks the newest active ones beyond
+        the cap."""
+        settings = get_settings()
+        after = now or datetime.now(tz=UTC)
+        rows = await self._repo.list_for_workspace(workspace_id=workspace_id)
+        over = over_limit_ids(reversed(rows), settings.schedule_max_per_workspace)
+        return [
+            schedule_view_from_row(
+                row,
+                below_minimum_interval=row.enabled
+                and tightest_gap_below(row.cron_expr, after, settings.schedule_min_interval_minutes)
+                is not None,
+                over_workspace_limit=row.id in over,
+            )
+            for row in rows
+        ]
+
     async def get(
         self, *, schedule_id: uuid.UUID, workspace_id: uuid.UUID
     ) -> WorkspaceScheduleRow | None:
@@ -204,7 +234,8 @@ class ScheduleService:
     ) -> WorkspaceScheduleRow | None:
         if enabled:
             # Re-enabling must pass the same limits as create, else disable→create→re-enable
-            # bypasses them. Already-enabled is a no-op that passes.
+            # bypasses them. Already-enabled is a no-op that passes. Same lock as create.
+            await _lock_workspace_schedules(self._session, workspace_id)
             row = await self._repo.get(schedule_id=schedule_id, workspace_id=workspace_id)
             if row is not None and not row.enabled:
                 settings = get_settings()

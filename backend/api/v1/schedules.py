@@ -109,8 +109,7 @@ async def list_schedules(
 ) -> list[ScheduleView]:
     """List this workspace's schedules, newest first."""
     service = ScheduleService(session)
-    rows = await service.list(workspace_id=workspace_id)
-    return [_to_view(row) for row in rows]
+    return await service.list_views(workspace_id=workspace_id)
 
 
 @router.delete(
