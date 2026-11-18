@@ -1072,7 +1072,7 @@ class VerificationService:
             missing_tests=cited_tests(box),
             corrections=founder_corrections(run.payload if isinstance(run.payload, dict) else {}),
             correction_items=founder_correction_items(
-                run.payload if isinstance(run.payload, dict) else {}
+                run.payload if isinstance(run.payload, dict) else {}, requirements
             ),
             command_verdicts=command_verdicts(
                 ledger_command_plan(requirements),
