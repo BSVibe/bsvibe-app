@@ -133,6 +133,15 @@ async def test_a_qualified_name_gets_that_classes_definition() -> None:
     assert "limit: int = 1" not in shown
 
 
+async def test_the_same_definition_under_two_names_is_shown_once() -> None:
+    src = "class A:\n    other: int = 1\n\n\nclass B:\n    limit: int = 2\n"
+    box = _Box({"s.py": src}, ["s.py"])
+    shown = await _excerpt(box)(_row("R1", "`B.limit` and `limit` are 2"))
+    block = shown.split("--- named definitions")[1]
+    assert block.count("limit: int = 2") == 1
+    assert "# limit → same as above" in block
+
+
 async def test_a_bare_name_with_two_locations_shows_both() -> None:
     box = _Box({"s.py": _TWO_CLASSES}, ["s.py"])
     shown = await _excerpt(box)(_row("R1", "`limit` is 2"))
