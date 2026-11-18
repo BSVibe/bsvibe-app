@@ -28,7 +28,11 @@ from typing import Any
 
 import pytest
 
-from backend.workflow.application.agent_briefing import _ASK_SYSTEM_PROMPT, _SYSTEM_PROMPT
+from backend.workflow.application.agent_briefing import (
+    _ASK_SYSTEM_PROMPT,
+    _CLIENT_ATTACH_SYSTEM_PROMPT,
+    _SYSTEM_PROMPT,
+)
 
 
 def test_the_briefing_says_the_repos_own_checks_decide() -> None:
@@ -48,21 +52,48 @@ def test_the_briefing_says_the_gate_covers_every_file_you_changed() -> None:
     assert "test" in text
 
 
-def test_the_briefing_says_a_disposable_product_instance_exists() -> None:
-    """So an agent asked to prove a user-facing change does not invent a CI job
-    and a harness dependency — the apparatus is already there."""
-    text = _SYSTEM_PROMPT.lower()
-    assert "disposable" in text
-    # Not a bare "ci" substring — "decision" contains one, so that assertion
-    # would pass on the pre-change prompt and prove nothing.
+def test_client_attach_briefing_keeps_the_disposable_promise() -> None:
+    """Only a client_attach run opens the disposable stack
+    (``settle_client_attach`` → ``open_run_check_environment``), so only it is told so."""
+    text = _CLIENT_ATTACH_SYSTEM_PROMPT.lower()
+    assert "disposable instance" in text
+    # Not a bare "ci" substring — "decision" contains one.
     assert "invent" in text
+
+
+def test_server_run_briefing_makes_no_disposable_promise() -> None:
+    """A server run verifies in the plain sandbox; promising a stack there is false."""
+    assert "disposable" not in _SYSTEM_PROMPT.lower()
+    assert "no running instance" in _SYSTEM_PROMPT
+
+
+def test_the_briefing_asks_for_entry_point_wiring_and_catching_test() -> None:
+    """Self-verification goes past lint/test: run the change, confirm it is wired, test first."""
+    for prompt in (_SYSTEM_PROMPT, _CLIENT_ATTACH_SYSTEM_PROMPT):
+        text = prompt.lower()
+        assert "real entry point" in text
+        assert "called from production code" in text
+        assert "would have caught it first" in text
+        assert "re-derive its numbers" in text
+
+
+def test_system_prompt_for_picks_the_variant_by_run_kind() -> None:
+    import uuid
+
+    from backend.workflow.application._loop_context import system_prompt_for
+    from backend.workflow.infrastructure.db import ExecutionRun
+
+    run = ExecutionRun(id=uuid.uuid4(), payload={"intent_text": "x"})
+    assert system_prompt_for(run) == _SYSTEM_PROMPT
+    assert system_prompt_for(run, client_attach=True) == _CLIENT_ATTACH_SYSTEM_PROMPT
 
 
 def test_the_briefing_stays_within_its_per_turn_budget() -> None:
     """This string rides EVERY turn of EVERY run, and this repo deliberately
     respects a local-model generation budget (see ``_DESIGN_SPEC_DIRECTIVE``).
     A capability catalogue does not belong here — only what changes behaviour."""
-    assert len(_SYSTEM_PROMPT) <= 3_000, f"briefing is {len(_SYSTEM_PROMPT)} chars"
+    for prompt in (_SYSTEM_PROMPT, _CLIENT_ATTACH_SYSTEM_PROMPT):
+        assert len(prompt) <= 3_000, f"briefing is {len(prompt)} chars"
 
 
 @pytest.mark.asyncio
