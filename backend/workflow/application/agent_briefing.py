@@ -106,7 +106,7 @@ _CHECKED = (
 # disposable stack (``open_run_check_environment``), so only that path may promise it.
 _SERVER_VERIFY = (
     "Verification runs the repo's commands in this sandbox; there is no running "
-    "instance of the product."
+    "or disposable product instance, so do not invent a CI job or harness for one."
 )
 _CLIENT_ATTACH_VERIFY = (
     "Verification also gets a DISPOSABLE instance of the product, stood up from "

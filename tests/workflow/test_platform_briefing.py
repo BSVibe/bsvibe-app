@@ -63,8 +63,9 @@ def test_client_attach_briefing_keeps_the_disposable_promise() -> None:
 
 def test_server_run_briefing_makes_no_disposable_promise() -> None:
     """A server run verifies in the plain sandbox; promising a stack there is false."""
-    assert "disposable" not in _SYSTEM_PROMPT.lower()
-    assert "no running instance" in _SYSTEM_PROMPT
+    text = _SYSTEM_PROMPT.lower()
+    assert "disposable instance" not in text
+    assert "there is no running or disposable product instance" in text
 
 
 def test_the_briefing_asks_for_entry_point_wiring_and_catching_test() -> None:
