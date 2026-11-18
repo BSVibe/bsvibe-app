@@ -18,6 +18,7 @@ Pure: no I/O. The application layer (``requirements_ledger``) records, judges an
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -34,16 +35,36 @@ FOUNDER_CORRECTIONS_KEY = "founder_corrections"
 _CORRECTION_MAX_CHARS = 1500
 
 
-def _correction_entries(payload: Mapping[str, Any] | None) -> list[tuple[str, tuple[str, ...]]]:
+def item_text_hash(text: Any) -> str:
+    """Hash of an item's sentence (case/spacing-insensitive), stored beside a correction's items."""
+    return hashlib.sha256(" ".join(str(text or "").split()).lower().encode()).hexdigest()[:16]
+
+
+def _correction_entries(
+    payload: Mapping[str, Any] | None,
+    requirements: Sequence[Mapping[str, Any]] | None = None,
+) -> list[tuple[str, tuple[str, ...]]]:
     raw = (payload or {}).get(FOUNDER_CORRECTIONS_KEY)
     if not isinstance(raw, list):
         return []
+    now = (
+        {str(r.get("id")): item_text_hash(r.get("text")) for r in requirements if r.get("id")}
+        if requirements is not None
+        else None
+    )
     out: list[tuple[str, tuple[str, ...]]] = []
     for entry in raw:
         text = entry.get("text") if isinstance(entry, Mapping) else None
         if isinstance(text, str) and text.strip():
             items = entry.get("items") if isinstance(entry, Mapping) else None
             ids = tuple(str(i) for i in items) if isinstance(items, list) else ()
+            if now is not None and ids:
+                hashes = entry.get("item_hashes")
+                hashes = hashes if isinstance(hashes, Mapping) else {}
+                # An id the ledger no longer has, or whose sentence changed since the
+                # correction was written, is not trusted: the correction is about everything.
+                if any(i not in now or hashes.get(i) != now[i] for i in ids):
+                    ids = ()
             out.append((text.strip()[:_CORRECTION_MAX_CHARS], ids))
     return out
 
@@ -53,12 +74,17 @@ def founder_corrections(payload: Mapping[str, Any] | None) -> list[str]:
     return [text for text, _ in _correction_entries(payload)]
 
 
-def founder_correction_items(payload: Mapping[str, Any] | None) -> list[tuple[str, ...]]:
+def founder_correction_items(
+    payload: Mapping[str, Any] | None,
+    requirements: Sequence[Mapping[str, Any]] | None = None,
+) -> list[tuple[str, ...]]:
     """Per correction (same order as :func:`founder_corrections`): the ledger ids it is about.
 
     An empty tuple means the correction is not tied to an item - it concerns every row.
+    With ``requirements`` (today's ledger) stored ids are checked against it: an id that is
+    gone, or whose sentence differs from the one hashed at correction time, widens to all.
     """
-    return [ids for _, ids in _correction_entries(payload)]
+    return [ids for _, ids in _correction_entries(payload, requirements)]
 
 
 _ITEM_ID_RE = re.compile(r"(?<![A-Za-z0-9_])R(\d+)(?![A-Za-z0-9_])")
@@ -75,6 +101,13 @@ _DANGLING_RE = re.compile(
 _EXCLUSION_RE = re.compile(
     r"\ub9d0\uace0|\uc81c\uc678|\ube7c\uace0|\ubab0\ub77c\ub3c4|\ub098\uba38\uc9c0|\uc544\ub2cc|\uc544\ub2c8\ub2e4|\ubb34\uad00|"
     r"\bexcept\b|\bexcluding\b|\bother than\b|\bbesides\b|\bnot\b|\bbut\b|\bwithout\b|\brest\b|\bothers\b",
+    re.IGNORECASE,
+)
+# an expansion ("the same way for the others too"): the correction reaches beyond the named item
+_EXPANSION_RE = re.compile(
+    r"모두|전부|전체|(?:나머지|다른)(?:\s*[가-힣]{1,4}){0,2}?\s*도|[가-힣]들도|같은\s*방식|같은\s*식|"
+    r"(?<![가-힣])등(?:(?:도|을|를|은|는|의|이|가|과|와)(?![가-힣])|(?![가-힣]))|"
+    r"\ball\b|\bevery\w*|\beach\b|\bothers?\s+too\b|\bthe\s+same\s+way\b",
     re.IGNORECASE,
 )
 # "Cloudflare R2", "R2 bucket": the token is a name from outside the ledger
@@ -121,7 +154,7 @@ def infer_correction_items(text: str, requirements: Sequence[Mapping[str, Any]])
     1. ledger ids named in the sentence (``R2``, ranges ``R1~R4`` expanded);
     2. else the items whose text shares a backticked identifier with the sentence.
     """
-    if _EXCLUSION_RE.search(text):
+    if _EXCLUSION_RE.search(text) or _EXPANSION_RE.search(text):
         return []
     ids = [str(r.get("id")) for r in requirements if r.get("id")]
     named = _named_ids(text)
@@ -147,8 +180,15 @@ def append_founder_correction(payload: dict[str, Any], decision_id: str, text: s
     ledger = payload.get(REQUIREMENTS_KEY)
     reqs = [i for i in ledger if isinstance(i, Mapping)] if isinstance(ledger, list) else []
     corrections = list(payload.get(FOUNDER_CORRECTIONS_KEY) or [])
+    items = infer_correction_items(text, reqs)
+    by_id = {str(r.get("id")): r.get("text") for r in reqs}
     corrections.append(
-        {"decision_id": decision_id, "text": text, "items": infer_correction_items(text, reqs)}
+        {
+            "decision_id": decision_id,
+            "text": text,
+            "items": items,
+            "item_hashes": {i: item_text_hash(by_id.get(i)) for i in items},
+        }
     )
     payload[FOUNDER_CORRECTIONS_KEY] = corrections
 
