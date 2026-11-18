@@ -18,7 +18,7 @@ import pytest
 
 from backend.workflow.application import adversarial_verifier
 from backend.workflow.application.adversarial_verifier import run_adversarial_round
-from backend.workflow.application.agent_loop import LoopToolCall, LoopTurn
+from backend.workflow.application.agent_loop import LoopTurn
 from backend.workflow.application.run_detail import _tally_adversarial
 from backend.workflow.application.safe_mode_ledger import _adversarial_summary
 from backend.workflow.application.verification_service import VerificationService
@@ -60,9 +60,7 @@ def _answer(*findings: dict[str, Any]) -> LoopTurn:
 
 
 def _tool(name: str, **args: Any) -> LoopTurn:
-    return LoopTurn(
-        content="", tool_calls=(LoopToolCall(id=f"c-{name}", name=name, arguments=args),)
-    )
+    return LoopTurn(content=json.dumps({"tool": name, "args": args}), tool_calls=())
 
 
 def _res(code: int = 0, out: str = "", *, timed_out: bool = False) -> SandboxResult:
@@ -200,8 +198,10 @@ async def test_non_test_write_refused_and_copy_removed() -> None:
     writes = [c for c in box.commands if "base64 -d" in c]
     assert len(writes) == 1 and f"{SCRATCH_ROOT}/run-1/test_ok.py" in writes[0]
     assert not any("backend/svc.py" in c for c in writes)
-    refused = [m for m in llm.calls[1]["messages"] if m.get("role") == "tool"]
-    assert refused[0]["content"].startswith("REFUSED")
+    refused = [
+        m for m in llm.calls[1]["messages"] if str(m.get("content", "")).startswith("TOOL RESULT")
+    ]
+    assert "REFUSED" in refused[0]["content"]
     assert any("(거절)" in c for c in blob["checks"])
     # the harness deletes every copy (the verifier's, scratch dir included, and the repro's fresh
     # one); the verifier's copy goes last, after the repro has run
