@@ -54,6 +54,11 @@ class RunLedger(BaseModel):
     review_status: str = "none"
     review_counts: dict[str, int] = {}
     review_findings: list[ReviewFindingItem] = []
+    #: The adversarial verifier of the same round (report-only): ``done`` / ``unavailable`` /
+    #: ``none``. ``confirmed`` = the harness reproduced it; ``suspected`` = it did not ("의심").
+    adversarial_status: str = "none"
+    adversarial_confirmed: list[ReviewFindingItem] = []
+    adversarial_suspected: list[ReviewFindingItem] = []
 
 
 _Review = tuple[str, dict[str, int], list[ReviewFindingItem]]
@@ -81,10 +86,40 @@ def _review_summary(result: Any) -> _Review:
     return "done", counts, top
 
 
-async def _reviews_for_runs(
+_Adversarial = tuple[str, list[ReviewFindingItem], list[ReviewFindingItem]]
+
+
+def _adversarial_summary(result: Any) -> _Adversarial:
+    blob = result.get("adversarial") if isinstance(result, dict) else None
+    if not isinstance(blob, dict):
+        return "none", [], []
+    if blob.get("status") != "done":
+        return "unavailable", [], []
+    rank = {sev: i for i, sev in enumerate(SEVERITIES)}
+    findings = sorted(
+        (f for f in blob.get("findings") or [] if isinstance(f, dict)),
+        key=lambda f: rank.get(str(f.get("severity")), len(rank)),
+    )
+
+    def _items(confirmed: bool) -> list[ReviewFindingItem]:
+        return [
+            ReviewFindingItem(
+                severity=str(f.get("severity")),
+                file=f["file"] if isinstance(f.get("file"), str) else None,
+                line=f["line"] if isinstance(f.get("line"), int) else None,
+                claim=str(f.get("claim", "")),
+            )
+            for f in findings
+            if (f.get("confirmed") is True) is confirmed
+        ][:_REVIEW_SHOWN]
+
+    return "done", _items(True), _items(False)
+
+
+async def _last_passed_results(
     session: AsyncSession, *, workspace_id: uuid.UUID, run_ids: set[uuid.UUID]
-) -> dict[uuid.UUID, _Review]:
-    """Each run's LAST passed round's review (a run whose last passed round has none is absent)."""
+) -> dict[uuid.UUID, Any]:
+    """Each run's LAST passed round's stored result."""
     from backend.workflow.infrastructure.db import (  # noqa: PLC0415
         VerificationOutcome,
         VerificationResult,
@@ -103,11 +138,10 @@ async def _reviews_for_runs(
             .order_by(VerificationResult.created_at.desc(), VerificationResult.id.desc())
         )
     ).all()
-    found: dict[uuid.UUID, _Review] = {}
+    found: dict[uuid.UUID, Any] = {}
     for run_id, result in rows:
-        if run_id not in found:
-            found[run_id] = _review_summary(result)
-    return {r: v for r, v in found.items() if v[0] != "none"}
+        found.setdefault(run_id, result)
+    return found
 
 
 async def ledgers_for_runs(
@@ -116,11 +150,16 @@ async def ledgers_for_runs(
     """Ledger summary per run, read in one query; a run without a ledger is absent."""
     ids = {r for r in run_ids if r is not None}
     rows_by_run = await ledger_rows_for_runs(session, ids, workspace_id=workspace_id)
-    reviews = await _reviews_for_runs(session, workspace_id=workspace_id, run_ids=ids)
+    last = await _last_passed_results(session, workspace_id=workspace_id, run_ids=ids)
+    reviews = {r: _review_summary(res) for r, res in last.items()}
+    reviews = {r: v for r, v in reviews.items() if v[0] != "none"}
+    adversarial = {r: _adversarial_summary(res) for r, res in last.items()}
+    adversarial = {r: v for r, v in adversarial.items() if v[0] != "none"}
     out: dict[uuid.UUID, RunLedger] = {}
-    for run_id in rows_by_run.keys() | reviews.keys():
+    for run_id in rows_by_run.keys() | reviews.keys() | adversarial.keys():
         rows = rows_by_run.get(run_id, [])
         status, counts, findings = reviews.get(run_id, ("none", {}, []))
+        adv_status, adv_confirmed, adv_suspected = adversarial.get(run_id, ("none", [], []))
         out[run_id] = RunLedger(
             counts=ledger_counts(rows) if rows else {},
             attention=[
@@ -136,6 +175,9 @@ async def ledgers_for_runs(
             review_status=status,
             review_counts=counts,
             review_findings=findings,
+            adversarial_status=adv_status,
+            adversarial_confirmed=adv_confirmed,
+            adversarial_suspected=adv_suspected,
         )
     return out
 

@@ -151,6 +151,9 @@ class RunVerification(BaseModel):
     # The independent review of a passed round, as stored: ``{"status": "done", "findings": […]}``
     # or ``{"status": "unavailable", "reason"}``; ``None`` when no review ran (failed round).
     review: dict[str, Any] | None = None
+    # The adversarial verifier's result as stored (``status``, ``findings`` each with
+    # ``confirmed`` / ``output``, ``checks``); ``None`` when it did not run. Report-only.
+    adversarial: dict[str, Any] | None = None
 
 
 class RunRoundItem(BaseModel):
@@ -173,6 +176,8 @@ class RunVerificationRound(BaseModel):
     outcome: VerificationOutcome
     failed_checks: list[str] = []
     open_items: list[RunRoundItem] = []
+    # The adversarial verifier's result for this round (report-only); ``None`` when it did not run.
+    adversarial: dict[str, Any] | None = None
 
 
 class RunActivity(BaseModel):

@@ -462,6 +462,7 @@ def _run_verification(row: VerificationResult) -> RunVerification:
         requirements=_requirement_rows(rows),
         leftovers_excluded=_leftovers_excluded(result),
         review=result["review"] if isinstance(result.get("review"), dict) else None,
+        adversarial=result["adversarial"] if isinstance(result.get("adversarial"), dict) else None,
         **tally,
     )
 
@@ -503,6 +504,12 @@ def _round_summaries(rows: Sequence[VerificationResult]) -> list[RunVerification
                 outcome=row.outcome,
                 failed_checks=_failed_command_labels(row.result),
                 open_items=items,
+                adversarial=(
+                    row.result["adversarial"]
+                    if isinstance(row.result, dict)
+                    and isinstance(row.result.get("adversarial"), dict)
+                    else None
+                ),
             )
         )
     return out
@@ -631,6 +638,14 @@ class VerificationQuality(NamedTuple):
     reviews_unavailable: int
     review_findings_by_severity: dict[str, int]
     runs_reviewed_with_high: int
+    #: Adversarial verifier (report-only), per ROUND: ``adversarial_runs`` = rounds it FINISHED
+    #: (``done``), ``adversarial_unavailable`` = rounds where it could not be done (counted
+    #: apart, never as a run); the findings the harness reproduced / could not, summed over the
+    #: finished rounds.
+    adversarial_runs: int
+    adversarial_unavailable: int
+    adversarial_confirmed: int
+    adversarial_unconfirmed: int
 
     def as_dict(self) -> dict[str, Any]:
         return self._asdict()
@@ -698,6 +713,24 @@ def _tally_reviews(
     return done, unavailable, has_high
 
 
+def _tally_adversarial(verifications: Sequence[VerificationResult]) -> tuple[int, int, int, int]:
+    """One run's rounds → (rounds it finished, rounds it was unavailable, findings confirmed,
+    unconfirmed). An ``unavailable`` round is NOT a run and has no findings to count."""
+    ran = unavailable = confirmed = unconfirmed = 0
+    for v in verifications:
+        adv = v.result.get("adversarial") if isinstance(v.result, dict) else None
+        if not isinstance(adv, dict):
+            continue
+        if adv.get("status") != "done":
+            unavailable += 1
+            continue
+        ran += 1
+        findings = [f for f in adv.get("findings") or [] if isinstance(f, dict)]
+        confirmed += sum(1 for f in findings if f.get("confirmed") is True)
+        unconfirmed += sum(1 for f in findings if f.get("confirmed") is not True)
+    return ran, unavailable, confirmed, unconfirmed
+
+
 async def verification_quality(
     session: AsyncSession,
     workspace_id: uuid.UUID,
@@ -739,12 +772,18 @@ async def verification_quality(
     cause_missing = 0
     leftover_dirs: Counter[str] = Counter()
     reviews_done = reviews_unavailable = runs_with_high = 0
+    adv_runs = adv_unavailable = adv_confirmed = adv_unconfirmed = 0
     by_severity = dict.fromkeys(("high", "medium", "low"), 0)
     for verifications in by_run.values():
         done, unavailable, high = _tally_reviews(verifications, by_severity)
         reviews_done += done
         reviews_unavailable += unavailable
         runs_with_high += high
+        ran, adv_na, confirmed, unconfirmed = _tally_adversarial(verifications)
+        adv_runs += ran
+        adv_unavailable += adv_na
+        adv_confirmed += confirmed
+        adv_unconfirmed += unconfirmed
         ledger = [
             r for r in _ledger_rows(verifications[-1].result) if r.get("status") != "withdrawn"
         ]
@@ -795,6 +834,10 @@ async def verification_quality(
         reviews_unavailable=reviews_unavailable,
         review_findings_by_severity=by_severity,
         runs_reviewed_with_high=runs_with_high,
+        adversarial_runs=adv_runs,
+        adversarial_unavailable=adv_unavailable,
+        adversarial_confirmed=adv_confirmed,
+        adversarial_unconfirmed=adv_unconfirmed,
     )
 
 

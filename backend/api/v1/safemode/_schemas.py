@@ -47,6 +47,11 @@ class SafeModeItemResponse(BaseModel):
     review_status: str = "none"
     review_counts: dict[str, int] = {}
     review_findings: list[ReviewFindingItem] = []
+    # Adversarial verifier of the same round (report-only): confirmed first; the ones the
+    # harness could not reproduce are shown apart as "suspected" (의심).
+    adversarial_status: str = "none"
+    adversarial_confirmed: list[ReviewFindingItem] = []
+    adversarial_suspected: list[ReviewFindingItem] = []
 
 
 class SafeModeRunGroupResponse(BaseModel):

@@ -86,6 +86,9 @@ export function toPendingDecisions(
         review_status: d.review_status,
         review_counts: d.review_counts,
         review_findings: d.review_findings,
+        adversarial_status: d.adversarial_status,
+        adversarial_confirmed: d.adversarial_confirmed,
+        adversarial_suspected: d.adversarial_suspected,
       },
       createdAt: d.created_at,
     });

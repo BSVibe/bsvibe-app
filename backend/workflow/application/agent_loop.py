@@ -423,7 +423,10 @@ class RunOrchestrator:
         the executor orchestrator both go through this SAME service so they
         verify identically (Lift B2a)."""
         return VerificationService(
-            session=self._session, llm=self._judge_llm or self._llm, retriever=self._retriever
+            session=self._session,
+            llm=self._judge_llm or self._llm,
+            retriever=self._retriever,
+            verifier_llm=self._judge_llm or self._llm,
         )
 
     async def _verify(
