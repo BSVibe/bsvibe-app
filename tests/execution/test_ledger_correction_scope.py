@@ -127,3 +127,53 @@ async def test_uncertain_scope_rejudges_everything() -> None:
     assert await _asked_for("R1~ 는 틀렸다") == 4
     assert await _asked_for("R9 는 틀렸다") == 4
     assert await _asked_for("R2 는 틀렸다") == 1
+
+
+async def test_expansion_phrase_rejudges_everything() -> None:
+    # dropping _EXPANSION_RE makes the first of these narrow to R2 and go red
+    assert await _asked_for("R2 와 같은 방식으로 다른 것도 고쳐라") == 4
+    for text in (
+        "R2 포함 모두 틀렸다",
+        "R2 등 틀렸다",
+        "R2 전부 틀렸다",
+        "all of them like R2",
+        "R2 and every other one",
+        "R2 and the same way for others too",
+    ):
+        assert infer_correction_items(text, _REQS) == [], text
+    assert await _asked_for("R2 는 틀렸다") == 1
+
+
+async def test_rebuilt_ledger_makes_correction_global() -> None:
+    payload: dict[str, Any] = {"requirements": _REQS}
+    append_founder_correction(payload, "d1", "R2 는 틀렸다")
+    assert payload["founder_corrections"][0]["item_hashes"].keys() == {"R2"}
+    first, _ = await _round([], [])
+
+    # same ledger: still only R2
+    same = founder_correction_items(payload, _REQS)
+    assert same == [("R2",)]
+    _, calls = await _round(["R2 는 틀렸다"], same, first)
+    assert _asked(calls) == 1
+
+    # R2's sentence changed after the correction was written -> everything
+    rebuilt = [dict(r, text="rewritten") if r["id"] == "R2" else r for r in _REQS]
+    changed = founder_correction_items(payload, rebuilt)
+    assert changed == [()]
+    _, calls = await _round(["R2 는 틀렸다"], changed, first)
+    assert _asked(calls) == 4
+
+    # R2 is gone from the ledger -> everything
+    assert founder_correction_items(payload, [r for r in _REQS if r["id"] != "R2"]) == [()]
+
+
+async def test_expansion_with_particles_rejudges_everything() -> None:
+    # dropping the particle handling makes "R2 등도 틀렸다" narrow to R2 and go red
+    for text in (
+        "R2 등도 틀렸다",
+        "R2 와 다른 항목도 고쳐라",
+        "R2 와 다른 것들도 고쳐라",
+        "나머지 항목도 같은 식으로",
+    ):
+        assert await _asked_for(text) == 4, text
+    assert await _asked_for("R2 는 틀렸다") == 1
