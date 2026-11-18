@@ -139,10 +139,7 @@ async def run_adversarial_round(
         before = await _fingerprint(box)
         try:
             await release()
-            diff = await _sh(
-                box,
-                f"git -C {shlex.quote(box.workspace_mount)} diff {shlex.quote(baseline)} HEAD",
-            )
+            diff = await _working_tree_diff(box, baseline)
             await _make_copy(box, copy)
             findings = await _bounded(
                 _session(llm, run, copy, diff, surface, scratch, checks, budget), budget
@@ -156,7 +153,7 @@ async def run_adversarial_round(
                     "검증자가 끝내지 못했거나 출력을 해석하지 못했다",
                 )
             else:
-                judged = [await _judge(copy, scratch, f, budget) for f in findings]
+                judged = [await _judge(box, copy, scratch, f, budget) for f in findings]
                 blob = _blob("done", surface, judged, checks)
         finally:
             await _cleanup(box, copy, budget)
@@ -339,14 +336,26 @@ def _unconfirmed(finding: Finding, reason: str, output: str = "") -> dict[str, A
     }
 
 
-async def _judge(copy: _Copy, scratch: str, finding: Finding, budget: _Budget) -> dict[str, Any]:
-    """Run the repro on the changed tree (the copy); the verdict is the exit code / output."""
+async def _judge(
+    box: SandboxSession,
+    worked_in: _Copy,
+    scratch: str,
+    finding: Finding,
+    budget: _Budget,
+) -> dict[str, Any]:
+    """Run the repro in a FRESH copy of the verified state; the verdict is the exit code / output.
+
+    The verifier's own copy is never the place a repro runs: whatever it edited there (a broken
+    production function, say) must not reach the verdict. The fresh copy gets only the finding's
+    repro test file, taken from the scratch directory of the verifier's copy."""
     repro = finding.repro
     if budget.remaining() <= 0:
         return _unconfirmed(finding, "시간 예산이 소진되어 실행하지 못했다")
     confirmed, reason, output = False, "", ""
     timeout = _step_timeout(budget, _REPRO_TIMEOUT_S)
+    fresh = _Copy(box, f"{worked_in.root}-repro-{uuid.uuid4().hex[:6]}")
     try:
+        await _make_copy(box, fresh)
         if repro.kind == "test":
             path = repro.path or ""
             runner = repro_runner(path)
@@ -356,7 +365,8 @@ async def _judge(copy: _Copy, scratch: str, finding: Finding, budget: _Budget) -
                 reason = "이 파일 형식의 테스트 실행기를 알 수 없다"
             else:
                 command, failed_code = runner
-                res = await copy.exec(command, timeout_s=timeout)
+                await _carry_repro_file(box, worked_in, fresh, path)
+                res = await fresh.exec(command, timeout_s=timeout)
                 output = (res.stdout or "") + (res.stderr or "")
                 confirmed = judge_test(
                     exit_code=res.exit_code, failed_code=failed_code, timed_out=res.timed_out
@@ -369,7 +379,7 @@ async def _judge(copy: _Copy, scratch: str, finding: Finding, budget: _Budget) -
                     else "재현 테스트가 통과했거나 실행되지 않았다"
                 )
         else:
-            res = await copy.exec(repro.command or "", timeout_s=timeout)
+            res = await fresh.exec(repro.command or "", timeout_s=timeout)
             output = (res.stdout or "") + (res.stderr or "")
             confirmed = judge_command(
                 repro.expect, exit_code=res.exit_code, output=output, timed_out=res.timed_out
@@ -382,8 +392,28 @@ async def _judge(copy: _Copy, scratch: str, finding: Finding, budget: _Budget) -
                 else "재현 명령의 결과가 기대와 달랐다"
             )
     except Exception as exc:  # noqa: BLE001 — a repro that cannot run is unconfirmed
-        reason = f"재현을 실행할 수 없다: {type(exc).__name__}"
+        confirmed, reason = False, f"재현을 실행할 수 없다: {type(exc).__name__}"
+    finally:
+        await _cleanup(box, fresh, budget)
     return {**_unconfirmed(finding, reason, output), "confirmed": confirmed}
+
+
+async def _carry_repro_file(box: SandboxSession, src: _Copy, dst: _Copy, rel_path: str) -> None:
+    """Copy ONE file (the repro test, inside the scratch dir) from the verifier's copy into the
+    fresh one. Nothing else the verifier did travels."""
+    s, d = shlex.quote(f"{src.root}/{rel_path}"), shlex.quote(f"{dst.root}/{rel_path}")
+    await _sh(box, f'mkdir -p -- "$(dirname {d})" && cp -- {s} {d}')
+
+
+async def _working_tree_diff(box: SandboxSession, baseline: str) -> str:
+    """The change as the working tree stands against the baseline — uncommitted edits included
+    (``git diff baseline HEAD`` would miss them) — plus the names of untracked files."""
+    mount = shlex.quote(box.workspace_mount)
+    return await _sh(
+        box,
+        f"cd {mount} && git diff {shlex.quote(baseline)} && "
+        "echo '--- untracked files ---' && git ls-files -o --exclude-standard",
+    )
 
 
 async def _real(box: SandboxSession, command: str, timeout_s: float = _EXEC_TIMEOUT_S) -> Any:

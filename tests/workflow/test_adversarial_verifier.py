@@ -202,10 +202,14 @@ async def test_non_test_write_refused_and_copy_removed() -> None:
     refused = [m for m in llm.calls[1]["messages"] if m.get("role") == "tool"]
     assert refused[0]["content"].startswith("REFUSED")
     assert any("(거절)" in c for c in blob["checks"])
-    # the harness deletes the whole copy (scratch dir included) when it is done, and only then
+    # the harness deletes every copy (the verifier's, scratch dir included, and the repro's fresh
+    # one); the verifier's copy goes last, after the repro has run
     removals = [i for i, c in enumerate(box.commands) if "rm -rf" in c]
-    assert len(removals) == 1
+    assert len(removals) == 2
     assert removals[0] > max(i for i, c in enumerate(box.commands) if "pytest" in c)
+    # the repro file alone is carried into the fresh copy
+    carries = [c for c in box.commands if " cp -- " in c]
+    assert len(carries) == 1 and "test_bug.py" in carries[0]
 
 
 async def test_artifact_number_mismatch_is_confirmed() -> None:
@@ -430,6 +434,37 @@ async def test_hostile_shell_leaves_the_real_tree_untouched(tmp_path: Path) -> N
     assert not list(Path("/tmp").glob("bsvibe-adversarial-run-1-*"))  # noqa: S108 — and the copy
 
 
+async def test_verifier_edits_never_reach_the_verdict(tmp_path: Path) -> None:
+    """The verifier breaks production code in ITS copy, then submits a repro for the breakage.
+
+    The repro runs in a fresh copy of the verified state, so the finding stays unconfirmed.
+    Running repros in the verifier's own copy would turn this red."""
+    repo = _real_tree(tmp_path)  # verified: f() returns 2
+    repro = {
+        "kind": "command",
+        "command": "grep -q 'return 2' src.py",
+        "expect": {"exit_code": "nonzero"},  # "f() no longer returns 2"
+    }
+    sabotage = "sed -i.bak 's/return 2/return 3/' src.py"
+    llm = StubLlm([_tool("shell_exec", command=sabotage), _answer(_finding(repro))])
+
+    blob = await _local_round(repo, llm)
+
+    assert blob["status"] == "done"
+    assert blob["findings"][0]["confirmed"] is False
+    assert not list(Path("/tmp").glob("bsvibe-adversarial-run-1-*"))  # noqa: S108 — all removed
+
+
+async def test_the_verifier_is_given_the_working_tree_diff(tmp_path: Path) -> None:
+    repo = _real_tree(tmp_path)  # src.py committed after the baseline, other.py uncommitted
+    llm = StubLlm([_answer()])
+    await _local_round(repo, llm)
+    user = next(m for m in llm.calls[0]["messages"] if m["role"] == "user")["content"]
+    assert "x = 99  # uncommitted" in user  # `git diff baseline HEAD` would not have it
+    assert "return 2" in user
+    assert "scratch_notes.txt" in user  # untracked files are named
+
+
 async def test_without_isolation_the_hostile_shell_would_be_caught(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
@@ -468,8 +503,8 @@ async def test_when_the_time_budget_runs_out_remaining_repros_are_unconfirmed(
     first_done = {"n": 0}
     real_judge = adversarial_verifier._judge
 
-    async def spend_budget(copy: Any, scratch: str, finding: Any, budget: Any) -> Any:
-        out = await real_judge(copy, scratch, finding, budget)
+    async def spend_budget(box: Any, copy: Any, scratch: str, finding: Any, budget: Any) -> Any:
+        out = await real_judge(box, copy, scratch, finding, budget)
         first_done["n"] += 1
         monkeypatch.setattr(budget, "remaining", lambda: 0.0)  # the clock runs out after #1
         return out

@@ -1263,6 +1263,7 @@
     "suspected": "Suspected ({count})",
     "unavailable": "The adversarial check could not be done",
     "none": "No findings",
-    "round": "Verification {round}"
+    "round": "Verification {round}",
+    "reason": "({reason})"
   }
 }

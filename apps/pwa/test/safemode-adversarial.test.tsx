@@ -96,7 +96,11 @@ describe("Run detail — adversarial rounds", () => {
         ],
       },
     },
-    { round: 3, outcome: "passed", adversarial: { status: "unavailable" } },
+    {
+      round: 3,
+      outcome: "passed",
+      adversarial: { status: "unavailable", reason: "harness_error: tree changed" },
+    },
   ];
 
   it("shows confirmed first and 의심 apart, in Korean, only for rounds that ran it", () => {
@@ -115,7 +119,11 @@ describe("Run detail — adversarial rounds", () => {
     expect(screen.getByText("확인됨 (1)")).toBeInTheDocument();
     expect(screen.getByText("의심 (1)")).toBeInTheDocument();
     expect(screen.getByText("src/a.py:3 — proved defect")).toBeInTheDocument();
-    expect(screen.getByText("깨 보는 검증을 하지 못했습니다")).toBeInTheDocument();
+    expect(screen.getByText(/깨 보는 검증을 하지 못했습니다/)).toBeInTheDocument();
+    // the reason of an unavailable round is shown (harness_error / timeout / parse failure)
+    expect(screen.getByTestId("adversarial-reason")).toHaveTextContent(
+      "harness_error: tree changed",
+    );
   });
 
   it("renders nothing without any adversarial round", () => {
