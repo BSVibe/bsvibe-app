@@ -61,6 +61,10 @@ _UNTRACKED_HASH = (
 Llm = Any  # JudgeLlm: ``complete(messages=..., tools=...)`` → a turn with usage fields
 
 
+class _TokenCapExceeded(Exception):
+    """The verifier spent its token cap: the loop ends at once, nothing it still wanted counts."""
+
+
 class _Budget:
     """The stage's single clock. Everything that takes time asks it how much is left."""
 
@@ -133,10 +137,14 @@ async def run_adversarial_round(
     budget = _Budget()
     scratch = f"{SCRATCH_ROOT}/{str(run.id)[:12]}"
     checks: list[str] = []
-    copy = _Copy(box, f"{_COPY_ROOT}-{str(run.id)[:12]}-{uuid.uuid4().hex[:8]}")
-    blob: dict[str, Any]
+    tag = f"{str(run.id)[:12]}-{uuid.uuid4().hex[:8]}"
+    copy = _Copy(box, f"{_COPY_ROOT}-{tag}")
+    snapshot = f"{_COPY_ROOT}-snap-{tag}.tar"
+    guarded = False
     try:
         before = await _fingerprint(box)
+        await _snapshot(box, snapshot)
+        guarded = True
         try:
             await release()
             diff = await _working_tree_diff(box, baseline)
@@ -155,21 +163,65 @@ async def run_adversarial_round(
             else:
                 judged = [await _judge(box, copy, scratch, f, budget) for f in findings]
                 blob = _blob("done", surface, judged, checks)
+        except _TokenCapExceeded:
+            blob = _blob("unavailable", surface, [], checks, "토큰 상한 초과로 검증자를 멈췄다")
+        except Exception as exc:  # noqa: BLE001 — report-only: must never change the verdict
+            logger.warning("adversarial_unavailable", run_id=str(run.id), error=repr(exc)[:200])
+            blob = _blob("unavailable", surface, [], checks, f"{type(exc).__name__}: {exc}"[:300])
         finally:
             await _cleanup(box, copy, budget)
-        if await _fingerprint(box) != before:
-            logger.error("adversarial_real_tree_changed", run_id=str(run.id))
-            return _blob(
-                "unavailable",
-                surface,
-                [],
-                checks,
-                "harness_error: 검증 단계 중 실제 작업 트리가 바뀌어 결과를 버렸다",
-            )
-        return blob
+        return await _guard_real_tree(box, before, snapshot, run, surface, checks, blob)
     except Exception as exc:  # noqa: BLE001 — report-only: must never change the verdict
         logger.warning("adversarial_unavailable", run_id=str(run.id), error=repr(exc)[:200])
-        return _blob("unavailable", surface, [], checks, f"{type(exc).__name__}: {exc}"[:300])
+        why = f"{type(exc).__name__}: {exc}"[:200]
+        if guarded:  # the stage had started: the real tree must still be proven clean
+            return _unrestored(surface, checks, why)
+        return _blob("unavailable", surface, [], checks, why)
+    finally:
+        try:
+            await _real(box, f"rm -f -- {shlex.quote(snapshot)}", _EXEC_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 — the snapshot is outside the workspace
+            logger.warning("adversarial_snapshot_cleanup_failed", error=repr(exc)[:200])
+
+
+def _unrestored(surface: str, checks: list[str], why: str) -> dict[str, Any]:
+    """The real tree could not be proven identical to its pre-stage state: fail the round."""
+    reason = f"harness_error: 작업 트리를 복원하지 못했다 ({why})"
+    return {**_blob("unavailable", surface, [], checks, reason), "tree_unrestored": True}
+
+
+async def _guard_real_tree(
+    box: SandboxSession,
+    before: str,
+    snapshot: str,
+    run: Any,
+    surface: str,
+    checks: list[str],
+    blob: dict[str, Any],
+) -> dict[str, Any]:
+    """Guarantee the real tree equals its pre-stage state; detecting is not enough.
+
+    Same fingerprint: the verifier's result stands. Different: the result is discarded, the
+    tree is restored from the snapshot and re-fingerprinted; if that does not match either, the
+    round fails (``tree_unrestored``) so a polluted tree never reaches the ledger or delivery."""
+    if await _fingerprint(box) == before:
+        return blob
+    logger.error("adversarial_real_tree_changed", run_id=str(run.id))
+    try:
+        await _restore(box, snapshot)
+        restored = await _fingerprint(box) == before
+    except Exception as exc:  # noqa: BLE001 — an unverifiable restore is a failed round
+        logger.error("adversarial_restore_failed", run_id=str(run.id), error=repr(exc)[:200])
+        restored = False
+    if not restored:
+        return _unrestored(surface, checks, "복원 후 지문이 다르다")
+    return _blob(
+        "unavailable",
+        surface,
+        [],
+        checks,
+        "harness_error: 검증 단계 중 실제 작업 트리가 바뀌어 복원하고 결과를 버렸다",
+    )
 
 
 async def _bounded(coro: Awaitable[Any], budget: _Budget) -> Any:
@@ -232,13 +284,16 @@ async def _session(
     ]
     spent = 0
     for _ in range(_MAX_TURNS):
-        turn = await _turn(llm, run, messages, TOOLS if spent < _TOKEN_CAP else None)
+        turn = await _turn(llm, run, messages, TOOLS)
         spent += int(getattr(turn, "usage_prompt_tokens", 0) or 0) + int(
             getattr(turn, "usage_completion_tokens", 0) or 0
         )
         calls = tuple(getattr(turn, "tool_calls", ()) or ())
         if not calls:
             return parse_findings(str(getattr(turn, "content", "") or ""))
+        if spent >= _TOKEN_CAP:
+            # A real stop: no further tool call runs and no further model call is made.
+            raise _TokenCapExceeded
         messages.append(
             {
                 "role": "assistant",
@@ -437,6 +492,22 @@ async def _fingerprint(box: SandboxSession) -> str:
         box,
         f"cd {mount} && git rev-parse HEAD && git status --porcelain && "
         f"git diff HEAD | sha256sum && {_UNTRACKED_HASH}",
+    )
+
+
+async def _snapshot(box: SandboxSession, path: str) -> None:
+    """The real tree as it stands: ``.git`` (HEAD, index), uncommitted and untracked files, in a
+    tarball OUTSIDE the workspace, so a restore needs nothing the verifier could touch."""
+    mount = shlex.quote(box.workspace_mount)
+    await _sh(box, f"cd {mount} && tar -cf {shlex.quote(path)} .")
+
+
+async def _restore(box: SandboxSession, path: str) -> None:
+    """Put the real tree back exactly as snapshotted: empty it, then unpack."""
+    mount = shlex.quote(box.workspace_mount)
+    await _sh(
+        box,
+        f"cd {mount} && find . -mindepth 1 -delete && tar -xf {shlex.quote(path)} -C {mount}",
     )
 
 

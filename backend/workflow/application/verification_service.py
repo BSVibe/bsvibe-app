@@ -900,6 +900,10 @@ class VerificationService:
         ledger_pass = ledger is None or ledger_passed(ledger)
 
         passed = command_gate_pass and judge_pass and demo_pass and ledger_pass
+        if (adversarial or {}).get("tree_unrestored"):
+            # The verifier stage polluted the real tree and it could not be restored: nothing
+            # may flow on from it (the only way the stage touches ``passed``).
+            passed = False
         if passed and declared.final and derived_gate is not None:
             # The product's CI-equivalent run: last, and only for a round that passed
             # everything else — so a change that would turn CI red fails HERE.

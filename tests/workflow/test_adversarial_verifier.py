@@ -6,6 +6,7 @@ output); the model's own opinion of its finding never counts. Stage 1 is report-
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import subprocess
@@ -482,18 +483,71 @@ async def test_without_isolation_the_hostile_shell_would_be_caught(
     before = _tree_state(repo)
     blob = await _local_round(repo, StubLlm([_tool("shell_exec", command=_HOSTILE), _answer()]))
 
-    assert _tree_state(repo) != before  # the damage really happened...
-    assert blob["status"] == "unavailable"  # ...and the harness discarded the result
+    assert _tree_state(repo) == before  # the damage happened, then the harness restored it...
+    assert blob["status"] == "unavailable"  # ...and discarded the result
     assert blob["reason"].startswith("harness_error")
+    assert "tree_unrestored" not in blob
     assert blob["findings"] == []
 
 
-async def test_an_absolute_path_escape_is_a_harness_error(tmp_path: Path) -> None:
+async def test_an_absolute_path_escape_is_restored(tmp_path: Path) -> None:
     repo = _real_tree(tmp_path)
-    escape = f"echo hacked >> {repo}/src.py"
+    before = _tree_state(repo)
+    escape = (
+        f"echo hacked >> {repo}/src.py; echo new > {repo}/planted.txt; "
+        f"cd {repo} && git commit -qam evil && git reset -q --hard HEAD~1"
+    )
     blob = await _local_round(repo, StubLlm([_tool("shell_exec", command=escape), _answer()]))
+
+    assert _tree_state(repo) == before  # HEAD, status, diff, untracked: the pre-stage state
+    assert not (repo / "planted.txt").exists()
     assert blob["status"] == "unavailable"
     assert blob["reason"].startswith("harness_error")
+
+
+async def test_without_the_restore_the_escape_stays_and_the_round_fails(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    repo = _real_tree(tmp_path)
+
+    async def no_restore(box: Any, path: str) -> None:
+        return None
+
+    monkeypatch.setattr(adversarial_verifier, "_restore", no_restore)
+    escape = f"echo hacked >> {repo}/src.py"
+    blob = await _local_round(repo, StubLlm([_tool("shell_exec", command=escape), _answer()]))
+
+    assert "hacked" in (repo / "src.py").read_text()  # nothing put it back...
+    assert blob["tree_unrestored"] is True  # ...so the round is failed, not passed on
+    assert blob["reason"].startswith("harness_error")
+
+
+async def test_an_unrestorable_tree_fails_the_round(monkeypatch: Any) -> None:
+    from backend.workflow.application import verification_service
+
+    async def polluted(**kwargs: Any) -> dict[str, Any]:
+        return adversarial_verifier._unrestored("code", [], "복원 후 지문이 다르다")
+
+    monkeypatch.setattr(verification_service, "run_adversarial_round", polluted)
+    vr = await _verify(verifier=StubLlm([_answer()]))
+
+    assert vr.outcome is VerificationOutcome.FAILED  # a polluted tree never flows on
+    assert vr.result["adversarial"]["reason"].startswith("harness_error")
+
+
+async def test_the_token_cap_is_a_real_stop(monkeypatch: Any) -> None:
+    monkeypatch.setattr(adversarial_verifier, "_TOKEN_CAP", 10)
+    heavy = dataclasses.replace(_tool("shell_exec", command="probe"), usage_prompt_tokens=50)
+    llm = StubLlm([heavy, _tool("shell_exec", command="never"), _answer(_finding())])
+    box = _AdvBox(pytest=_res(1, "failed"))
+
+    blob = await _round(llm, box)
+
+    assert blob["status"] == "unavailable"
+    assert "토큰" in blob["reason"]
+    assert blob["findings"] == []
+    assert len(llm.calls) == 1  # the loop ended at once
+    assert not any(c.endswith("probe") for c in box.commands)  # and its tool call never ran
 
 
 async def test_when_the_time_budget_runs_out_remaining_repros_are_unconfirmed(
