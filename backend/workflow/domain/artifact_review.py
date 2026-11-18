@@ -49,6 +49,8 @@ REVIEW_SYSTEM_PROMPT = (
     ' 거부할 이유가 없으면 {"findings": []}.'
 )
 
+CODE_EXTENSIONS = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+
 _TEST_DIRS = {"tests", "test", "__tests__", "spec", "specs", "e2e"}
 _TEST_FILE = re.compile(
     r"(^|/)(test_[^/]*\.py|[^/]*_test\.py|conftest\.py|[^/]*\.(test|spec)\.[jt]sx?)$"
@@ -205,7 +207,10 @@ def _defined_here(path: str, side: _FileSide, source: str | None) -> list[tuple[
 def changed_source_paths(diff: str) -> list[str]:
     """Non-test files the diff adds lines to — the ones whose post-change text is worth reading."""
     sides, _ = _parse_diff(diff)
-    return [p for p, side in sides.items() if side.added and not is_test_path(p)]
+    paths = [p for p, side in sides.items() if side.added and not is_test_path(p)]
+    # Code files first (stable): the caller caps how many it reads, and only code files
+    # can hold definitions — a pile of .md/.yaml/lock files must not eat the budget.
+    return sorted(paths, key=lambda p: not p.endswith(CODE_EXTENSIONS))
 
 
 def new_public_symbols(diff: str, files: Mapping[str, str] | None = None) -> list[NewSymbol]:
@@ -341,7 +346,17 @@ def _generic_masked(text: str) -> str:
     """TS/JS-ish: ``//`` and ``/* */`` comments, quoted strings and multi-line template
     literals become blanks."""
     spans: list[tuple[int, int]] = []
-    i, n = 0, len(text)
+    _mask_code(text, 0, spans, in_interpolation=False)
+    return _blank_spans(text, spans)
+
+
+def _mask_code(text: str, i: int, spans: list[tuple[int, int]], *, in_interpolation: bool) -> int:
+    """Scan code from ``i``, appending comment/string spans; returns where scanning stopped.
+
+    Inside a template ``${ … }`` the scan is code again and stops at the matching ``}``.
+    """
+    n = len(text)
+    depth = 0
     while i < n:
         ch = text[i]
         if text.startswith("//", i):
@@ -354,15 +369,48 @@ def _generic_masked(text: str) -> str:
             end = n if end < 0 else end + 2
             spans.append((i, end))
             i = end
-        elif ch in "'\"`":
+        elif ch == "`":
+            i = _mask_template(text, i, spans)
+        elif ch in "'\"":
             j = i + 1
-            while j < n and text[j] != ch and (ch == "`" or text[j] != "\n"):
+            while j < n and text[j] != ch and text[j] != "\n":
                 j += 2 if text[j] == "\\" else 1
             spans.append((i, min(j + 1, n)))
             i = j + 1
+        elif in_interpolation and ch == "{":
+            depth += 1
+            i += 1
+        elif in_interpolation and ch == "}":
+            if depth == 0:
+                return i
+            depth -= 1
+            i += 1
         else:
             i += 1
-    return _blank_spans(text, spans)
+    return n
+
+
+def _mask_template(text: str, start: int, spans: list[tuple[int, int]]) -> int:
+    """Blank a backtick template's literal parts; its ``${ … }`` bodies stay code."""
+    n = len(text)
+    i = start + 1
+    literal = start
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+        elif ch == "`":
+            spans.append((literal, i + 1))
+            return i + 1
+        elif text.startswith("${", i):
+            spans.append((literal, i + 2))
+            i = _mask_code(text, i + 2, spans, in_interpolation=True)
+            literal = i  # the closing ``}`` starts the next literal part
+            i += 1
+        else:
+            i += 1
+    spans.append((literal, n))
+    return n
 
 
 def masked_lines(path: str, text: str) -> list[str] | None:
