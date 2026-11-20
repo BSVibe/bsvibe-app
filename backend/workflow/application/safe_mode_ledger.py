@@ -94,9 +94,8 @@ def _adversarial_summary(result: Any) -> _Adversarial:
     blob = result.get("adversarial") if isinstance(result, dict) else None
     if not isinstance(blob, dict):
         return "none", [], []
-    if blob.get("status") == "no_probe":
-        return "no_probe", [], []
-    if blob.get("status") != "done":
+    status = blob.get("status")
+    if status not in ("done", "no_probe"):
         return "unavailable", [], []
     rank = {sev: i for i, sev in enumerate(SEVERITIES)}
     findings = sorted(
@@ -116,7 +115,7 @@ def _adversarial_summary(result: Any) -> _Adversarial:
             if (f.get("confirmed") is True) is confirmed
         ][:_REVIEW_SHOWN]
 
-    return "done", _items(True), _items(False)
+    return str(status), _items(True), _items(False)
 
 
 async def _last_passed_results(

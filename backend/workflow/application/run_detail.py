@@ -726,12 +726,12 @@ def _tally_adversarial(
         if not isinstance(adv, dict):
             continue
         if adv.get("status") == "no_probe":
-            no_probe += 1
-            continue
-        if adv.get("status") != "done":
+            no_probe += 1  # the harness's repro results still count; only the status differs
+        elif adv.get("status") != "done":
             unavailable += 1
             continue
-        ran += 1
+        else:
+            ran += 1
         findings = [f for f in adv.get("findings") or [] if isinstance(f, dict)]
         confirmed += sum(1 for f in findings if f.get("confirmed") is True)
         unconfirmed += sum(1 for f in findings if f.get("confirmed") is not True)

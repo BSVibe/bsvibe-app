@@ -363,6 +363,33 @@ async def test_refused_write_test_after_nudge_is_still_no_probe() -> None:
     assert blob["probes"] == 0
 
 
+async def test_first_answer_survives_two_malformed_replies_after_the_nudge() -> None:
+    junk = LoopTurn(content="not json", tool_calls=())
+    llm = StubLlm([_answer(_finding()), junk, junk])
+    blob = await _round(llm, _AdvBox(pytest=_res(1, "1 failed")))
+
+    assert blob["status"] == "no_probe"
+    assert blob["probes"] == 0
+    assert len(blob["findings"]) == 1  # the first answer's finding is kept and judged
+    assert blob["findings"][0]["confirmed"] is True
+
+
+def test_no_probe_rounds_keep_their_confirmed_findings_on_card_and_tally() -> None:
+    adv = {
+        "status": "no_probe",
+        "findings": [
+            {"severity": "high", "claim": "proved", "confirmed": True},
+            {"severity": "low", "claim": "maybe", "confirmed": False},
+        ],
+    }
+    status, confirmed, suspected = _adversarial_summary({"adversarial": adv})
+    assert status == "no_probe"
+    assert [f.claim for f in confirmed] == ["proved"]
+    assert [f.claim for f in suspected] == ["maybe"]
+    # not a "done" run, but its harness-reproduced findings are counted
+    assert _tally_adversarial([SimpleNamespace(result={"adversarial": adv})]) == (0, 0, 1, 1, 1)
+
+
 async def test_probe_then_answer_is_done_without_a_nudge() -> None:
     llm = StubLlm([_tool("grep", pattern="x"), _answer()])
     blob = await _round(llm, _AdvBox())

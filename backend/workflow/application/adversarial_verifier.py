@@ -296,15 +296,17 @@ async def _session(
     ]
     spent = 0
     nudged = False
+    first_answer: list[Finding] | None = None  # kept: a failed nudge must not lose it
     for _ in range(_MAX_TURNS):
         reply, used = await _ask(llm, run, messages)
         spent += used
         if reply is None:
-            return None  # malformed twice: this round is unavailable
+            return first_answer  # malformed twice: the first answer if any, else unavailable
         if isinstance(reply, list):
             if probes[0] == 0 and not nudged and spent < _TOKEN_CAP:
                 # Answered without touching the change: send it back ONCE (counts as a turn).
                 nudged = True
+                first_answer = reply
                 messages.append({"role": "user", "content": _NO_PROBE_NUDGE})
                 continue
             return reply
@@ -318,7 +320,7 @@ async def _session(
     # Out of turns: ask for the answer.
     messages.append({"role": "user", "content": "Stop investigating. Give the final JSON now."})
     reply, _ = await _ask(llm, run, messages)
-    return reply if isinstance(reply, list) else None
+    return reply if isinstance(reply, list) else first_answer
 
 
 async def _ask(

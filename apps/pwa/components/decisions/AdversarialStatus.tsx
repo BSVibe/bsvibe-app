@@ -70,6 +70,9 @@ export default function AdversarialStatus({
       <div className="adversarial-status">
         <span className="adversarial-status__title">{t("title")}</span>
         <span className="adversarial-status__count">{t("noProbe")}</span>
+        {(confirmed.length > 0 || suspected.length > 0) && (
+          <AdversarialFindings confirmed={confirmed} suspected={suspected} />
+        )}
       </div>
     );
   }
