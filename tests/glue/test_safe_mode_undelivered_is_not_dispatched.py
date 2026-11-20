@@ -91,6 +91,9 @@ class _GitOps:
     async def is_ahead_of_base(self, dest: Path, base_branch: str) -> bool:
         return False
 
+    async def fetch_base_tip(self, dest: Path, base_branch: str, *, token: str | None) -> bool:
+        return True
+
     async def push(self, dest: Path, branch: str, *, token: str | None) -> None:
         return None
 
