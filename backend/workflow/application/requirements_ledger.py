@@ -91,7 +91,10 @@ _JUDGE_SYSTEM = (
     'A definition that ends in "[... truncated, N more chars ...]" is NOT the whole '
     "definition: do not judge what the cut-off part might contain. When a name has several "
     "definitions at different locations, only the one at the location the requirement means "
-    'counts; a note about "other definitions" means some were not shown.'
+    'counts; a note about "other definitions" means some were not shown. '
+    'A line "no definition found in the files looked up" means only that those files (changed '
+    "and cited ones) do not define the name — an unchanged file may: do not conclude "
+    "passed=false or that it is missing from that line alone, weigh it together with the diff."
 )
 
 ContentKey = Callable[[Mapping[str, Any]], Awaitable[str]]
@@ -309,6 +312,33 @@ def _is_code(path: str) -> bool:
     return path.lower().endswith(_CODE_EXTS)
 
 
+#: Kept back from the definitions for the "no definition found" line.
+_UNFOUND_RESERVE = 600
+#: How many looked-up files are named in that line (the rest are counted).
+_UNFOUND_FILES_SHOWN = 3
+
+
+def _unfound_line(unfound: list[str], scope: list[str], room: int) -> str:
+    """One line naming what no searched file defines — "not in the files looked up", never
+    "does not exist": a file this run did not touch may define it. Fits ``room`` chars: the
+    first names are listed, the rest counted."""
+    files = ", ".join(scope[:_UNFOUND_FILES_SHOWN])
+    if len(scope) > _UNFOUND_FILES_SHOWN:
+        files += f", +{len(scope) - _UNFOUND_FILES_SHOWN} more"
+    looked = f"{len(scope)} file(s): {files}"
+    for listed in range(len(unfound), -1, -1):
+        names = ", ".join(f"`{n}`" for n in unfound[:listed])
+        if listed < len(unfound):
+            rest = f"{len(unfound) - listed} more name(s)"
+            names = f"{names}, {rest}" if names else rest
+        line = (
+            f"[... no definition found in the files looked up: {names} — looked up: {looked} ...]"
+        )
+        if len(line) <= room:
+            return line
+    return ""
+
+
 class _DefinitionFinder:
     """Finds the definitions an item names, in the cited paths and the files this run changed.
 
@@ -407,12 +437,17 @@ class _DefinitionFinder:
         header = "--- named definitions (looked up in the changed tree):"
         shown: list[str] = []
         skipped: list[str] = []
-        used = len(header)
         notes: list[str] = []
+        found = [(name, await self._hits(scope, name)) for name in names]
+        # Names with no definition in the searched files: told to the judge, so "not there"
+        # is not read as "not shown". Only when something was actually searched.
+        unfound = [name for name, hits in found if not hits] if scope else []
+        # Room for the unfound line is kept back from the definitions.
+        budget = _DEFINITIONS_CHARS - (_UNFOUND_RESERVE if unfound else 0)
+        used = len(header)
         # The same definition reached by two names (`B.limit` and `limit`) goes in once.
         seen: set[tuple[str, str, str]] = set()
-        for name in names:
-            hits = await self._hits(scope, name)
+        for name, hits in found:
             if not hits:
                 continue
             many = len(hits) > 1
@@ -421,14 +456,14 @@ class _DefinitionFinder:
             for (path, cls, body), loc in zip(hits, where, strict=True):
                 if (path, cls, body) in seen:
                     entry = f"# {name} → same as above"
-                    if entry not in shown and used + len(entry) + 2 <= _DEFINITIONS_CHARS:
+                    if entry not in shown and used + len(entry) + 2 <= budget:
                         shown.append(entry)
                         used += len(entry) + 2
                     fitted += 1
                     continue
                 # Several locations are all named: none is passed off as THE definition.
                 entry = f"# {loc}\n{body}" if many else f"# {path}\n{body}"
-                if used + len(entry) + 2 > _DEFINITIONS_CHARS:
+                if used + len(entry) + 2 > budget:
                     continue
                 shown.append(entry)
                 seen.add((path, cls, body))
@@ -442,11 +477,14 @@ class _DefinitionFinder:
                     f"[... `{name}`: 다른 정의 {left}개 있음, not shown; "
                     f"all locations: {', '.join(where)} ...]"
                 )
-        if not shown and not skipped:
+        if not shown and not skipped and not unfound:
             return ""
         out = [header, *shown, *notes]
         if skipped:
             out.append(f"[... not shown, out of room: {', '.join(skipped)} ...]")
+        room = _DEFINITIONS_CHARS - len("\n\n".join(out)) - 2
+        if unfound and (line := _unfound_line(unfound, scope, room)):
+            out.append(line)
         return "\n\n".join(out)
 
 

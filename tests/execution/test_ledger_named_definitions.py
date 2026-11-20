@@ -94,7 +94,64 @@ async def test_a_function_is_shown_whole_and_a_missing_name_is_skipped() -> None
     box = _Box({"s.py": _SETTINGS}, ["s.py"])
     shown = await _excerpt(box)(_row("R1", "`resolve_credentials` and `no_such_name`"))
     assert "return value" in shown
-    assert "no_such_name" not in shown
+    assert "no definition found in the files looked up: `no_such_name`" in shown
+    assert "looked up: " in shown
+
+
+async def test_a_name_with_no_definition_is_reported_to_the_judge() -> None:
+    from backend.workflow.application.requirements_ledger import judge_messages
+
+    box = _Box({"s.py": _SETTINGS}, ["s.py"])
+    row = _row("R1", "`purge_expired` 를 추가한다")
+    row["kind"] = "do"
+    shown = await _excerpt(box)(row)
+    assert "no definition found in the files looked up: `purge_expired`" in shown
+    assert "does not exist" not in shown
+    msgs = judge_messages(row, shown)
+    assert "no definition found in the files looked up: `purge_expired`" in msgs[1]["content"]
+    assert "files looked up" in msgs[0]["content"]
+
+
+async def test_only_unfound_names_still_make_a_block() -> None:
+    box = _Box({"s.py": _SETTINGS}, ["s.py"])
+    shown = await _excerpt(box)(_row("R1", "`nope_a` and `nope_b`"))
+    assert "`nope_a`, `nope_b`" in shown
+    assert "s.py" in shown
+
+
+async def test_found_and_skipped_names_are_not_listed_as_unfound() -> None:
+    src = "class A:\n    limit: int = 2\n\n\nclass B:\n    limit: int = 2\n"
+    box = _Box({"s.py": src}, ["s.py"])
+    shown = await _excerpt(box)(_row("R1", "`A.limit` and `limit` and `ghost`"))
+    line = [x for x in shown.splitlines() if "no definition found" in x][0]
+    assert "`ghost`" in line
+    assert "limit" not in line.split("looked up:")[1].split("—")[0]
+    big = "".join(f"CONST_{i:03d} = '{'x' * 400}'\n" for i in range(30))
+    box = _Box({"s.py": big}, ["s.py"])
+    text = " ".join(f"`CONST_{i:03d}`" for i in range(30)) + " `ghost`"
+    shown = await _excerpt(box)(_row("R1", text))
+    line = [x for x in shown.splitlines() if "no definition found" in x][0]
+    assert "CONST_" not in line.split("—")[0]
+
+
+async def test_all_names_found_has_no_unfound_line() -> None:
+    box = _Box({"s.py": _SETTINGS}, ["s.py"])
+    shown = await _excerpt(box)(_row("R1", "`resolve_credentials`"))
+    assert "no definition found" not in shown
+
+
+async def test_many_unfound_names_stay_within_the_budget() -> None:
+    from backend.workflow.application.requirements_ledger import _DEFINITIONS_CHARS
+
+    big = "".join(f"CONST_{i:03d} = '{'x' * 400}'\n" for i in range(30))
+    box = _Box({"s.py": big}, ["s.py"])
+    ghosts = " ".join(f"`ghost_name_{i:03d}`" for i in range(80))
+    text = " ".join(f"`CONST_{i:03d}`" for i in range(30)) + " " + ghosts
+    shown = await _excerpt(box)(_row("R1", text))
+    block = "--- named definitions" + shown.split("--- named definitions")[1]
+    assert "more name(s)" in block
+    assert "no definition found" in block
+    assert len(block) <= _DEFINITIONS_CHARS
 
 
 async def test_names_past_the_cap_are_declared_not_shown() -> None:
