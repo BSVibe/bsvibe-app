@@ -300,6 +300,38 @@ class GitOps:
             if token:
                 await self.scrub_origin_token(dest)
 
+    async def fetch_base_tip(self, dest: Path, base_branch: str, *, token: str | None) -> bool:
+        """Best-effort ``git fetch --depth=1 origin <base_branch>`` right before a push.
+
+        A shallow run clone whose base moved while the run worked lacks the remote's tip, so
+        ``git push`` cannot subtract what the remote already has and sends a full snapshot
+        (GitHub 408). Having the tip commit locally lets push omit the overlapping objects.
+        Token handling as :meth:`fetch` (re-auth ``origin`` for this call, scrub in ``finally``).
+        A failure NEVER blocks delivery: it is logged and ``False`` is returned.
+        """
+        try:
+            if token:
+                origin = await self._run_checked("remote", "get-url", "origin", cwd=dest)
+                authed = self.authed_url(origin.strip(), token=token)
+                await self._run_checked(
+                    "remote", "set-url", "origin", authed, cwd=dest, token=token
+                )
+            try:
+                await self._run_checked(
+                    "fetch", "--quiet", "--depth=1", "origin", base_branch, cwd=dest, token=token
+                )
+            finally:
+                if token:
+                    await self.scrub_origin_token(dest)
+        except GitError as exc:
+            logger.warning(
+                "git_ops_fetch_base_tip_failed",
+                base_branch=base_branch,
+                error=scrub_token(str(exc), token),
+            )
+            return False
+        return True
+
     async def is_shallow(self, dest: Path) -> bool:
         """True iff ``dest`` is a shallow clone (``git rev-parse
         --is-shallow-repository`` → ``"true"``).

@@ -490,3 +490,79 @@ async def test_checkout_existing_remote_branch_after_full_reclone(tmp_path: Path
     assert (dest / "runfile.txt").read_text() == "from run\n"
     branch = await _run("rev-parse", "--abbrev-ref", "HEAD", cwd=dest)
     assert branch == "bsvibe/run-reclone"
+
+
+# --- fetch_base_tip: shallow run whose base moved mid-run -------------------
+
+
+async def _object_total(bare: Path) -> int:
+    out = await _run("count-objects", "-v", cwd=bare)
+    stats = dict(line.split(": ") for line in out.splitlines())
+    return int(stats["count"]) + int(stats["in-pack"])
+
+
+async def _advance_main_many(bare: Path, tmp_path: Path, tag: str, n: int) -> None:
+    work = tmp_path / f"many-{tag}"
+    await _run("clone", str(bare), str(work))
+    await _run("config", "user.email", "t@bsvibe.dev", cwd=work)
+    await _run("config", "user.name", "Test", cwd=work)
+    for i in range(n):
+        (work / f"{tag}_{i}.txt").write_text(f"{tag} {i}\n")
+    await _run("add", "-A", cwd=work)
+    await _run("commit", "-m", f"many {tag}", cwd=work)
+    await _run("push", "origin", "main", cwd=work)
+
+
+async def _moved_base_run(tmp_path: Path) -> tuple[GitOps, Path, Path]:
+    bare = await _make_bare_remote(tmp_path)
+    # Keep every received pack whole (no unpacking) so duplicates sent are counted.
+    await _run("config", "receive.unpackLimit", "1", cwd=bare)
+    await _advance_main_many(bare, tmp_path, "a", 150)  # a big base the shallow run starts from
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, "bsvibe/run-moved")
+    (dest / "answer.txt").write_text("42\n")
+    await ops.commit_all(dest, "Add the answer")
+    await _advance_main_many(bare, tmp_path, "b", 150)
+    await _advance_main_many(bare, tmp_path, "c", 150)
+    return ops, dest, bare
+
+
+async def test_push_after_fetch_base_tip_sends_only_new_objects(tmp_path: Path) -> None:
+    ops, dest, bare = await _moved_base_run(tmp_path)
+    before = await _object_total(bare)
+    assert await ops.fetch_base_tip(dest, "main", token=None) is True
+    await ops.push(dest, "bsvibe/run-moved", token=None)
+    sent = await _object_total(bare) - before
+    assert 0 < sent < 20  # commit + tree + blob, not the ~150-object base snapshot
+
+
+async def test_push_without_fetch_base_tip_sends_full_snapshot(tmp_path: Path) -> None:
+    ops, dest, bare = await _moved_base_run(tmp_path)
+    before = await _object_total(bare)
+    await ops.push(dest, "bsvibe/run-moved", token=None)
+    # Wire-cut guard: without the fetch the whole snapshot is uploaded.
+    assert await _object_total(bare) - before >= 20
+
+
+async def test_fetch_base_tip_failure_does_not_block_push(tmp_path: Path) -> None:
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, "bsvibe/run-nobase")
+    (dest / "a.txt").write_text("a\n")
+    await ops.commit_all(dest, "a")
+    assert await ops.fetch_base_tip(dest, "no-such-branch", token=None) is False
+    await ops.push(dest, "bsvibe/run-nobase", token=None)
+    assert "bsvibe/run-nobase" in await _run("branch", "--list", cwd=bare)
+
+
+async def test_fetch_base_tip_scrubs_token(tmp_path: Path) -> None:
+    dest = tmp_path / "checkout"
+    await _run("init", "-b", "main", str(dest))
+    await _run("remote", "add", "origin", "https://127.0.0.1:1/o/r.git", cwd=dest)
+    token = "ghp_fakeSecretTokenABC123"  # noqa: S105
+    assert await GitOps().fetch_base_tip(dest, "main", token=token) is False
+    assert token not in (dest / ".git" / "config").read_text()
