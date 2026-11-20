@@ -377,3 +377,16 @@ async def test_unfound_line_survives_long_skipped_and_notes() -> None:
     assert "`ghost`" in block or "with no definition found" in block
     assert "no definition found" in block
     assert len(block) <= _DEFINITIONS_CHARS
+
+
+async def test_all_found_output_is_unchanged_with_definitions_over_4500_chars() -> None:
+    # Definitions totalling 4500-6000 chars, no notes/skipped/unfound: the whole 6000-char
+    # budget is still theirs (no reserve taken), so all of them are shown.
+    src = "".join(f"CONST_{i:02d} = '{'x' * 400}'\n" for i in range(12))
+    box = _Box({"s.py": src}, ["s.py"])
+    text = " ".join(f"`CONST_{i:02d}`" for i in range(12))
+    shown = await _excerpt(box)(_row("R1", text, paths=["s.py"]))
+    block = "--- named definitions" + shown.split("--- named definitions")[1]
+    assert 4500 < len(block) <= 6000
+    assert all(f"CONST_{i:02d} =" in block for i in range(12))
+    assert "no definition found" not in block and "out of room" not in block

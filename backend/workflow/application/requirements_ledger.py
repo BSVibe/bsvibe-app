@@ -314,8 +314,6 @@ def _is_code(path: str) -> bool:
 
 #: Kept back from the definitions for the "no definition found" line.
 _UNFOUND_RESERVE = 600
-#: Kept back for the "more definitions" and "out of room" lines (they shrink to counts if longer).
-_EXTRAS_RESERVE = 1500
 _SKIPPED_COMPACT = 100
 #: How many looked-up files are named in that line (the rest are counted).
 _UNFOUND_FILES_SHOWN = 3
@@ -360,6 +358,9 @@ def _assemble(
         out.append(full)
         left -= len(full) + 2
     if skipped:
+        # When the list has to be cut, names with a specific location (a class member, one of
+        # several definitions) are kept before the module-level ones.
+        skipped = sorted(skipped, key=lambda e: "(module level)" in e)
         full = f"[... {len(skipped)} name(s) not shown, out of room ...]"
         for listed in range(len(skipped), 0, -1):
             more = f", +{len(skipped) - listed} more" if listed < len(skipped) else ""
@@ -470,16 +471,17 @@ class _DefinitionFinder:
         ]
         header = "--- named definitions (looked up in the changed tree):"
         shown: list[str] = []
+        labels: list[str] = []  # what each shown entry is, for moving it to ``skipped``
         skipped: list[str] = []
         notes: list[str] = []
         found = [(name, await self._hits(scope, name)) for name in names]
         # Names with no definition in the searched files: told to the judge, so "not there"
         # is not read as "not shown". Only when something was actually searched.
         unfound = [name for name, hits in found if not hits] if scope else []
-        # Room for the unfound line (as long as it really is) and for the compact forms of the
-        # notes / skipped lines is kept back from the definitions.
+        # Room for the unfound line (as long as it really is) is kept back from the definitions;
+        # the notes / skipped lines are made room for afterwards, by dropping the last definitions.
         tail = _unfound_line(unfound, scope, _UNFOUND_RESERVE) if unfound else ""
-        budget = _DEFINITIONS_CHARS - (len(tail) + 2 if tail else 0) - _EXTRAS_RESERVE
+        budget = _DEFINITIONS_CHARS - (len(tail) + 2 if tail else 0)
         used = len(header)
         # The same definition reached by two names (`B.limit` and `limit`) goes in once.
         seen: set[tuple[str, str, str]] = set()
@@ -494,6 +496,7 @@ class _DefinitionFinder:
                     entry = f"# {name} → same as above"
                     if entry not in shown and used + len(entry) + 2 <= budget:
                         shown.append(entry)
+                        labels.append(f"{name} ({loc})")
                         used += len(entry) + 2
                     fitted += 1
                     continue
@@ -502,6 +505,7 @@ class _DefinitionFinder:
                 if used + len(entry) + 2 > budget:
                     continue
                 shown.append(entry)
+                labels.append(f"{name} ({loc})")
                 seen.add((path, cls, body))
                 used += len(entry) + 2
                 fitted += 1
@@ -515,7 +519,14 @@ class _DefinitionFinder:
                 )
         if not shown and not skipped and not unfound:
             return ""
-        return _assemble(header, shown, notes, skipped, tail)
+        out = _assemble(header, shown, notes, skipped, tail)
+        # Notes and the skipped line count against the budget too: when they do not fit, the
+        # last definitions give way (moved to ``skipped``), never the unfound line.
+        while len(out) > _DEFINITIONS_CHARS and shown:
+            shown.pop()
+            skipped.insert(0, labels.pop())
+            out = _assemble(header, shown, notes, skipped, tail)
+        return out
 
 
 def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
