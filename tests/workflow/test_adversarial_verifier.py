@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+import shlex
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,6 +42,7 @@ from tests.execution.test_verification_service import (
 )
 from tests.workflow.test_artifact_review import _GitBox
 
+_UV_SH = "uv run sh -c "
 _TEST_REPRO = {"kind": "test", "path": f"{SCRATCH_ROOT}/run-1/test_bug.py"}
 
 
@@ -68,24 +70,49 @@ def _res(code: int = 0, out: str = "", *, timed_out: bool = False) -> SandboxRes
 
 
 class _AdvBox(_GitBox):
-    """A git box whose pytest / repro commands are scripted and whose commands are recorded."""
+    """A git box whose pytest / repro commands are scripted and whose commands are recorded.
 
-    def __init__(self, *, pytest: SandboxResult | None = None, **scripted: SandboxResult) -> None:
+    ``pytest`` / ``scripted`` answer the repro on the changed tree; ``pytest_before`` /
+    ``scripted_before`` answer the same repro on the baseline copy (the ``-before-`` directory).
+    A repro with no 'before' answer shows nothing before the change (pytest passes, the command
+    exits 0 with no output)."""
+
+    def __init__(
+        self,
+        *,
+        pytest: SandboxResult | None = None,
+        pytest_before: SandboxResult | None = None,
+        scripted_before: dict[str, SandboxResult] | None = None,
+        **scripted: SandboxResult,
+    ) -> None:
         super().__init__()
         self.pytest = pytest or _res(0, "1 passed")
+        self.pytest_before = pytest_before or _res(0, "1 passed")
         self.scripted = scripted
+        self.scripted_before = scripted_before or {}
         self.commands: list[str] = []
 
     async def exec(self, command: str, **kwargs: Any) -> SandboxResult:
         self.commands.append(command)
-        if "status --porcelain" in command or "tar --exclude" in command or "rm -rf" in command:
+        if (
+            "status --porcelain" in command
+            or "tar --exclude" in command
+            or "rm -rf" in command
+            or "git archive" in command  # the baseline copy's rewind
+        ):
             return _res(0, "")  # fingerprint (unchanged) / the copy / its removal
+        before = "-before-" in command
         inner = re.sub(r"^cd \S+ && ", "", command)  # the copy wrapper
         if "pytest" in inner:
-            return self.pytest
+            return self.pytest_before if before else self.pytest
         bare = inner.removeprefix(CI_PREFIX)
-        if bare in self.scripted:
-            return self.scripted[bare]
+        if bare.startswith(_UV_SH):  # a command repro, as the harness wraps it
+            bare = shlex.split(bare.removeprefix(_UV_SH))[0]
+        table = self.scripted_before if before else self.scripted
+        if bare in table:
+            return table[bare]
+        if before and bare in self.scripted:
+            return _res(0, "")
         return await super().exec(command, **kwargs)
 
 
@@ -211,14 +238,14 @@ async def test_non_test_write_refused_and_copy_removed() -> None:
     ]
     assert "REFUSED" in refused[0]["content"]
     assert any("(거절)" in c for c in blob["checks"])
-    # the harness deletes every copy (the verifier's, scratch dir included, and the repro's fresh
-    # one); the verifier's copy goes last, after the repro has run
+    # the harness deletes every copy (the verifier's, scratch dir included, the repro's fresh one
+    # and the baseline one); the verifier's copy goes last, after the repro has run
     removals = [i for i, c in enumerate(box.commands) if "rm -rf" in c]
-    assert len(removals) == 2
+    assert len(removals) == 3
     assert removals[0] > max(i for i, c in enumerate(box.commands) if "pytest" in c)
-    # the repro file alone is carried into the fresh copy
+    # the repro file alone is carried into the fresh copy and the baseline copy
     carries = [c for c in box.commands if " cp -- " in c]
-    assert len(carries) == 1 and "test_bug.py" in carries[0]
+    assert len(carries) == 2 and all("test_bug.py" in c for c in carries)
 
 
 async def test_artifact_number_mismatch_is_confirmed() -> None:
@@ -228,7 +255,10 @@ async def test_artifact_number_mismatch_is_confirmed() -> None:
         "command": "wc -l < data.csv",
         "expect": {"not_contains": "42"},
     }
-    box = _AdvBox(**{"wc -l < data.csv": _res(0, "40")})
+    box = _AdvBox(
+        scripted_before={"wc -l < data.csv": _res(0, "42")},  # the report was right before
+        **{"wc -l < data.csv": _res(0, "40")},
+    )
     llm = StubLlm([_tool("grep", pattern="42 rows"), _answer(_finding(repro))])
     blob = await _round(llm, box, surface="artifact")
 
@@ -649,8 +679,10 @@ async def test_when_the_time_budget_runs_out_remaining_repros_are_unconfirmed(
     first_done = {"n": 0}
     real_judge = adversarial_verifier._judge
 
-    async def spend_budget(box: Any, copy: Any, scratch: str, finding: Any, budget: Any) -> Any:
-        out = await real_judge(box, copy, scratch, finding, budget)
+    async def spend_budget(
+        box: Any, copy: Any, scratch: str, finding: Any, budget: Any, **kw: Any
+    ) -> Any:
+        out = await real_judge(box, copy, scratch, finding, budget, **kw)
         first_done["n"] += 1
         monkeypatch.setattr(budget, "remaining", lambda: 0.0)  # the clock runs out after #1
         return out
@@ -661,4 +693,191 @@ async def test_when_the_time_budget_runs_out_remaining_repros_are_unconfirmed(
     )
 
     assert [f["confirmed"] for f in blob["findings"]] == [True, False, False]
-    assert sum("pytest" in c for c in box.commands) == 1  # #2 and #3 never ran
+    # #1 ran twice (changed tree + baseline control); #2 and #3 never ran
+    assert sum("pytest" in c for c in box.commands) == 2
+
+
+# -- baseline control: a repro that also holds BEFORE the change proves nothing ---------------
+
+
+def _cmd_repro(command: str, **expect: Any) -> dict[str, Any]:
+    return {"kind": "command", "command": command, "expect": expect}
+
+
+async def _one(box: _AdvBox, repro: dict[str, Any]) -> dict[str, Any]:
+    blob = await _round(StubLlm([_tool("grep", pattern="x"), _answer(_finding(repro))]), box)
+    assert blob["status"] == "done"
+    return blob["findings"][0]
+
+
+async def test_grep_repro_that_also_holds_before_the_change_is_not_confirmed() -> None:
+    probe = "grep -rl adversarial_unavailable ."
+    repro = _cmd_repro(probe, contains="MISSING:")
+    out = _res(0, "MISSING:backend/x.py")
+    box = _AdvBox(scripted_before={probe: out}, **{probe: out})  # same output both sides
+
+    finding = await _one(box, repro)
+
+    assert finding["confirmed"] is False
+    assert "변경 전에도 같은 결과" in finding["reason"]
+
+
+async def test_command_that_matches_only_after_the_change_is_confirmed() -> None:
+    probe = "check"
+    box = _AdvBox(scripted_before={probe: _res(0, "fine")}, **{probe: _res(0, "MISSING:x")})
+    finding = await _one(box, _cmd_repro(probe, contains="MISSING:"))
+    assert finding["confirmed"] is True
+    assert "변경 후에서만" in finding["reason"]
+
+
+async def test_test_repro_failing_on_both_sides_is_not_confirmed() -> None:
+    box = _AdvBox(pytest=_res(1, "1 failed"), pytest_before=_res(1, "1 failed"))
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is False
+    assert "변경 전에도 같은 결과" in finding["reason"]
+
+
+async def test_test_repro_failing_only_after_is_confirmed() -> None:
+    box = _AdvBox(pytest=_res(1, "1 failed"), pytest_before=_res(0, "1 passed"))
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is True
+    assert "변경 전에는 통과" in finding["reason"]
+
+
+async def test_test_repro_that_cannot_be_collected_before_is_confirmed_with_the_reason() -> None:
+    # the test imports what the change adds: before the change it cannot even be collected
+    box = _AdvBox(pytest=_res(1, "1 failed"), pytest_before=_res(2, "ImportError"))
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is True
+    assert "변경 전 실행 불가" in finding["reason"]
+    assert finding["baseline_not_run"] is True
+
+
+async def test_command_repro_that_cannot_run_before_is_never_confirmed() -> None:
+    probe = "check"
+    before = _res(1, "ModuleNotFoundError: No module named 'new_thing'")
+    box = _AdvBox(scripted_before={probe: before}, **{probe: _res(0, "MISSING:x")})
+    finding = await _one(box, _cmd_repro(probe, contains="MISSING:"))
+    assert finding["confirmed"] is False
+    assert "변경 전 실행 불가" in finding["reason"]
+
+
+async def test_a_baseline_run_that_times_out_never_confirms() -> None:
+    hung = _res(1, "", timed_out=True)
+    test_box = _AdvBox(pytest=_res(1, "1 failed"), pytest_before=hung)
+    test_finding = await _one(test_box, _TEST_REPRO)
+    cmd_box = _AdvBox(scripted_before={"check": hung}, **{"check": _res(0, "MISSING:x")})
+    cmd_finding = await _one(cmd_box, _cmd_repro("check", contains="MISSING:"))
+
+    for finding in (test_finding, cmd_finding):
+        assert finding["confirmed"] is False
+        assert finding["reason"] == "변경 전 대조 시간 초과"
+
+
+async def test_a_collection_error_is_not_run_rather_than_wrong() -> None:
+    box = _AdvBox(pytest=_res(2, "ERROR collecting: ModuleNotFoundError: structlog"))
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is False
+    assert finding["not_run"] is True
+    assert finding["reason"].startswith("재현이 실행되지 않음")
+    # no baseline control is spent on a repro that never ran
+    assert not any("-before-" in c and "pytest" in c for c in box.commands)
+
+    missing = "python -c 'import backend.x'"
+    err = _res(1, "ModuleNotFoundError: No module named 'structlog'")
+    cmd = await _one(_AdvBox(**{missing: err}), _cmd_repro(missing, exit_code="nonzero"))
+    assert cmd["confirmed"] is False  # exit 1 matches `nonzero`, but nothing ran
+    assert cmd["not_run"] is True
+    assert cmd["reason"].startswith("재현이 실행되지 않음")
+
+
+async def test_repros_run_with_the_gates_uv_run_prefix() -> None:
+    probe = "python -c 'import backend.workflow.application.safe_mode_ledger'"
+    box = _AdvBox(pytest=_res(1, "1 failed"), **{probe: _res(0, "")})
+    await _round(
+        StubLlm(
+            [
+                _tool("grep", pattern="x"),
+                _answer(_finding(), _finding(_cmd_repro(probe, exit_code=0))),
+            ]
+        ),
+        box,
+    )
+    repro_runs = [c for c in box.commands if "pytest" in c or " sh -c " in c]
+    assert repro_runs, "no repro ran"
+    for command in repro_runs:
+        inner = re.sub(r"^cd \S+ && ", "", command)
+        assert inner.startswith("uv run "), inner  # never a bare `python`
+    assert any("uv run python -m pytest" in c for c in repro_runs)
+    assert any(c.endswith(shlex.quote(probe)) for c in repro_runs)
+
+
+def test_the_verifier_is_told_where_repros_run() -> None:
+    from backend.workflow.domain.adversarial import SYSTEM_PROMPT
+
+    assert "uv run" in SYSTEM_PROMPT
+    assert "BEFORE the change" in SYSTEM_PROMPT
+
+
+def test_the_card_carries_why_a_suspected_finding_is_not_confirmed() -> None:
+    blob = {
+        "status": "done",
+        "findings": [
+            {"claim": "ran?", "confirmed": False, "reason": "재현이 실행되지 않음 (exit 2)"},
+            {"claim": "proved", "confirmed": True, "reason": "x"},
+        ],
+    }
+    _, confirmed, suspected = _adversarial_summary({"adversarial": blob})
+    assert [f.reason for f in suspected] == ["재현이 실행되지 않음 (exit 2)"]
+    assert [f.reason for f in confirmed] == [None]
+
+
+# -- the baseline copy, on a real repository ------------------------------------------------------
+
+
+async def test_baseline_copy_undoes_a_rename_and_additions(tmp_path: Path) -> None:
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "a.py").write_text("A = 1\n")
+    (repo / "keep.py").write_text("K = 1\n")
+    (repo / "gone.py").write_text("G = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "mv", "a.py", "b.py")  # the change: a rename ...
+    (repo / "keep.py").write_text("K = 2\n")  # ... an edit ...
+    _git(repo, "rm", "-q", "gone.py")  # ... a deletion ...
+    (repo / "new.py").write_text("N = 1\n")  # ... and new files, tracked and not
+    _git(repo, "add", "new.py")
+    (repo / "loose.py").write_text("L = 1\n")
+    box = _LocalBox(repo)
+    copy = adversarial_verifier._Copy(box, str(tmp_path / "copy"))  # type: ignore[arg-type]
+    before = _tree_state(repo)
+
+    await adversarial_verifier._make_copy(box, copy)  # type: ignore[arg-type]
+    assert (tmp_path / "copy" / "b.py").exists()  # the verified state has the new path
+    await adversarial_verifier._to_baseline(box, copy, base)  # type: ignore[arg-type]
+
+    root = tmp_path / "copy"
+    assert not (root / "b.py").exists()  # the renamed file's NEW path is gone
+    assert (root / "a.py").read_text() == "A = 1\n"  # and the old one is back
+    assert (root / "keep.py").read_text() == "K = 1\n"
+    assert (root / "gone.py").exists()
+    assert not (root / "new.py").exists()
+    assert not (root / "loose.py").exists()
+    assert _tree_state(repo) == before  # the real tree was only read
+
+
+async def test_a_grep_repro_that_holds_on_both_trees_is_unconfirmed_for_real(
+    tmp_path: Path,
+) -> None:
+    repo = _real_tree(tmp_path)  # "def f" exists both before and after the change
+    probe = _cmd_repro("grep -c 'def f' src.py", contains="1")
+    llm = StubLlm([_tool("grep", pattern="x"), _answer(_finding(probe))])
+
+    blob = await _local_round(repo, llm)
+
+    assert blob["findings"][0]["confirmed"] is False
+    assert "변경 전에도 같은 결과" in blob["findings"][0]["reason"]
+    assert not list(Path("/tmp").glob("bsvibe-adversarial-run-1-*"))  # noqa: S108 — all removed

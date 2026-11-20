@@ -38,6 +38,13 @@ class ReviewFindingItem(BaseModel):
     claim: str
 
 
+class AdversarialFindingItem(ReviewFindingItem):
+    """An adversarial finding. ``reason`` says why a suspected (unconfirmed) one is not
+    confirmed — 'the repro did not run' is told apart from 'the claim was wrong'."""
+
+    reason: str | None = None
+
+
 class RunLedger(BaseModel):
     """``counts`` is the report's ``ledger_counts`` (``{}`` when the run has no ledger).
 
@@ -58,8 +65,8 @@ class RunLedger(BaseModel):
     #: no tool request: it did not check) / ``unavailable`` / ``none``. ``confirmed`` = the
     #: harness reproduced it; ``suspected`` = it did not ("의심").
     adversarial_status: str = "none"
-    adversarial_confirmed: list[ReviewFindingItem] = []
-    adversarial_suspected: list[ReviewFindingItem] = []
+    adversarial_confirmed: list[AdversarialFindingItem] = []
+    adversarial_suspected: list[AdversarialFindingItem] = []
 
 
 _Review = tuple[str, dict[str, int], list[ReviewFindingItem]]
@@ -87,7 +94,7 @@ def _review_summary(result: Any) -> _Review:
     return "done", counts, top
 
 
-_Adversarial = tuple[str, list[ReviewFindingItem], list[ReviewFindingItem]]
+_Adversarial = tuple[str, list[AdversarialFindingItem], list[AdversarialFindingItem]]
 
 
 def _adversarial_summary(result: Any) -> _Adversarial:
@@ -103,13 +110,16 @@ def _adversarial_summary(result: Any) -> _Adversarial:
         key=lambda f: rank.get(str(f.get("severity")), len(rank)),
     )
 
-    def _items(confirmed: bool) -> list[ReviewFindingItem]:
+    def _items(confirmed: bool) -> list[AdversarialFindingItem]:
         return [
-            ReviewFindingItem(
+            AdversarialFindingItem(
                 severity=str(f.get("severity")),
                 file=f["file"] if isinstance(f.get("file"), str) else None,
                 line=f["line"] if isinstance(f.get("line"), int) else None,
                 claim=str(f.get("claim", "")),
+                reason=(
+                    f["reason"] if not confirmed and isinstance(f.get("reason"), str) else None
+                ),
             )
             for f in findings
             if (f.get("confirmed") is True) is confirmed
@@ -184,4 +194,10 @@ async def ledgers_for_runs(
     return out
 
 
-__all__ = ["LedgerAttentionItem", "ReviewFindingItem", "RunLedger", "ledgers_for_runs"]
+__all__ = [
+    "AdversarialFindingItem",
+    "LedgerAttentionItem",
+    "ReviewFindingItem",
+    "RunLedger",
+    "ledgers_for_runs",
+]

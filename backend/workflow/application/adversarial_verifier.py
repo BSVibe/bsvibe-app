@@ -31,10 +31,13 @@ from backend.workflow.domain.adversarial import (
     ToolRequest,
     checklist,
     clip,
+    command_did_not_run,
     judge_command,
     judge_test,
     parse_reply,
+    repro_command,
     repro_runner,
+    repro_test_did_not_run,
     write_refusal,
 )
 from backend.workflow.infrastructure.sandbox import SandboxResult, SandboxSession
@@ -162,7 +165,9 @@ async def run_adversarial_round(
                     "검증자가 끝내지 못했거나 출력을 해석하지 못했다",
                 )
             else:
-                judged = [await _judge(box, copy, scratch, f, budget) for f in findings]
+                judged = [
+                    await _judge(box, copy, scratch, f, budget, baseline=baseline) for f in findings
+                ]
                 blob = _blob("done" if probes[0] else "no_probe", surface, judged, checks)
                 blob["probes"] = probes[0]
         except _TokenCapExceeded:
@@ -437,60 +442,188 @@ async def _judge(
     scratch: str,
     finding: Finding,
     budget: _Budget,
+    *,
+    baseline: str = "",
 ) -> dict[str, Any]:
     """Run the repro in a FRESH copy of the verified state; the verdict is the exit code / output.
 
     The verifier's own copy is never the place a repro runs: whatever it edited there (a broken
     production function, say) must not reach the verdict. The fresh copy gets only the finding's
-    repro test file, taken from the scratch directory of the verifier's copy."""
+    repro test file, taken from the scratch directory of the verifier's copy.
+
+    A repro that shows the defect AFTER the change is then run again on a copy of the tree BEFORE
+    it (the baseline control): a result that already held before is not the change's doing."""
     repro = finding.repro
     if budget.remaining() <= 0:
         return _unconfirmed(finding, "시간 예산이 소진되어 실행하지 못했다")
-    confirmed, reason, output = False, "", ""
     timeout = _step_timeout(budget, _REPRO_TIMEOUT_S)
     fresh = _Copy(box, f"{worked_in.root}-repro-{uuid.uuid4().hex[:6]}")
+    verdict: tuple[bool, str, str, dict[str, Any]]
     try:
         await _make_copy(box, fresh)
         if repro.kind == "test":
-            path = repro.path or ""
-            runner = repro_runner(path)
-            if write_refusal(path, scratch) is not None:
-                reason = "재현 테스트가 임시 디렉터리 밖에 있어 실행하지 않았다"
-            elif runner is None:
-                reason = "이 파일 형식의 테스트 실행기를 알 수 없다"
-            else:
-                command, failed_code = runner
-                await _carry_repro_file(box, worked_in, fresh, path)
-                res = await fresh.exec(command, timeout_s=timeout)
-                output = (res.stdout or "") + (res.stderr or "")
-                confirmed = judge_test(
-                    exit_code=res.exit_code, failed_code=failed_code, timed_out=res.timed_out
-                )
-                reason = (
-                    "재현 테스트가 변경에서 실패했다"
-                    if confirmed
-                    else "시간 초과"
-                    if res.timed_out
-                    else "재현 테스트가 통과했거나 실행되지 않았다"
-                )
-        else:
-            res = await fresh.exec(repro.command or "", timeout_s=timeout)
-            output = (res.stdout or "") + (res.stderr or "")
-            confirmed = judge_command(
-                repro.expect, exit_code=res.exit_code, output=output, timed_out=res.timed_out
+            verdict = await _judge_test(
+                box, worked_in, fresh, scratch, finding, baseline, budget, timeout
             )
-            reason = (
-                "재현 명령의 결과가 기대와 일치했다"
-                if confirmed
-                else "시간 초과"
-                if res.timed_out
-                else "재현 명령의 결과가 기대와 달랐다"
+        else:
+            verdict = await _judge_command(
+                box, worked_in, fresh, finding, baseline, budget, timeout
             )
     except Exception as exc:  # noqa: BLE001 — a repro that cannot run is unconfirmed
-        confirmed, reason = False, f"재현을 실행할 수 없다: {type(exc).__name__}"
+        verdict = (False, f"재현을 실행할 수 없다: {type(exc).__name__}", "", {})
     finally:
         await _cleanup(box, fresh, budget)
-    return {**_unconfirmed(finding, reason, output), "confirmed": confirmed}
+    confirmed, reason, output, extra = verdict
+    return {**_unconfirmed(finding, reason, output), "confirmed": confirmed, **extra}
+
+
+async def _judge_test(
+    box: SandboxSession,
+    worked_in: _Copy,
+    fresh: _Copy,
+    scratch: str,
+    finding: Finding,
+    baseline: str,
+    budget: _Budget,
+    step_s: float,
+) -> tuple[bool, str, str, dict[str, Any]]:
+    """(confirmed, reason, output, extra) for a test repro."""
+    path = finding.repro.path or ""
+    runner = repro_runner(path)
+    if write_refusal(path, scratch) is not None:
+        return False, "재현 테스트가 임시 디렉터리 밖에 있어 실행하지 않았다", "", {}
+    if runner is None:
+        return False, "이 파일 형식의 테스트 실행기를 알 수 없다", "", {}
+    command, failed_code = runner
+    await _carry_repro_file(box, worked_in, fresh, path)
+    res = await fresh.exec(command, timeout_s=step_s)
+    output = (res.stdout or "") + (res.stderr or "")
+    if res.timed_out:
+        return False, "시간 초과", output, {}
+    if judge_test(exit_code=res.exit_code, failed_code=failed_code, timed_out=False):
+        before = await _before_change(box, worked_in, command, path, baseline, budget)
+        confirmed, reason, extra = _control_test(before, failed_code)
+        return confirmed, reason, output, extra
+    if repro_test_did_not_run(exit_code=res.exit_code, timed_out=False):
+        reason = f"재현이 실행되지 않음 (수집·import 오류, exit {res.exit_code})"
+        return False, reason, output, {"not_run": True}
+    return False, "재현 테스트가 통과했다", output, {}
+
+
+async def _judge_command(
+    box: SandboxSession,
+    worked_in: _Copy,
+    fresh: _Copy,
+    finding: Finding,
+    baseline: str,
+    budget: _Budget,
+    step_s: float,
+) -> tuple[bool, str, str, dict[str, Any]]:
+    """(confirmed, reason, output, extra) for a command repro."""
+    expect = finding.repro.expect
+    command = repro_command(finding.repro.command or "")
+    res = await fresh.exec(command, timeout_s=step_s)
+    output = (res.stdout or "") + (res.stderr or "")
+    if res.timed_out:
+        return False, "시간 초과", output, {}
+    if command_did_not_run(expect, exit_code=res.exit_code, output=output, timed_out=False):
+        reason = f"재현이 실행되지 않음 (명령 오류, exit {res.exit_code})"
+        return False, reason, output, {"not_run": True}
+    if judge_command(expect, exit_code=res.exit_code, output=output, timed_out=False):
+        before = await _before_change(box, worked_in, command, None, baseline, budget)
+        confirmed, reason, extra = _control_command(expect, before)
+        return confirmed, reason, output, extra
+    return False, "재현 명령의 결과가 기대와 달랐다", output, {}
+
+
+async def _before_change(
+    box: SandboxSession,
+    worked_in: _Copy,
+    command: str,
+    test_path: str | None,
+    baseline: str,
+    budget: _Budget,
+) -> SandboxResult | None:
+    """The same repro on a copy of the tree BEFORE the change. ``None`` = no time left for it.
+
+    Same isolation as every other copy: it is a throwaway directory driven through the box, the
+    real tree is only read, it is deleted afterwards, and it spends the one shared budget."""
+    if budget.remaining() <= 0:
+        return None
+    old = _Copy(box, f"{worked_in.root}-before-{uuid.uuid4().hex[:6]}")
+    try:
+        await _make_copy(box, old)
+        await _to_baseline(box, old, baseline)
+        if test_path is not None:
+            await _carry_repro_file(box, worked_in, old, test_path)
+        return await old.exec(command, timeout_s=_step_timeout(budget, _REPRO_TIMEOUT_S))
+    finally:
+        await _cleanup(box, old, budget)
+
+
+def _control_test(
+    before: SandboxResult | None, failed_code: int
+) -> tuple[bool, str, dict[str, Any]]:
+    """The repro test failed after the change: did it also fail before? → (confirmed, why, extra)."""
+    if before is None:
+        return False, "시간 예산이 소진되어 변경 전 대조를 하지 못했다", {}
+    if before.timed_out:
+        return False, "변경 전 대조 시간 초과", {}
+    if judge_test(exit_code=before.exit_code, failed_code=failed_code, timed_out=False):
+        return False, "변경 전에도 같은 결과", {}
+    if before.exit_code == 0:
+        return True, "재현 테스트가 변경 후에서만 실패했다 (변경 전에는 통과)", {}
+    if repro_test_did_not_run(exit_code=before.exit_code, timed_out=False):
+        # The test cannot even be collected before the change (it imports what the change adds):
+        # the failure after is all there is to go on, and it is said so.
+        return (
+            True,
+            f"재현 테스트가 변경 후에서 실패했다 (변경 전 실행 불가: 수집·import 오류, "
+            f"exit {before.exit_code})",
+            {"baseline_not_run": True},
+        )
+    return False, f"변경 전 대조를 판정하지 못했다 (exit {before.exit_code})", {}
+
+
+def _control_command(
+    expect: dict[str, Any], before: SandboxResult | None
+) -> tuple[bool, str, dict[str, Any]]:
+    """The command matched ``expect`` after the change: did it also match before?"""
+    if before is None:
+        return False, "시간 예산이 소진되어 변경 전 대조를 하지 못했다", {}
+    if before.timed_out:
+        return False, "변경 전 대조 시간 초과", {}
+    out = (before.stdout or "") + (before.stderr or "")
+    if command_did_not_run(expect, exit_code=before.exit_code, output=out, timed_out=False):
+        return (
+            False,
+            "변경 전 실행 불가 — 명령형 재현은 변경 전 대조 없이 확인하지 않는다",
+            {"baseline_not_run": True},
+        )
+    if judge_command(expect, exit_code=before.exit_code, output=out, timed_out=False):
+        return False, "변경 전에도 같은 결과", {}
+    return True, "재현 명령의 결과가 변경 후에서만 기대와 일치했다 (변경 전에는 불일치)", {}
+
+
+async def _to_baseline(box: SandboxSession, copy: _Copy, baseline: str) -> None:
+    """Turn ``copy`` (a copy of the verified state) into the tree BEFORE the change.
+
+    Files the change ADDED are deleted — found with ``git diff --no-renames --name-only
+    --diff-filter=A`` so that a renamed file's NEW path counts as added — as are untracked
+    files; then every tracked file is put back as it was at ``baseline``. Ignored files (the
+    project venv, installed packages) stay: the repro still needs its environment. The real
+    tree is only read."""
+    mount, root, ref = (
+        shlex.quote(box.workspace_mount),
+        shlex.quote(copy.root),
+        shlex.quote(baseline),
+    )
+    await _sh(
+        box,
+        f"cd {mount} && {{ git diff -z --no-renames --name-only --diff-filter=A {ref}; "
+        f"git ls-files -z -o --exclude-standard; }} | (cd {root} && xargs -0 -r rm -f --) && "
+        f"git archive {ref} | tar -xf - -C {root}",
+    )
 
 
 async def _carry_repro_file(box: SandboxSession, src: _Copy, dst: _Copy, rel_path: str) -> None:
