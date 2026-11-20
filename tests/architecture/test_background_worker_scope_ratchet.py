@@ -53,6 +53,7 @@ SCOPED_WORKERS: frozenset[str] = frozenset(
     {
         "intake_worker",
         "agent_worker",
+        "adversarial_replay_worker",
         "delivery_worker",
         "notify_worker",
         "daily_brief_worker",

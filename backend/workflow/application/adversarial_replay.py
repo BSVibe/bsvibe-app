@@ -16,8 +16,11 @@ Contract (each point is pinned by ``tests/workflow/test_adversarial_replay.py``)
 * Nothing is written: no run, deliverable, Safe Mode card, ledger row or knowledge. The stand-in
   ``run`` is a plain namespace, so the production ``verification_quality`` aggregate cannot see
   it. Every tree is removed afterwards.
-* One replay at a time (a second caller is refused, not queued), at most
-  :data:`MAX_REPEAT` repeats and :data:`MAX_CASES` cases.
+* At most :data:`MAX_REPEAT` repeats and :data:`MAX_CASES` cases. "One replay at a time" is NOT
+  decided here: it is the job row's state (``adversarial_replay_jobs``), so it holds across
+  processes and restarts.
+* Whatever one case raises, only that case is recorded as ``failed`` (with the reason) and the
+  next case runs.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import re
 import shutil
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -82,16 +85,8 @@ class CaseSpec:
 BoxFactory = Callable[[Path], contextlib.AbstractAsyncContextManager[SandboxSession]]
 StageA = Callable[..., Awaitable[dict[str, Any]]]
 Loader = Callable[[uuid.UUID], Awaitable[ReplayInput]]
-
-_slot = asyncio.Lock()  # one replay at a time — replay spends the workspace owner's tokens
-
-
-@contextlib.asynccontextmanager
-async def replay_slot() -> AsyncIterator[None]:
-    if _slot.locked():
-        raise ReplayRefused("다른 재생이 이미 돌고 있다 — 끝난 뒤 다시 시도하라")
-    async with _slot:
-        yield
+Progress = Callable[[list[dict[str, Any]]], Awaitable[None]]
+Beat = Callable[[], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +256,7 @@ async def _replay_case(
     box_for: BoxFactory,
     stage_a: StageA,
     work_root: Path,
+    beat: Beat | None = None,
 ) -> dict[str, Any]:
     head: dict[str, Any] = {
         "deliverable_id": str(spec.deliverable_id),
@@ -271,6 +267,8 @@ async def _replay_case(
         inp = await load(spec.deliverable_id)
         runs = []
         for _ in range(repeat):
+            if beat is not None:
+                await beat()
             runs.append(
                 await _replay_once(
                     inp, llm=llm, box_for=box_for, stage_a=stage_a, work_root=work_root
@@ -278,6 +276,14 @@ async def _replay_case(
             )
     except CaseUnavailable as exc:
         return {**head, "status": "skipped", "reason": str(exc), "runs": []}
+    except Exception as exc:  # noqa: BLE001 — one case's failure must not take the rest down
+        logger.warning("adversarial_replay_case_failed", error=repr(exc)[:300])
+        return {
+            **head,
+            "status": "failed",
+            "reason": f"{type(exc).__name__}: {str(exc)[:300]}",
+            "runs": [],
+        }
     confirmed_runs = sum(1 for r in runs if r["stage_a"].get("confirmed"))
     return {
         **head,
@@ -293,6 +299,7 @@ def score(results: list[dict[str, Any]]) -> dict[str, Any]:
     """Totals over the cases that actually ran. Whether a confirmed finding is the SAME defect as
     the known one cannot be decided here — the findings are returned for a human to judge."""
     ran = [r for r in results if r["status"] == "ran"]
+    failed = [r for r in results if r["status"] == "failed"]
     defect = [r for r in ran if r["expected"] == "defect"]
     clean = [r for r in ran if r["expected"] == "clean"]
     runs = [run for r in ran for run in r["runs"]]
@@ -305,7 +312,8 @@ def score(results: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "cases": len(results),
-        "skipped": len(results) - len(ran),
+        "skipped": len(results) - len(ran) - len(failed),
+        "failed": len(failed),
         "defect_cases": len(defect),
         "defect_cases_confirmed": sum(1 for r in defect if r["any_confirmed"]),
         "defect_confirmed_rate": rate(defect),
@@ -317,6 +325,14 @@ def score(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def validate_request(n_cases: int, repeat: int) -> None:
+    """Raise :class:`ReplayRefused` for a request over the caps (used at submit time too)."""
+    if not 1 <= repeat <= MAX_REPEAT:
+        raise ReplayRefused(f"repeat 는 1~{MAX_REPEAT} 이어야 한다")
+    if not 1 <= n_cases <= MAX_CASES:
+        raise ReplayRefused(f"cases 는 1~{MAX_CASES} 개여야 한다")
+
+
 async def run_replay(
     cases: list[CaseSpec],
     *,
@@ -326,16 +342,19 @@ async def run_replay(
     box_for: BoxFactory,
     work_root: Path,
     stage_a: StageA = run_adversarial_round,
+    on_progress: Progress | None = None,
+    beat: Beat | None = None,
 ) -> dict[str, Any]:
-    """Replay ``cases`` (one at a time process-wide). Raises :class:`ReplayRefused` on a bad or
-    concurrent request; an unreplayable case is reported in the result, never raised."""
-    if not 1 <= repeat <= MAX_REPEAT:
-        raise ReplayRefused(f"repeat 는 1~{MAX_REPEAT} 이어야 한다")
-    if not 1 <= len(cases) <= MAX_CASES:
-        raise ReplayRefused(f"cases 는 1~{MAX_CASES} 개여야 한다")
-    async with replay_slot():
-        await asyncio.to_thread(work_root.mkdir, parents=True, exist_ok=True)
-        results = [
+    """Replay ``cases`` one after another. Raises :class:`ReplayRefused` on an over-cap request;
+    an unreplayable case is ``skipped`` and one that raised is ``failed`` — both in the result.
+
+    ``on_progress`` gets the results so far after every case; ``beat`` is called before every
+    Stage A round (the job's liveness signal)."""
+    validate_request(len(cases), repeat)
+    await asyncio.to_thread(work_root.mkdir, parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    for spec in cases:
+        results.append(
             await _replay_case(
                 spec,
                 repeat=repeat,
@@ -344,9 +363,11 @@ async def run_replay(
                 box_for=box_for,
                 stage_a=stage_a,
                 work_root=work_root,
+                beat=beat,
             )
-            for spec in cases
-        ]
+        )
+        if on_progress is not None:
+            await on_progress(results)
     return {"results": results, "summary": score(results)}
 
 
@@ -401,4 +422,5 @@ __all__ = [
     "load_replay_input",
     "run_replay",
     "score",
+    "validate_request",
 ]

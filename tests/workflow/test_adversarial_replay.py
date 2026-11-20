@@ -7,7 +7,6 @@ whole replay through the real ExecutorAdapter path like ``test_adversarial_execu
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import os
@@ -25,8 +24,14 @@ from backend.config import get_settings
 from backend.dispatch.adapter import ExecutorAdapter
 from backend.executors import dispatch
 from backend.identity import oauth_service
-from backend.mcp.tools.adversarial_replay_tools import AdversarialReplayInput
+from backend.mcp.tools.adversarial_replay_tools import (
+    AdversarialReplayInput,
+    AdversarialReplayStatusInput,
+    _h_adversarial_replay,
+    _h_adversarial_replay_status,
+)
 from backend.workflow.application import adversarial_replay as replay
+from backend.workflow.application import adversarial_replay_jobs as jobs
 from backend.workflow.application.adversarial_replay import (
     CaseSpec,
     ReplayInput,
@@ -34,7 +39,18 @@ from backend.workflow.application.adversarial_replay import (
     run_replay,
 )
 from backend.workflow.application.loop_llm import ResolverLoopLlm
+from backend.workflow.application.runtime import account_resolution
+from backend.workflow.application.runtime.adversarial_replay_runtime import judge_llm_for
+from backend.workflow.infrastructure.db import (
+    AdversarialReplayJob,
+    Deliverable,
+    ExecutionRun,
+    UnattributedLlmUsage,
+)
 from backend.workflow.infrastructure.sandbox.noop_manager import NoopSandboxSession
+from backend.workflow.infrastructure.workers.adversarial_replay_worker import (
+    AdversarialReplayWorker,
+)
 
 from .._support import shared_file_sessionmaker
 from ..dispatch.test_adapter import (
@@ -319,34 +335,6 @@ async def test_repeat_is_capped(repo: _Repo, tmp_path: Path) -> None:
     assert AdversarialReplayInput(deliverable_id=did).repeat == 1
 
 
-async def test_only_one_replay_at_a_time(repo: _Repo, tmp_path: Path) -> None:
-    started, release = asyncio.Event(), asyncio.Event()
-
-    async def stage_a(**_: Any) -> dict[str, Any]:
-        started.set()
-        await release.wait()
-        return _blob()
-
-    did = uuid.uuid4()
-    kw: dict[str, Any] = {
-        "load": _loader({did: repo.input()}),
-        "llm": object(),
-        "box_for": _noop_box,
-        "work_root": tmp_path / "work",
-        "stage_a": stage_a,
-    }
-    first = asyncio.create_task(run_replay([CaseSpec(did)], **kw))
-    await started.wait()
-    with pytest.raises(ReplayRefused):
-        await run_replay([CaseSpec(did)], **kw)
-    release.set()
-    assert (await first)["results"][0]["status"] == "ran"
-    release.clear()
-    started.clear()
-    release.set()
-    assert (await run_replay([CaseSpec(did)], **kw))["results"][0]["status"] == "ran"  # free again
-
-
 async def test_replay_runs_through_the_real_executor_adapter(
     repo: _Repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -400,3 +388,172 @@ async def test_replay_runs_through_the_real_executor_adapter(
     assert len(prompts) == 2  # tool request → harness output → final answer
     assert run["base_commit"] == repo.a
     assert _git(repo.path, "status", "--porcelain") == ""
+
+
+# ---------------------------------------------------------------------------
+# the background job (the MCP request only registers; the worker runs; status reads)
+# ---------------------------------------------------------------------------
+def _specs(n: int = 1) -> list[CaseSpec]:
+    return [CaseSpec(uuid.uuid4(), "defect") for _ in range(n)]
+
+
+async def _count(sf: Any, model: Any) -> int:
+    from sqlalchemy import func, select  # noqa: PLC0415
+
+    async with sf() as session:
+        return int((await session.execute(select(func.count()).select_from(model))).scalar_one())
+
+
+async def test_only_one_job_runs_at_a_time_by_db_state() -> None:
+    ws = uuid.uuid4()
+    async with shared_file_sessionmaker() as sf:
+        async with sf() as session:
+            first = await jobs.submit_job(session, ws, _specs(), repeat=1, batch=False)
+            with pytest.raises(ReplayRefused):  # a second while one is queued
+                await jobs.submit_job(session, ws, _specs(), repeat=1, batch=False)
+            other = await jobs.submit_job(session, uuid.uuid4(), _specs(), repeat=1, batch=False)
+
+        claimed = await jobs.claim_next(sf)
+        assert claimed is not None and claimed.id == first.id  # oldest first
+        # `first` is running with a live heartbeat: nothing else is handed out, from ANY worker
+        assert await jobs.claim_next(sf) is None
+        async with sf() as session:
+            with pytest.raises(ReplayRefused):
+                await jobs.submit_job(session, ws, _specs(), repeat=1, batch=False)
+
+        # the worker died: its heartbeat lapses, so the slot is freed and the next job is claimed
+        from datetime import timedelta  # noqa: PLC0415
+
+        async with sf() as session:
+            row = await session.get(AdversarialReplayJob, first.id)
+            assert row is not None
+            row.heartbeat_at = datetime.now(UTC) - timedelta(seconds=jobs.LEASE_S + 5)
+            await session.commit()
+        nxt = await jobs.claim_next(sf)
+        assert nxt is not None and nxt.id == other.id
+        async with sf() as session:
+            dead = await session.get(AdversarialReplayJob, first.id)
+            assert dead is not None and dead.status == jobs.FAILED and dead.error
+
+
+async def test_a_case_exception_fails_only_that_case(repo: _Repo, tmp_path: Path) -> None:
+    calls = {"n": 0}
+
+    async def stage_a(**_: Any) -> dict[str, Any]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("judge exploded")
+        return _blob(1)
+
+    ids = [uuid.uuid4(), uuid.uuid4()]
+    out = await run_replay(
+        [CaseSpec(ids[0], "defect"), CaseSpec(ids[1], "defect")],
+        load=_loader({i: repo.input() for i in ids}),
+        llm=object(),
+        box_for=_noop_box,
+        work_root=tmp_path / "work",
+        stage_a=stage_a,
+    )
+    first, second = out["results"]
+    assert first["status"] == "failed" and "judge exploded" in first["reason"]
+    assert second["status"] == "ran" and second["any_confirmed"] is True
+    assert out["summary"]["failed"] == 1
+    assert list((tmp_path / "work").glob("replay-*")) == []
+
+
+async def test_job_worker_runs_and_status_reports_scoring(repo: _Repo, tmp_path: Path) -> None:
+    ws = uuid.uuid4()
+    outcomes = iter([1, 0, 1, 0])  # defect: 1/2 confirmed, clean: 1/2 confirmed
+
+    async def stage_a(**_: Any) -> dict[str, Any]:
+        return _blob(next(outcomes))
+
+    ids = [uuid.uuid4() for _ in range(4)]
+    cases = [
+        CaseSpec(ids[0], "defect", "note"),
+        CaseSpec(ids[1], "defect"),
+        CaseSpec(ids[2], "clean"),
+        CaseSpec(ids[3], "clean"),
+    ]
+    inputs = {i: repo.input() for i in ids}
+
+    async with shared_file_sessionmaker() as sf:
+        async with sf() as session:
+            registered = await jobs.submit_job(session, ws, cases, repeat=1, batch=True)
+
+        async def execute(job: AdversarialReplayJob) -> None:
+            async def llm_for(_ws: uuid.UUID) -> Any:
+                return object()
+
+            await jobs.execute_job(
+                sf,
+                job,
+                llm_for=llm_for,
+                load_for=lambda _ws: _loader(inputs),
+                box_for=_noop_box,
+                work_root=tmp_path / "work",
+                stage_a=stage_a,
+            )
+
+        worker = AdversarialReplayWorker(session_factory=sf, execute=execute)
+        assert await worker.run_once() == 1
+        assert await worker.run_once() == 0  # nothing left
+
+        # a fresh session (as after a restart) reads the stored state
+        async with sf() as session:
+            status = await jobs.job_status(session, ws, registered.id)
+            assert await jobs.job_status(session, uuid.uuid4(), registered.id) is None
+    assert status is not None and status["status"] == "done"
+    assert status["progress"] == {"cases_total": 4, "cases_done": 4}
+    assert status["summary"]["defect_confirmed_rate"] == 0.5
+    assert status["summary"]["false_confirmed_rate"] == 0.5
+    assert status["results"][0]["defect_note"] == "note"
+    assert status["results"][0]["runs"][0]["confirmed_findings"][0]["claim"] == "bug 0"
+
+
+async def test_mcp_tools_register_at_once_and_read_status() -> None:
+    ws = uuid.uuid4()
+    async with shared_file_sessionmaker() as sf:
+        async with sf() as session:
+            ctx = SimpleNamespace(session=session, principal=SimpleNamespace(workspace_id=ws))
+            did = uuid.uuid4()
+            out = (
+                await _h_adversarial_replay(
+                    AdversarialReplayInput(deliverable_id=did, repeat=3), ctx
+                )  # type: ignore[arg-type]
+            ).root
+            assert out["status"] == "queued" and out["repeat"] == 3
+            status = (
+                await _h_adversarial_replay_status(
+                    AdversarialReplayStatusInput(replay_id=uuid.UUID(out["replay_id"])),
+                    ctx,  # type: ignore[arg-type]
+                )
+            ).root
+            assert status["status"] == "queued" and status["results"] == []
+            from backend.mcp.api import ToolError  # noqa: PLC0415
+
+            with pytest.raises(ToolError):  # one at a time
+                await _h_adversarial_replay(AdversarialReplayInput(deliverable_id=did), ctx)  # type: ignore[arg-type]
+            with pytest.raises(ToolError):
+                await _h_adversarial_replay_status(
+                    AdversarialReplayStatusInput(replay_id=uuid.uuid4()),
+                    ctx,  # type: ignore[arg-type]
+                )
+
+
+async def test_fake_run_id_records_no_usage_or_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The judge path is handed a stand-in run; none of its id may reach the adapter."""
+    seen: dict[str, Any] = {}
+
+    async def fake_resolve(*_a: Any, **kw: Any) -> None:
+        seen.update(kw)
+        return None
+
+    monkeypatch.setattr(account_resolution, "resolve_via_caller", fake_resolve)
+    ws = uuid.uuid4()
+    async with shared_file_sessionmaker() as sf:
+        assert await judge_llm_for(sf, get_settings(), ws) is None
+        assert seen["workspace_id"] == ws
+        assert seen.get("run_id") is None  # not bound to a run: no meter, no run link
+        for model in (ExecutionRun, Deliverable, UnattributedLlmUsage):
+            assert await _count(sf, model) == 0

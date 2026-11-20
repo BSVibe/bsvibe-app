@@ -13,7 +13,7 @@ single target and cross-module FKs resolve against one registry.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -436,3 +436,38 @@ class UnattributedLlmUsage(ExecutionBase):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now()
     )
+
+
+class AdversarialReplayJob(ExecutionBase):
+    """재생(Stage A 를 과거 결과물에 다시 돌리기) 한 건 — 백그라운드 작업의 상태·결과.
+
+    MCP 요청 안에서 끝낼 수 없다(Stage A 한 라운드만 180초, Cloudflare 는 ~100초에 끊는다). 그래서
+    도구는 이 행만 만들고, 워커가 실행하며, status 도구가 읽는다. 재시작 뒤에도 남는다. 동시 1개
+    제한도 프로세스 잠금이 아니라 이 행의 ``status`` / ``heartbeat_at`` 으로 건다.
+
+    ``execution_runs`` 가 아니다 — 재생은 런·결과물·카드·장부를 만들지 않으며, ``verification_quality``
+    는 이 표를 읽지 않는다. 레이어 2(ORM 자동 필터) 표이고 RLS 루트가 아니다.
+    """
+
+    __tablename__ = "adversarial_replay_jobs"
+    __table_args__ = (
+        Index("ix_adversarial_replay_jobs_status_created", "status", "created_at"),
+        Index("ix_adversarial_replay_jobs_ws_created", "workspace_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    # queued | running | done | failed
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    # {"cases": [{"deliverable_id", "expected", "defect_note"}], "repeat": int, "batch": bool}
+    request: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # 끝난 사례별 결과(진행 중에도 사례마다 채워진다) + 채점
+    results: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
+    summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

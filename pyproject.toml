@@ -444,12 +444,6 @@ ignore_imports = [
     # helpers (``_checkpoint_shared``) and the decision repo stay pure and in the
     # allowlist, so they need no exemption.
     "backend.mcp.tools.checkpoint_tools -> backend.workflow.application.checkpoint_resolution",
-    # bsvibe_adversarial_replay — 재생은 운영 검증과 같은 judge 경로(resolve_judge_llm)와 같은
-    # 샌드박스 선택(resolve_sandbox_manager)을 써야 운영 라운드와 같은 조건이 된다. 두 헬퍼의
-    # 복사본을 두면 재생과 운영이 어긋난다. 이 도구 모듈 한 곳의 직접 간선 예외이며, 그 아래
-    # router / extensions / executors 전이 경로는 workflow_tools 예외와 같은 사정이다.
-    "backend.mcp.tools.adversarial_replay_tools -> backend.workflow.application.runtime.account_resolution",
-    "backend.mcp.tools.adversarial_replay_tools -> backend.workflow.application.runtime.sandbox_selection",
 ]
 
 

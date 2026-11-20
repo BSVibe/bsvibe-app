@@ -46,6 +46,10 @@ ALLOWED: dict[str, str] = {
     "backend/identity/billing_paddle.py": (
         "Paddle 웹훅 — 세션 없이 구독 id·custom_data 로 워크스페이스를 찾는다. 쓰기는 그 워크스페이스 스코프 안"
     ),
+    "backend/workflow/application/adversarial_replay_jobs.py": (
+        "재생 작업 클레임 — 대기 작업과 실행 중 작업(동시 1개 판정)이 모든 테넌트에 걸쳐 보여야 한다. "
+        "실행·기록은 그 작업의 워크스페이스 스코프 안"
+    ),
     "backend/workflow/infrastructure/workers/agent_worker.py": (
         "디스크 리퍼가 살아 있는 런·제품을 묻는다 · 큐 클레임(요청·런) · 멈춘 클레임 회수"
     ),

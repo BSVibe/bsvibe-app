@@ -1,19 +1,18 @@
-"""``bsvibe_adversarial_replay`` — run Stage A again over past deliverables with known answers.
+"""``bsvibe_adversarial_replay`` / ``bsvibe_adversarial_replay_status`` — Stage A replay as a job.
 
-The rule (tree reconstruction, the production round, no side effects, one at a time, scoring)
-lives in :mod:`backend.workflow.application.adversarial_replay`. REST is deliberately not added:
-this is a measurement tool for the founder's MCP client, and a REST twin would only duplicate it.
-
-The judge LLM is the workspace's own ``workflow.judge`` route — the same one a real verification
-grades on — so the tokens are the workspace owner's.
+A replay cannot finish inside an MCP request (one Stage A round is up to 180 s; Cloudflare cuts a
+silent request at ~100 s — see ``reindex_tools.py``). So ``bsvibe_adversarial_replay`` only
+registers a job and returns its ``replay_id`` at once; the worker process runs it; and
+``bsvibe_adversarial_replay_status`` reads progress, per-case results and the scoring from the DB
+(they survive a restart). The rules (tree reconstruction, the production round, no side effects,
+one at a time, scoring) live in :mod:`backend.workflow.application.adversarial_replay` and
+:mod:`backend.workflow.application.adversarial_replay_jobs`. REST is deliberately not added: this
+is a measurement tool for the founder's MCP client.
 """
 
 from __future__ import annotations
 
-import contextlib
 import uuid
-from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
@@ -23,12 +22,9 @@ from backend.workflow.application.adversarial_replay import (
     MAX_CASES,
     MAX_REPEAT,
     CaseSpec,
-    CaseUnavailable,
     ReplayRefused,
-    load_replay_input,
-    run_replay,
 )
-from backend.workflow.infrastructure.sandbox.protocol import SandboxSession
+from backend.workflow.application.adversarial_replay_jobs import job_status, submit_job
 
 
 class _Out(RootModel[Any]):
@@ -49,34 +45,12 @@ class AdversarialReplayInput(BaseModel):
     cases: list[_Case] | None = Field(default=None, max_length=MAX_CASES)
 
 
-def _box_factory(settings: Any) -> Any:
-    from backend.workflow.application.runtime.sandbox_selection import (  # noqa: PLC0415
-        resolve_sandbox_manager,
-    )
-
-    manager = resolve_sandbox_manager(None, settings)
-
-    @contextlib.asynccontextmanager
-    async def _box(path: Path) -> AsyncIterator[SandboxSession]:
-        project = uuid.uuid4()
-        box = await manager.acquire(project, str(path))
-        try:
-            yield box
-        finally:
-            await manager.release(project)
-
-    return _box
+class AdversarialReplayStatusInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    replay_id: uuid.UUID
 
 
 async def _h_adversarial_replay(args: AdversarialReplayInput, ctx: ToolContext) -> Any:
-    from types import SimpleNamespace  # noqa: PLC0415
-
-    from backend.config import get_settings  # noqa: PLC0415
-    from backend.workers.emit import get_emit_redis_client  # noqa: PLC0415
-    from backend.workflow.application.runtime.account_resolution import (  # noqa: PLC0415
-        resolve_judge_llm,
-    )
-
     if (args.deliverable_id is None) == (args.cases is None):
         raise ToolError("deliverable_id 와 cases 중 하나만 주어야 한다")
     specs = (
@@ -84,42 +58,32 @@ async def _h_adversarial_replay(args: AdversarialReplayInput, ctx: ToolContext) 
         if args.deliverable_id is not None
         else [CaseSpec(c.deliverable_id, c.expected, c.defect_note) for c in args.cases or []]
     )
-    workspace_id = ctx.principal.workspace_id
-    settings = get_settings()
-    llm = await resolve_judge_llm(
-        ctx.session,
-        SimpleNamespace(id=uuid.uuid4(), workspace_id=workspace_id),  # type: ignore[arg-type]
-        settings,
-        redis=get_emit_redis_client(settings),
-        session_factory=ctx.session_factory,
-    )
-    if llm is None:
-        raise ToolError("이 워크스페이스에 judge 모델 경로가 없어 재생할 수 없다")
-
-    async def load(deliverable_id: uuid.UUID) -> Any:
-        try:
-            return await load_replay_input(ctx.session, workspace_id, deliverable_id)
-        finally:
-            # Read-only: end the read transaction so a long replay holds no connection state.
-            await ctx.session.rollback()
-
-    root = Path(settings.run_workspace_root)
-    root = root if root.is_absolute() else Path.cwd() / root
     try:
-        out = await run_replay(
+        job = await submit_job(
+            ctx.session,
+            ctx.principal.workspace_id,
             specs,
             repeat=args.repeat,
-            load=load,
-            llm=llm,
-            box_for=_box_factory(settings),
-            work_root=root / "adversarial-replay",
+            batch=args.cases is not None,
         )
     except ReplayRefused as exc:
         raise ToolError(str(exc)) from exc
-    except CaseUnavailable as exc:  # pragma: no cover — run_replay reports these per case
-        raise ToolError(str(exc)) from exc
-    # A single deliverable answers with its case directly; a batch with results + summary.
-    return _Out(out["results"][0] if args.deliverable_id is not None else out)
+    return _Out(
+        {
+            "replay_id": str(job.id),
+            "status": job.status,
+            "cases": len(specs),
+            "repeat": args.repeat,
+            "next": "bsvibe_adversarial_replay_status(replay_id) 로 진행·결과를 조회하라",
+        }
+    )
+
+
+async def _h_adversarial_replay_status(args: AdversarialReplayStatusInput, ctx: ToolContext) -> Any:
+    out = await job_status(ctx.session, ctx.principal.workspace_id, args.replay_id)
+    if out is None:
+        raise ToolError("재생을 찾을 수 없다")
+    return _Out(out)
 
 
 def register_adversarial_replay_tools(registry: ToolRegistry) -> None:
@@ -127,20 +91,38 @@ def register_adversarial_replay_tools(registry: ToolRegistry) -> None:
         Tool(
             name="bsvibe_adversarial_replay",
             description=(
-                "Run the adversarial verifier (Stage A) again over past deliverables, in a tree "
-                "rebuilt from each deliverable's diff on its base commit. Give `deliverable_id` "
-                f"(+ `repeat`, up to {MAX_REPEAT}) or `cases` "
-                f"(up to {MAX_CASES}, each with expected 'defect' | 'clean') for a scored batch. "
-                "Creates no run, deliverable, card, ledger entry or knowledge; one replay at a "
-                "time; spends the workspace's judge-route tokens. A case whose base commit or "
-                "diff cannot be reconstructed is skipped with the reason. Confirmed findings come "
-                "back with claim/file/line — whether one is the known defect is for a human."
+                "Register a background replay of the adversarial verifier (Stage A) over past "
+                "deliverables, in a tree rebuilt from each deliverable's diff on its base commit. "
+                f"Give `deliverable_id` (+ `repeat`, up to {MAX_REPEAT}) or `cases` (up to "
+                f"{MAX_CASES}, each with expected 'defect' | 'clean') for a scored batch. Returns "
+                "`replay_id` AT ONCE — the worker runs it; poll "
+                "`bsvibe_adversarial_replay_status`. Creates no run, deliverable, card, ledger "
+                "entry or knowledge; one replay at a time (a second is refused while one is "
+                "queued/running); spends the workspace's judge-route tokens."
             ),
             input_schema=AdversarialReplayInput,
             output_schema=_Out,
             handler=_h_adversarial_replay,
             required_scopes=("mcp:write",),
             audit_event="bsvibe.mcp.adversarial_replay.invoked",
+        )
+    )
+    registry.register(
+        Tool(
+            name="bsvibe_adversarial_replay_status",
+            description=(
+                "Progress, per-case results and scoring of a replay registered by "
+                "`bsvibe_adversarial_replay`. Each case is `ran` (every repeat's Stage A blob, "
+                "tokens, seconds, and the confirmed findings' claim/file/line for a human to "
+                "judge), `skipped` (base commit / diff unusable — with the reason) or `failed` "
+                "(an exception — with the reason). `summary` holds defect_confirmed_rate and "
+                "false_confirmed_rate over the cases finished so far. A case with no `reason` "
+                "ran; whether a confirmed finding is the KNOWN defect is for a human."
+            ),
+            input_schema=AdversarialReplayStatusInput,
+            output_schema=_Out,
+            handler=_h_adversarial_replay_status,
+            required_scopes=("mcp:read",),
         )
     )
 
