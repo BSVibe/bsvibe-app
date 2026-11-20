@@ -43,6 +43,10 @@ class AdversarialFindingItem(ReviewFindingItem):
     confirmed — 'the repro did not run' is told apart from 'the claim was wrong'."""
 
     reason: str | None = None
+    #: the repro never ran (unconfirmed) — told apart from "the claim was wrong".
+    not_run: bool = False
+    #: confirmed, but the repro could not run before the change (only the after-result counts).
+    baseline_not_run: bool = False
 
 
 class RunLedger(BaseModel):
@@ -118,8 +122,13 @@ def _adversarial_summary(result: Any) -> _Adversarial:
                 line=f["line"] if isinstance(f.get("line"), int) else None,
                 claim=str(f.get("claim", "")),
                 reason=(
-                    f["reason"] if not confirmed and isinstance(f.get("reason"), str) else None
+                    f["reason"]
+                    if isinstance(f.get("reason"), str)
+                    and (not confirmed or f.get("baseline_not_run") is True)
+                    else None
                 ),
+                not_run=f.get("not_run") is True,
+                baseline_not_run=f.get("baseline_not_run") is True,
             )
             for f in findings
             if (f.get("confirmed") is True) is confirmed

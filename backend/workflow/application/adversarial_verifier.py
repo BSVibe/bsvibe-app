@@ -68,6 +68,10 @@ class _TokenCapExceeded(Exception):
     """The verifier spent its token cap: the loop ends at once, nothing it still wanted counts."""
 
 
+class _BaselineUnavailable(Exception):
+    """The tree before the change could not be built: the repro is not confirmed."""
+
+
 class _Budget:
     """The stage's single clock. Everything that takes time asks it how much is left."""
 
@@ -469,6 +473,8 @@ async def _judge(
             verdict = await _judge_command(
                 box, worked_in, fresh, finding, baseline, budget, timeout
             )
+    except _BaselineUnavailable as exc:
+        verdict = (False, f"변경 전 대조를 하지 못했다 ({str(exc)[:120]})", "", {})
     except Exception as exc:  # noqa: BLE001 — a repro that cannot run is unconfirmed
         verdict = (False, f"재현을 실행할 수 없다: {type(exc).__name__}", "", {})
     finally:
@@ -553,7 +559,10 @@ async def _before_change(
     old = _Copy(box, f"{worked_in.root}-before-{uuid.uuid4().hex[:6]}")
     try:
         await _make_copy(box, old)
-        await _to_baseline(box, old, baseline)
+        try:
+            await _to_baseline(box, old, baseline)
+        except Exception as exc:
+            raise _BaselineUnavailable(str(exc)) from exc
         if test_path is not None:
             await _carry_repro_file(box, worked_in, old, test_path)
         return await old.exec(command, timeout_s=_step_timeout(budget, _REPRO_TIMEOUT_S))
@@ -618,11 +627,16 @@ async def _to_baseline(box: SandboxSession, copy: _Copy, baseline: str) -> None:
         shlex.quote(copy.root),
         shlex.quote(baseline),
     )
+    # No pipes: each step's exit code counts (a bad ref or a shallow clone fails `git diff`, and
+    # a pipe would only report the last stage). Intermediate files live outside the workspace.
     await _sh(
         box,
-        f"cd {mount} && {{ git diff -z --no-renames --name-only --diff-filter=A {ref}; "
-        f"git ls-files -z -o --exclude-standard; }} | (cd {root} && xargs -0 -r rm -f --) && "
-        f"git archive {ref} | tar -xf - -C {root}",
+        f"cd {mount} && f=$(mktemp) && "
+        f'git diff -z --no-renames --name-only --diff-filter=A {ref} > "$f" && '
+        f'git ls-files -z -o --exclude-standard >> "$f" && '
+        f'(cd {root} && xargs -0 -r rm -f -- < "$f") && '
+        f'git archive {ref} -o "$f.tar" && tar -xf "$f.tar" -C {root}; '
+        'rc=$?; rm -f "$f" "$f.tar"; exit $rc',
     )
 
 
