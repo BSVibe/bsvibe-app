@@ -644,6 +644,8 @@ class VerificationQuality(NamedTuple):
     #: finished rounds.
     adversarial_runs: int
     adversarial_unavailable: int
+    #: Rounds that finished but ran NO tool request (``no_probe``): the verifier did not check.
+    adversarial_no_probe: int
     adversarial_confirmed: int
     adversarial_unconfirmed: int
 
@@ -713,22 +715,27 @@ def _tally_reviews(
     return done, unavailable, has_high
 
 
-def _tally_adversarial(verifications: Sequence[VerificationResult]) -> tuple[int, int, int, int]:
+def _tally_adversarial(
+    verifications: Sequence[VerificationResult],
+) -> tuple[int, int, int, int, int]:
     """One run's rounds → (rounds it finished, rounds it was unavailable, findings confirmed,
-    unconfirmed). An ``unavailable`` round is NOT a run and has no findings to count."""
-    ran = unavailable = confirmed = unconfirmed = 0
+    unconfirmed, ``no_probe`` rounds). ``unavailable`` / ``no_probe`` rounds are NOT runs."""
+    ran = unavailable = confirmed = unconfirmed = no_probe = 0
     for v in verifications:
         adv = v.result.get("adversarial") if isinstance(v.result, dict) else None
         if not isinstance(adv, dict):
             continue
-        if adv.get("status") != "done":
+        if adv.get("status") == "no_probe":
+            no_probe += 1  # the harness's repro results still count; only the status differs
+        elif adv.get("status") != "done":
             unavailable += 1
             continue
-        ran += 1
+        else:
+            ran += 1
         findings = [f for f in adv.get("findings") or [] if isinstance(f, dict)]
         confirmed += sum(1 for f in findings if f.get("confirmed") is True)
         unconfirmed += sum(1 for f in findings if f.get("confirmed") is not True)
-    return ran, unavailable, confirmed, unconfirmed
+    return ran, unavailable, confirmed, unconfirmed, no_probe
 
 
 async def verification_quality(
@@ -772,14 +779,15 @@ async def verification_quality(
     cause_missing = 0
     leftover_dirs: Counter[str] = Counter()
     reviews_done = reviews_unavailable = runs_with_high = 0
-    adv_runs = adv_unavailable = adv_confirmed = adv_unconfirmed = 0
+    adv_no_probe = adv_runs = adv_unavailable = adv_confirmed = adv_unconfirmed = 0
     by_severity = dict.fromkeys(("high", "medium", "low"), 0)
     for verifications in by_run.values():
         done, unavailable, high = _tally_reviews(verifications, by_severity)
         reviews_done += done
         reviews_unavailable += unavailable
         runs_with_high += high
-        ran, adv_na, confirmed, unconfirmed = _tally_adversarial(verifications)
+        ran, adv_na, confirmed, unconfirmed, no_probe = _tally_adversarial(verifications)
+        adv_no_probe += no_probe
         adv_runs += ran
         adv_unavailable += adv_na
         adv_confirmed += confirmed
@@ -836,6 +844,7 @@ async def verification_quality(
         runs_reviewed_with_high=runs_with_high,
         adversarial_runs=adv_runs,
         adversarial_unavailable=adv_unavailable,
+        adversarial_no_probe=adv_no_probe,
         adversarial_confirmed=adv_confirmed,
         adversarial_unconfirmed=adv_unconfirmed,
     )

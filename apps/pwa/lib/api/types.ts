@@ -452,7 +452,7 @@ export interface ReviewFields {
   }[];
   /** The adversarial verifier of the same round (report-only). Confirmed = the harness
    *  reproduced it; suspected ("의심") = it could not. `none` = it did not run. */
-  adversarial_status?: "done" | "unavailable" | "none";
+  adversarial_status?: "done" | "no_probe" | "unavailable" | "none";
   adversarial_confirmed?: AdversarialFindingItem[];
   adversarial_suspected?: AdversarialFindingItem[];
 }
@@ -474,7 +474,9 @@ export interface AdversarialStoredFinding extends AdversarialFindingItem {
 
 /** `result.adversarial` on a verification round (report-only). */
 export interface RunAdversarial {
-  status: "done" | "unavailable";
+  status: "done" | "no_probe" | "unavailable";
+  /** Tool requests the verifier actually ran; `no_probe` = it ran none. */
+  probes?: number;
   surface?: "code" | "artifact";
   findings?: AdversarialStoredFinding[];
   confirmed?: number;

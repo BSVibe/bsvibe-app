@@ -149,8 +149,9 @@ async def run_adversarial_round(
             await release()
             diff = await _working_tree_diff(box, baseline)
             await _make_copy(box, copy)
+            probes = [0]
             findings = await _bounded(
-                _session(llm, run, copy, diff, surface, scratch, checks, budget), budget
+                _session(llm, run, copy, diff, surface, scratch, checks, budget, probes), budget
             )
             if findings is None:
                 blob = _blob(
@@ -162,7 +163,8 @@ async def run_adversarial_round(
                 )
             else:
                 judged = [await _judge(box, copy, scratch, f, budget) for f in findings]
-                blob = _blob("done", surface, judged, checks)
+                blob = _blob("done" if probes[0] else "no_probe", surface, judged, checks)
+                blob["probes"] = probes[0]
         except _TokenCapExceeded:
             blob = _blob("unavailable", surface, [], checks, "토큰 상한 초과로 검증자를 멈췄다")
         except Exception as exc:  # noqa: BLE001 — report-only: must never change the verdict
@@ -253,6 +255,13 @@ def _blob(
     }
 
 
+_NO_PROBE_NUDGE = (
+    "You gave a final answer without running any tool. Before the final answer, read or run "
+    "the change at least once (file_read, grep, shell_exec or write_test) to check it "
+    "yourself, then give the final JSON."
+)
+
+
 async def _session(
     llm: Llm,
     run: Any,
@@ -262,7 +271,9 @@ async def _session(
     scratch: str,
     checks: list[str],
     budget: _Budget,
+    probes: list[int] | None = None,
 ) -> list[Finding] | None:
+    probes = probes if probes is not None else [0]
     payload = run.payload if isinstance(run.payload, dict) else {}
     messages: list[dict[str, Any]] = [
         {
@@ -284,24 +295,32 @@ async def _session(
         },
     ]
     spent = 0
+    nudged = False
+    first_answer: list[Finding] | None = None  # kept: a failed nudge must not lose it
     for _ in range(_MAX_TURNS):
         reply, used = await _ask(llm, run, messages)
         spent += used
         if reply is None:
-            return None  # malformed twice: this round is unavailable
+            return first_answer  # malformed twice: the first answer if any, else unavailable
         if isinstance(reply, list):
+            if probes[0] == 0 and not nudged and spent < _TOKEN_CAP:
+                # Answered without touching the change: send it back ONCE (counts as a turn).
+                nudged = True
+                first_answer = reply
+                messages.append({"role": "user", "content": _NO_PROBE_NUDGE})
+                continue
             return reply
         if spent >= _TOKEN_CAP:
             # A real stop: no further tool call runs and no further model call is made.
             raise _TokenCapExceeded
-        output = await _dispatch(copy, scratch, reply.name, reply.args, checks, budget)
+        output = await _dispatch(copy, scratch, reply.name, reply.args, checks, budget, probes)
         messages.append(
             {"role": "user", "content": f"TOOL RESULT ({reply.name}):\n{output}"},
         )
     # Out of turns: ask for the answer.
     messages.append({"role": "user", "content": "Stop investigating. Give the final JSON now."})
     reply, _ = await _ask(llm, run, messages)
-    return reply if isinstance(reply, list) else None
+    return reply if isinstance(reply, list) else first_answer
 
 
 async def _ask(
@@ -346,26 +365,32 @@ async def _dispatch(  # noqa: PLR0911 — one return per tool, flat on purpose
     args: dict[str, Any],
     checks: list[str],
     budget: _Budget,
+    probes: list[int] | None = None,
 ) -> str:
-    """One verifier tool call, always against the copy. Writes go through the guard."""
+    """One verifier tool call, always against the copy. Writes go through the guard.
+
+    ``probes[0]`` counts only requests that actually RAN: a refused write, an unknown tool or an
+    error does not count."""
+    ran = probes if probes is not None else [0]
     try:
         if name == "file_read":
             path = str(args.get("path", ""))
             checks.append(f"file_read {path}"[:200])
-            return clip(
-                (await copy.read_file(path, _TOOL_OUTPUT_CHARS)).decode(errors="replace"),
-                _TOOL_OUTPUT_CHARS,
-            )
+            data = await copy.read_file(path, _TOOL_OUTPUT_CHARS)
+            ran[0] += 1
+            return clip(data.decode(errors="replace"), _TOOL_OUTPUT_CHARS)
         if name == "grep":
             pattern = str(args.get("pattern", ""))
             checks.append(f"grep {pattern}"[:200])
             cmd = f"git -C {shlex.quote(copy.root)} grep -n -e {shlex.quote(pattern)}"
             res = await copy.exec(cmd, timeout_s=_step_timeout(budget, _EXEC_TIMEOUT_S))
+            ran[0] += 1
             return clip(res.stdout or "", _TOOL_OUTPUT_CHARS)
         if name == "shell_exec":
             command = str(args.get("command", ""))
             checks.append(f"$ {command}"[:200])
             result = await copy.exec(command, timeout_s=_step_timeout(budget, _EXEC_TIMEOUT_S))
+            ran[0] += 1
             body = f"exit={result.exit_code}{' (timeout)' if result.timed_out else ''}\n"
             return clip(body + (result.stdout or "") + (result.stderr or ""), _TOOL_OUTPUT_CHARS)
         if name == "write_test":
@@ -376,6 +401,7 @@ async def _dispatch(  # noqa: PLR0911 — one return per tool, flat on purpose
                 return f"REFUSED: {refusal}"
             checks.append(f"write_test {path}"[:200])
             await copy.write_file(path, str(args.get("content", "")).encode())
+            ran[0] += 1
             return "written"
     except Exception as exc:  # noqa: BLE001 — a tool error is the model's to read, not ours to raise
         return f"ERROR: {type(exc).__name__}: {exc}"[:500]

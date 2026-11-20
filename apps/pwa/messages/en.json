@@ -1261,6 +1261,7 @@
     "title": "Adversarial check",
     "confirmed": "Confirmed ({count})",
     "suspected": "Suspected ({count})",
+    "noProbe": "The verifier did not check (no tool was run)",
     "unavailable": "The adversarial check could not be done",
     "none": "No findings",
     "round": "Verification {round}",

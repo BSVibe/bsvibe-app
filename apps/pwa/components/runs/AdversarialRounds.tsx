@@ -35,7 +35,11 @@ export default function AdversarialRounds({ rounds }: { rounds?: RunVerification
             <span className="adversarial-status__title">
               {t("round", { round: r.round })} · {t("title")}
             </span>
-            {r.adversarial?.status === "unavailable" ? (
+            {r.adversarial?.status === "no_probe" ? (
+              <span className="adversarial-status__count" data-testid="adversarial-no-probe">
+                {t("noProbe")}
+              </span>
+            ) : r.adversarial?.status === "unavailable" ? (
               <span className="adversarial-status__count">
                 {t("unavailable")}
                 {r.adversarial.reason ? (

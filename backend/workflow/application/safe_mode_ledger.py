@@ -54,8 +54,9 @@ class RunLedger(BaseModel):
     review_status: str = "none"
     review_counts: dict[str, int] = {}
     review_findings: list[ReviewFindingItem] = []
-    #: The adversarial verifier of the same round (report-only): ``done`` / ``unavailable`` /
-    #: ``none``. ``confirmed`` = the harness reproduced it; ``suspected`` = it did not ("의심").
+    #: The adversarial verifier of the same round (report-only): ``done`` / ``no_probe`` (it ran
+    #: no tool request: it did not check) / ``unavailable`` / ``none``. ``confirmed`` = the
+    #: harness reproduced it; ``suspected`` = it did not ("의심").
     adversarial_status: str = "none"
     adversarial_confirmed: list[ReviewFindingItem] = []
     adversarial_suspected: list[ReviewFindingItem] = []
@@ -93,7 +94,8 @@ def _adversarial_summary(result: Any) -> _Adversarial:
     blob = result.get("adversarial") if isinstance(result, dict) else None
     if not isinstance(blob, dict):
         return "none", [], []
-    if blob.get("status") != "done":
+    status = blob.get("status")
+    if status not in ("done", "no_probe"):
         return "unavailable", [], []
     rank = {sev: i for i, sev in enumerate(SEVERITIES)}
     findings = sorted(
@@ -113,7 +115,7 @@ def _adversarial_summary(result: Any) -> _Adversarial:
             if (f.get("confirmed") is True) is confirmed
         ][:_REVIEW_SHOWN]
 
-    return "done", _items(True), _items(False)
+    return str(status), _items(True), _items(False)
 
 
 async def _last_passed_results(

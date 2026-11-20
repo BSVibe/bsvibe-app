@@ -121,6 +121,36 @@ async def test_the_verifier_runs_a_full_loop_through_the_real_executor_adapter(
     assert any("git" in c and "grep" in c for c in box.commands)
 
 
+async def test_no_probe_through_the_real_adapter_is_asked_once_then_no_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blob, _, prompts = await _round_through_adapter(
+        monkeypatch, [{"findings": []}, {"findings": []}], _AdvBox()
+    )
+
+    assert blob["status"] == "no_probe", blob
+    assert blob["probes"] == 0
+    assert len(prompts) == 2  # the nudge went to the model once
+
+
+async def test_probing_after_the_nudge_is_done_through_the_real_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blob, _, prompts = await _round_through_adapter(
+        monkeypatch,
+        [
+            {"findings": []},
+            {"tool": "grep", "args": {"pattern": "x"}},
+            {"findings": []},
+        ],
+        _AdvBox(),
+    )
+
+    assert blob["status"] == "done", blob
+    assert blob["probes"] >= 1
+    assert len(prompts) == 3
+
+
 async def test_the_verifier_never_issues_an_executor_task_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,8 +191,10 @@ async def test_one_malformed_reply_is_asked_again_once(
 ) -> None:
     box = _AdvBox()
     blob, _, prompts = await _round_through_adapter(
-        monkeypatch, ["oops not json", {"findings": []}], box
+        monkeypatch,
+        ["oops not json", {"tool": "grep", "args": {"pattern": "x"}}, {"findings": []}],
+        box,
     )
 
     assert blob["status"] == "done"
-    assert len(prompts) == 2
+    assert len(prompts) == 3
