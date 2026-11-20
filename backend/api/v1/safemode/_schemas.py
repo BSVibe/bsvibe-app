@@ -11,7 +11,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.workflow.application.safe_mode_ledger import LedgerAttentionItem, ReviewFindingItem
+from backend.workflow.application.safe_mode_ledger import (
+    AdversarialFindingItem,
+    LedgerAttentionItem,
+    ReviewFindingItem,
+)
 from backend.workflow.application.safe_mode_queue import DenyKind
 from backend.workflow.domain.change_footprint import TopDir
 
@@ -50,8 +54,8 @@ class SafeModeItemResponse(BaseModel):
     # Adversarial verifier of the same round (report-only): confirmed first; the ones the
     # harness could not reproduce are shown apart as "suspected" (의심).
     adversarial_status: str = "none"
-    adversarial_confirmed: list[ReviewFindingItem] = []
-    adversarial_suspected: list[ReviewFindingItem] = []
+    adversarial_confirmed: list[AdversarialFindingItem] = []
+    adversarial_suspected: list[AdversarialFindingItem] = []
 
 
 class SafeModeRunGroupResponse(BaseModel):

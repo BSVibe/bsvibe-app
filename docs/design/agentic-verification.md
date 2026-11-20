@@ -80,6 +80,17 @@ The harness runs it:
 
 This is also the false-positive filter: an LLM can claim anything, but it cannot make a passing test fail.
 
+Two rules keep that filter honest (stage 1 is still report-only; `passed` never changes):
+
+* **Baseline control.** A reproduction that shows the defect after the change is run again on a copy of the tree
+  *before* the change. It is **confirmed** only if it does not hold there. Same result before ⇒ unconfirmed
+  ("변경 전에도 같은 결과"). A test that cannot even be collected before (it imports what the change adds) may be
+  confirmed, with that reason recorded; a command reproduction that cannot run before is never confirmed; a baseline
+  timeout never confirms.
+* **Same environment as the gates.** Reproductions run through `uv run` (commands as `uv run sh -c ...`, tests as
+  `uv run python -m pytest ...`), never a bare `python`. A reproduction that dies with an import / collection error is
+  unconfirmed with the reason "재현이 실행되지 않음" (`not_run`), told apart from "the claim was wrong".
+
 ### 3.2 Stage A — Adversarial verifier (new, inside the round)
 
 * **Where:** in `VerificationService.verify`, after the derived gate (VS:809-866), before the ledger (VS:871).

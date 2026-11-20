@@ -180,10 +180,51 @@ def repro_runner(path: str) -> tuple[str, int] | None:
 
     quoted = shlex.quote(path)
     if path.endswith(".py"):
-        return f"python -m pytest -q -x -p no:cacheprovider {quoted}", _PYTEST_FAILED
+        return (
+            f"{REPRO_RUN_PREFIX}python -m pytest -q -x -p no:cacheprovider {quoted}",
+            _PYTEST_FAILED,
+        )
     if re.search(r"\.(test|spec)\.[cm]?[jt]sx?$", path):
         return f"npx --no-install vitest run {quoted}", _JS_FAILED
     return None
+
+
+#: The repo's gates run through ``uv run`` (project venv, dependencies installed); a repro runs
+#: the same way. A bare ``python`` would not see the project's dependencies (``structlog`` …).
+REPRO_RUN_PREFIX = "uv run "
+
+#: pytest exit codes that mean 'the test did not run' (collection / import error, interrupted,
+#: nothing collected) — as opposed to 1 = 'a test ran and failed'.
+_PYTEST_NOT_RUN = (2, 3, 4, 5)
+_NOT_RUN_MARKERS = ("ModuleNotFoundError", "command not found")
+
+
+def repro_command(command: str) -> str:
+    """A command repro as the harness runs it: under ``uv run`` like the gates, so ``python``
+    and every project import resolve against the project's environment."""
+    import shlex  # noqa: PLC0415
+
+    return f"{REPRO_RUN_PREFIX}sh -c {shlex.quote(command)}"
+
+
+def command_did_not_run(
+    expect: dict[str, Any], *, exit_code: int | None, output: str, timed_out: bool
+) -> bool:
+    """The command died before showing anything: shell 'not found' (126/127) or a missing
+    module. A claim that itself expects such an error in its output is not 'not run'."""
+    if timed_out or exit_code is None:
+        return False
+    wanted = str(expect.get("contains", ""))
+    if any(m in wanted for m in _NOT_RUN_MARKERS):
+        return False
+    if exit_code in (126, 127):
+        return True
+    return any(m in output for m in _NOT_RUN_MARKERS)
+
+
+def repro_test_did_not_run(*, exit_code: int | None, timed_out: bool) -> bool:
+    """A repro test that ended in a collection/import error (or collected nothing)."""
+    return not timed_out and exit_code in _PYTEST_NOT_RUN
 
 
 def clip(text: str, limit: int = OUTPUT_CHARS) -> str:
@@ -219,7 +260,13 @@ ONLY into the scratch directory {scratch}. You cannot edit anything else.
 
 Rule: a claim counts only if you attach a repro the harness can run itself. The harness runs it \
 on the changed tree: a repro test that FAILS, or a command whose result matches `expect`, makes \
-the claim "confirmed"; anything else is discarded as "unconfirmed". No repro, no finding.
+the claim "confirmed" ONLY if it does not hold before the change (the harness also runs it on \
+the tree BEFORE the change, the baseline). A repro that gives the same result before the change \
+proves nothing about the change; a grep that merely finds some text is such a repro. Anything \
+else is discarded as "unconfirmed". No repro, no finding.
+Environment: repros run through `uv run` (the same way the repo's gates run), from the \
+repository root, so `python` and the project's dependencies are available. A repro that dies \
+with an import / collection error is "unconfirmed: the repro did not run".
 
 {protocol}
 

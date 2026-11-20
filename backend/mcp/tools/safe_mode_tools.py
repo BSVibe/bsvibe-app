@@ -26,6 +26,7 @@ from backend.workflow.application.safe_mode_approval import (
     approve_run_and_dispatch,
 )
 from backend.workflow.application.safe_mode_ledger import (
+    AdversarialFindingItem,
     LedgerAttentionItem,
     ReviewFindingItem,
     RunLedger,
@@ -75,8 +76,8 @@ class SafeModeItem(_Output):
     review_findings: list[ReviewFindingItem] = []
     #: The adversarial verifier (report-only): confirmed first, unconfirmed as "suspected".
     adversarial_status: str = "none"
-    adversarial_confirmed: list[ReviewFindingItem] = []
-    adversarial_suspected: list[ReviewFindingItem] = []
+    adversarial_confirmed: list[AdversarialFindingItem] = []
+    adversarial_suspected: list[AdversarialFindingItem] = []
 
 
 class SafeModeListPendingOutput(_Output):
