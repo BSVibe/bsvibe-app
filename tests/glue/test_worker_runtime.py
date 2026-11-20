@@ -597,6 +597,7 @@ async def test_build_worker_runtime_constructs_all_workers(
         # once-a-day digest PRODUCER emitted at the workspace's local morning.
         "daily_brief_worker",
         "settle_worker",
+        "adversarial_replay_worker",
         "relay_worker",
         # M1 — schedule runner now ships in the production worker set.
         "schedule_worker",
