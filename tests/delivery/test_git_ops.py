@@ -566,3 +566,18 @@ async def test_fetch_base_tip_scrubs_token(tmp_path: Path) -> None:
     token = "ghp_fakeSecretTokenABC123"  # noqa: S105
     assert await GitOps().fetch_base_tip(dest, "main", token=token) is False
     assert token not in (dest / ".git" / "config").read_text()
+
+
+async def test_fetch_base_tip_on_full_clone_stays_complete(tmp_path: Path) -> None:
+    """A complete clone is fetched WITHOUT ``--depth`` -- it must not turn shallow."""
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "full"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=0)
+    assert await _run("rev-parse", "--is-shallow-repository", cwd=dest) == "false"
+    await _advance_main(bare, tmp_path, path="b.txt", content="b\n", msg="base moved")
+    assert await ops.fetch_base_tip(dest, "main", token=None) is True
+    assert await _run("rev-parse", "--is-shallow-repository", cwd=dest) == "false"
+    assert await _run("rev-parse", "origin/main", cwd=dest) == await _run(
+        "rev-parse", "main", cwd=bare
+    )

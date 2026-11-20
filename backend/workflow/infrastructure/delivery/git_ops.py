@@ -301,7 +301,10 @@ class GitOps:
                 await self.scrub_origin_token(dest)
 
     async def fetch_base_tip(self, dest: Path, base_branch: str, *, token: str | None) -> bool:
-        """Best-effort ``git fetch --depth=1 origin <base_branch>`` right before a push.
+        """Best-effort ``git fetch [--depth=1] origin <base_branch>`` right before a push.
+
+        ``--depth=1`` is used only when the clone is shallow; a complete clone fetches the tip
+        with full history so it stays complete.
 
         A shallow run clone whose base moved while the run worked lacks the remote's tip, so
         ``git push`` cannot subtract what the remote already has and sends a full snapshot
@@ -317,9 +320,13 @@ class GitOps:
                     "remote", "set-url", "origin", authed, cwd=dest, token=token
                 )
             try:
-                await self._run_checked(
-                    "fetch", "--quiet", "--depth=1", "origin", base_branch, cwd=dest, token=token
-                )
+                # ``--depth=1`` only on a shallow clone: on a complete clone it would turn the
+                # repository shallow, truncating history later steps rely on.
+                args = ["fetch", "--quiet"]
+                if await self.is_shallow(dest):
+                    args.append("--depth=1")
+                args += ["origin", base_branch]
+                await self._run_checked(*args, cwd=dest, token=token)
             finally:
                 if token:
                     await self.scrub_origin_token(dest)
