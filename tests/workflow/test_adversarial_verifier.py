@@ -349,6 +349,20 @@ async def test_probing_after_the_nudge_is_done() -> None:
     assert blob["probes"] >= 1
 
 
+async def test_refused_write_test_after_nudge_is_still_no_probe() -> None:
+    llm = StubLlm(
+        [
+            _answer(),
+            _tool("write_test", path="backend/svc.py", content="x"),
+            _answer(),
+        ]
+    )
+    blob = await _round(llm, _AdvBox())
+
+    assert blob["status"] == "no_probe"
+    assert blob["probes"] == 0
+
+
 async def test_probe_then_answer_is_done_without_a_nudge() -> None:
     llm = StubLlm([_tool("grep", pattern="x"), _answer()])
     blob = await _round(llm, _AdvBox())

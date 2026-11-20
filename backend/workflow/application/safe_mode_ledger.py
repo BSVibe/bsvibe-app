@@ -42,7 +42,7 @@ class RunLedger(BaseModel):
     """``counts`` is the report's ``ledger_counts`` (``{}`` when the run has no ledger).
 
     ``review_*`` is the independent review of the run's last PASSED round (report-only):
-    ``review_status`` is ``done`` / ``no_probe`` / ``unavailable`` / ``none``.
+    ``review_status`` is ``done`` / ``unavailable`` / ``none``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -54,8 +54,9 @@ class RunLedger(BaseModel):
     review_status: str = "none"
     review_counts: dict[str, int] = {}
     review_findings: list[ReviewFindingItem] = []
-    #: The adversarial verifier of the same round (report-only): ``done`` / ``unavailable`` /
-    #: ``none``. ``confirmed`` = the harness reproduced it; ``suspected`` = it did not ("의심").
+    #: The adversarial verifier of the same round (report-only): ``done`` / ``no_probe`` (it ran
+    #: no tool request: it did not check) / ``unavailable`` / ``none``. ``confirmed`` = the
+    #: harness reproduced it; ``suspected`` = it did not ("의심").
     adversarial_status: str = "none"
     adversarial_confirmed: list[ReviewFindingItem] = []
     adversarial_suspected: list[ReviewFindingItem] = []
