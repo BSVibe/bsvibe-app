@@ -1265,6 +1265,8 @@
     "unavailable": "깨 보는 검증을 하지 못했습니다",
     "none": "지적 없음",
     "round": "{round}번째 검증",
-    "reason": "({reason})"
+    "reason": "({reason})",
+    "notRun": "재현이 실행되지 않음",
+    "baselineNotRun": "변경 전 실행 불가"
   }
 }

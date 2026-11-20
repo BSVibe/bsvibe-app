@@ -65,6 +65,33 @@ describe("Safe Mode card — adversarial check", () => {
     expect(screen.queryByText(/adversarial/i)).toBeNull();
   });
 
+  it("shows why a finding is unconfirmed, tells not_run apart, and flags a missing baseline", () => {
+    render(
+      <DeliveryRow
+        item={delivery({
+          adversarial_status: "done",
+          adversarial_confirmed: [
+            F("proved", { reason: "after only", baseline_not_run: true }),
+            F("plain", { reason: "ordinary confirmation" }),
+          ],
+          adversarial_suspected: [
+            F("never ran", { reason: "repro did not run (exit 127)", not_run: true }),
+            F("wrong", { reason: "repro passed" }),
+          ],
+        })}
+        onResolved={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("adversarial-not-run")).toHaveTextContent("The repro did not run");
+    expect(screen.getByTestId("adversarial-baseline-not-run")).toHaveTextContent(
+      "Could not run before the change",
+    );
+    expect(screen.getByText(/repro did not run \(exit 127\)/)).toBeInTheDocument();
+    expect(screen.getByText(/\(repro passed\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/ordinary confirmation/)).toBeNull();
+    expect(screen.getAllByTestId("adversarial-not-run")).toHaveLength(1);
+  });
+
   it("carries the queue item's adversarial fields onto the pending delivery", () => {
     const item = {
       id: "i1",
@@ -123,6 +150,33 @@ describe("Run detail — adversarial rounds", () => {
     // the reason of an unavailable round is shown (harness_error / timeout / parse failure)
     expect(screen.getByTestId("adversarial-reason")).toHaveTextContent(
       "harness_error: tree changed",
+    );
+  });
+
+  it("renders each finding's reason in the run detail", () => {
+    render(
+      <NextIntlClientProvider locale="ko" messages={koMessages}>
+        <AdversarialRounds
+          rounds={[
+            {
+              round: 1,
+              outcome: "passed",
+              adversarial: {
+                status: "done",
+                findings: [
+                  { ...F("a"), confirmed: false, not_run: true, reason: "수집 오류" },
+                  { ...F("b"), confirmed: true, baseline_not_run: true, reason: "대조 불가" },
+                ],
+              },
+            },
+          ]}
+        />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByTestId("adversarial-not-run")).toHaveTextContent("재현이 실행되지 않음");
+    expect(screen.getByText(/수집 오류/)).toBeInTheDocument();
+    expect(screen.getByTestId("adversarial-baseline-not-run")).toHaveTextContent(
+      "변경 전 실행 불가",
     );
   });
 
