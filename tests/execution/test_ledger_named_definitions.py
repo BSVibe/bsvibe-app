@@ -149,9 +149,21 @@ async def test_many_unfound_names_stay_within_the_budget() -> None:
     text = " ".join(f"`CONST_{i:03d}`" for i in range(30)) + " " + ghosts
     shown = await _excerpt(box)(_row("R1", text))
     block = "--- named definitions" + shown.split("--- named definitions")[1]
-    assert "more name(s)" in block
     assert "no definition found" in block
     assert len(block) <= _DEFINITIONS_CHARS
+
+
+def test_unfound_line_shrinks_to_fit_its_room() -> None:
+    from backend.workflow.application.requirements_ledger import _unfound_line
+
+    names = [f"ghost_name_{i:03d}" for i in range(80)]
+    scope = [f"pkg/a_long_file_name_{i}.py" for i in range(9)]
+    for room in (600, 250, 120, 60):
+        line = _unfound_line(names, scope, room)
+        assert "no definition found" in line
+    assert "more name(s)" in _unfound_line(names, scope, 250)
+    assert len(_unfound_line(names, scope, 600)) <= 600
+    assert len(_unfound_line(names, scope, 1)) <= 120
 
 
 async def test_names_past_the_cap_are_declared_not_shown() -> None:
@@ -346,3 +358,22 @@ async def test_ts_object_literal_field_found_as_last_resort() -> None:
     box = _Box({"o.ts": "const cfg = {\n  retries: 3,\n};\n"}, ["o.ts"])
     shown = await _excerpt(box)(_row("R1", "`retries` is 3", paths=["o.ts"]))
     assert "retries: 3" in shown
+
+
+async def test_unfound_line_survives_long_skipped_and_notes() -> None:
+    from backend.workflow.application.requirements_ledger import _DEFINITIONS_CHARS
+
+    big = "".join(f"CONST_{i:03d} = '{'x' * 400}'\n" for i in range(30))
+    files = {"s.py": big}
+    changed = ["s.py"]
+    for i in range(40):
+        path = f"pkg/{'long_dir_' * 6}{i}/mod.py"
+        files[path] = f"CONST_{i:03d} = 1\n"
+        changed.append(path)
+    box = _Box(files, changed)
+    text = " ".join(f"`CONST_{i:03d}`" for i in range(30)) + " `ghost`"
+    shown = await _excerpt(box)(_row("R1", text))
+    block = "--- named definitions" + shown.split("--- named definitions")[1]
+    assert "`ghost`" in block or "with no definition found" in block
+    assert "no definition found" in block
+    assert len(block) <= _DEFINITIONS_CHARS

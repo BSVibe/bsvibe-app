@@ -314,6 +314,9 @@ def _is_code(path: str) -> bool:
 
 #: Kept back from the definitions for the "no definition found" line.
 _UNFOUND_RESERVE = 600
+#: Kept back for the "more definitions" and "out of room" lines (they shrink to counts if longer).
+_EXTRAS_RESERVE = 1500
+_SKIPPED_COMPACT = 100
 #: How many looked-up files are named in that line (the rest are counted).
 _UNFOUND_FILES_SHOWN = 3
 
@@ -326,6 +329,8 @@ def _unfound_line(unfound: list[str], scope: list[str], room: int) -> str:
     if len(scope) > _UNFOUND_FILES_SHOWN:
         files += f", +{len(scope) - _UNFOUND_FILES_SHOWN} more"
     looked = f"{len(scope)} file(s): {files}"
+    if len(f"[... no definition found in the files looked up: {looked} ...]") > room:
+        looked = f"{len(scope)} file(s)"
     for listed in range(len(unfound), -1, -1):
         names = ", ".join(f"`{n}`" for n in unfound[:listed])
         if listed < len(unfound):
@@ -336,7 +341,36 @@ def _unfound_line(unfound: list[str], scope: list[str], room: int) -> str:
         )
         if len(line) <= room:
             return line
-    return ""
+    # Nothing fits: the shortest form, which always fits the reserve.
+    files = f"{len(scope)} file(s)"
+    return f"[... {len(unfound)} name(s) with no definition found in {files} looked up ...]"
+
+
+def _assemble(
+    header: str, shown: list[str], notes: list[str], skipped: list[str], tail: str
+) -> str:
+    """Join the block within ``_DEFINITIONS_CHARS``: the unfound line is always kept, the notes
+    and the skipped line shrink to counts when there is no room for them in full."""
+    out = [header, *shown]
+    left = _DEFINITIONS_CHARS - (len(tail) + 2 if tail else 0) - len("\n\n".join(out)) - 2
+    if notes:
+        full = "\n\n".join(notes)
+        if len(full) + 2 > left - _SKIPPED_COMPACT:
+            full = f"[... {len(notes)} name(s) have more definitions, not shown ...]"
+        out.append(full)
+        left -= len(full) + 2
+    if skipped:
+        full = f"[... {len(skipped)} name(s) not shown, out of room ...]"
+        for listed in range(len(skipped), 0, -1):
+            more = f", +{len(skipped) - listed} more" if listed < len(skipped) else ""
+            cand = f"[... not shown, out of room: {', '.join(skipped[:listed])}{more} ...]"
+            if len(cand) + 2 <= left:
+                full = cand
+                break
+        out.append(full)
+    if tail:
+        out.append(tail)
+    return "\n\n".join(out)
 
 
 class _DefinitionFinder:
@@ -442,8 +476,10 @@ class _DefinitionFinder:
         # Names with no definition in the searched files: told to the judge, so "not there"
         # is not read as "not shown". Only when something was actually searched.
         unfound = [name for name, hits in found if not hits] if scope else []
-        # Room for the unfound line is kept back from the definitions.
-        budget = _DEFINITIONS_CHARS - (_UNFOUND_RESERVE if unfound else 0)
+        # Room for the unfound line (as long as it really is) and for the compact forms of the
+        # notes / skipped lines is kept back from the definitions.
+        tail = _unfound_line(unfound, scope, _UNFOUND_RESERVE) if unfound else ""
+        budget = _DEFINITIONS_CHARS - (len(tail) + 2 if tail else 0) - _EXTRAS_RESERVE
         used = len(header)
         # The same definition reached by two names (`B.limit` and `limit`) goes in once.
         seen: set[tuple[str, str, str]] = set()
@@ -479,13 +515,7 @@ class _DefinitionFinder:
                 )
         if not shown and not skipped and not unfound:
             return ""
-        out = [header, *shown, *notes]
-        if skipped:
-            out.append(f"[... not shown, out of room: {', '.join(skipped)} ...]")
-        room = _DEFINITIONS_CHARS - len("\n\n".join(out)) - 2
-        if unfound and (line := _unfound_line(unfound, scope, room)):
-            out.append(line)
-        return "\n\n".join(out)
+        return _assemble(header, shown, notes, skipped, tail)
 
 
 def diff_excerpt(box: SandboxSession, baseline: str | None) -> Excerpt:
