@@ -148,7 +148,7 @@ def test_only_a_test_file_inside_the_scratch_dir_may_be_written() -> None:
 async def test_failing_repro_test_is_confirmed() -> None:
     # the model CLAIMS nothing is confirmed either way: the pytest exit code decides
     box = _AdvBox(pytest=_res(1, "1 failed"))
-    blob = await _round(StubLlm([_answer(_finding())]), box)
+    blob = await _round(StubLlm([_tool("grep", pattern="x"), _answer(_finding())]), box)
 
     assert blob["status"] == "done"
     assert (blob["confirmed"], blob["unconfirmed"]) == (1, 0)
@@ -158,7 +158,9 @@ async def test_failing_repro_test_is_confirmed() -> None:
 
 async def test_passing_repro_is_unconfirmed_even_if_the_model_says_confirmed() -> None:
     box = _AdvBox(pytest=_res(0, "1 passed"))
-    blob = await _round(StubLlm([_answer(_finding(confirmed=True))]), box)
+    blob = await _round(
+        StubLlm([_tool("grep", pattern="x"), _answer(_finding(confirmed=True))]), box
+    )
 
     assert (blob["confirmed"], blob["unconfirmed"]) == (0, 1)
     assert blob["findings"][0]["confirmed"] is False
@@ -170,7 +172,13 @@ async def test_a_repro_that_cannot_run_is_unconfirmed() -> None:
     timed_out = {"kind": "command", "command": "sleep 999", "expect": {"exit_code": "nonzero"}}
     box = _AdvBox(**{"sleep 999": _res(1, "", timed_out=True)})
     blob = await _round(
-        StubLlm([_answer(_finding(unknown_runner), _finding(outside), _finding(timed_out))]), box
+        StubLlm(
+            [
+                _tool("grep", pattern="x"),
+                _answer(_finding(unknown_runner), _finding(outside), _finding(timed_out)),
+            ]
+        ),
+        box,
     )
 
     assert blob["status"] == "done"
@@ -180,7 +188,7 @@ async def test_a_repro_that_cannot_run_is_unconfirmed() -> None:
 
 async def test_long_repro_output_is_cut() -> None:
     box = _AdvBox(pytest=_res(1, "x" * 50_000))
-    blob = await _round(StubLlm([_answer(_finding())]), box)
+    blob = await _round(StubLlm([_tool("grep", pattern="x"), _answer(_finding())]), box)
     assert len(blob["findings"][0]["output"]) < 2000
 
 
@@ -229,7 +237,11 @@ async def test_artifact_number_mismatch_is_confirmed() -> None:
     assert "source command" in llm.calls[0]["messages"][0]["content"]  # the artifact checklist
 
     agreeing = _AdvBox(**{"wc -l < data.csv": _res(0, "42")})
-    again = await _round(StubLlm([_answer(_finding(repro))]), agreeing, surface="artifact")
+    again = await _round(
+        StubLlm([_tool("grep", pattern="x"), _answer(_finding(repro))]),
+        agreeing,
+        surface="artifact",
+    )
     assert again["findings"][0]["confirmed"] is False
 
 
@@ -252,7 +264,11 @@ async def _verify(
         contract = VerificationContract(
             checks=(VerificationCheck(kind="command", command=command),)
         )
-        svc = VerificationService(session=session, llm=StubLlm([_answer()]), verifier_llm=verifier)
+        svc = VerificationService(
+            session=session,
+            llm=StubLlm([_tool("grep", pattern="x"), _answer()]),
+            verifier_llm=verifier,
+        )
         return await svc.verify(
             run=run,
             work_step=work_step,
@@ -267,7 +283,7 @@ async def _verify(
 
 async def test_confirmed_finding_does_not_change_passed() -> None:
     repro = {"kind": "command", "command": "probe", "expect": {"exit_code": "nonzero"}}
-    verifier = StubLlm([_answer(_finding(repro))])
+    verifier = StubLlm([_tool("grep", pattern="x"), _answer(_finding(repro))])
     vr = await _verify(verifier=verifier, box=_AdvBox(probe=_res(2, "bad")))
 
     assert vr.outcome is VerificationOutcome.PASSED
@@ -277,7 +293,7 @@ async def test_confirmed_finding_does_not_change_passed() -> None:
 
 
 async def test_gate_failure_skips_adversarial() -> None:
-    verifier = StubLlm([_answer(_finding())])
+    verifier = StubLlm([_tool("grep", pattern="x"), _answer(_finding())])
     box = _AdvBox(**{"false": _res(1, "red")})
     vr = await _verify(verifier=verifier, command="false", box=box)
 
@@ -302,9 +318,44 @@ def test_quality_counts_adversarial_and_keeps_unavailable_apart() -> None:
         _round_with(),  # ran, nothing found
         SimpleNamespace(result={"adversarial": {"status": "unavailable", "findings": []}}),
     ]
-    # (runs, unavailable, confirmed, unconfirmed): an unavailable round is NOT a run
-    assert _tally_adversarial(rounds) == (2, 1, 1, 2)
-    assert _tally_adversarial([]) == (0, 0, 0, 0)
+    # (runs, unavailable, confirmed, unconfirmed, no_probe): an unavailable round is NOT a run
+    assert _tally_adversarial(rounds) == (2, 1, 1, 2, 0)
+    assert _tally_adversarial([]) == (0, 0, 0, 0, 0)
+
+
+def test_quality_counts_no_probe_apart_from_done_and_unavailable() -> None:
+    def _r(status: str) -> Any:
+        return SimpleNamespace(result={"adversarial": {"status": status, "findings": []}})
+
+    rounds = [_r("done"), _r("no_probe"), _r("no_probe"), _r("unavailable")]
+    assert _tally_adversarial(rounds) == (1, 1, 0, 0, 2)
+
+
+async def test_no_tool_use_is_sent_back_once_then_recorded_as_no_probe() -> None:
+    llm = StubLlm([_answer(), _answer()])
+    blob = await _round(llm, _AdvBox())
+
+    assert blob["status"] == "no_probe"
+    assert blob["probes"] == 0
+    assert len(llm.calls) == 2  # the nudge reached the model exactly once
+    assert "at least once" in llm.calls[1]["messages"][-1]["content"]
+
+
+async def test_probing_after_the_nudge_is_done() -> None:
+    llm = StubLlm([_answer(), _tool("grep", pattern="x"), _answer()])
+    blob = await _round(llm, _AdvBox())
+
+    assert blob["status"] == "done"
+    assert blob["probes"] >= 1
+
+
+async def test_probe_then_answer_is_done_without_a_nudge() -> None:
+    llm = StubLlm([_tool("grep", pattern="x"), _answer()])
+    blob = await _round(llm, _AdvBox())
+
+    assert blob["status"] == "done"
+    assert blob["probes"] == 1
+    assert len(llm.calls) == 2
 
 
 def test_card_shows_confirmed_first_and_unconfirmed_as_suspected() -> None:
@@ -458,7 +509,7 @@ async def test_verifier_edits_never_reach_the_verdict(tmp_path: Path) -> None:
 
 async def test_the_verifier_is_given_the_working_tree_diff(tmp_path: Path) -> None:
     repo = _real_tree(tmp_path)  # src.py committed after the baseline, other.py uncommitted
-    llm = StubLlm([_answer()])
+    llm = StubLlm([_tool("grep", pattern="x"), _answer()])
     await _local_round(repo, llm)
     user = next(m for m in llm.calls[0]["messages"] if m["role"] == "user")["content"]
     assert "x = 99  # uncommitted" in user  # `git diff baseline HEAD` would not have it
@@ -529,7 +580,7 @@ async def test_an_unrestorable_tree_fails_the_round(monkeypatch: Any) -> None:
         return adversarial_verifier._unrestored("code", [], "복원 후 지문이 다르다")
 
     monkeypatch.setattr(verification_service, "run_adversarial_round", polluted)
-    vr = await _verify(verifier=StubLlm([_answer()]))
+    vr = await _verify(verifier=StubLlm([_tool("grep", pattern="x"), _answer()]))
 
     assert vr.outcome is VerificationOutcome.FAILED  # a polluted tree never flows on
     assert vr.result["adversarial"]["reason"].startswith("harness_error")
@@ -564,7 +615,9 @@ async def test_when_the_time_budget_runs_out_remaining_repros_are_unconfirmed(
         return out
 
     monkeypatch.setattr(adversarial_verifier, "_judge", spend_budget)
-    blob = await _round(StubLlm([_answer(_finding(), _finding(), _finding())]), box)
+    blob = await _round(
+        StubLlm([_tool("grep", pattern="x"), _answer(_finding(), _finding(), _finding())]), box
+    )
 
     assert [f["confirmed"] for f in blob["findings"]] == [True, False, False]
     assert sum("pytest" in c for c in box.commands) == 1  # #2 and #3 never ran

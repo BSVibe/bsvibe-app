@@ -59,12 +59,20 @@ export default function AdversarialStatus({
   confirmed = [],
   suspected = [],
 }: {
-  status?: "done" | "unavailable" | "none";
+  status?: "done" | "no_probe" | "unavailable" | "none";
   confirmed?: AdversarialFindingItem[];
   suspected?: AdversarialFindingItem[];
 }) {
   const t = useTranslations("adversarialStatus");
   if (!status || status === "none") return null;
+  if (status === "no_probe") {
+    return (
+      <div className="adversarial-status">
+        <span className="adversarial-status__title">{t("title")}</span>
+        <span className="adversarial-status__count">{t("noProbe")}</span>
+      </div>
+    );
+  }
   if (status === "unavailable") {
     return (
       <div className="adversarial-status">

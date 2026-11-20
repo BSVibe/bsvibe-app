@@ -1261,6 +1261,7 @@
     "title": "깨 보는 검증",
     "confirmed": "확인됨 ({count})",
     "suspected": "의심 ({count})",
+    "noProbe": "검증자가 확인하지 않음",
     "unavailable": "깨 보는 검증을 하지 못했습니다",
     "none": "지적 없음",
     "round": "{round}번째 검증",

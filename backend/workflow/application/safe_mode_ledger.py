@@ -42,7 +42,7 @@ class RunLedger(BaseModel):
     """``counts`` is the report's ``ledger_counts`` (``{}`` when the run has no ledger).
 
     ``review_*`` is the independent review of the run's last PASSED round (report-only):
-    ``review_status`` is ``done`` / ``unavailable`` / ``none``.
+    ``review_status`` is ``done`` / ``no_probe`` / ``unavailable`` / ``none``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -93,6 +93,8 @@ def _adversarial_summary(result: Any) -> _Adversarial:
     blob = result.get("adversarial") if isinstance(result, dict) else None
     if not isinstance(blob, dict):
         return "none", [], []
+    if blob.get("status") == "no_probe":
+        return "no_probe", [], []
     if blob.get("status") != "done":
         return "unavailable", [], []
     rank = {sev: i for i, sev in enumerate(SEVERITIES)}

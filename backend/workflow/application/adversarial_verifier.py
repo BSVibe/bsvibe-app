@@ -149,8 +149,9 @@ async def run_adversarial_round(
             await release()
             diff = await _working_tree_diff(box, baseline)
             await _make_copy(box, copy)
+            probes = [0]
             findings = await _bounded(
-                _session(llm, run, copy, diff, surface, scratch, checks, budget), budget
+                _session(llm, run, copy, diff, surface, scratch, checks, budget, probes), budget
             )
             if findings is None:
                 blob = _blob(
@@ -162,7 +163,8 @@ async def run_adversarial_round(
                 )
             else:
                 judged = [await _judge(box, copy, scratch, f, budget) for f in findings]
-                blob = _blob("done", surface, judged, checks)
+                blob = _blob("done" if probes[0] else "no_probe", surface, judged, checks)
+                blob["probes"] = probes[0]
         except _TokenCapExceeded:
             blob = _blob("unavailable", surface, [], checks, "토큰 상한 초과로 검증자를 멈췄다")
         except Exception as exc:  # noqa: BLE001 — report-only: must never change the verdict
@@ -253,6 +255,13 @@ def _blob(
     }
 
 
+_NO_PROBE_NUDGE = (
+    "You gave a final answer without running any tool. Before the final answer, read or run "
+    "the change at least once (file_read, grep, shell_exec or write_test) to check it "
+    "yourself, then give the final JSON."
+)
+
+
 async def _session(
     llm: Llm,
     run: Any,
@@ -262,7 +271,9 @@ async def _session(
     scratch: str,
     checks: list[str],
     budget: _Budget,
+    probes: list[int] | None = None,
 ) -> list[Finding] | None:
+    probes = probes if probes is not None else [0]
     payload = run.payload if isinstance(run.payload, dict) else {}
     messages: list[dict[str, Any]] = [
         {
@@ -284,16 +295,23 @@ async def _session(
         },
     ]
     spent = 0
+    nudged = False
     for _ in range(_MAX_TURNS):
         reply, used = await _ask(llm, run, messages)
         spent += used
         if reply is None:
             return None  # malformed twice: this round is unavailable
         if isinstance(reply, list):
+            if probes[0] == 0 and not nudged and spent < _TOKEN_CAP:
+                # Answered without touching the change: send it back ONCE (counts as a turn).
+                nudged = True
+                messages.append({"role": "user", "content": _NO_PROBE_NUDGE})
+                continue
             return reply
         if spent >= _TOKEN_CAP:
             # A real stop: no further tool call runs and no further model call is made.
             raise _TokenCapExceeded
+        probes[0] += 1
         output = await _dispatch(copy, scratch, reply.name, reply.args, checks, budget)
         messages.append(
             {"role": "user", "content": f"TOOL RESULT ({reply.name}):\n{output}"},
