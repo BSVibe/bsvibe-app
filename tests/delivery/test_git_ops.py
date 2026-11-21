@@ -581,3 +581,20 @@ async def test_fetch_base_tip_on_full_clone_stays_complete(tmp_path: Path) -> No
     assert await _run("rev-parse", "origin/main", cwd=dest) == await _run(
         "rev-parse", "main", cwd=bare
     )
+
+
+async def test_fetch_base_tip_option_injection_is_not_executed(tmp_path: Path) -> None:
+    """``--upload-pack=...`` as base_branch must not run a command; push still proceeds."""
+    bare = await _make_bare_remote(tmp_path)
+    ops = GitOps()
+    dest = tmp_path / "checkout"
+    await ops.clone(bare.as_uri(), dest, token=None, depth=1)
+    await ops.checkout_new_branch(dest, "bsvibe/run-inj")
+    (dest / "a.txt").write_text("a\n")
+    await ops.commit_all(dest, "a")
+    marker = tmp_path / "pwned"
+    evil = f"--upload-pack=touch {marker};git-upload-pack"
+    assert await ops.fetch_base_tip(dest, evil, token=None) is False
+    assert not marker.exists()
+    await ops.push(dest, "bsvibe/run-inj", token=None)
+    assert "bsvibe/run-inj" in await _run("branch", "--list", cwd=bare)

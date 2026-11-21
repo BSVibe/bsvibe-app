@@ -311,7 +311,15 @@ class GitOps:
         (GitHub 408). Having the tip commit locally lets push omit the overlapping objects.
         Token handling as :meth:`fetch` (re-auth ``origin`` for this call, scrub in ``finally``).
         A failure NEVER blocks delivery: it is logged and ``False`` is returned.
+
+        SECURITY -- ``base_branch`` is user-configured. It is validated with
+        ``git check-ref-format --branch`` (a leading ``-`` or a malformed name skips the fetch)
+        and passed after ``--`` as an explicit refspec, so it can never be read as a git option
+        (``--upload-pack=...`` would run a command).
         """
+        if base_branch.startswith("-") or not await self._is_valid_branch_name(base_branch):
+            logger.warning("git_ops_fetch_base_tip_skipped_invalid_branch", base_branch=base_branch)
+            return False
         try:
             if token:
                 origin = await self._run_checked("remote", "get-url", "origin", cwd=dest)
@@ -325,7 +333,11 @@ class GitOps:
                 args = ["fetch", "--quiet"]
                 if await self.is_shallow(dest):
                     args.append("--depth=1")
-                args += ["origin", base_branch]
+                args += [
+                    "origin",
+                    "--",
+                    f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}",
+                ]
                 await self._run_checked(*args, cwd=dest, token=token)
             finally:
                 if token:
@@ -338,6 +350,13 @@ class GitOps:
             )
             return False
         return True
+
+    async def _is_valid_branch_name(self, name: str) -> bool:
+        """True iff ``git check-ref-format --branch <name>`` accepts it (never raises)."""
+        if not name or name.startswith("-"):
+            return False
+        code, _out, _err = await self._run("check-ref-format", "--branch", name)
+        return code == 0
 
     async def is_shallow(self, dest: Path) -> bool:
         """True iff ``dest`` is a shallow clone (``git rev-parse
