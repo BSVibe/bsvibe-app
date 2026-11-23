@@ -845,3 +845,61 @@ async def test_reap_idle_ignores_dirs_without_a_product_row(sf, tmp_path):
             idle_grace_s=0,
         )
     assert reaped == []
+
+
+async def test_reap_idle_keeps_products_a_live_replay_job_points_at(sf, workspace_id, tmp_path):
+    """A Stage A replay is not a run, but it reads the product repo: while its job is
+    queued/running the product is kept; once the job ends it is reclaimable again."""
+    from backend.workflow.infrastructure.db import AdversarialReplayJob  # noqa: PLC0415
+
+    products_root = tmp_path / "products"
+    products_root.mkdir()
+    pid = uuid.uuid4()
+    old = datetime.now(tz=UTC) - timedelta(hours=48)
+    await _seed_product(sf, product_id=pid, ws_id=workspace_id, updated_at=old)
+    (products_root / str(pid)).mkdir()
+    async with sf() as s:
+        run_id = await _seed_run(s, workspace_id, status=RunStatus.SHIPPED, product_id=pid)
+        did = await _seed_deliverable(s, workspace_id, run_id)
+        async with workspace_session_scope(s, workspace_id):
+            (await s.get(ExecutionRun, run_id)).updated_at = old
+            s.add(
+                AdversarialReplayJob(
+                    id=(job_id := uuid.uuid4()),
+                    workspace_id=workspace_id,
+                    status="running",
+                    request={"cases": [{"deliverable_id": str(did)}], "repeat": 1},
+                    results=[],
+                )
+            )
+            await s.flush()
+        await s.commit()
+
+    removed: list[uuid.UUID] = []
+
+    async def publisher(_pid):
+        return True
+
+    async def remover(p):
+        removed.append(p)
+
+    async def sweep():
+        async with sf() as s, cross_tenant_session_read(s):
+            return await reap_idle_product_workspaces(
+                s,
+                publisher=publisher,
+                remover=remover,
+                products_root=products_root,
+                idle_grace_s=3600,
+            )
+
+    assert await sweep() == [], "a running replay keeps its product's repo"
+    assert removed == []
+
+    async with sf() as s:
+        async with workspace_session_scope(s, workspace_id):
+            job = await s.get(AdversarialReplayJob, job_id)
+            job.status = "done"
+            await s.commit()
+
+    assert await sweep() == [pid], "once the job is over the product is reclaimable again"

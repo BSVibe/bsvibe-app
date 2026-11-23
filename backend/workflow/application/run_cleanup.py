@@ -370,6 +370,9 @@ async def reap_idle_product_workspaces(
             )
         ).all()
     }
+    # A queued/running Stage A replay is not a run but reads the product repo the same way:
+    # the products its cases point at are kept like products with a live run.
+    busy |= await _products_of_active_replays(session, on_disk)
     # Activity = the product row's own updated_at OR any run's, whichever is
     # newer: a product created moments ago has no runs yet but is very much live.
     recent = {
@@ -427,6 +430,47 @@ async def reap_idle_product_workspaces(
     if reaped:
         logger.info("reaped_idle_product_workspaces", count=len(reaped))
     return reaped
+
+
+async def _products_of_active_replays(
+    session: AsyncSession, candidates: set[uuid.UUID]
+) -> set[uuid.UUID]:
+    """Products (among ``candidates``) that a queued/running replay job's cases point at."""
+    from backend.workflow.infrastructure.db import (  # noqa: PLC0415
+        AdversarialReplayJob,
+        Deliverable,
+    )
+
+    requests = (
+        (
+            await session.execute(
+                select(AdversarialReplayJob.request).where(
+                    AdversarialReplayJob.status.in_(("queued", "running"))
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    deliverable_ids: set[uuid.UUID] = set()
+    for request in requests:
+        cases = request.get("cases") if isinstance(request, dict) else None
+        for case in cases or []:
+            try:
+                deliverable_ids.add(uuid.UUID(str(case["deliverable_id"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+    if not deliverable_ids:
+        return set()
+    rows = await session.execute(
+        select(ExecutionRun.product_id)
+        .join(Deliverable, Deliverable.run_id == ExecutionRun.id)
+        .where(
+            Deliverable.id.in_(deliverable_ids),
+            ExecutionRun.product_id.in_(candidates),
+        )
+    )
+    return {row[0] for row in rows.all()}
 
 
 def _bundle_publisher_for(
