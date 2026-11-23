@@ -42,6 +42,23 @@ def _is_transient(status: int) -> bool:
     return status in _TRANSIENT_STATUSES or status >= 500  # noqa: PLR2004
 
 
+_BAD_BRANCH_CHARS = frozenset(" ~^:?*[\\")
+
+
+def is_valid_base_branch(value: object) -> bool:
+    """저장 시점 검증 — ``git check-ref-format --branch`` 규칙의 보수적 부분집합.
+
+    ``-`` 로 시작하는 값은 git 옵션으로 읽힐 수 있어 거부한다.
+    """
+    if not isinstance(value, str) or not value or len(value) > 255:  # noqa: PLR2004
+        return False
+    if value.startswith(("-", "/")) or value.endswith(("/", ".", ".lock")) or value == "@":
+        return False
+    if ".." in value or "@{" in value or "//" in value or "/." in value or value.startswith("."):
+        return False
+    return not any(c in _BAD_BRANCH_CHARS or ord(c) < 0x20 or ord(c) == 0x7F for c in value)
+
+
 def reject_server_owned_installation(
     connector: str, *, external_ref: str | None, delivery_config: dict[str, Any] | None
 ) -> None:
@@ -55,6 +72,9 @@ def reject_server_owned_installation(
         raise ValueError(
             "installation_id 는 서버가 설치 claim 때 기록하는 값이라 직접 설정할 수 없습니다"
         )
+    base_branch = (delivery_config or {}).get("base_branch")
+    if base_branch is not None and not is_valid_base_branch(base_branch):
+        raise ValueError("base_branch 가 올바른 git 브랜치 이름이 아닙니다")
     if connector == "github" and external_ref is not None and external_ref.strip():
         raise ValueError(
             "github 커넥터의 external_ref 는 설치 claim 이 서버에서 기록하는 값이라 직접 설정할 수 없습니다"

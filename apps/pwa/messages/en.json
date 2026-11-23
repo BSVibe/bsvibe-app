@@ -1265,6 +1265,8 @@
     "unavailable": "The adversarial check could not be done",
     "none": "No findings",
     "round": "Verification {round}",
-    "reason": "({reason})"
+    "reason": "({reason})",
+    "notRun": "The repro did not run",
+    "baselineNotRun": "Could not run before the change"
   }
 }

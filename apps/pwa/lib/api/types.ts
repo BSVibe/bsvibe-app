@@ -462,12 +462,17 @@ export interface AdversarialFindingItem {
   file: string | null;
   line: number | null;
   claim: string;
+  /** Why it is unconfirmed (or, confirmed, that the repro could not run before the change). */
+  reason?: string | null;
+  /** The repro never ran — told apart from "the claim was wrong". */
+  not_run?: boolean;
+  /** Confirmed, but the repro could not run before the change. */
+  baseline_not_run?: boolean;
 }
 
 /** One finding of `result.adversarial` as stored (run detail rounds). */
 export interface AdversarialStoredFinding extends AdversarialFindingItem {
   confirmed: boolean;
-  reason?: string;
   /** The repro's output, already cut by the harness. */
   output?: string;
 }

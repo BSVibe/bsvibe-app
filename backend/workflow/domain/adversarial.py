@@ -207,6 +207,26 @@ def repro_command(command: str) -> str:
     return f"{REPRO_RUN_PREFIX}sh -c {shlex.quote(command)}"
 
 
+#: Spellings of 'the thing is missing' a repro may legitimately EXPECT to see (a change that
+#: forgot a dependency makes ``No module named`` the very proof of the defect).
+_EXPECTED_ERROR_MARKERS = (
+    "No module named",
+    "ModuleNotFoundError",
+    "ImportError",
+    "command not found",
+    "not found",
+)
+
+
+def _expects_the_error(expect: dict[str, Any]) -> bool:
+    """The repro itself asks for the shell/import error: in ``contains`` or as exit 126/127."""
+    wanted = str(expect.get("contains", "")).lower()
+    if any(m.lower() in wanted for m in _EXPECTED_ERROR_MARKERS):
+        return True
+    code = expect.get("exit_code")
+    return isinstance(code, int) and not isinstance(code, bool) and code in (126, 127)
+
+
 def command_did_not_run(
     expect: dict[str, Any], *, exit_code: int | None, output: str, timed_out: bool
 ) -> bool:
@@ -214,8 +234,7 @@ def command_did_not_run(
     module. A claim that itself expects such an error in its output is not 'not run'."""
     if timed_out or exit_code is None:
         return False
-    wanted = str(expect.get("contains", ""))
-    if any(m in wanted for m in _NOT_RUN_MARKERS):
+    if _expects_the_error(expect):
         return False
     if exit_code in (126, 127):
         return True

@@ -63,6 +63,9 @@ class _CapturingGitOps:
     async def commit_all(self, dest: Path, message: str) -> bool:
         return self.committed
 
+    async def fetch_base_tip(self, dest: Path, base_branch: str, *, token: str | None) -> bool:
+        return True
+
     async def push(self, dest: Path, branch: str, *, token: str | None) -> None:
         self.push_token = token
 

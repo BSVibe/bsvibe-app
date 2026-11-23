@@ -300,6 +300,64 @@ class GitOps:
             if token:
                 await self.scrub_origin_token(dest)
 
+    async def fetch_base_tip(self, dest: Path, base_branch: str, *, token: str | None) -> bool:
+        """Best-effort ``git fetch [--depth=1] origin <base_branch>`` right before a push.
+
+        ``--depth=1`` is used only when the clone is shallow; a complete clone fetches the tip
+        with full history so it stays complete.
+
+        A shallow run clone whose base moved while the run worked lacks the remote's tip, so
+        ``git push`` cannot subtract what the remote already has and sends a full snapshot
+        (GitHub 408). Having the tip commit locally lets push omit the overlapping objects.
+        Token handling as :meth:`fetch` (re-auth ``origin`` for this call, scrub in ``finally``).
+        A failure NEVER blocks delivery: it is logged and ``False`` is returned.
+
+        SECURITY -- ``base_branch`` is user-configured. It is validated with
+        ``git check-ref-format --branch`` (a leading ``-`` or a malformed name skips the fetch)
+        and passed after ``--`` as an explicit refspec, so it can never be read as a git option
+        (``--upload-pack=...`` would run a command).
+        """
+        if base_branch.startswith("-") or not await self._is_valid_branch_name(base_branch):
+            logger.warning("git_ops_fetch_base_tip_skipped_invalid_branch", base_branch=base_branch)
+            return False
+        try:
+            if token:
+                origin = await self._run_checked("remote", "get-url", "origin", cwd=dest)
+                authed = self.authed_url(origin.strip(), token=token)
+                await self._run_checked(
+                    "remote", "set-url", "origin", authed, cwd=dest, token=token
+                )
+            try:
+                # ``--depth=1`` only on a shallow clone: on a complete clone it would turn the
+                # repository shallow, truncating history later steps rely on.
+                args = ["fetch", "--quiet"]
+                if await self.is_shallow(dest):
+                    args.append("--depth=1")
+                args += [
+                    "origin",
+                    "--",
+                    f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}",
+                ]
+                await self._run_checked(*args, cwd=dest, token=token)
+            finally:
+                if token:
+                    await self.scrub_origin_token(dest)
+        except GitError as exc:
+            logger.warning(
+                "git_ops_fetch_base_tip_failed",
+                base_branch=base_branch,
+                error=scrub_token(str(exc), token),
+            )
+            return False
+        return True
+
+    async def _is_valid_branch_name(self, name: str) -> bool:
+        """True iff ``git check-ref-format --branch <name>`` accepts it (never raises)."""
+        if not name or name.startswith("-"):
+            return False
+        code, _out, _err = await self._run("check-ref-format", "--branch", name)
+        return code == 0
+
     async def is_shallow(self, dest: Path) -> bool:
         """True iff ``dest`` is a shallow clone (``git rev-parse
         --is-shallow-repository`` → ``"true"``).

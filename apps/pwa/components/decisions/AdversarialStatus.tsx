@@ -9,6 +9,26 @@ function label(f: AdversarialFindingItem): string {
   return `${where}${f.claim}`;
 }
 
+/** Why a finding stands as it does: "재현이 실행되지 않음" for a suspected one whose repro never
+ *  ran, the reason for any other suspected one, "변경 전 실행 불가" for a confirmed one. */
+function Why({ f, confirmed }: { f: AdversarialFindingItem; confirmed: boolean }) {
+  const t = useTranslations("adversarialStatus");
+  const notRun = !confirmed && f.not_run === true;
+  const baseline = confirmed && f.baseline_not_run === true;
+  if (!notRun && !baseline && !(!confirmed && f.reason)) return null;
+  return (
+    <span className="adversarial-status__reason" data-testid="adversarial-finding-reason">
+      {" "}
+      {notRun ? (
+        <strong data-testid="adversarial-not-run">{t("notRun")}</strong>
+      ) : baseline ? (
+        <strong data-testid="adversarial-baseline-not-run">{t("baselineNotRun")}</strong>
+      ) : null}
+      {f.reason && (!confirmed || baseline) ? ` ${t("reason", { reason: f.reason })}` : null}
+    </span>
+  );
+}
+
 /**
  * The adversarial verifier's findings, confirmed ones FIRST and the unreproduced ones apart as
  * "의심" (suspected). Report-only: never blocks anything. Renders nothing when there is nothing
@@ -32,7 +52,10 @@ export function AdversarialFindings({
           <ul className="adversarial-status__items">
             {confirmed.map((f, i) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: findings have no id; the list is static.
-              <li key={i}>{label(f)}</li>
+              <li key={i}>
+                {label(f)}
+                <Why f={f} confirmed />
+              </li>
             ))}
           </ul>
         </div>
@@ -45,7 +68,10 @@ export function AdversarialFindings({
           <ul className="adversarial-status__items">
             {suspected.map((f, i) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: findings have no id; the list is static.
-              <li key={i}>{label(f)}</li>
+              <li key={i}>
+                {label(f)}
+                <Why f={f} confirmed={false} />
+              </li>
             ))}
           </ul>
         </div>

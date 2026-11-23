@@ -881,3 +881,89 @@ async def test_a_grep_repro_that_holds_on_both_trees_is_unconfirmed_for_real(
     assert blob["findings"][0]["confirmed"] is False
     assert "변경 전에도 같은 결과" in blob["findings"][0]["reason"]
     assert not list(Path("/tmp").glob("bsvibe-adversarial-run-1-*"))  # noqa: S108 — all removed
+
+
+# -- expected errors, summary reasons, baseline failures ----------------------------------------
+
+
+async def test_expected_import_error_confirms_only_after_the_change() -> None:
+    probe = "python -c 'import backend.x'"
+    err = _res(1, "ModuleNotFoundError: No module named 'dep'")
+    repro = _cmd_repro(probe, exit_code="nonzero", contains="No module named")
+
+    after_only = await _one(_AdvBox(scripted_before={probe: _res(0, "")}, **{probe: err}), repro)
+    assert after_only["confirmed"] is True
+    assert not after_only.get("not_run")
+
+    both = await _one(_AdvBox(scripted_before={probe: err}, **{probe: err}), repro)
+    assert both["confirmed"] is False
+    assert "변경 전에도 같은 결과" in both["reason"]
+
+
+async def test_expected_exit_127_follows_the_same_rule() -> None:
+    probe = "./bin/tool"
+    gone = _res(127, "sh: ./bin/tool: not found")
+    repro = _cmd_repro(probe, exit_code=127)
+    ok = await _one(_AdvBox(scripted_before={probe: _res(0, "")}, **{probe: gone}), repro)
+    assert ok["confirmed"] is True
+    both = await _one(_AdvBox(scripted_before={probe: gone}, **{probe: gone}), repro)
+    assert both["confirmed"] is False
+
+
+async def test_unexpected_module_not_found_is_still_not_run() -> None:
+    probe = "python -c 'import backend.x'"
+    err = _res(1, "ModuleNotFoundError: No module named 'dep'")
+    finding = await _one(_AdvBox(**{probe: err}), _cmd_repro(probe, exit_code="nonzero"))
+    assert finding["confirmed"] is False
+    assert finding["not_run"] is True
+
+
+def test_summary_carries_baseline_not_run_reason() -> None:
+    blob = {
+        "status": "done",
+        "findings": [
+            {"severity": "high", "claim": "a", "confirmed": True, "reason": "ok"},
+            {
+                "severity": "high",
+                "claim": "b",
+                "confirmed": True,
+                "reason": "변경 전 실행 불가",
+                "baseline_not_run": True,
+            },
+            {"severity": "low", "claim": "c", "confirmed": False, "reason": "x", "not_run": True},
+        ],
+    }
+    _, confirmed, suspected = _adversarial_summary({"adversarial": blob})
+    by_claim = {f.claim: f for f in confirmed}
+    assert by_claim["b"].reason == "변경 전 실행 불가"
+    assert by_claim["b"].baseline_not_run is True
+    assert by_claim["a"].reason is None
+    assert suspected[0].not_run is True
+
+
+async def test_baseline_with_missing_ref_raises(tmp_path: Path) -> None:
+    repo = tmp_path / "ws"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "a.py").write_text("A = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    (repo / "added.py").write_text("N = 1\n")
+    box = _LocalBox(repo)
+    copy = adversarial_verifier._Copy(box, str(tmp_path / "copy"))  # type: ignore[arg-type]
+    await adversarial_verifier._make_copy(box, copy)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError):
+        await adversarial_verifier._to_baseline(box, copy, "no-such-ref")  # type: ignore[arg-type]
+
+
+async def test_a_repro_whose_baseline_cannot_be_built_is_unconfirmed(monkeypatch: Any) -> None:
+    async def boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("bad ref")
+
+    monkeypatch.setattr(adversarial_verifier, "_to_baseline", boom)
+    probe = "check"
+    box = _AdvBox(**{probe: _res(0, "MISSING:x")})
+    finding = await _one(box, _cmd_repro(probe, contains="MISSING:"))
+    assert finding["confirmed"] is False
+    assert "변경 전 대조를 하지 못했다" in finding["reason"]

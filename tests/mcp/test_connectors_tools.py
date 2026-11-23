@@ -841,3 +841,27 @@ async def test_set_delivery_config_rejects_installation_id(
                 {"connector_id": cid, "delivery_config": {"installation_id": 999}},
                 ctx,
             )
+
+
+async def test_set_delivery_config_rejects_option_like_base_branch(
+    db, workspace_id, user_id, registry, seeded
+) -> None:
+    cid = await _create_github(
+        db, registry, workspace_id=workspace_id, user_id=user_id, delivery_config={}
+    )
+    async with db() as s:
+        ctx = ToolContext(
+            principal=_principal(
+                workspace_id=workspace_id, user_id=user_id, scopes=("mcp:read", "mcp:write")
+            ),
+            session=s,
+        )
+        with pytest.raises(ToolError, match="base_branch"):
+            await registry.call_tool(
+                "bsvibe_connectors_set_delivery_config",
+                {
+                    "connector_id": cid,
+                    "delivery_config": {"base_branch": "--upload-pack=touch x;git-upload-pack"},
+                },
+                ctx,
+            )
