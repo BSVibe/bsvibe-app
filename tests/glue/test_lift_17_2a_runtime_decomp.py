@@ -256,6 +256,7 @@ def test_build_worker_runtime_constructs_expected_workers() -> None:
         # Notifier daily_brief — per-workspace once-a-day digest producer.
         "daily_brief_worker",
         "settle_worker",
+        "adversarial_replay_worker",
         "relay_worker",
         "schedule_worker",
         "safe_mode_expiry_worker",

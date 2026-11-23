@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from backend.mcp.api import ToolRegistry
 from backend.mcp.tools.account_tools import register_account_tools
+from backend.mcp.tools.adversarial_replay_tools import register_adversarial_replay_tools
 from backend.mcp.tools.bindings_tools import register_bindings_tools
 from backend.mcp.tools.checkpoint_tools import register_checkpoint_tools
 from backend.mcp.tools.connectors_tools import register_connectors_tools
@@ -78,6 +79,7 @@ def register_all_tools(
         )
     register_workflow_tools(registry)
     register_safe_mode_tools(registry)
+    register_adversarial_replay_tools(registry)
     register_direct_tools(registry)
     register_model_accounts_tools(registry)
     register_connectors_tools(registry)
@@ -122,6 +124,7 @@ __all__ = [
     "register_reindex_tools",
     "register_notifications_tools",
     "register_run_routing_rules_tools",
+    "register_adversarial_replay_tools",
     "register_safe_mode_tools",
     "register_schedule_tools",
     "register_skills_tools",

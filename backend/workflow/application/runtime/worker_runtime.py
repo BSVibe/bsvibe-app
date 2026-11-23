@@ -45,6 +45,9 @@ from backend.schedule.infrastructure.workers.schedule_worker import (
 from backend.workers.base import BaseWorker
 from backend.workers.relays import build_relay
 from backend.workflow.application.run_persistence import create_decision
+from backend.workflow.application.runtime.adversarial_replay_runtime import (
+    build_adversarial_replay_worker,
+)
 from backend.workflow.application.runtime.intake_trust_runtime import (
     build_repo_permission_lookup,
 )
@@ -208,6 +211,9 @@ def build_worker_runtime(
             repo_permission=build_repo_permission_lookup(session_factory=session_factory),
         ),
         AgentWorker(session_factory=session_factory, execution=execution),
+        # Stage A replay over past deliverables — background job behind
+        # ``bsvibe_adversarial_replay`` (a replay outlives an MCP request).
+        build_adversarial_replay_worker(session_factory=session_factory, settings=settings),
         DeliveryWorker(session_factory=session_factory, dispatcher=delivery_adapter),
         NotifyWorker(session_factory=session_factory, sender=notify_sender),
         # Notifier daily_brief — per-workspace once-a-day digest producer.
