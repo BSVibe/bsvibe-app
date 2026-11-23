@@ -40,6 +40,7 @@ from typing import Any
 
 import structlog
 
+from backend.storage.branch_point import MAIN_REFS
 from backend.workflow.application.adversarial_verifier import run_adversarial_round
 from backend.workflow.infrastructure.sandbox.protocol import SandboxSession
 
@@ -73,6 +74,7 @@ class ReplayInput:
     created_at: datetime | None
     repo_dir: Path
     intent_text: str = ""
+    fetch_failed: bool = False  # origin/main could not be fetched from GitHub before the search
 
 
 @dataclass(frozen=True)
@@ -147,16 +149,30 @@ async def find_base_commit(repo: Path, inp: ReplayInput) -> str:
         raise CaseUnavailable(
             "기준 커밋이 기록돼 있지 않고, diff 에 기존 파일의 index blob 이 없다"
         )
-    args = ["rev-list", "--first-parent", "-n", str(_MAX_CANDIDATES)]
-    if inp.created_at is not None:
-        args.append(f"--before={inp.created_at.isoformat()}")
-    code, out = await _git(*args, "main", cwd=repo)
-    if code != 0:
-        raise CaseUnavailable(f"main 이력을 읽지 못했다: {out.strip()[:200]}")
-    for commit in out.split():  # newest first = nearest before the deliverable
+    note = " (GitHub origin/main 을 받아 오지 못했다)" if inp.fetch_failed else ""
+    # Same ref set ``branch_point`` measures the deliverable's diff from: the server's local
+    # ``main`` and ``origin/main`` can differ (squash merges on GitHub, server merge commits).
+    candidates: dict[str, int] = {}
+    errors: list[str] = []
+    for ref in MAIN_REFS:
+        args = ["log", "--first-parent", "-n", str(_MAX_CANDIDATES), "--format=%H %ct"]
+        if inp.created_at is not None:
+            args.append(f"--before={inp.created_at.isoformat()}")
+        code, out = await _git(*args, ref, "--", cwd=repo)
+        if code != 0:
+            errors.append(f"{ref}: {out.strip()[:200]}")
+            continue
+        for line in out.splitlines():
+            sha, _, ts = line.partition(" ")
+            if sha and ts.strip().isdigit():
+                candidates.setdefault(sha, int(ts))  # one commit on both refs is seen once
+    if not candidates and errors:
+        raise CaseUnavailable(f"main 이력을 읽지 못했다: {'; '.join(errors)}{note}")
+    # nearest before the deliverable first (stable sort keeps MAIN_REFS order on ties)
+    for commit in sorted(candidates, key=lambda c: -candidates[c]):
         if await _commit_matches(repo, commit, blobs):
             return commit
-    raise CaseUnavailable("diff 의 index blob 이 모두 맞는 main 커밋을 찾지 못했다")
+    raise CaseUnavailable(f"diff 의 index blob 이 모두 맞는 main 커밋을 찾지 못했다{note}")
 
 
 async def reconstruct_tree(inp: ReplayInput, dest: Path) -> str:
@@ -404,6 +420,9 @@ async def load_replay_input(
     if not present:
         raise CaseUnavailable("제품 저장소도 bundle 도 이 서버에 없다")
     repo = product_workspace_path(run.product_id)
+    # Bring origin/main up to GitHub the way run preparation does (same credential), so a base
+    # commit that only GitHub has can be found. A failed fetch is not fatal: search what exists.
+    fetch_failed = await _refresh_origin(session, workspace_id, run.product_id)
     recorded = next(
         (
             str(payload[k])
@@ -420,7 +439,31 @@ async def load_replay_input(
         created_at=row.created_at,
         repo_dir=repo,
         intent_text=str(run_payload.get("intent_text") or ""),
+        fetch_failed=fetch_failed,
     )
+
+
+async def _refresh_origin(session: Any, workspace_id: uuid.UUID, product_id: uuid.UUID) -> bool:
+    """Fetch GitHub ``main`` into ``origin/main`` (``sync_main_with_origin``); True = it failed."""
+    from backend.storage.product_workspace import sync_main_with_origin  # noqa: PLC0415
+
+    async def _github_token() -> str | None:
+        from backend.connectors.auth.resolve import resolve_github_token  # noqa: PLC0415
+        from backend.router.accounts.crypto import cipher_from_settings  # noqa: PLC0415
+
+        try:
+            return await resolve_github_token(
+                session, workspace_id=workspace_id, cipher=cipher_from_settings()
+            )
+        except Exception:  # noqa: BLE001 — a public repo fetches without it
+            logger.warning("replay_credential_unavailable", product_id=str(product_id))
+            return None
+
+    try:
+        return await sync_main_with_origin(product_id, _github_token) == "fetch_failed"
+    except Exception:  # noqa: BLE001 — never fatal; the search uses the refs it has
+        logger.warning("replay_origin_fetch_error", product_id=str(product_id))
+        return True
 
 
 __all__ = [

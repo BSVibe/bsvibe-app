@@ -280,6 +280,12 @@ ignore_imports = [
     # chains would mean a secret encrypted on one path and stored in the clear
     # on the other. Scoped to that one edge; the rest of the contract stands.
     "backend.workflow.application.product_secrets -> backend.router.accounts.crypto",
+    # 재생 도구는 기준 커밋 탐색 전에 GitHub main 을 받아 온다. 런 준비와 같은 경로
+    # (``sync_main_with_origin`` + 워크스페이스의 GitHub 자격 증명)를 쓰므로 자격 증명
+    # 해석기와 cipher 가 필요하다. 사본을 두면 런 준비와 어긋난다. 이 한 모듈에 한정된,
+    # 함수 안에서만 import 하는 간선이다.
+    "backend.workflow.application.adversarial_replay -> backend.connectors.auth.resolve",
+    "backend.workflow.application.adversarial_replay -> backend.router.accounts.crypto",
     # Lift D3a — UI-parity setup tools (model accounts / connectors /
     # notifications). Each new tool module calls the SAME service /
     # row / kind primitives the REST surface uses so the MCP and PWA

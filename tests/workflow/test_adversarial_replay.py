@@ -557,3 +557,92 @@ async def test_fake_run_id_records_no_usage_or_events(monkeypatch: pytest.Monkey
         assert seen.get("run_id") is None  # not bound to a run: no meter, no run link
         for model in (ExecutionRun, Deliverable, UnattributedLlmUsage):
             assert await _count(sf, model) == 0
+
+
+# ---------------------------------------------------------------------------
+# base commit search over main AND origin/main, with a fetch first
+# ---------------------------------------------------------------------------
+def _origin_only_base(repo: _Repo) -> tuple[str, str]:
+    """Base X lives only on a GitHub-side branch off A; local main is diverged (C)."""
+    _git(repo.path, "checkout", "-q", "--detach", repo.a)
+    (repo.path / "a.py").write_text("def f():\n    return 1  # github\n")
+    _git(repo.path, "commit", "-qam", "gh", date="2026-01-15T00:00:00Z")
+    x = _git(repo.path, "rev-parse", "HEAD")
+    (repo.path / "a.py").write_text("def f():\n    return 41\n")
+    (repo.path / "new.py").write_text("X = 1\n")
+    _git(repo.path, "add", "-A")
+    diff = _git(repo.path, "diff", "--cached", "--binary") + "\n"
+    _git(repo.path, "reset", "-q", "--hard", x)
+    _git(repo.path, "clean", "-fdq")
+    _git(repo.path, "checkout", "-q", "main")
+    return x, diff
+
+
+async def test_base_commit_only_on_origin_main_is_found(repo: _Repo) -> None:
+    x, diff = _origin_only_base(repo)
+    _git(repo.path, "update-ref", "refs/remotes/origin/main", x)
+    assert await replay.find_base_commit(repo.path, repo.input(diff=diff)) == x
+
+
+def _fake_loader_env(
+    repo: _Repo, monkeypatch: pytest.MonkeyPatch, diff: str, fake_sync: Any
+) -> tuple[Any, uuid.UUID, uuid.UUID]:
+    ws, pid, did = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    deliverable = SimpleNamespace(
+        workspace_id=ws,
+        run_id=uuid.uuid4(),
+        payload={"diff": diff},
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    run = SimpleNamespace(product_id=pid, payload={})
+
+    class _Session:
+        async def get(self, model: Any, _id: Any) -> Any:
+            return deliverable if model.__name__ == "Deliverable" else run
+
+    async def ensure(_pid: uuid.UUID) -> bool:
+        return True
+
+    async def token(_session: Any, *, workspace_id: uuid.UUID, cipher: Any) -> str:
+        assert workspace_id == ws
+        return "ghs_workspace_token"
+
+    monkeypatch.setattr("backend.storage.product_workspace.ensure_product_workspace", ensure)
+    monkeypatch.setattr(
+        "backend.storage.product_workspace.product_workspace_path", lambda _p: repo.path
+    )
+    monkeypatch.setattr("backend.storage.product_workspace.sync_main_with_origin", fake_sync)
+    monkeypatch.setattr("backend.connectors.auth.resolve.resolve_github_token", token)
+    monkeypatch.setattr("backend.router.accounts.crypto.cipher_from_settings", lambda: object())
+    return _Session(), ws, did
+
+
+async def test_base_commit_only_on_github_is_found_after_fetch(
+    repo: _Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    x, diff = _origin_only_base(repo)
+    seen: dict[str, Any] = {}
+
+    async def fake_sync(_pid: uuid.UUID, credential: Any = None) -> str:
+        seen["token"] = await credential()  # same credential path as run preparation
+        _git(repo.path, "update-ref", "refs/remotes/origin/main", x)
+        return "fast_forwarded"
+
+    session, ws, did = _fake_loader_env(repo, monkeypatch, diff, fake_sync)
+    inp = await replay.load_replay_input(session, ws, did)
+    assert seen["token"] == "ghs_workspace_token"
+    assert inp.fetch_failed is False
+    assert await replay.find_base_commit(repo.path, inp) == x
+
+
+async def test_fetch_failure_is_named_in_the_reason(
+    repo: _Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def failing(_pid: uuid.UUID, credential: Any = None) -> str:
+        return "fetch_failed"
+
+    monkeypatch.setattr("backend.storage.product_workspace.sync_main_with_origin", failing)
+    assert await replay._refresh_origin(object(), uuid.uuid4(), uuid.uuid4()) is True
+    bogus = repo.diff.replace("index ", "index ffffff", 1)
+    with pytest.raises(replay.CaseUnavailable, match="받아 오지 못했다"):
+        await replay.find_base_commit(repo.path, repo.input(diff=bogus, fetch_failed=True))
