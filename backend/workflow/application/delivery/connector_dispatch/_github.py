@@ -292,6 +292,9 @@ async def deliver_github(
     # 3. Push the branch to the (real-or-test) remote. The server's own
     #    credential, because the server holds this checkout — the mirror image
     #    of client_attach, where the founder's machine pushes with theirs.
+    #    First pull the base branch's remote tip (depth 1) so a shallow run whose base moved
+    #    mid-run doesn't upload a full snapshot (GitHub 408). Best-effort: never blocks.
+    await deps.git_ops.fetch_base_tip(checkout, binding.base_branch, token=token)
     await deps.git_ops.push(checkout, branch, token=token)
 
     return await _open_pr_and_settle(
