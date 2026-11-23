@@ -584,21 +584,54 @@ async def test_base_commit_only_on_origin_main_is_found(repo: _Repo) -> None:
     assert await replay.find_base_commit(repo.path, repo.input(diff=diff)) == x
 
 
+def _fake_loader_env(
+    repo: _Repo, monkeypatch: pytest.MonkeyPatch, diff: str, fake_sync: Any
+) -> tuple[Any, uuid.UUID, uuid.UUID]:
+    ws, pid, did = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    deliverable = SimpleNamespace(
+        workspace_id=ws,
+        run_id=uuid.uuid4(),
+        payload={"diff": diff},
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    run = SimpleNamespace(product_id=pid, payload={})
+
+    class _Session:
+        async def get(self, model: Any, _id: Any) -> Any:
+            return deliverable if model.__name__ == "Deliverable" else run
+
+    async def ensure(_pid: uuid.UUID) -> bool:
+        return True
+
+    async def token(_session: Any, *, workspace_id: uuid.UUID, cipher: Any) -> str:
+        assert workspace_id == ws
+        return "ghs_workspace_token"
+
+    monkeypatch.setattr("backend.storage.product_workspace.ensure_product_workspace", ensure)
+    monkeypatch.setattr(
+        "backend.storage.product_workspace.product_workspace_path", lambda _p: repo.path
+    )
+    monkeypatch.setattr("backend.storage.product_workspace.sync_main_with_origin", fake_sync)
+    monkeypatch.setattr("backend.connectors.auth.resolve.resolve_github_token", token)
+    monkeypatch.setattr("backend.router.accounts.crypto.cipher_from_settings", lambda: object())
+    return _Session(), ws, did
+
+
 async def test_base_commit_only_on_github_is_found_after_fetch(
     repo: _Repo, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     x, diff = _origin_only_base(repo)
-    inp = repo.input(diff=diff)
-    with pytest.raises(replay.CaseUnavailable):  # not fetched yet: local refs lack X
-        await replay.find_base_commit(repo.path, inp)
+    seen: dict[str, Any] = {}
 
     async def fake_sync(_pid: uuid.UUID, credential: Any = None) -> str:
-        assert credential is not None  # same credential path as run preparation
+        seen["token"] = await credential()  # same credential path as run preparation
         _git(repo.path, "update-ref", "refs/remotes/origin/main", x)
         return "fast_forwarded"
 
-    monkeypatch.setattr("backend.storage.product_workspace.sync_main_with_origin", fake_sync)
-    assert await replay._refresh_origin(object(), uuid.uuid4(), uuid.uuid4()) is False
+    session, ws, did = _fake_loader_env(repo, monkeypatch, diff, fake_sync)
+    inp = await replay.load_replay_input(session, ws, did)
+    assert seen["token"] == "ghs_workspace_token"
+    assert inp.fetch_failed is False
     assert await replay.find_base_commit(repo.path, inp) == x
 
 
