@@ -378,7 +378,10 @@ async def load_replay_input(
     session: Any, workspace_id: uuid.UUID, deliverable_id: uuid.UUID
 ) -> ReplayInput:
     """Read what a replay needs. Read-only; another workspace's deliverable reads as absent."""
-    from backend.storage.product_workspace import product_workspace_path  # noqa: PLC0415
+    from backend.storage.product_workspace import (  # noqa: PLC0415
+        ensure_product_workspace,
+        product_workspace_path,
+    )
     from backend.workflow.domain.verified_deliverable import diff_of  # noqa: PLC0415
     from backend.workflow.infrastructure.db import Deliverable, ExecutionRun  # noqa: PLC0415
 
@@ -390,9 +393,17 @@ async def load_replay_input(
     run = await session.get(ExecutionRun, row.run_id)
     if run is None or run.product_id is None:
         raise CaseUnavailable("결과물의 런/제품을 찾을 수 없다")
+    # The on-disk repo is a cache (the idle reaper bundles and deletes it): restore it the way
+    # every other surface does. False = no repo AND no bundle, i.e. nothing to replay against.
+    try:
+        present = await ensure_product_workspace(run.product_id)
+    except Exception as exc:  # noqa: BLE001 — a failed restore is this case's reason
+        raise CaseUnavailable(
+            f"제품 저장소를 bundle 에서 복원하지 못했다: {type(exc).__name__}: {str(exc)[:200]}"
+        ) from exc
+    if not present:
+        raise CaseUnavailable("제품 저장소도 bundle 도 이 서버에 없다")
     repo = product_workspace_path(run.product_id)
-    if not (repo / ".git").exists():
-        raise CaseUnavailable("제품 저장소가 이 서버에 없다")
     recorded = next(
         (
             str(payload[k])
