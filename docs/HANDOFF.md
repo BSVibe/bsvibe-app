@@ -1,4 +1,4 @@
-# BSVibe session handoff — 2026-11-17
+# BSVibe session handoff — 2026-11-23
 
 **Deploy topology** — they differ. Mixing them up costs an hour of "I deployed, why didn't it change".
 
@@ -21,7 +21,39 @@
 
 ---
 
-## §0 — One line: **The audit's non-security blockers that are code are fixed; the ledger judge now sees the definitions it was missing**
+## §0 — One line: **The adversarial verifier (Stage A) runs in production, finds real defects, and can be replayed on past deliverables**
+
+11-17 → 11-23. Every card was reviewed (diff read, review findings checked against the code) before approve / deny.
+"Rounds" is `passed_on_round` / all rounds of the run.
+
+| Issue → PR | What | Rounds |
+|---|---|---|
+| — → #1421 | design: `docs/design/agentic-verification.md` — findings count only when reproduced; the run attacks its own work | — |
+| → #1425 | **Stage A added, report-only**: an adversarial verifier inside the verification round; never fails a round | 1 / 4 |
+| → #1437 | Stage A never ran in prod (refused as an executor agent task with no run; passing it would bypass copy isolation) — the harness now drives the tool loop itself | 1 / 1 |
+| #1439 → #1442 | a Stage A that used no tool and said "no problem" is recorded apart, not as `done` | 1 / 3 |
+| #1440 → #1443 | a repro that also holds BEFORE the change is not "confirmed"; Python repros run in the project's environment | 1 / 2 |
+| #1444 → #1445 | PWA shows why a finding is unconfirmed; command repros get the before-change control too | 1 / 2 |
+| #1447 → #1448 | **delivery push fetches the base tip first** (`--depth=1` on a shallow clone only; branch name validated and passed after `--`): a shallow run whose `main` moved mid-run uploaded a full snapshot → GitHub 408. **Checked live 11-23**: `a491c5bc`'s re-send pushed in ~2 s and opened #1449 | 2 / 4 |
+| #1446 → #1449 | `bsvibe_adversarial_replay` / `_status`: Stage A replayed on a past deliverable (diff applied to its base commit), as a background job, scored batches, no run / card / ledger written | 1 / 3 |
+| #1438 → #1441, → #1436, → #1418 | ledger judge's named definitions: not-found names listed, a definition shown once, TS/JS classes told apart | 1 / 3 · 1 / 1 · — |
+| → #1417, #1424, #1433 | review's "called in production" check: multi-line docstrings, non-code files, TS template interpolation | — · 2 / 3 · 1 / 1 |
+| → #1423, #1435 | a founder correction re-judges only the items it touches; widening phrases ("the same way for the rest") widen it | — · 1 / 3 |
+| → #1427 | agent brief: no promise of a disposable stack on server runs; self-check goes past lint/test | 2 / 2 |
+| → #1434 | schedule cap holds under concurrent requests; pre-existing over-frequent schedules are shown | 1 / 1 |
+| → #1416, #1419 | `--cov ./tests/x` no longer read as a test path; Obsidian scanner read errors classified | — · 1 / 1 |
+
+**Stage A pays for itself already**: on #1447's run it reproduced and confirmed three real defects across three rounds
+— a test fake left without the new method (2 tests red), a full clone turned shallow by the fetch, and
+`--upload-pack=…` as `base_branch` running a command — all fixed before the card. Its round-4 status was
+`unavailable` (token cap). The review's one medium on #1446 was false (`confirmed` IS a top-level count in the blob,
+`adversarial_verifier.py:260`).
+
+**Sign-in was down 11-20 08:12 → 11-23 01:53 UTC** (JWKS host unresolvable — the Supabase project paused again).
+`auth_dependency_worker` fired and `auth_down` reached Telegram 11-22 and 11-23; the alert arrived but was missed.
+Restored by 형님 11-23; `auth_dependency_recovered` 01:53:20. 형님 11-23: no change to the alert path this time.
+
+## §0-b — previous session (11-13 → 11-17): **The audit's non-security blockers that are code are fixed; the ledger judge now sees the definitions it was missing**
 
 11-13 → 11-17. Every card was reviewed (diff read, review findings checked against the code) before approve / deny.
 "Rounds" is `passed_on_round` / all rounds of the run, across denials.
@@ -37,7 +69,7 @@
 | #1401 → #1405 | a conflict budget's `exhausted` mark survives the PR turning `clean` | 1 / 1 |
 | #1403 → #1406 | **every round's ledger is visible**: run detail `rounds[]` (outcome, failed checks, open items), the judge's `evidence_missing` flag, `verification_quality.ledger_only_failure_causes` | 1 / 1 |
 | #1404 → #1407 | **named definitions in the judge's evidence**: backticked names in the item / note / cited tests are looked up in the changed tree (files parsed once, off the event loop, untracked files included) and shown in a block with its own 6,000-char room | 1 / 3 (two denials: re-parsing per name on the event loop; a race that gave concurrent items an empty file list) |
-| #1408 → #1409 (open) | a definition cut at the cap says so; `Class.name` keeps its qualifier; a bare name with several locations shows them all | 2 / 2 (round 1 lost to `deriver_error: TimeoutError`) |
+| #1408 → #1409 | a definition cut at the cap says so; `Class.name` keeps its qualifier; a bare name with several locations shows them all | 2 / 2 (round 1 lost to `deriver_error: TimeoutError`) |
 
 **Why #1403/#1404**: of 41 non-done items in the last-round ledgers of 20 runs, 21 (51 %) were "evidence not shown" (80 %
 counting secondary mentions); only 2 (5 %) were code the judge found wrong. The missing evidence split evenly between
@@ -46,35 +78,6 @@ cut implementation bodies, cut test bodies and setting defaults / constants. Re-
 
 **Round-1 pass rate** (product, last 30 finished runs, 11-16): 19 / 30. Reviews: 49 cards reviewed; findings 16 high,
 48 medium, 54 low.
-
-## §0-b — previous session (11-11 → 11-13): **The re-audit's five cross-tenant security findings are fixed and deployed; BSVibe is still not ready for strangers**
-
-11-11 → 11-13. Every card below was reviewed (diff read, review findings checked against the code) before it was
-approved or denied. "Rounds" is `passed_on_round` / all verification rounds of the run, across denials.
-
-| Issue → PR | What | Rounds |
-|---|---|---|
-| #1364 → #1365 | **monthly token budget is unlimited by default** (tokens are BYO); owner/admin may set a spend limit. Per-run cap (2M) unchanged | 3 / 3 |
-| — → #1366 | public re-audit `docs/audit/multiuser-readiness-2026-11-12.md` (security details withheld; full report kept off GitHub) | — |
-| #1367 → #1372 | GitHub App setup flow is operator-only | 1 / 3 (two denials) |
-| #1368 → #1373 | repository bindings and webhook routing are tied to repository access | 2 / 12 (a denial; then the run hit the 2M cap on automatic merge-conflict re-dispatches → #1387) |
-| #1370 → #1374 | connector API URLs pass the egress check | 1 / 1 |
-| #1371 → #1377 | the sandbox firewall rules also cover user-defined networks | 1 / 3 |
-| #1375 → #1378 | **ledger verdicts stop flipping between rounds**: "excerpt not shown" is `cannot_determine` → `unclear` (passes), verdicts kept per file-content key | 2 / 3 |
-| #1376 → #1379 | users can no longer set a GitHub connector's `external_ref`; a cleanup migration cleared unverified ones | 2 / 2 |
-| by hand → #1383 | **intake outage fix**: an App delivery for an account with no recorded installation asks the App (`GET /repos/{repo}/installation`, App JWT) and records it when it matches | — |
-| #1369 → (denied, cancelled) → #1380 → #1385 | **Obsidian import is confined to a server-side root** (`<import_root>/<workspace_id>`, fail-closed when unset), symlinks never followed, note / entry / byte caps during the walk | 2 / 2 |
-| #1381 → #1384 | a founder's free-text checkpoint answer is recorded as a ledger correction too | 1 / 1 |
-| #1382 | closed unbuilt — its premise was wrong: `claim_install` already records the installation id (since the 09-10 audit) | — |
-| #1386 → #1388 | **pending decisions close when their run ends** (`run_reached_terminal`, run untouched; `delivery_failed` / `merge_watch_stalled` kept); `discard`/`retry` on an ended run closes only the decision; a migration swept the backlog — **checked live 11-13: the pending-checkpoint queue went from 3 to 0** | approved after one denial |
-| #1387 → #1389 (open) | **merge-conflict re-dispatch has run-wide caps**: 4 re-dispatches in total (a new head no longer resets the count), 500k tokens after the first conflict (never above the run cap); hitting either goes straight to `merge_conflict_review` with what was tried; an in-turn hit marks the budget `exhausted` so the stalled-head path cannot re-open the run | approved after two denials |
-
-**Founder corrections are proven live**: #1386's re-work card showed R3 under `ledger_corrected` — the item came back
-done on the founder's denial reason, not the issue's sentence.
-
-**Security status**: the three blocker and two high cross-tenant findings of the 11-12 re-audit (#1367–#1371) are
-merged and deployed, plus the two follow-ups they exposed (#1376, #1380). The audit's other blockers are not security
-and are not filed yet (§Ⅲ).
 
 ## §Ⅰ — Decisions still in force (형님, 2026-10-01 · 10-04 · 10-16 · 10-19 · 10-20 · 10-21 · 10-23 · 10-26 · 10-28 · 10-29 · 10-30 · 11-03 · 11-11 · 11-17)
 
@@ -406,27 +409,43 @@ and are not filed yet (§Ⅲ).
 * **`deriver_error: TimeoutError`** cost #1408 its first round (the gate deriver timed out, every declared check had
   passed). One sample; watch `rounds[]` for another.
 
+## §Ⅱ-n — What 11-17/11-23 found
+
+* **A shallow run whose base moved cannot deliver, and "send again" cannot fix it.** `git push` subtracts only remote
+  tips it has locally; a depth-1 clone missing the new `main` sent 2,648 objects instead of 48 and GitHub answered 408
+  after ~13 s, every time. Fixed by #1448; the same run delivered on its first re-send after deploy.
+* **The ledger judge still reports `evidence_missing` for code that is in the diff.** #1447's last round marked R1
+  `unclear` because "the `deliver_github` call is not shown" — the hunk was there. The ledger passes `unclear`, so it
+  cost nothing this time; it is a sample for §Ⅲ-4.
+* **A merge takes 30–50 min from PR open**, not minutes: the suite plus the merge watch's poll. Silence in the worker
+  log meanwhile is normal — the quiet path of `merge_watch_worker` logs nothing.
+* **The auto-mode classifier blocks `safe_mode_approve_run`, `checkpoints_resolve`, `exec` into prod and
+  `git reset --hard`.** Ask 형님 for the approve / re-send each time; read prod only through `docker logs`.
+
 ## §Ⅲ — Next
 
-1. **Close #1408 when #1409 merges** (pause window).
+1. ~~Close the issues whose PRs merged~~ — #1438 #1439 #1440 #1444 #1446 #1447 closed 11-23 in one pause window.
 2. **Not ready for strangers — what is left is the founder's, not code**: an alert path that is more than one person
-   (the 5.5-day auth outage) · an off-box copy of the KMS and MCP OAuth signing keys · the GitHub App made public ·
-   sign-up mail off Supabase's default SMTP limit · a rehearsed restore (24 h recovery point) · the infra items in the
-   private audit report. The code blockers of the 11-12 audit are done (#1395 #1396 #1398 #1402).
-3. **11-23 weekly BStockReport**: first week after #1400 — it must ship with one Telegram message and no
-   `delivery_failed`; then tick `requirements-ledger-checklist.md` D.
+   (two auth outages now: 5.5 days, then 2.7 days 11-20 → 11-23; left as is 11-23) · an off-box copy of the KMS and MCP OAuth signing
+   keys · the GitHub App made public · sign-up mail off Supabase's default SMTP limit · a rehearsed restore (24 h
+   recovery point) · the infra items in the private audit report. A Supabase plan that does not pause would remove
+   the outage class itself.
+3. **Measure Stage A with the replay** once #1449 is deployed: `bsvibe_adversarial_replay` with the 7 cases in #1446
+   (4 defect, 3 clean), `repeat` 2–3. Then decide whether Stage A becomes a gate (design doc §4). Known replay lows:
+   git-quoted (non-ASCII) paths drop out of the base-commit search; an exception mid-repeat drops that case's finished
+   repeats; a replay holds a sandbox slot per round.
 4. **Re-measure the ledger** once `rounds[]` / `evidence_missing` have ~20 runs: `ledger_only_failure_causes` and the
    round-1 pass rate (19 / 30 on 11-16). If "evidence missing" still dominates, the next lever is the evidence room.
-5. ~~R5 stage 2~~ — decided 11-17: report-only (§Ⅰ).
-6. ~~#1267 layer 2~~ — decided 11-17: not built, issue closed (§Ⅰ).
-7. **#1323 leftovers**: `mcp_work_claim_lost` firing for a turn that survives its job; a run paused on a founder
+5. Weekly BStockReport 11-23 shipped with one Telegram message and no `delivery_failed` (run `e06f8c31`);
+   checklist D2 ticked. Its in-place gate check came back `unavailable` (exit 127) — look at why before 11-30.
+6. **#1323 leftovers**: `mcp_work_claim_lost` firing for a turn that survives its job; a run paused on a founder
    decision across a restart. Then the rest of the #929 second-box list (`docs/runbook/vault-to-postgres.md`).
-8. Low priority: named definitions keep no qualifier for TS/JS and list no locations when none fits; `git grep -w`
-   counts common names as called; `--cov ./tests/x` is read as `--cov`'s value; a vague denial reason re-judges every
+7. Low priority: `base_branch` save-time check is looser than `git check-ref-format` (`HEAD` saves, then the base
+   fetch is silently skipped); `git grep -w` counts common names as called; a vague denial reason re-judges every
    ledger item; the sandbox image has no `BSVIBE_PARSER_OFFLINE`; #1380's review lows.
-9. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap · #937 outside the repo · which §Ⅳ bullet on
+8. ⏳ 형님's batch: codex live run (#1183) · #1046 live group-chat tap · #937 outside the repo · which §Ⅳ bullet on
    throwaway containers stands.
-10. E2E checklists still open: `requirements-ledger-checklist.md` (A1, B, C2, D1/D2/D3, E), `ci-parity-checklist.md`
+9. E2E checklists still open: `requirements-ledger-checklist.md` (A1, B, C2, D1/D3, E), `ci-parity-checklist.md`
    (C, E1/E3, F), `counterfactual-guard-checklist.md`, `intake-trust-by-repo-permission-checklist.md` (non-writer
    comment), `worker-restart-releases-claims-checklist.md` (claim-lost, paused run).
 

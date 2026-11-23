@@ -30,11 +30,12 @@ Guards / Acceptance …). Everything else is unchanged.
 
 ## D. Where v1 does not apply (must be unchanged)
 - [ ] A request with no structure ("make it nicer") gets no ledger and verifies as before.
-- [ ] The weekly BStockReport run (client_attach, direct_output) gets no ledger and still ships
+- [x] The weekly BStockReport run (client_attach, direct_output) gets no ledger and still ships
       with one Telegram message.
       (No ledger: confirmed on 11-02 `f03aa42b` and 11-09 `d330b009`. Ships: FAILED both weeks — the
       report reached Telegram but a spurious `delivery_failed` (no PR for a non-code artifact, #1266)
       held the run; fixed by #1339 / PR #1340. Re-check on the 11-16 run.)
+      **Passed 11-23** `e06f8c31`: no ledger, shipped, one Telegram delivery, no `delivery_failed`.
 - [ ] A run framed before the deploy finishes as before.
 
 ## E. Nothing leaks
