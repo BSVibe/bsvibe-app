@@ -1019,3 +1019,24 @@ async def test_a_repro_whose_baseline_cannot_be_built_is_unconfirmed(monkeypatch
     finding = await _one(box, _cmd_repro(probe, contains="MISSING:"))
     assert finding["confirmed"] is False
     assert "변경 전 대조를 하지 못했다" in finding["reason"]
+
+
+def test_repro_prefix_runs_without_a_lockfile(tmp_path: Path) -> None:
+    """No ``uv.lock`` → ``--frozen`` would exit 2 for every repro; the prefix must not use it."""
+    assert "--frozen" not in REPRO_RUN_PREFIX
+    assert "--all-extras" in REPRO_RUN_PREFIX
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "lockless"\nversion = "0"\nrequires-python = ">=3.9"\n'
+        "dependencies = []\n[tool.uv]\npackage = false\n"
+    )
+    done = subprocess.run(  # noqa: S602 — fixed test command
+        f"{REPRO_RUN_PREFIX}python -c 'print(1)'",
+        shell=True,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "1"

@@ -191,7 +191,7 @@ def repro_runner(path: str) -> tuple[str, int] | None:
 
 #: The repo's gates run through ``uv run`` (project venv, dependencies installed); a repro runs
 #: the same way. A bare ``python`` would not see the project's dependencies (``structlog`` …).
-REPRO_RUN_PREFIX = "uv run --frozen --all-extras "
+REPRO_RUN_PREFIX = "uv run --all-extras "
 
 #: pytest exit codes that mean 'the test did not run' (collection / import error, interrupted,
 #: nothing collected) — as opposed to 1 = 'a test ran and failed'.
