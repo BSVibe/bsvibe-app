@@ -191,7 +191,7 @@ def repro_runner(path: str) -> tuple[str, int] | None:
 
 #: The repo's gates run through ``uv run`` (project venv, dependencies installed); a repro runs
 #: the same way. A bare ``python`` would not see the project's dependencies (``structlog`` …).
-REPRO_RUN_PREFIX = "uv run "
+REPRO_RUN_PREFIX = "uv run --all-extras "
 
 #: pytest exit codes that mean 'the test did not run' (collection / import error, interrupted,
 #: nothing collected) — as opposed to 1 = 'a test ran and failed'.
@@ -241,9 +241,43 @@ def command_did_not_run(
     return any(m in output for m in _NOT_RUN_MARKERS)
 
 
-def repro_test_did_not_run(*, exit_code: int | None, timed_out: bool) -> bool:
-    """A repro test that ended in a collection/import error (or collected nothing)."""
-    return not timed_out and exit_code in _PYTEST_NOT_RUN
+#: Output saying the test RUNNER itself is missing (no pytest in the venv, no vitest, shell
+#: 'not found'). pytest's own exit 1 = 'a test failed' must not hide this.
+#: Only the line shapes the interpreter / uv / shell really print are accepted (whole line), so
+#: an assert message that merely QUOTES "No module named pytest" is not mistaken for it.
+_SHELL = r"(?:(?:sh|bash|zsh|dash)(?:: line \d+)?: )?"
+_RUNNER_MISSING = re.compile(
+    r"^[^\s:]*python[\d.]*: No module named '?(?:_?pytest|vitest)'?[ \t]*$"
+    r"|^error: Failed to spawn: .?(?:pytest|vitest)\b.*$"
+    rf"|^{_SHELL}command not found: (?:pytest|vitest|uv|npx)[ \t]*$"
+    rf"|^{_SHELL}(?:pytest|vitest|uv|npx): (?:command )?not found[ \t]*$",
+    re.MULTILINE,
+)
+
+#: Traces of pytest having really run (collection / result summary lines).
+_RUNNER_RAN = re.compile(
+    r"^=+ test session starts =+"
+    r"|^collected \d+ items?\b"
+    r"|^=+ .*\b(?:passed|failed|errors?)\b.* in [\d.]+s.*=+\s*$"
+    r"|^\d+ (?:passed|failed|errors?)\b",
+    re.MULTILINE,
+)
+
+
+def runner_is_missing(output: str) -> bool:
+    """The output shows the test runner could not even start (and pytest never ran)."""
+    text = output or ""
+    if _RUNNER_RAN.search(text):
+        return False
+    return bool(_RUNNER_MISSING.search(text))
+
+
+def repro_test_did_not_run(*, exit_code: int | None, timed_out: bool, output: str = "") -> bool:
+    """A repro test that never ran: a collection/import error (or nothing collected), or the
+    runner itself missing — whatever the exit code (a missing pytest exits 1, like a failure)."""
+    if timed_out:
+        return False
+    return exit_code in _PYTEST_NOT_RUN or runner_is_missing(output)
 
 
 def clip(text: str, limit: int = OUTPUT_CHARS) -> str:

@@ -24,10 +24,12 @@ from backend.workflow.application.run_detail import _tally_adversarial
 from backend.workflow.application.safe_mode_ledger import _adversarial_summary
 from backend.workflow.application.verification_service import VerificationService
 from backend.workflow.domain.adversarial import (
+    REPRO_RUN_PREFIX,
     SCRATCH_ROOT,
     judge_command,
     judge_test,
     parse_findings,
+    runner_is_missing,
     write_refusal,
 )
 from backend.workflow.domain.declared_checks import CI_PREFIX
@@ -42,7 +44,7 @@ from tests.execution.test_verification_service import (
 )
 from tests.workflow.test_artifact_review import _GitBox
 
-_UV_SH = "uv run sh -c "
+_UV_SH = f"{REPRO_RUN_PREFIX}sh -c "
 _TEST_REPRO = {"kind": "test", "path": f"{SCRATCH_ROOT}/run-1/test_bug.py"}
 
 
@@ -837,6 +839,56 @@ async def test_a_collection_error_is_not_run_rather_than_wrong() -> None:
     assert cmd["reason"].startswith("재현이 실행되지 않음")
 
 
+_NO_PYTEST = _res(1, "/tmp/x/.venv/bin/python: No module named pytest")
+
+
+async def test_missing_test_runner_is_not_run_whatever_the_exit_code() -> None:
+    box = _AdvBox(pytest=_NO_PYTEST, pytest_before=_NO_PYTEST)
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is False
+    assert finding["not_run"] is True
+    assert finding["reason"].startswith("재현이 실행되지 않음")
+    assert "변경 전에도" not in finding["reason"]
+
+
+async def test_real_failure_after_and_missing_runner_before_is_not_the_same_result() -> None:
+    box = _AdvBox(pytest=_res(1, "assert 1 == 2\n1 failed"), pytest_before=_NO_PYTEST)
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is False
+    assert finding["baseline_not_run"] is True
+    assert "변경 전에도 같은 결과" not in finding["reason"]
+    assert "변경 전 실행 불가" in finding["reason"]
+
+
+async def test_assert_message_mentioning_missing_pytest_is_still_confirmed() -> None:
+    quoted = _res(
+        1,
+        "=== test session starts ===\ncollected 1 item\n"
+        "E   AssertionError: /x/python: No module named pytest\n"
+        "=== 1 failed in 0.1s ===",
+    )
+    box = _AdvBox(pytest=quoted, pytest_before=_res(0, "1 passed"))
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is True
+    assert not finding.get("not_run")
+
+    # even without a run trace, a quoted message is not a runner error: whole lines only
+    bare = _res(1, "E   assert 'x/python: No module named pytest' in out")
+    again = await _one(_AdvBox(pytest=bare, pytest_before=_res(0, "1 passed")), _TEST_REPRO)
+    assert again["confirmed"] is True
+
+    assert runner_is_missing("error: Failed to spawn: `pytest`")
+    assert runner_is_missing("sh: pytest: not found")
+    assert runner_is_missing("/tmp/x/.venv/bin/python: No module named pytest")
+
+
+async def test_real_failure_before_and_after_is_still_the_same_result() -> None:
+    failed = _res(1, "assert 1 == 2\n1 failed")
+    finding = await _one(_AdvBox(pytest=failed, pytest_before=failed), _TEST_REPRO)
+    assert finding["confirmed"] is False
+    assert finding["reason"] == "변경 전에도 같은 결과"
+
+
 async def test_repros_run_with_the_gates_uv_run_prefix() -> None:
     probe = "python -c 'import backend.workflow.application.safe_mode_ledger'"
     box = _AdvBox(pytest=_res(1, "1 failed"), **{probe: _res(0, "")})
@@ -854,7 +906,7 @@ async def test_repros_run_with_the_gates_uv_run_prefix() -> None:
     for command in repro_runs:
         inner = re.sub(r"^cd \S+ && ", "", command)
         assert inner.startswith("uv run "), inner  # never a bare `python`
-    assert any("uv run python -m pytest" in c for c in repro_runs)
+    assert any(f"{REPRO_RUN_PREFIX}python -m pytest" in c for c in repro_runs)
     assert any(c.endswith(shlex.quote(probe)) for c in repro_runs)
 
 
@@ -1013,3 +1065,24 @@ async def test_a_repro_whose_baseline_cannot_be_built_is_unconfirmed(monkeypatch
     finding = await _one(box, _cmd_repro(probe, contains="MISSING:"))
     assert finding["confirmed"] is False
     assert "변경 전 대조를 하지 못했다" in finding["reason"]
+
+
+def test_repro_prefix_runs_without_a_lockfile(tmp_path: Path) -> None:
+    """No ``uv.lock`` → ``--frozen`` would exit 2 for every repro; the prefix must not use it."""
+    assert "--frozen" not in REPRO_RUN_PREFIX
+    assert "--all-extras" in REPRO_RUN_PREFIX
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "lockless"\nversion = "0"\nrequires-python = ">=3.9"\n'
+        "dependencies = []\n[tool.uv]\npackage = false\n"
+    )
+    done = subprocess.run(  # noqa: S602 — fixed test command
+        f"{REPRO_RUN_PREFIX}python -c 'print(1)'",
+        shell=True,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "1"
