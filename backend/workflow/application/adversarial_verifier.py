@@ -38,6 +38,7 @@ from backend.workflow.domain.adversarial import (
     repro_command,
     repro_runner,
     repro_test_did_not_run,
+    runner_is_missing,
     write_refusal,
 )
 from backend.workflow.infrastructure.sandbox import SandboxResult, SandboxSession
@@ -506,13 +507,13 @@ async def _judge_test(
     output = (res.stdout or "") + (res.stderr or "")
     if res.timed_out:
         return False, "시간 초과", output, {}
+    if repro_test_did_not_run(exit_code=res.exit_code, timed_out=False, output=output):
+        reason = f"재현이 실행되지 않음 (수집·import 오류 또는 실행기 없음, exit {res.exit_code})"
+        return False, reason, output, {"not_run": True}
     if judge_test(exit_code=res.exit_code, failed_code=failed_code, timed_out=False):
         before = await _before_change(box, worked_in, command, path, baseline, budget)
         confirmed, reason, extra = _control_test(before, failed_code)
         return confirmed, reason, output, extra
-    if repro_test_did_not_run(exit_code=res.exit_code, timed_out=False):
-        reason = f"재현이 실행되지 않음 (수집·import 오류, exit {res.exit_code})"
-        return False, reason, output, {"not_run": True}
     return False, "재현 테스트가 통과했다", output, {}
 
 
@@ -570,7 +571,7 @@ async def _before_change(
         await _cleanup(box, old, budget)
 
 
-def _control_test(
+def _control_test(  # noqa: PLR0911 — one return per outcome, flat on purpose
     before: SandboxResult | None, failed_code: int
 ) -> tuple[bool, str, dict[str, Any]]:
     """The repro test failed after the change: did it also fail before? → (confirmed, why, extra)."""
@@ -578,6 +579,12 @@ def _control_test(
         return False, "시간 예산이 소진되어 변경 전 대조를 하지 못했다", {}
     if before.timed_out:
         return False, "변경 전 대조 시간 초과", {}
+    if runner_is_missing((before.stdout or "") + (before.stderr or "")):
+        return (
+            False,
+            f"변경 전 실행 불가 (테스트 실행기 없음, exit {before.exit_code}) — 대조하지 못했다",
+            {"baseline_not_run": True},
+        )
     if judge_test(exit_code=before.exit_code, failed_code=failed_code, timed_out=False):
         return False, "변경 전에도 같은 결과", {}
     if before.exit_code == 0:

@@ -24,6 +24,7 @@ from backend.workflow.application.run_detail import _tally_adversarial
 from backend.workflow.application.safe_mode_ledger import _adversarial_summary
 from backend.workflow.application.verification_service import VerificationService
 from backend.workflow.domain.adversarial import (
+    REPRO_RUN_PREFIX,
     SCRATCH_ROOT,
     judge_command,
     judge_test,
@@ -42,7 +43,7 @@ from tests.execution.test_verification_service import (
 )
 from tests.workflow.test_artifact_review import _GitBox
 
-_UV_SH = "uv run sh -c "
+_UV_SH = f"{REPRO_RUN_PREFIX}sh -c "
 _TEST_REPRO = {"kind": "test", "path": f"{SCRATCH_ROOT}/run-1/test_bug.py"}
 
 
@@ -791,6 +792,34 @@ async def test_a_collection_error_is_not_run_rather_than_wrong() -> None:
     assert cmd["reason"].startswith("재현이 실행되지 않음")
 
 
+_NO_PYTEST = _res(1, "/tmp/x/.venv/bin/python: No module named pytest")
+
+
+async def test_missing_test_runner_is_not_run_whatever_the_exit_code() -> None:
+    box = _AdvBox(pytest=_NO_PYTEST, pytest_before=_NO_PYTEST)
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is False
+    assert finding["not_run"] is True
+    assert finding["reason"].startswith("재현이 실행되지 않음")
+    assert "변경 전에도" not in finding["reason"]
+
+
+async def test_real_failure_after_and_missing_runner_before_is_not_the_same_result() -> None:
+    box = _AdvBox(pytest=_res(1, "assert 1 == 2\n1 failed"), pytest_before=_NO_PYTEST)
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is False
+    assert finding["baseline_not_run"] is True
+    assert "변경 전에도 같은 결과" not in finding["reason"]
+    assert "변경 전 실행 불가" in finding["reason"]
+
+
+async def test_real_failure_before_and_after_is_still_the_same_result() -> None:
+    failed = _res(1, "assert 1 == 2\n1 failed")
+    finding = await _one(_AdvBox(pytest=failed, pytest_before=failed), _TEST_REPRO)
+    assert finding["confirmed"] is False
+    assert finding["reason"] == "변경 전에도 같은 결과"
+
+
 async def test_repros_run_with_the_gates_uv_run_prefix() -> None:
     probe = "python -c 'import backend.workflow.application.safe_mode_ledger'"
     box = _AdvBox(pytest=_res(1, "1 failed"), **{probe: _res(0, "")})
@@ -808,7 +837,7 @@ async def test_repros_run_with_the_gates_uv_run_prefix() -> None:
     for command in repro_runs:
         inner = re.sub(r"^cd \S+ && ", "", command)
         assert inner.startswith("uv run "), inner  # never a bare `python`
-    assert any("uv run python -m pytest" in c for c in repro_runs)
+    assert any(f"{REPRO_RUN_PREFIX}python -m pytest" in c for c in repro_runs)
     assert any(c.endswith(shlex.quote(probe)) for c in repro_runs)
 
 
