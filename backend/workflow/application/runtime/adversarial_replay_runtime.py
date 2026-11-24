@@ -18,10 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import Settings
 from backend.data.rls import workspace_session_scope
-from backend.workers.emit import get_emit_redis_client
+from backend.dispatch.adapter import ExecutorAdapter
+from backend.workers.emit import get_dispatch_redis_client
 from backend.workflow.application.adversarial_replay import (
     CaseUnavailable,
     ReplayInput,
+    ReplayRefused,
     load_replay_input,
 )
 from backend.workflow.application.adversarial_replay_jobs import execute_job
@@ -45,13 +47,20 @@ async def judge_llm_for(
     throwaway, never stored (pinned by ``test_adversarial_replay``)."""
     async with session_factory() as session:
         async with workspace_session_scope(session, workspace_id):
-            return await resolve_judge_llm(
+            # the dispatch client (any ``worker_mode``, just ``redis_url``) — the same one the
+            # production verification round gets; the emit client is None under db_polling
+            llm = await resolve_judge_llm(
                 session,
                 SimpleNamespace(id=uuid.uuid4(), workspace_id=workspace_id),  # type: ignore[arg-type]
                 settings,
-                redis=get_emit_redis_client(settings),
+                redis=get_dispatch_redis_client(settings),
                 session_factory=session_factory,
             )
+    adapter = getattr(llm, "_adapter", None)
+    if isinstance(adapter, ExecutorAdapter) and adapter.redis is None:
+        # decided once, at job start: every Stage A would end `unavailable` for this reason
+        raise ReplayRefused("judge 경로가 executor 인데 Redis 가 없다 (redis_url 미설정)")
+    return llm
 
 
 def box_factory(settings: Settings) -> Any:

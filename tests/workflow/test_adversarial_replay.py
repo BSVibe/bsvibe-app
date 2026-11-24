@@ -38,8 +38,8 @@ from backend.workflow.application.adversarial_replay import (
     ReplayRefused,
     run_replay,
 )
-from backend.workflow.application.loop_llm import ResolverLoopLlm
 from backend.workflow.application.runtime import account_resolution
+from backend.workflow.application.runtime import adversarial_replay_runtime as runtime_mod
 from backend.workflow.application.runtime.adversarial_replay_runtime import judge_llm_for
 from backend.workflow.infrastructure.db import (
     AdversarialReplayJob,
@@ -338,7 +338,9 @@ async def test_repeat_is_capped(repo: _Repo, tmp_path: Path) -> None:
 async def test_replay_runs_through_the_real_executor_adapter(
     repo: _Repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The production round (``run_adversarial_round``), real ExecutorAdapter, fake CLI only."""
+    """The production wiring (``build_adversarial_replay_worker`` → ``judge_llm_for``), the
+    real ExecutorAdapter and the real Stage A round; only the CLI transport is fake. No redis is
+    handed to the adapter here: it arrives through ``judge_llm_for`` under ``db_polling``."""
     workspace_id = uuid.uuid4()
     queue = [json.dumps({"tool": "grep", "args": {"pattern": "return"}}), '{"findings": []}']
     prompts: list[Any] = []
@@ -353,7 +355,22 @@ async def test_replay_runs_through_the_real_executor_adapter(
     monkeypatch.setattr(oauth_service, "issue_run_task_token", _no_token)
     monkeypatch.setattr(dispatch, "await_completion", _fake_cli)
 
-    did = uuid.uuid4()
+    fake_redis = await _make_redis()
+    monkeypatch.setattr(runtime_mod, "get_dispatch_redis_client", lambda _s: fake_redis)
+    monkeypatch.setattr(runtime_mod, "box_factory", lambda _s: _noop_box)
+
+    async def _load(_session: Any, _ws: uuid.UUID, _did: uuid.UUID) -> ReplayInput:
+        return repo.input()
+
+    monkeypatch.setattr(runtime_mod, "load_replay_input", _load)
+    settings = get_settings().model_copy(
+        update={
+            "worker_mode": "db_polling",
+            "redis_url": "redis://unused",
+            "run_workspace_root": str(tmp_path / "work"),
+        }
+    )
+
     async with shared_file_sessionmaker() as sf:
         async with sf() as setup:
             worker = await _seed_worker(
@@ -362,32 +379,118 @@ async def test_replay_runs_through_the_real_executor_adapter(
             account = _executor_account(workspace_id, worker.id)
             setup.add(account)
             await setup.commit()
-        async with sf() as adapter_session:
+
+        async def _resolve(session: Any, *_a: Any, **kw: Any) -> Any:
+            assert kw["redis"] is fake_redis
             adapter = ExecutorAdapter(
                 account=account,
                 workspace_id=workspace_id,
                 account_id=account.account_id,
                 model_account_id=account.id,
-                session=adapter_session,
+                session=session,
                 session_factory=sf,
-                settings=get_settings(),
-                redis=await _make_redis(),
+                settings=settings,
+                redis=kw["redis"],
                 run_id=None,
             )
-            out = await run_replay(
-                [CaseSpec(did)],
-                load=_loader({did: repo.input()}),
-                llm=ResolverLoopLlm(adapter=adapter),
-                box_for=_noop_box,
-                work_root=tmp_path / "work",
-            )
+            return SimpleNamespace(adapter=adapter)
 
-    run = out["results"][0]["runs"][0]
+        monkeypatch.setattr(account_resolution, "resolve_via_caller", _resolve)
+        async with sf() as session:
+            registered = await jobs.submit_job(
+                session, workspace_id, [CaseSpec(uuid.uuid4())], repeat=1, batch=False
+            )
+        replay_worker = runtime_mod.build_adversarial_replay_worker(
+            session_factory=sf, settings=settings
+        )
+        assert await replay_worker.run_once() == 1
+        async with sf() as session:
+            status = await jobs.job_status(session, workspace_id, registered.id)
+
+    assert status is not None and status["status"] == "done", status
+    run = status["results"][0]["runs"][0]
     assert run["stage_a"]["status"] == "done", run["stage_a"]
     assert run["stage_a"]["probes"] >= 1
     assert len(prompts) == 2  # tool request → harness output → final answer
     assert run["base_commit"] == repo.a
     assert _git(repo.path, "status", "--porcelain") == ""
+
+
+async def test_judge_llm_gets_a_dispatch_redis_even_in_db_polling_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_resolve(*_a: Any, **kw: Any) -> None:
+        seen.update(kw)
+        return None
+
+    monkeypatch.setattr(account_resolution, "resolve_via_caller", fake_resolve)
+    settings = get_settings().model_copy(
+        update={"worker_mode": "db_polling", "redis_url": "redis://localhost:6379/0"}
+    )
+    async with shared_file_sessionmaker() as sf:
+        await judge_llm_for(sf, settings, uuid.uuid4())
+    assert seen["redis"] is not None
+
+
+async def test_executor_judge_without_redis_ends_the_job_before_stage_a(
+    repo: _Repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_id = uuid.uuid4()
+    settings = get_settings().model_copy(update={"worker_mode": "db_polling", "redis_url": None})
+    calls: list[Any] = []
+
+    async def stage_a(**kw: Any) -> dict[str, Any]:  # pragma: no cover — must not run
+        calls.append(kw)
+        return _blob()
+
+    async with shared_file_sessionmaker() as sf:
+        async with sf() as setup:
+            worker = await _seed_worker(
+                setup, workspace_id=workspace_id, capabilities=["claude_code"]
+            )
+            account = _executor_account(workspace_id, worker.id)
+            setup.add(account)
+            await setup.commit()
+
+        async def _resolve(session: Any, *_a: Any, **kw: Any) -> Any:
+            assert kw["redis"] is None
+            adapter = ExecutorAdapter(
+                account=account,
+                workspace_id=workspace_id,
+                account_id=account.account_id,
+                model_account_id=account.id,
+                session=session,
+                session_factory=sf,
+                settings=settings,
+                redis=kw["redis"],
+                run_id=None,
+            )
+            return SimpleNamespace(adapter=adapter)
+
+        monkeypatch.setattr(account_resolution, "resolve_via_caller", _resolve)
+        async with sf() as session:
+            registered = await jobs.submit_job(
+                session, workspace_id, _specs(7), repeat=2, batch=False
+            )
+        claimed = await jobs.claim_next(sf)
+        assert claimed is not None
+        await jobs.execute_job(
+            sf,
+            claimed,
+            llm_for=lambda ws: judge_llm_for(sf, settings, ws),
+            load_for=lambda _ws: _loader({}),
+            box_for=_noop_box,
+            work_root=tmp_path / "work",
+            stage_a=stage_a,
+        )
+        async with sf() as session:
+            status = await jobs.job_status(session, workspace_id, registered.id)
+
+    assert calls == []
+    assert status is not None and status["status"] == "failed"
+    assert "Redis" in status["error"] and "executor" in status["error"]
 
 
 # ---------------------------------------------------------------------------
