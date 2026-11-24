@@ -243,17 +243,33 @@ def command_did_not_run(
 
 #: Output saying the test RUNNER itself is missing (no pytest in the venv, no vitest, shell
 #: 'not found'). pytest's own exit 1 = 'a test failed' must not hide this.
+#: Only the line shapes the interpreter / uv / shell really print are accepted (whole line), so
+#: an assert message that merely QUOTES "No module named pytest" is not mistaken for it.
+_SHELL = r"(?:(?:sh|bash|zsh|dash)(?:: line \d+)?: )?"
 _RUNNER_MISSING = re.compile(
-    r"No module named '?(?:_?pytest|vitest)\b"
-    r"|command not found: (?:pytest|vitest|uv|npx)\b"
-    r"|(?:pytest|vitest|uv|npx): (?:command )?not found"
-    r"|Failed to spawn: .?(?:pytest|vitest)"
+    r"^[^\s:]*python[\d.]*: No module named '?(?:_?pytest|vitest)'?[ \t]*$"
+    r"|^error: Failed to spawn: .?(?:pytest|vitest)\b.*$"
+    rf"|^{_SHELL}command not found: (?:pytest|vitest|uv|npx)[ \t]*$"
+    rf"|^{_SHELL}(?:pytest|vitest|uv|npx): (?:command )?not found[ \t]*$",
+    re.MULTILINE,
+)
+
+#: Traces of pytest having really run (collection / result summary lines).
+_RUNNER_RAN = re.compile(
+    r"^=+ test session starts =+"
+    r"|^collected \d+ items?\b"
+    r"|^=+ .*\b(?:passed|failed|errors?)\b.* in [\d.]+s.*=+\s*$"
+    r"|^\d+ (?:passed|failed|errors?)\b",
+    re.MULTILINE,
 )
 
 
 def runner_is_missing(output: str) -> bool:
-    """The output shows the test runner could not even start."""
-    return bool(_RUNNER_MISSING.search(output or ""))
+    """The output shows the test runner could not even start (and pytest never ran)."""
+    text = output or ""
+    if _RUNNER_RAN.search(text):
+        return False
+    return bool(_RUNNER_MISSING.search(text))
 
 
 def repro_test_did_not_run(*, exit_code: int | None, timed_out: bool, output: str = "") -> bool:

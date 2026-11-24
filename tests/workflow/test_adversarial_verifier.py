@@ -29,6 +29,7 @@ from backend.workflow.domain.adversarial import (
     judge_command,
     judge_test,
     parse_findings,
+    runner_is_missing,
     write_refusal,
 )
 from backend.workflow.domain.declared_checks import CI_PREFIX
@@ -811,6 +812,28 @@ async def test_real_failure_after_and_missing_runner_before_is_not_the_same_resu
     assert finding["baseline_not_run"] is True
     assert "변경 전에도 같은 결과" not in finding["reason"]
     assert "변경 전 실행 불가" in finding["reason"]
+
+
+async def test_assert_message_mentioning_missing_pytest_is_still_confirmed() -> None:
+    quoted = _res(
+        1,
+        "=== test session starts ===\ncollected 1 item\n"
+        "E   AssertionError: /x/python: No module named pytest\n"
+        "=== 1 failed in 0.1s ===",
+    )
+    box = _AdvBox(pytest=quoted, pytest_before=_res(0, "1 passed"))
+    finding = await _one(box, _TEST_REPRO)
+    assert finding["confirmed"] is True
+    assert not finding.get("not_run")
+
+    # even without a run trace, a quoted message is not a runner error: whole lines only
+    bare = _res(1, "E   assert 'x/python: No module named pytest' in out")
+    again = await _one(_AdvBox(pytest=bare, pytest_before=_res(0, "1 passed")), _TEST_REPRO)
+    assert again["confirmed"] is True
+
+    assert runner_is_missing("error: Failed to spawn: `pytest`")
+    assert runner_is_missing("sh: pytest: not found")
+    assert runner_is_missing("/tmp/x/.venv/bin/python: No module named pytest")
 
 
 async def test_real_failure_before_and_after_is_still_the_same_result() -> None:
