@@ -671,3 +671,90 @@ async def test_missing_or_unreachable_repo_url_reports_fetch_failed(
     with pytest.raises(replay.CaseUnavailable, match="받아 오지 못했다"):
         await replay.find_base_commit(product, inp)
     assert _git(product, "rev-parse", "main") == main_before
+
+
+async def test_replay_tree_is_self_contained_without_product_repo(
+    repo: _Repo, tmp_path: Path
+) -> None:
+    """Only the copy's directory is mounted in the sandbox: no alternates back to the product."""
+    dest = tmp_path / "copy"
+    base = await replay.reconstruct_tree(repo.input(), dest)
+    before = (_git(repo.path, "rev-parse", "HEAD"), _git(repo.path, "count-objects", "-v"))
+
+    assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
+    moved = tmp_path / "moved-away"
+    repo.path.rename(moved)  # the product repo is no longer reachable at its old path
+    assert _git(dest, "rev-parse", "HEAD") == base == repo.a
+    assert "new.py" in _git(dest, "status", "--porcelain")
+    assert "X = 1" in _git(dest, "diff", "HEAD") or (dest / "new.py").read_text() == "X = 1\n"
+    assert (dest / "a.py").read_text() == repo.applied_a_py
+    _git(dest, "fsck", "--no-dangling")
+    moved.rename(repo.path)
+    assert (_git(repo.path, "rev-parse", "HEAD"), _git(repo.path, "count-objects", "-v")) == before
+
+
+async def test_unavailable_stage_a_is_not_scored(repo: _Repo, tmp_path: Path) -> None:
+    calls = iter(range(100))
+
+    async def stage_a(**_: Any) -> dict[str, Any]:
+        if next(calls) < 2:  # case one: both repeats unavailable
+            return {"status": "unavailable", "reason": "boom", "findings": [], "confirmed": 0}
+        return _blob(1)
+
+    ids = [uuid.uuid4(), uuid.uuid4()]
+    out = await run_replay(
+        [CaseSpec(ids[0], "defect"), CaseSpec(ids[1], "defect")],
+        repeat=2,
+        load=_loader({i: repo.input() for i in ids}),
+        llm=object(),
+        box_for=_noop_box,
+        work_root=tmp_path / "work",
+        stage_a=stage_a,
+    )
+    first, second = out["results"]
+    assert first["status"] == "failed" and "boom" in first["reason"]
+    assert second["status"] == "ran"
+    s = out["summary"]
+    assert (s["failed"], s["defect_cases"], s["defect_confirmed_rate"]) == (1, 1, 1.0)
+
+    async def always_unavailable(**_: Any) -> dict[str, Any]:
+        return {"status": "unavailable", "reason": "x", "findings": [], "confirmed": 0}
+
+    out = await run_replay(
+        [CaseSpec(ids[0], "defect")],
+        load=_loader({ids[0]: repo.input()}),
+        llm=object(),
+        box_for=_noop_box,
+        work_root=tmp_path / "work",
+        stage_a=always_unavailable,
+    )
+    assert out["summary"]["defect_confirmed_rate"] is None
+    assert out["summary"]["mean_tokens"] is None
+
+
+async def test_unavailable_reason_carries_stderr_tail() -> None:
+    from backend.workflow.application.adversarial_verifier import run_adversarial_round
+
+    class _Box:
+        workspace_mount = "/work"
+
+        async def exec(self, command: str, **_: Any) -> Any:
+            return SimpleNamespace(
+                exit_code=128,
+                stdout="",
+                stderr="noise " * 100 + "fatal: not a git repository",
+                timed_out=False,
+            )
+
+    run = SimpleNamespace(
+        id=uuid.uuid4(), payload={}, usage_prompt_tokens=0, usage_completion_tokens=0
+    )
+
+    async def release() -> None:
+        return None
+
+    blob = await run_adversarial_round(
+        llm=object(), run=run, box=_Box(), baseline="x", surface="code", release=release
+    )
+    assert blob["status"] == "unavailable"
+    assert "fatal: not a git repository" in blob["reason"]

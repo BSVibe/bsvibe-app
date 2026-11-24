@@ -177,14 +177,14 @@ async def run_adversarial_round(
         except _TokenCapExceeded:
             blob = _blob("unavailable", surface, [], checks, "토큰 상한 초과로 검증자를 멈췄다")
         except Exception as exc:  # noqa: BLE001 — report-only: must never change the verdict
-            logger.warning("adversarial_unavailable", run_id=str(run.id), error=repr(exc)[:200])
-            blob = _blob("unavailable", surface, [], checks, f"{type(exc).__name__}: {exc}"[:300])
+            logger.warning("adversarial_unavailable", run_id=str(run.id), error=repr(exc)[:600])
+            blob = _blob("unavailable", surface, [], checks, f"{type(exc).__name__}: {exc}"[:450])
         finally:
             await _cleanup(box, copy, budget)
         return await _guard_real_tree(box, before, snapshot, run, surface, checks, blob)
     except Exception as exc:  # noqa: BLE001 — report-only: must never change the verdict
-        logger.warning("adversarial_unavailable", run_id=str(run.id), error=repr(exc)[:200])
-        why = f"{type(exc).__name__}: {exc}"[:200]
+        logger.warning("adversarial_unavailable", run_id=str(run.id), error=repr(exc)[:600])
+        why = f"{type(exc).__name__}: {exc}"[:450]
         if guarded:  # the stage had started: the real tree must still be proven clean
             return _unrestored(surface, checks, why)
         return _blob("unavailable", surface, [], checks, why)
@@ -665,7 +665,11 @@ async def _real(box: SandboxSession, command: str, timeout_s: float = _EXEC_TIME
 async def _sh(box: SandboxSession, command: str) -> str:
     res = await _real(box, command)
     if res.timed_out or res.exit_code != 0:
-        raise RuntimeError(f"command failed (exit {res.exit_code}): {command[:80]}")
+        tail = (res.stderr or "").strip()[-300:]
+        raise RuntimeError(
+            f"command failed (exit {res.exit_code}): {command[:80]}"
+            + (f" | stderr: {tail}" if tail else "")
+        )
     return res.stdout or ""
 
 

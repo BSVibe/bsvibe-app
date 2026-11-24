@@ -178,17 +178,19 @@ async def find_base_commit(repo: Path, inp: ReplayInput) -> str:
 async def reconstruct_tree(inp: ReplayInput, dest: Path) -> str:
     """Check out the base commit into ``dest`` and apply the diff there; returns the commit.
 
-    ``dest`` is a shared-object clone, so the product's own repository is never touched."""
+    ``dest`` is a self-contained clone (no alternates back to the product repository), so it is a
+    full repository with only that directory mounted in the sandbox; the product repo is never
+    touched."""
     if inp.diff_truncated:
         raise CaseUnavailable("diff 가 잘려 저장돼 있어 같은 트리를 만들 수 없다")
     if not inp.diff.strip():
         raise CaseUnavailable("결과물에 diff 가 없다")
     base = await find_base_commit(inp.repo_dir, inp)
-    code, out = await _git(
-        "clone", "--shared", "--no-checkout", str(inp.repo_dir), str(dest), cwd=inp.repo_dir
-    )
+    code, out = await _git("clone", "--no-checkout", str(inp.repo_dir), str(dest), cwd=inp.repo_dir)
     if code != 0:
         raise CaseUnavailable(f"저장소 사본을 만들지 못했다: {out.strip()[:200]}")
+    # a clone only takes the source's branches; the base may live on a remote-tracking ref
+    await _git("fetch", "-q", "origin", "+refs/remotes/*:refs/remotes/src/*", cwd=dest)
     code, out = await _git("checkout", "--detach", base, cwd=dest)
     if code != 0:
         raise CaseUnavailable(f"기준 커밋을 체크아웃하지 못했다: {out.strip()[:200]}")
@@ -300,7 +302,16 @@ async def _replay_case(
             "reason": f"{type(exc).__name__}: {str(exc)[:300]}",
             "runs": [],
         }
-    confirmed_runs = sum(1 for r in runs if r["stage_a"].get("confirmed"))
+    measured = [r for r in runs if r["stage_a"].get("status") != "unavailable"]
+    if not measured:
+        why = (runs[0]["stage_a"].get("reason") or "")[:450] if runs else ""
+        return {
+            **head,
+            "status": "failed",
+            "reason": f"Stage A 가 모든 반복에서 unavailable: {why}",
+            "runs": runs,
+        }
+    confirmed_runs = sum(1 for r in measured if r["stage_a"].get("confirmed"))
     return {
         **head,
         "status": "ran",
@@ -318,7 +329,7 @@ def score(results: list[dict[str, Any]]) -> dict[str, Any]:
     failed = [r for r in results if r["status"] == "failed"]
     defect = [r for r in ran if r["expected"] == "defect"]
     clean = [r for r in ran if r["expected"] == "clean"]
-    runs = [run for r in ran for run in r["runs"]]
+    runs = [run for r in ran for run in r["runs"] if run["stage_a"].get("status") != "unavailable"]
 
     def rate(rows: list[dict[str, Any]]) -> float | None:
         return sum(1 for r in rows if r["any_confirmed"]) / len(rows) if rows else None
