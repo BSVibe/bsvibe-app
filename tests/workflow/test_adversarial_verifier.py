@@ -672,6 +672,52 @@ async def test_the_token_cap_is_a_real_stop(monkeypatch: Any) -> None:
     assert not any(c.endswith("probe") for c in box.commands)  # and its tool call never ran
 
 
+def _big_tool(prompt: int) -> LoopTurn:
+    turn = _tool("shell_exec", command="probe")
+    return dataclasses.replace(turn, usage_prompt_tokens=prompt, usage_completion_tokens=10)
+
+
+def _big_answer(prompt: int, *findings: dict[str, Any]) -> LoopTurn:
+    return dataclasses.replace(
+        _answer(*findings), usage_prompt_tokens=prompt, usage_completion_tokens=10
+    )
+
+
+async def test_token_cap_asks_for_the_final_json_once(monkeypatch: Any) -> None:
+    monkeypatch.setattr(adversarial_verifier, "_TOKEN_CAP", 150_000)
+    monkeypatch.setattr(adversarial_verifier, "_FINAL_MARGIN", 5_000)
+    llm = StubLlm([_big_tool(30_000)] * 3 + [_big_answer(30_000, _finding())])
+    box = _AdvBox(pytest=_res(1, "failed"))
+
+    blob = await _round(llm, box)
+
+    final_asks = [
+        c
+        for c in llm.calls
+        if "Give the final JSON now" in str(c["messages"][-1].get("content", ""))
+    ]
+    assert len(final_asks) == 1
+    assert blob["status"] == "done"
+    assert blob["budget_stopped"] is True
+    assert len(blob["findings"]) == 1
+    assert len(llm.calls) * 30_010 <= 150_000  # the whole round stays within the cap
+
+
+async def test_token_cap_malformed_final_answer_is_unavailable(monkeypatch: Any) -> None:
+    monkeypatch.setattr(adversarial_verifier, "_TOKEN_CAP", 150_000)
+    monkeypatch.setattr(adversarial_verifier, "_FINAL_MARGIN", 5_000)
+    junk = dataclasses.replace(
+        LoopTurn(content="not json", tool_calls=()), usage_prompt_tokens=30_000
+    )
+    llm = StubLlm([_big_tool(30_000)] * 3 + [junk, junk])
+
+    blob = await _round(llm, _AdvBox())
+
+    assert blob["status"] == "unavailable"
+    assert "토큰" in blob["reason"]
+    assert len(llm.calls) <= 4
+
+
 async def test_when_the_time_budget_runs_out_remaining_repros_are_unconfirmed(
     monkeypatch: Any,
 ) -> None:

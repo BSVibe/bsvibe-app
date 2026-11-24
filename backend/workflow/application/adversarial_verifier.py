@@ -51,6 +51,10 @@ _BUDGET_S = 180.0
 _RESERVE_S = 30.0
 _MAX_TURNS = 12
 _TOKEN_CAP = 120_000
+#: Held back from the cap for the final-JSON request: the tool output a turn adds plus the
+#: completion. When the next call (last prompt + this) would pass the cap, the loop stops
+#: investigating and asks for the answer instead.
+_FINAL_MARGIN = 6_000
 _EXEC_TIMEOUT_S = 60.0
 _REPRO_TIMEOUT_S = 120.0
 _TOOL_OUTPUT_CHARS = 4000
@@ -157,8 +161,10 @@ async def run_adversarial_round(
             diff = await _working_tree_diff(box, baseline)
             await _make_copy(box, copy)
             probes = [0]
+            stopped = [False]
             findings = await _bounded(
-                _session(llm, run, copy, diff, surface, scratch, checks, budget, probes), budget
+                _session(llm, run, copy, diff, surface, scratch, checks, budget, probes, stopped),
+                budget,
             )
             if findings is None:
                 blob = _blob(
@@ -174,6 +180,8 @@ async def run_adversarial_round(
                 ]
                 blob = _blob("done" if probes[0] else "no_probe", surface, judged, checks)
                 blob["probes"] = probes[0]
+                if stopped[0]:
+                    blob["budget_stopped"] = True
         except _TokenCapExceeded:
             blob = _blob("unavailable", surface, [], checks, "토큰 상한 초과로 검증자를 멈췄다")
         except Exception as exc:  # noqa: BLE001 — report-only: must never change the verdict
@@ -281,8 +289,10 @@ async def _session(
     checks: list[str],
     budget: _Budget,
     probes: list[int] | None = None,
+    stopped: list[bool] | None = None,
 ) -> list[Finding] | None:
     probes = probes if probes is not None else [0]
+    stopped = stopped if stopped is not None else [False]
     payload = run.payload if isinstance(run.payload, dict) else {}
     messages: list[dict[str, Any]] = [
         {
@@ -307,7 +317,7 @@ async def _session(
     nudged = False
     first_answer: list[Finding] | None = None  # kept: a failed nudge must not lose it
     for _ in range(_MAX_TURNS):
-        reply, used = await _ask(llm, run, messages)
+        reply, used, last_prompt = await _ask(llm, run, messages)
         spent += used
         if reply is None:
             return first_answer  # malformed twice: the first answer if any, else unavailable
@@ -322,33 +332,47 @@ async def _session(
         if spent >= _TOKEN_CAP:
             # A real stop: no further tool call runs and no further model call is made.
             raise _TokenCapExceeded
+        if spent + 2 * (last_prompt + _FINAL_MARGIN) > _TOKEN_CAP:
+            # One more investigating turn AND the final request would pass the cap: no more
+            # tools, ask ONCE for the answer now (its share is what the check holds back). One
+            # attempt only — a malformed reply must not spend past the cap.
+            stopped[0] = True
+            messages.append(
+                {"role": "user", "content": "Stop investigating. Give the final JSON now."}
+            )
+            final, _, _ = await _ask(llm, run, messages, attempts=1)
+            if isinstance(final, list):
+                return final
+            if first_answer is not None:
+                return first_answer
+            raise _TokenCapExceeded
         output = await _dispatch(copy, scratch, reply.name, reply.args, checks, budget, probes)
         messages.append(
             {"role": "user", "content": f"TOOL RESULT ({reply.name}):\n{output}"},
         )
     # Out of turns: ask for the answer.
     messages.append({"role": "user", "content": "Stop investigating. Give the final JSON now."})
-    reply, _ = await _ask(llm, run, messages)
+    reply, _, _ = await _ask(llm, run, messages)
     return reply if isinstance(reply, list) else first_answer
 
 
 async def _ask(
-    llm: Llm, run: Any, messages: list[dict[str, Any]]
-) -> tuple[ToolRequest | list[Finding] | None, int]:
+    llm: Llm, run: Any, messages: list[dict[str, Any]], *, attempts: int = 2
+) -> tuple[ToolRequest | list[Finding] | None, int, int]:
     """One plain chat turn (no ``tools``: the harness runs the tool loop itself). A reply that is
     not the agreed JSON is asked for again ONCE; still wrong \u2192 ``None``. Appends to ``messages``."""
     spent = 0
-    for attempt in range(2):
+    prompt = 0
+    for attempt in range(attempts):
         turn = await _turn(llm, run, messages, None)
-        spent += int(getattr(turn, "usage_prompt_tokens", 0) or 0) + int(
-            getattr(turn, "usage_completion_tokens", 0) or 0
-        )
+        prompt = int(getattr(turn, "usage_prompt_tokens", 0) or 0)
+        spent += prompt + int(getattr(turn, "usage_completion_tokens", 0) or 0)
         content = str(getattr(turn, "content", "") or "")
         messages.append({"role": "assistant", "content": content})
         parsed = parse_reply(content)
         if parsed is not None:
-            return parsed, spent
-        if attempt == 0:
+            return parsed, spent, prompt
+        if attempt < attempts - 1:
             messages.append(
                 {
                     "role": "user",
@@ -356,7 +380,7 @@ async def _ask(
                     '{"tool": ..., "args": {...}} or {"findings": [...]}.',
                 }
             )
-    return None, spent
+    return None, spent, prompt
 
 
 async def _turn(llm: Llm, run: Any, messages: list[dict[str, Any]], tools: Any) -> Any:
