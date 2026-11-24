@@ -584,10 +584,25 @@ async def test_base_commit_only_on_origin_main_is_found(repo: _Repo) -> None:
     assert await replay.find_base_commit(repo.path, repo.input(diff=diff)) == x
 
 
-def _fake_loader_env(
-    repo: _Repo, monkeypatch: pytest.MonkeyPatch, diff: str, fake_sync: Any
-) -> tuple[Any, uuid.UUID, uuid.UUID]:
+def _bundle_restored_product(repo: _Repo, root: Path, github: Path) -> Path:
+    """A product repo restored the way ``ensure_product_workspace`` does: cloned from a bundle
+    that is then deleted, so ``origin`` is a dead temp path. ``github`` holds the base commit."""
+    bundle = root / "restore.bundle"
+    _git(repo.path, "bundle", "create", str(bundle), "main")
+    product = root / "restored"
+    _git(root, "clone", "-q", "--branch", "main", str(bundle), str(product))
+    bundle.unlink()
+    github.mkdir()
+    _git(github, "init", "-q", "--bare", "-b", "main")
+    return product
+
+
+def _loader_env(
+    repo: _Repo, monkeypatch: pytest.MonkeyPatch, product: Path, diff: str, repo_url: str | None
+) -> tuple[Any, uuid.UUID, uuid.UUID, dict[str, Any]]:
+    """Only the DB rows, the restore step and the credential are stubbed; the fetch is real."""
     ws, pid, did = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    seen: dict[str, Any] = {}
     deliverable = SimpleNamespace(
         workspace_id=ws,
         run_id=uuid.uuid4(),
@@ -595,54 +610,64 @@ def _fake_loader_env(
         created_at=datetime(2026, 2, 1, tzinfo=UTC),
     )
     run = SimpleNamespace(product_id=pid, payload={})
+    product_row = SimpleNamespace(repo_url=repo_url)
 
     class _Session:
         async def get(self, model: Any, _id: Any) -> Any:
-            return deliverable if model.__name__ == "Deliverable" else run
+            return {"Deliverable": deliverable, "ProductRow": product_row}.get(model.__name__, run)
 
     async def ensure(_pid: uuid.UUID) -> bool:
         return True
 
     async def token(_session: Any, *, workspace_id: uuid.UUID, cipher: Any) -> str:
         assert workspace_id == ws
+        seen["token"] = "ghs_workspace_token"
         return "ghs_workspace_token"
 
     monkeypatch.setattr("backend.storage.product_workspace.ensure_product_workspace", ensure)
     monkeypatch.setattr(
-        "backend.storage.product_workspace.product_workspace_path", lambda _p: repo.path
+        "backend.storage.product_workspace.product_workspace_path", lambda _p: product
     )
-    monkeypatch.setattr("backend.storage.product_workspace.sync_main_with_origin", fake_sync)
     monkeypatch.setattr("backend.connectors.auth.resolve.resolve_github_token", token)
     monkeypatch.setattr("backend.router.accounts.crypto.cipher_from_settings", lambda: object())
-    return _Session(), ws, did
+    return _Session(), ws, did, seen
 
 
-async def test_base_commit_only_on_github_is_found_after_fetch(
-    repo: _Repo, monkeypatch: pytest.MonkeyPatch
+async def test_bundle_restored_repo_finds_base_via_product_repo_url(
+    repo: _Repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     x, diff = _origin_only_base(repo)
-    seen: dict[str, Any] = {}
+    github = tmp_path / "github"
+    product = _bundle_restored_product(repo, tmp_path, github)
+    _git(repo.path, "push", "-q", str(github), f"{x}:refs/heads/main")
+    origin_before = _git(product, "remote", "get-url", "origin")
+    main_before = _git(product, "rev-parse", "main")
+    assert _git(product, "cat-file", "-t", main_before) == "commit"
+    session, ws, did, seen = _loader_env(repo, monkeypatch, product, diff, str(github))
 
-    async def fake_sync(_pid: uuid.UUID, credential: Any = None) -> str:
-        seen["token"] = await credential()  # same credential path as run preparation
-        _git(repo.path, "update-ref", "refs/remotes/origin/main", x)
-        return "fast_forwarded"
-
-    session, ws, did = _fake_loader_env(repo, monkeypatch, diff, fake_sync)
     inp = await replay.load_replay_input(session, ws, did)
+
     assert seen["token"] == "ghs_workspace_token"
     assert inp.fetch_failed is False
-    assert await replay.find_base_commit(repo.path, inp) == x
+    assert await replay.find_base_commit(product, inp) == x
+    assert _git(product, "remote", "get-url", "origin") == origin_before
+    assert _git(product, "rev-parse", "main") == main_before
+    assert "ghs_workspace_token" not in (product / ".git" / "config").read_text()
 
 
-async def test_fetch_failure_is_named_in_the_reason(
-    repo: _Repo, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("kind", ["no_url", "unreachable"])
+async def test_missing_or_unreachable_repo_url_reports_fetch_failed(
+    repo: _Repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
 ) -> None:
-    async def failing(_pid: uuid.UUID, credential: Any = None) -> str:
-        return "fetch_failed"
+    x, diff = _origin_only_base(repo)
+    product = _bundle_restored_product(repo, tmp_path, tmp_path / "github")
+    url = None if kind == "no_url" else str(tmp_path / "nowhere")
+    session, ws, did, _ = _loader_env(repo, monkeypatch, product, diff, url)
+    main_before = _git(product, "rev-parse", "main")
 
-    monkeypatch.setattr("backend.storage.product_workspace.sync_main_with_origin", failing)
-    assert await replay._refresh_origin(object(), uuid.uuid4(), uuid.uuid4()) is True
-    bogus = repo.diff.replace("index ", "index ffffff", 1)
+    inp = await replay.load_replay_input(session, ws, did)
+
+    assert inp.fetch_failed is True
     with pytest.raises(replay.CaseUnavailable, match="받아 오지 못했다"):
-        await replay.find_base_commit(repo.path, repo.input(diff=bogus, fetch_failed=True))
+        await replay.find_base_commit(product, inp)
+    assert _git(product, "rev-parse", "main") == main_before

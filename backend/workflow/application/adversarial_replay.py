@@ -444,8 +444,12 @@ async def load_replay_input(
 
 
 async def _refresh_origin(session: Any, workspace_id: uuid.UUID, product_id: uuid.UUID) -> bool:
-    """Fetch GitHub ``main`` into ``origin/main`` (``sync_main_with_origin``); True = it failed."""
-    from backend.storage.product_workspace import sync_main_with_origin  # noqa: PLC0415
+    """Fetch the product's ``repo_url`` ``main`` into ``origin/main``; True = it failed.
+
+    The repo's own ``origin`` remote is NOT used: a bundle-restored repo points it at a deleted
+    temp file."""
+    from backend.identity.workspaces_db import ProductRow  # noqa: PLC0415
+    from backend.storage.product_workspace import fetch_main_from_url  # noqa: PLC0415
 
     async def _github_token() -> str | None:
         from backend.connectors.auth.resolve import resolve_github_token  # noqa: PLC0415
@@ -460,7 +464,9 @@ async def _refresh_origin(session: Any, workspace_id: uuid.UUID, product_id: uui
             return None
 
     try:
-        return await sync_main_with_origin(product_id, _github_token) == "fetch_failed"
+        product = await session.get(ProductRow, product_id)
+        repo_url = getattr(product, "repo_url", None)
+        return not await fetch_main_from_url(product_id, repo_url, _github_token)
     except Exception:  # noqa: BLE001 — never fatal; the search uses the refs it has
         logger.warning("replay_origin_fetch_error", product_id=str(product_id))
         return True

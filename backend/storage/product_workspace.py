@@ -702,6 +702,38 @@ async def sync_main_with_origin(  # noqa: PLR0911 — one early return per repor
         return "fetch_failed"
 
 
+async def fetch_main_from_url(
+    product_id: uuid.UUID, repo_url: str | None, credential: Credential | None = None
+) -> bool:
+    """Fetch ``main`` of ``repo_url`` into ``refs/remotes/origin/main``; True = it succeeded.
+
+    Unlike :func:`sync_main_with_origin` this ignores the repo's own ``origin`` remote (a repo
+    restored from a bundle has the deleted bundle path there). Nothing else is touched: not
+    local ``main``, not the remotes. The token is used for this one fetch only. Never raises.
+    """
+    if not repo_url:
+        return False
+    repo = product_workspace_path(product_id)
+    token: str | None = None
+    try:
+        token = await credential() if credential is not None else None
+        url = _authed_fetch_url(repo_url, token) if token else repo_url
+        fetched = await _git(
+            "fetch", "--quiet", url, "+main:refs/remotes/origin/main", cwd=repo, check=False
+        )
+        if fetched.returncode != 0:
+            logger.warning(
+                "product_main_url_fetch_failed",
+                product_id=str(product_id),
+                stderr=(fetched.stderr.replace(token, "***") if token else fetched.stderr)[:300],
+            )
+            return False
+    except (ProductWorkspaceError, OSError):
+        logger.warning("product_main_url_fetch_failed", product_id=str(product_id), exc_info=True)
+        return False
+    return True
+
+
 async def add_run_worktree(product_id: uuid.UUID, run_id: uuid.UUID) -> Path:
     """``git worktree add var/runs/<rid> -b bsvibe/run/<rid> main``.
 
