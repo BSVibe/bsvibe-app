@@ -18,27 +18,37 @@ import shlex
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from typing import Any
 
 import structlog
 
+from backend.workflow.application.requirements_ledger import run_requirements
 from backend.workflow.domain.adversarial import (
+    INTENT_SYSTEM_PROMPT,
     MAX_FINDINGS,
     PROTOCOL,
+    REASON_BASIS_MISMATCH,
+    REASON_INTENT_CONFLICT,
+    REASON_INTENT_NO_TOKENS,
+    REPRO_RUN_PREFIX,
     SCRATCH_ROOT,
     SYSTEM_PROMPT,
     Finding,
     ToolRequest,
+    check_expected_basis,
     checklist,
     clip,
     command_did_not_run,
     judge_command,
     judge_test,
+    parse_intent_verdict,
     parse_reply,
     repro_command,
     repro_runner,
     repro_test_did_not_run,
     runner_is_missing,
+    split_test_id,
     write_refusal,
 )
 from backend.workflow.infrastructure.sandbox import SandboxResult, SandboxSession
@@ -56,6 +66,10 @@ _TOKEN_CAP = 120_000
 #: completion. When the next call (last prompt + this) would pass the cap, the loop stops
 #: investigating and asks for the answer instead.
 _FINAL_MARGIN = 6_000
+#: The judge answers with one short JSON object; this is what one intent call is assumed to add
+#: on top of its prompt when checking that it still fits the round's token cap.
+_INTENT_COMPLETION_TOKENS = 300
+_CHARS_PER_TOKEN = 3
 _EXEC_TIMEOUT_S = 60.0
 _REPRO_TIMEOUT_S = 120.0
 _TOOL_OUTPUT_CHARS = 4000
@@ -75,6 +89,31 @@ class _TokenCapExceeded(Exception):
 
 class _BaselineUnavailable(Exception):
     """The tree before the change could not be built: the repro is not confirmed."""
+
+
+def _run_tokens(run: Any) -> int:
+    return int(getattr(run, "usage_prompt_tokens", 0) or 0) + int(
+        getattr(run, "usage_completion_tokens", 0) or 0
+    )
+
+
+class _Intent:
+    """What the basis check needs: the judge LLM, the run (tokens are metered on it) and the
+    request's own words (body + ledger items) to quote from and to judge against."""
+
+    def __init__(self, llm: Llm, run: Any, tokens_at_start: int | None = None) -> None:
+        self.llm = llm
+        self.run = run
+        self._tokens_at_start = _run_tokens(run) if tokens_at_start is None else tokens_at_start
+        payload = run.payload if isinstance(run.payload, dict) else {}
+        body = str(payload.get("intent_text") or payload.get("text") or "")
+        self.requests: list[tuple[str, str]] = [("", body)]
+        self.requests += [(str(i["id"]), str(i["text"])) for i in run_requirements(run)]
+
+    def tokens_left(self) -> int:
+        """What the round's token cap has left: everything this round metered on the run (the
+        session and every earlier intent call) counts against it."""
+        return _TOKEN_CAP - (_run_tokens(self.run) - self._tokens_at_start)
 
 
 class _Budget:
@@ -147,6 +186,7 @@ async def run_adversarial_round(
 ) -> dict[str, Any]:
     """The ``result["adversarial"]`` blob. Never raises: a hiccup is ``status: unavailable``."""
     budget = _Budget()
+    tokens_at_start = _run_tokens(run)
     scratch = f"{SCRATCH_ROOT}/{str(run.id)[:12]}"
     checks: list[str] = []
     tag = f"{str(run.id)[:12]}-{uuid.uuid4().hex[:8]}"
@@ -176,8 +216,10 @@ async def run_adversarial_round(
                     "검증자가 끝내지 못했거나 출력을 해석하지 못했다",
                 )
             else:
+                intent = _Intent(llm, run, tokens_at_start)
                 judged = [
-                    await _judge(box, copy, scratch, f, budget, baseline=baseline) for f in findings
+                    await _judge(box, copy, scratch, f, budget, baseline=baseline, intent=intent)
+                    for f in findings
                 ]
                 blob = _blob("done" if probes[0] else "no_probe", surface, judged, checks)
                 blob["probes"] = probes[0]
@@ -459,6 +501,7 @@ def _unconfirmed(finding: Finding, reason: str, output: str = "") -> dict[str, A
             **({"path": repro.path} if repro.path else {}),
             **({"command": repro.command, "expect": repro.expect} if repro.command else {}),
         },
+        **({"expected_from": asdict(finding.expected_from)} if finding.expected_from else {}),
         "confirmed": False,
         "reason": reason,
         "output": clip(output),
@@ -473,6 +516,7 @@ async def _judge(
     budget: _Budget,
     *,
     baseline: str = "",
+    intent: _Intent | None = None,
 ) -> dict[str, Any]:
     """Run the repro in a FRESH copy of the verified state; the verdict is the exit code / output.
 
@@ -498,6 +542,12 @@ async def _judge(
             verdict = await _judge_command(
                 box, worked_in, fresh, finding, baseline, budget, timeout
             )
+        if verdict[0]:  # confirmed so far: the expected behaviour needs a basis and no conflict
+            ok, why, extra = await _vet_basis(
+                box, worked_in, fresh, finding, baseline, budget, timeout, intent
+            )
+            if not ok:
+                verdict = (False, why, verdict[2], extra)
     except _BaselineUnavailable as exc:
         verdict = (False, f"변경 전 대조를 하지 못했다 ({str(exc)[:120]})", "", {})
     except Exception as exc:  # noqa: BLE001 — a repro that cannot run is unconfirmed
@@ -506,6 +556,107 @@ async def _judge(
         await _cleanup(box, fresh, budget)
     confirmed, reason, output, extra = verdict
     return {**_unconfirmed(finding, reason, output), "confirmed": confirmed, **extra}
+
+
+async def _vet_basis(
+    box: SandboxSession,
+    worked_in: _Copy,
+    fresh: _Copy,
+    finding: Finding,
+    baseline: str,
+    budget: _Budget,
+    step_s: float,
+    intent: _Intent | None,
+) -> tuple[bool, str, dict[str, Any]]:
+    """A confirmed candidate also needs a stated, checkable basis for what it expects, and that
+    expectation must not be the behaviour the request asked for. It only ever SUBTRACTS."""
+    ef = finding.expected_from
+    requests = intent.requests if intent else []
+    problem = check_expected_basis(ef, requests)
+    if problem is not None:
+        return False, problem, {}
+    assert ef is not None  # noqa: S101 — check_expected_basis rejects None
+    if ef.kind == "existing_test":
+        problem = await _check_existing_test(
+            box, worked_in, fresh, finding, ef.test, baseline, budget, step_s
+        )
+        if problem is not None:
+            return False, problem, {}
+    if intent is None:
+        return False, "의도 충돌 판정을 하지 못했다", {}
+    return await _intent_check(intent, finding, budget)
+
+
+async def _check_existing_test(
+    box: SandboxSession,
+    worked_in: _Copy,
+    fresh: _Copy,
+    finding: Finding,
+    test: str,
+    baseline: str,
+    budget: _Budget,
+    step_s: float,
+) -> str | None:
+    """The named test must pass BEFORE the change and (unless it is the repro) fail after it."""
+    split = split_test_id(test)
+    if split is None or not split[0].endswith(".py"):
+        return f"{REASON_BASIS_MISMATCH} (지원하지 않는 기존 테스트 형식)"
+    command = f"{REPRO_RUN_PREFIX}python -m pytest -q -x -p no:cacheprovider {shlex.quote(test)}"
+    before = await _before_change(box, worked_in, command, None, baseline, budget)
+    if before is None or before.timed_out:
+        return f"{REASON_BASIS_MISMATCH} (기존 테스트를 변경 전에 실행하지 못했다)"
+    if before.exit_code != 0:
+        return f"{REASON_BASIS_MISMATCH} (기존 테스트가 변경 전에 통과하지 않는다)"
+    if finding.repro.path == split[0]:
+        return None
+    after = await fresh.exec(command, timeout_s=step_s)
+    if after.timed_out or not judge_test(exit_code=after.exit_code, failed_code=1, timed_out=False):
+        return f"{REASON_BASIS_MISMATCH} (기존 테스트가 변경 후에 실패하지 않는다)"
+    return None
+
+
+async def _intent_check(
+    intent: _Intent, finding: Finding, budget: _Budget
+) -> tuple[bool, str, dict[str, Any]]:
+    """One separate judge call per candidate. Conflict, a failed call or an unreadable answer
+    all leave the finding unconfirmed."""
+    if budget.remaining() <= 0:
+        return False, "시간 예산이 소진되어 의도 충돌 판정을 하지 못했다", {}
+    repro = finding.repro
+    ef = finding.expected_from
+    ledger = "\n".join(f"- {i}: {t}" for i, t in intent.requests[1:]) or "(none)"
+    user = (
+        f"REQUEST:\n{intent.requests[0][1]}\n\nREQUIREMENTS LEDGER:\n{ledger}\n\n"
+        f"CLAIM: {finding.claim}\n"
+        f"REPRO: {repro.command or repro.path}\n"
+        f"EXPECTED BEHAVIOUR BASIS: {asdict(ef) if ef else None}\n\n"
+        "Does the behaviour the repro expects conflict with what the request asked to change?"
+    )
+    messages = [
+        {"role": "system", "content": INTENT_SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
+    # Only inside the round's token cap: less left than one call's worth → no call, unconfirmed.
+    needed = (
+        sum(len(m["content"]) for m in messages) // _CHARS_PER_TOKEN + _INTENT_COMPLETION_TOKENS
+    )
+    if intent.tokens_left() < needed:
+        return False, REASON_INTENT_NO_TOKENS, {}
+    try:
+        turn = await _turn(intent.llm, intent.run, messages, None)
+    except Exception as exc:  # noqa: BLE001 — a failed judge call is conservative: unconfirmed
+        return False, f"의도 충돌 판정 호출 실패: {type(exc).__name__}", {}
+    verdict = parse_intent_verdict(str(getattr(turn, "content", "") or ""))
+    if verdict is None:
+        return False, "의도 충돌 판정을 읽지 못했다", {}
+    conflict, why = verdict
+    if conflict:
+        return (
+            False,
+            REASON_INTENT_CONFLICT + (f": {why}" if why else ""),
+            {"intent_conflict": True},
+        )
+    return True, "", {}
 
 
 async def _judge_test(

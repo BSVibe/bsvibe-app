@@ -91,6 +91,29 @@ Two rules keep that filter honest (stage 1 is still report-only; `passed` never 
   `uv run python -m pytest ...`), never a bare `python`. A reproduction that dies with an import / collection error is
   unconfirmed with the reason "재현이 실행되지 않음" (`not_run`), told apart from "the claim was wrong".
 
+* **Expected basis x intent (confirmed = changed-only AND justified).** The baseline control proves "this change
+  changed this behaviour", not "the changed behaviour is wrong": a behaviour the request told the agent to change
+  differs before and after by definition, so a repro that expects the old behaviour always holds "only after the
+  change". A confirmed candidate must therefore pass two more checks. They can only remove a confirmation, never add one:
+  1. **Basis (`expected_from`).** Each finding states where the "correct behaviour" its repro asserts comes from, as one of
+     `request` (a verbatim `quote` of the request body or a ledger item, with its `req_id`), `existing_test`
+     (`path::name` of a repo test that passed before the change; the repro is that test, or that test fails after the
+     change) or `unchanged_contract` (a `file:line` in the code *before* the change, for behaviour the request did not
+     touch). The harness checks it mechanically: the quote must occur in the request body or ledger text (whitespace
+     normalised, substring) and be at least 20 characters and 3 words long after normalising (a shorter one, such as
+     `e` or `the`, occurs in any text and proves nothing: "기대 근거 불일치"); the existing test must pass on the pre-change tree and fail on the changed tree (unless it
+     is the repro); an `unchanged_contract` location must be `file:line`. No basis: unconfirmed, "기대 근거 없음".
+     Failed check: unconfirmed, "기대 근거 불일치".
+  2. **Intent conflict (one judge call per candidate).** Candidates that pass 1 go to a separate call on the same judge
+     path, given the request and the ledger: does the behaviour the repro expects conflict with what the request asked
+     to change? Conflict: unconfirmed, "요청된 변경과 충돌(의도된 동작)". A failed or unreadable judge call leaves the
+     candidate unconfirmed (conservative). Its tokens count toward the round's tokens, and the call is made only inside
+     the round's token cap: if what is left is less than one call needs (prompt estimate plus the answer), no call is
+     made and the candidate stays unconfirmed, "토큰 예산 소진으로 의도 충돌 판정을 하지 못했다".
+
+  This closes the "request-mandated change confirmed as a regression" class (#1440, replay `9c8254c5`), which section 4
+  needs at about zero wrongly-confirmed before Stage A may gate.
+
 ### 3.2 Stage A — Adversarial verifier (new, inside the round)
 
 * **Where:** in `VerificationService.verify`, after the derived gate (VS:809-866), before the ledger (VS:871).
