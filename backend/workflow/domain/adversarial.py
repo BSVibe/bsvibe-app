@@ -306,7 +306,14 @@ REPRO_RUN_PREFIX = "uv run --all-extras "
 #: pytest exit codes that mean 'the test did not run' (collection / import error, interrupted,
 #: nothing collected) — as opposed to 1 = 'a test ran and failed'.
 _PYTEST_NOT_RUN = (2, 3, 4, 5)
-_NOT_RUN_MARKERS = ("ModuleNotFoundError", "command not found")
+#: Whole-line shapes the interpreter / shell really print when the command could not run
+#: (a traceback's last line, ``sh: 1: foo: not found``, ``bash: foo: command not found``).
+#: A grep hit such as ``x.py:12:    except ModuleNotFoundError:`` is not one of them.
+_COMMAND_NOT_RUN = re.compile(
+    r"^ModuleNotFoundError: No module named .+$"
+    r"|^(?:(?:sh|bash|zsh|dash)(?:: line \d+|: \d+)?: )?[^\s:]+: (?:command )?not found[ \t]*$",
+    re.MULTILINE,
+)
 
 
 def repro_command(command: str) -> str:
@@ -346,9 +353,11 @@ def command_did_not_run(
         return False
     if _expects_the_error(expect):
         return False
+    if exit_code == 0:
+        return False  # it ended normally: it ran, whatever the output says
     if exit_code in (126, 127):
         return True
-    return any(m in output for m in _NOT_RUN_MARKERS)
+    return bool(_COMMAND_NOT_RUN.search(output or ""))
 
 
 #: Output saying the test RUNNER itself is missing (no pytest in the venv, no vitest, shell
