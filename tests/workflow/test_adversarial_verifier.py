@@ -24,6 +24,7 @@ from backend.workflow.application.run_detail import _tally_adversarial
 from backend.workflow.application.safe_mode_ledger import _adversarial_summary
 from backend.workflow.application.verification_service import VerificationService
 from backend.workflow.domain.adversarial import (
+    MAX_TEST_CHARS,
     REPRO_RUN_PREFIX,
     SCRATCH_ROOT,
     judge_command,
@@ -109,9 +110,19 @@ class _AdvBox(_GitBox):
         self.scripted = scripted
         self.scripted_before = scripted_before or {}
         self.commands: list[str] = []
+        #: True: a repro file exists only if the session wrote it (``write_test`` / ``content``).
+        self.written_only = False
+        self.written: list[str] = []
 
     async def exec(self, command: str, **kwargs: Any) -> SandboxResult:
         self.commands.append(command)
+        inner0 = re.sub(r"^cd \S+ && ", "", command)
+        if "base64 -d >" in inner0:  # copy.write_file
+            self.written.append(shlex.split(inner0.rsplit("base64 -d >", 1)[1])[0])
+            return _res(0, "")
+        if inner0.startswith("test -f ") and "-before-" not in command:
+            path = shlex.split(inner0)[2]
+            return _res(0 if (not self.written_only or path in self.written) else 1, "")
         if (
             "status --porcelain" in command
             or "tar --exclude" in command
@@ -1322,3 +1333,74 @@ async def test_intent_judge_is_skipped_when_tokens_are_exhausted() -> None:
     assert result["confirmed"] is False
     assert result["reason"] == "토큰 예산 소진으로 의도 충돌 판정을 하지 못했다"
     assert len(llm.calls) == 2  # the judge was never called
+
+
+# -- #1461 follow-up: a test repro whose file was never written ---------------------------------
+
+
+async def test_unwritten_test_repro_is_missing_not_runtime_error() -> None:
+    box = _AdvBox(pytest=_res(1, "1 failed"), pytest_before=_res(0, "1 passed"))
+    box.written_only = True
+    finding = await _one(box, _TEST_REPRO)  # answered with a path, no write_test before
+    assert finding["confirmed"] is False
+    assert finding["reason"] == "재현 테스트 파일이 없다(작성되지 않음)"
+    assert finding["repro_missing"] is True
+    assert "RuntimeError" not in finding["reason"]
+
+
+async def test_written_test_repro_is_judged_as_before() -> None:
+    box = _AdvBox(pytest=_res(1, "1 failed"), pytest_before=_res(0, "1 passed"))
+    box.written_only = True
+    llm = StubLlm(
+        [
+            _tool("write_test", path=_TEST_REPRO["path"], content="def test_x(): assert 0"),
+            _answer(_finding()),
+        ]
+    )
+    blob = await _round(llm, box)
+    assert blob["findings"][0]["confirmed"] is True
+    assert "repro_missing" not in blob["findings"][0]
+
+
+async def test_final_answer_content_is_written_and_judged() -> None:
+    box = _AdvBox(pytest=_res(1, "1 failed"), pytest_before=_res(0, "1 passed"))
+    box.written_only = True
+    repro = {**_TEST_REPRO, "content": "def test_x(): assert 0"}
+    finding = await _one(box, repro)
+    assert finding["confirmed"] is True
+    assert _TEST_REPRO["path"] in box.written
+    assert "content" not in finding["repro"]
+
+
+async def test_final_answer_content_outside_scratch_or_too_big_is_refused() -> None:
+    box = _AdvBox(pytest=_res(1, "1 failed"))
+    box.written_only = True
+    outside = await _one(box, {"kind": "test", "path": "tests/test_evil.py", "content": "x"})
+    assert outside["confirmed"] is False
+    assert "임시 테스트 디렉터리" in outside["reason"]
+    big = {**_TEST_REPRO, "content": "x" * (MAX_TEST_CHARS + 1)}
+    too_big = await _one(box, big)
+    assert too_big["confirmed"] is False
+    assert "너무 크다" in too_big["reason"]
+    assert box.written == []
+
+
+async def test_write_test_refuses_a_too_big_file_like_the_final_answer() -> None:
+    box = _AdvBox()
+    llm = StubLlm(
+        [
+            _tool("write_test", path=_TEST_REPRO["path"], content="x" * (MAX_TEST_CHARS + 1)),
+            _answer(),
+        ]
+    )
+    await _round(llm, box)
+    assert box.written == []
+
+
+def test_final_requests_tell_how_to_repro() -> None:
+    assert "write_test" in adversarial_verifier._FINAL_REQUEST
+    assert '"content"' in adversarial_verifier._FINAL_REQUEST
+    assert "command repro" in adversarial_verifier._FINAL_REQUEST
+    assert adversarial_verifier._FINAL_REQUEST.startswith(
+        "Stop investigating. Give the final JSON now."
+    )

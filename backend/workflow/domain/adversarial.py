@@ -29,7 +29,21 @@ _PYTEST_FAILED = 1
 _JS_FAILED = 1
 
 
-def write_refusal(rel_path: str, scratch_dir: str) -> str | None:
+#: A test file the verifier writes (``write_test`` or a final answer's ``content``) may not be
+#: larger than this many characters.
+MAX_TEST_CHARS = 100_000
+#: Why a test repro could not be judged: its file was never written in this session.
+REASON_REPRO_MISSING = "재현 테스트 파일이 없다(작성되지 않음)"
+
+#: Appended to every "give the final JSON now" request.
+FINAL_REPRO_HINT = (
+    " A test repro must point only at a file you already wrote with write_test, or carry its "
+    'text: {"kind": "test", "path": "<scratch>/test_x.py", "content": "<file content>"}. '
+    "Otherwise use a command repro."
+)
+
+
+def write_refusal(rel_path: str, scratch_dir: str, content: str | None = None) -> str | None:
     """Why the verifier may not write ``rel_path`` (``None`` = allowed).
 
     Allowed: a test file directly inside the harness's scratch directory. Anything else — a
@@ -44,6 +58,8 @@ def write_refusal(rel_path: str, scratch_dir: str) -> str | None:
     name = posixpath.basename(clean)
     if not any(fnmatch.fnmatch(name, p) for p in _TEST_FILE_PATTERNS):
         return "테스트 파일이 아닌 파일은 쓸 수 없다"
+    if content is not None and len(content) > MAX_TEST_CHARS:
+        return f"테스트 파일이 너무 크다(최대 {MAX_TEST_CHARS}자)"
     return None
 
 
@@ -53,6 +69,8 @@ class Repro:
     path: str | None
     command: str | None
     expect: dict[str, Any]
+    #: A test repro may carry the file's text in the final answer; the harness writes it.
+    content: str | None = None
 
 
 EXPECTED_KINDS = ("request", "existing_test", "unchanged_contract")
@@ -180,7 +198,8 @@ def _parse_repro(raw: Any) -> Repro | None:
         path = raw.get("path")
         if not isinstance(path, str) or not path.strip():
             return None
-        return Repro("test", path.strip(), None, {})
+        content = raw.get("content")
+        return Repro("test", path.strip(), None, {}, content if isinstance(content, str) else None)
     if kind == "command":
         command = raw.get("command")
         expect = _expect(raw.get("expect"))
@@ -448,7 +467,7 @@ Surface for this change: {surface}.
 
 Final answer: ONLY this JSON, at most {limit} findings (an empty list is a fine answer):
 {{"findings": [{{"severity": "high|medium|low", "claim": "...", "file": "path", "line": 1,
- "repro": {{"kind": "test", "path": "{scratch}/test_x.py"}}
+ "repro": {{"kind": "test", "path": "{scratch}/test_x.py"}}  (a file already written with write_test; or add "content": "<file text>")
  | {{"kind": "command", "command": "...",
      "expect": {{"exit_code": 0|"nonzero", "contains": "...", "not_contains": "..."}}}},
  "expected_from": {{"kind": "request", "quote": "verbatim text, 20+ chars and 3+ words after whitespace normalisation", "req_id": "R1"}}

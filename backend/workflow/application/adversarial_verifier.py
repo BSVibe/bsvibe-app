@@ -25,12 +25,14 @@ import structlog
 
 from backend.workflow.application.requirements_ledger import run_requirements
 from backend.workflow.domain.adversarial import (
+    FINAL_REPRO_HINT,
     INTENT_SYSTEM_PROMPT,
     MAX_FINDINGS,
     PROTOCOL,
     REASON_BASIS_MISMATCH,
     REASON_INTENT_CONFLICT,
     REASON_INTENT_NO_TOKENS,
+    REASON_REPRO_MISSING,
     REPRO_RUN_PREFIX,
     SCRATCH_ROOT,
     SYSTEM_PROMPT,
@@ -322,6 +324,9 @@ _NO_PROBE_NUDGE = (
 )
 
 
+_FINAL_REQUEST = "Stop investigating. Give the final JSON now." + FINAL_REPRO_HINT
+
+
 async def _session(
     llm: Llm,
     run: Any,
@@ -380,9 +385,7 @@ async def _session(
             # tools, ask ONCE for the answer now (its share is what the check holds back). One
             # attempt only — a malformed reply must not spend past the cap.
             stopped[0] = True
-            messages.append(
-                {"role": "user", "content": "Stop investigating. Give the final JSON now."}
-            )
+            messages.append({"role": "user", "content": _FINAL_REQUEST})
             final, _, _ = await _ask(llm, run, messages, attempts=1)
             if isinstance(final, list):
                 return final
@@ -394,7 +397,7 @@ async def _session(
             {"role": "user", "content": f"TOOL RESULT ({reply.name}):\n{output}"},
         )
     # Out of turns: ask for the answer.
-    messages.append({"role": "user", "content": "Stop investigating. Give the final JSON now."})
+    messages.append({"role": "user", "content": _FINAL_REQUEST})
     reply, _, _ = await _ask(llm, run, messages)
     return reply if isinstance(reply, list) else first_answer
 
@@ -471,12 +474,13 @@ async def _dispatch(  # noqa: PLR0911 — one return per tool, flat on purpose
             return clip(body + (result.stdout or "") + (result.stderr or ""), _TOOL_OUTPUT_CHARS)
         if name == "write_test":
             path = str(args.get("path", ""))
-            refusal = write_refusal(path, scratch)
+            body = str(args.get("content", ""))
+            refusal = write_refusal(path, scratch, body)
             if refusal is not None:
                 checks.append(f"write_test {path} (거절)"[:200])
                 return f"REFUSED: {refusal}"
             checks.append(f"write_test {path}"[:200])
-            await copy.write_file(path, str(args.get("content", "")).encode())
+            await copy.write_file(path, body.encode())
             ran[0] += 1
             return "written"
     except Exception as exc:  # noqa: BLE001 — a tool error is the model's to read, not ours to raise
@@ -659,7 +663,7 @@ async def _intent_check(
     return True, "", {}
 
 
-async def _judge_test(
+async def _judge_test(  # noqa: PLR0911 — one return per outcome, flat on purpose
     box: SandboxSession,
     worked_in: _Copy,
     fresh: _Copy,
@@ -672,11 +676,21 @@ async def _judge_test(
     """(confirmed, reason, output, extra) for a test repro."""
     path = finding.repro.path or ""
     runner = repro_runner(path)
-    if write_refusal(path, scratch) is not None:
+    content = finding.repro.content
+    if content is not None:
+        # The final answer carries the file: same rules as write_test, same refusal reasons.
+        refusal = write_refusal(path, scratch, content)
+        if refusal is not None:
+            return False, refusal, "", {}
+    elif write_refusal(path, scratch) is not None:
         return False, "재현 테스트가 임시 디렉터리 밖에 있어 실행하지 않았다", "", {}
     if runner is None:
         return False, "이 파일 형식의 테스트 실행기를 알 수 없다", "", {}
     command, failed_code = runner
+    if content is not None:
+        await worked_in.write_file(path, content.encode())  # content wins over a written file
+    elif not await _repro_file_exists(worked_in, path):
+        return False, REASON_REPRO_MISSING, "", {"repro_missing": True}
     await _carry_repro_file(box, worked_in, fresh, path)
     res = await fresh.exec(command, timeout_s=step_s)
     output = (res.stdout or "") + (res.stderr or "")
@@ -820,6 +834,12 @@ async def _to_baseline(box: SandboxSession, copy: _Copy, baseline: str) -> None:
         f'git archive {ref} -o "$f.tar" && tar -xf "$f.tar" -C {root}; '
         'rc=$?; rm -f "$f" "$f.tar"; exit $rc',
     )
+
+
+async def _repro_file_exists(worked_in: _Copy, rel_path: str) -> bool:
+    """Was the repro file written in the verifier's copy? (Only ``write_test`` writes there.)"""
+    res = await worked_in.exec(f"test -f {shlex.quote(rel_path)}", timeout_s=_EXEC_TIMEOUT_S)
+    return res.exit_code == 0
 
 
 async def _carry_repro_file(box: SandboxSession, src: _Copy, dst: _Copy, rel_path: str) -> None:
