@@ -1288,3 +1288,33 @@ def test_parse_findings_reads_the_three_basis_kinds() -> None:
     )
     kinds = [f.expected_from.kind if f.expected_from else None for f in parse_findings(raw) or []]
     assert kinds == ["request", "existing_test", "unchanged_contract", None]
+
+
+@pytest.mark.parametrize("quote", ["e", "the", "do it", "an  apple", "a b c d e f g"])
+async def test_short_quotes_are_unconfirmed(quote: str) -> None:
+    """A quote that is in the request but under 20 chars / 3 words proves nothing."""
+    request = "the apple is red, e is a letter, do it an apple a b c d e f g"
+    finding = _finding(_OLD_BEHAVIOUR, expected_from={"kind": "request", "quote": quote})
+    result, llm, _ = await _basis_round(finding, _only_after_box(), request=request)
+    assert result["confirmed"] is False
+    assert "기대 근거 불일치" in result["reason"]
+    assert len(llm.calls) == 2  # no intent call
+
+
+async def test_intent_judge_is_skipped_when_tokens_are_exhausted() -> None:
+    """Less cap left than one judge call needs → no call, unconfirmed with the budget reason."""
+    big = LoopTurn(content=json.dumps({"tool": "grep", "args": {"pattern": "x"}}), tool_calls=())
+    big = LoopTurn(content=big.content, tool_calls=(), usage_prompt_tokens=100_000)
+    finding = _finding(_OLD_BEHAVIOUR)
+    final = LoopTurn(
+        content=json.dumps({"findings": [finding]}),
+        tool_calls=(),
+        usage_prompt_tokens=19_500,
+        usage_completion_tokens=100,
+    )
+    llm = StubLlm([big, final])
+    blob = await _round(llm, _only_after_box(), run=_intent_run("do it"))
+    result = blob["findings"][0]
+    assert result["confirmed"] is False
+    assert result["reason"] == "토큰 예산 소진으로 의도 충돌 판정을 하지 못했다"
+    assert len(llm.calls) == 2  # the judge was never called

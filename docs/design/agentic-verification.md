@@ -100,13 +100,16 @@ Two rules keep that filter honest (stage 1 is still report-only; `passed` never 
      (`path::name` of a repo test that passed before the change; the repro is that test, or that test fails after the
      change) or `unchanged_contract` (a `file:line` in the code *before* the change, for behaviour the request did not
      touch). The harness checks it mechanically: the quote must occur in the request body or ledger text (whitespace
-     normalised, substring); the existing test must pass on the pre-change tree and fail on the changed tree (unless it
+     normalised, substring) and be at least 20 characters and 3 words long after normalising (a shorter one, such as
+     `e` or `the`, occurs in any text and proves nothing: "기대 근거 불일치"); the existing test must pass on the pre-change tree and fail on the changed tree (unless it
      is the repro); an `unchanged_contract` location must be `file:line`. No basis: unconfirmed, "기대 근거 없음".
      Failed check: unconfirmed, "기대 근거 불일치".
   2. **Intent conflict (one judge call per candidate).** Candidates that pass 1 go to a separate call on the same judge
      path, given the request and the ledger: does the behaviour the repro expects conflict with what the request asked
      to change? Conflict: unconfirmed, "요청된 변경과 충돌(의도된 동작)". A failed or unreadable judge call leaves the
-     candidate unconfirmed (conservative). Its tokens count toward the round's tokens.
+     candidate unconfirmed (conservative). Its tokens count toward the round's tokens, and the call is made only inside
+     the round's token cap: if what is left is less than one call needs (prompt estimate plus the answer), no call is
+     made and the candidate stays unconfirmed, "토큰 예산 소진으로 의도 충돌 판정을 하지 못했다".
 
   This closes the "request-mandated change confirmed as a regression" class (#1440, replay `9c8254c5`), which section 4
   needs at about zero wrongly-confirmed before Stage A may gate.

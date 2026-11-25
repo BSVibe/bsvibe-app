@@ -59,6 +59,10 @@ EXPECTED_KINDS = ("request", "existing_test", "unchanged_contract")
 REASON_NO_BASIS = "기대 근거 없음"
 REASON_BASIS_MISMATCH = "기대 근거 불일치"
 REASON_INTENT_CONFLICT = "요청된 변경과 충돌(의도된 동작)"
+REASON_INTENT_NO_TOKENS = "토큰 예산 소진으로 의도 충돌 판정을 하지 못했다"
+#: A `request` quote shorter than this (whitespace-normalised) is not evidence of anything.
+MIN_QUOTE_CHARS = 20
+MIN_QUOTE_WORDS = 3
 
 
 @dataclass(frozen=True)
@@ -131,6 +135,12 @@ def check_expected_basis(  # noqa: PLR0911 — one return per outcome, flat on p
         return REASON_NO_BASIS
     if ef.kind == "request":
         quote = normalize_ws(ef.quote)
+        if len(quote) < MIN_QUOTE_CHARS or len(quote.split()) < MIN_QUOTE_WORDS:
+            # A one-letter or common-word 'quote' is found in any text: it proves nothing.
+            return (
+                f"{REASON_BASIS_MISMATCH} (인용이 너무 짧다: 공백 정규화 후 "
+                f"{MIN_QUOTE_CHARS}자·{MIN_QUOTE_WORDS}단어 이상이어야 한다)"
+            )
         pool = [t for i, t in requests if not ef.req_id or i in ("", ef.req_id)]
         if quote and any(quote in normalize_ws(t) for t in pool):
             return None

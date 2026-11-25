@@ -30,6 +30,7 @@ from backend.workflow.domain.adversarial import (
     PROTOCOL,
     REASON_BASIS_MISMATCH,
     REASON_INTENT_CONFLICT,
+    REASON_INTENT_NO_TOKENS,
     REPRO_RUN_PREFIX,
     SCRATCH_ROOT,
     SYSTEM_PROMPT,
@@ -65,6 +66,10 @@ _TOKEN_CAP = 120_000
 #: completion. When the next call (last prompt + this) would pass the cap, the loop stops
 #: investigating and asks for the answer instead.
 _FINAL_MARGIN = 6_000
+#: The judge answers with one short JSON object; this is what one intent call is assumed to add
+#: on top of its prompt when checking that it still fits the round's token cap.
+_INTENT_COMPLETION_TOKENS = 300
+_CHARS_PER_TOKEN = 3
 _EXEC_TIMEOUT_S = 60.0
 _REPRO_TIMEOUT_S = 120.0
 _TOOL_OUTPUT_CHARS = 4000
@@ -86,17 +91,29 @@ class _BaselineUnavailable(Exception):
     """The tree before the change could not be built: the repro is not confirmed."""
 
 
+def _run_tokens(run: Any) -> int:
+    return int(getattr(run, "usage_prompt_tokens", 0) or 0) + int(
+        getattr(run, "usage_completion_tokens", 0) or 0
+    )
+
+
 class _Intent:
     """What the basis check needs: the judge LLM, the run (tokens are metered on it) and the
     request's own words (body + ledger items) to quote from and to judge against."""
 
-    def __init__(self, llm: Llm, run: Any) -> None:
+    def __init__(self, llm: Llm, run: Any, tokens_at_start: int | None = None) -> None:
         self.llm = llm
         self.run = run
+        self._tokens_at_start = _run_tokens(run) if tokens_at_start is None else tokens_at_start
         payload = run.payload if isinstance(run.payload, dict) else {}
         body = str(payload.get("intent_text") or payload.get("text") or "")
         self.requests: list[tuple[str, str]] = [("", body)]
         self.requests += [(str(i["id"]), str(i["text"])) for i in run_requirements(run)]
+
+    def tokens_left(self) -> int:
+        """What the round's token cap has left: everything this round metered on the run (the
+        session and every earlier intent call) counts against it."""
+        return _TOKEN_CAP - (_run_tokens(self.run) - self._tokens_at_start)
 
 
 class _Budget:
@@ -169,6 +186,7 @@ async def run_adversarial_round(
 ) -> dict[str, Any]:
     """The ``result["adversarial"]`` blob. Never raises: a hiccup is ``status: unavailable``."""
     budget = _Budget()
+    tokens_at_start = _run_tokens(run)
     scratch = f"{SCRATCH_ROOT}/{str(run.id)[:12]}"
     checks: list[str] = []
     tag = f"{str(run.id)[:12]}-{uuid.uuid4().hex[:8]}"
@@ -198,7 +216,7 @@ async def run_adversarial_round(
                     "검증자가 끝내지 못했거나 출력을 해석하지 못했다",
                 )
             else:
-                intent = _Intent(llm, run)
+                intent = _Intent(llm, run, tokens_at_start)
                 judged = [
                     await _judge(box, copy, scratch, f, budget, baseline=baseline, intent=intent)
                     for f in findings
@@ -618,6 +636,12 @@ async def _intent_check(
         {"role": "system", "content": INTENT_SYSTEM_PROMPT},
         {"role": "user", "content": user},
     ]
+    # Only inside the round's token cap: less left than one call's worth → no call, unconfirmed.
+    needed = (
+        sum(len(m["content"]) for m in messages) // _CHARS_PER_TOKEN + _INTENT_COMPLETION_TOKENS
+    )
+    if intent.tokens_left() < needed:
+        return False, REASON_INTENT_NO_TOKENS, {}
     try:
         turn = await _turn(intent.llm, intent.run, messages, None)
     except Exception as exc:  # noqa: BLE001 — a failed judge call is conservative: unconfirmed
