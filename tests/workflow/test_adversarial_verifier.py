@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import structlog.testing
 
 from backend.workflow.application import adversarial_verifier
 from backend.workflow.application.adversarial_verifier import run_adversarial_round
@@ -1266,6 +1267,72 @@ async def test_intent_judge_failure_is_unconfirmed() -> None:
     blob = await _round(llm, _only_after_box())
     assert blob["findings"][0]["confirmed"] is False
     assert "의도 충돌 판정" in blob["findings"][0]["reason"]
+
+
+class _FlakyJudge(StubLlm):
+    """After the scripted session turns, the first ``failures`` judge calls raise ``exc``."""
+
+    def __init__(self, turns: list[LoopTurn], failures: int, exc: Exception) -> None:
+        super().__init__(turns)
+        self.failures = failures
+        self.exc = exc
+        self.judge_calls = 0
+
+    async def complete(self, *, messages: list[dict[str, Any]], tools: Any) -> LoopTurn:
+        if not self._turns:
+            self.judge_calls += 1
+            if self.judge_calls <= self.failures:
+                raise self.exc
+        return await super().complete(messages=messages, tools=tools)
+
+
+def _session_turns() -> list[LoopTurn]:
+    return [_tool("grep", pattern="x"), _answer(_finding(_OLD_BEHAVIOUR))]
+
+
+def _transient() -> Any:
+    from backend.dispatch.adapter import ExecutorAdapterUnavailable
+
+    return ExecutorAdapterUnavailable("task failed: cli exit 1", retryable=True)
+
+
+async def test_intent_call_failure_reason_carries_the_message() -> None:
+    from backend.dispatch.adapter import ExecutorAdapterUnavailable
+
+    exc = ExecutorAdapterUnavailable("no live 'claude_code' worker " + "x" * 400)
+    llm = _FlakyJudge(_session_turns(), failures=5, exc=exc)
+    with structlog.testing.capture_logs() as logs:
+        blob = await _round(llm, _only_after_box())
+    reason = blob["findings"][0]["reason"]
+    assert "ExecutorAdapterUnavailable: no live 'claude_code' worker" in reason
+    assert len(reason) < 400
+    assert llm.judge_calls == 1  # not retryable
+    warn = [e for e in logs if e["event"] == "adversarial_intent_unavailable"]
+    assert warn and warn[0]["run_id"] and "no live" in warn[0]["error"]
+
+
+async def test_retryable_intent_failure_is_retried_once() -> None:
+    llm = _FlakyJudge(_session_turns(), failures=1, exc=_transient())
+    blob = await _round(llm, _only_after_box())
+    assert blob["findings"][0]["confirmed"] is True
+    assert llm.judge_calls == 2
+
+
+async def test_intent_call_failing_twice_is_unconfirmed() -> None:
+    llm = _FlakyJudge(_session_turns(), failures=2, exc=_transient())
+    blob = await _round(llm, _only_after_box())
+    assert blob["findings"][0]["confirmed"] is False
+    assert "cli exit 1" in blob["findings"][0]["reason"]
+    assert llm.judge_calls == 2  # one retry, no more
+
+
+async def test_no_retry_when_the_tokens_left_do_not_cover_another_call() -> None:
+    exc = _transient()
+    exc.usage_prompt_tokens = 119_900  # the failed attempt burned almost the whole cap
+    llm = _FlakyJudge(_session_turns(), failures=1, exc=exc)
+    blob = await _round(llm, _only_after_box())
+    assert blob["findings"][0]["confirmed"] is False
+    assert llm.judge_calls == 1
 
 
 async def test_unreadable_intent_answer_is_unconfirmed() -> None:

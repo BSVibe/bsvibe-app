@@ -85,6 +85,16 @@ _UNTRACKED_HASH = (
 Llm = Any  # JudgeLlm: ``complete(messages=..., tools=...)`` → a turn with usage fields
 
 
+_ERROR_CHARS = 300
+
+
+def _is_transient(exc: Exception) -> bool:
+    """A failure worth ONE more judge call: a failed task or a full worker, not a config error."""
+    return bool(getattr(exc, "retryable", False)) or type(exc).__name__ == (
+        "ExecutorCapacitySaturated"
+    )
+
+
 class _TokenCapExceeded(Exception):
     """The verifier spent its token cap: the loop ends at once, nothing it still wanted counts."""
 
@@ -647,9 +657,28 @@ async def _intent_check(
     if intent.tokens_left() < needed:
         return False, REASON_INTENT_NO_TOKENS, {}
     try:
-        turn = await _turn(intent.llm, intent.run, messages, None)
+        try:
+            turn = await _turn(intent.llm, intent.run, messages, None)
+        except Exception as first:
+            if not _is_transient(first) or intent.tokens_left() < needed:
+                raise
+            logger.warning(
+                "adversarial_intent_retry",
+                run_id=str(intent.run.id),
+                error=f"{type(first).__name__}: {first}"[:_ERROR_CHARS],
+            )
+            # A failed attempt still spent tokens; they were carried on the error (#928).
+            intent.run.usage_prompt_tokens += int(getattr(first, "usage_prompt_tokens", 0) or 0)
+            intent.run.usage_completion_tokens += int(
+                getattr(first, "usage_completion_tokens", 0) or 0
+            )
+            if intent.tokens_left() < needed:
+                raise
+            turn = await _turn(intent.llm, intent.run, messages, None)
     except Exception as exc:  # noqa: BLE001 — a failed judge call is conservative: unconfirmed
-        return False, f"의도 충돌 판정 호출 실패: {type(exc).__name__}", {}
+        detail = f"{type(exc).__name__}: {exc}"[:_ERROR_CHARS]
+        logger.warning("adversarial_intent_unavailable", run_id=str(intent.run.id), error=detail)
+        return False, f"의도 충돌 판정 호출 실패: {detail}", {}
     verdict = parse_intent_verdict(str(getattr(turn, "content", "") or ""))
     if verdict is None:
         return False, "의도 충돌 판정을 읽지 못했다", {}
