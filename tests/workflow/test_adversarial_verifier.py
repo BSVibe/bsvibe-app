@@ -1161,7 +1161,11 @@ async def test_the_same_repro_without_the_intent_check_would_be_confirmed() -> N
 
 async def test_request_quote_not_in_request_is_unconfirmed() -> None:
     finding = _finding(
-        _OLD_BEHAVIOUR, expected_from={"kind": "request", "quote": "never said this"}
+        _OLD_BEHAVIOUR,
+        expected_from={
+            "kind": "request",
+            "quote": "the request never said anything like this sentence",
+        },
     )
     result, llm, _ = await _basis_round(finding, _only_after_box())
     assert result["confirmed"] is False

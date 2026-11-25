@@ -429,7 +429,9 @@ else is discarded as "unconfirmed". No repro, no finding.
 A repro that holds only after the change shows the change CHANGED a behaviour, not that the new \
 behaviour is WRONG: a behaviour the REQUEST asked to change is intended. So every finding must \
 name `expected_from`, where the behaviour your repro asserts as correct comes from: \
-`request` (a verbatim `quote` from the REQUEST or a requirement item, with its `req_id`), \
+`request` (a verbatim `quote` from the REQUEST or a requirement item, with its `req_id`; the \
+`quote` must be literal text of at least 20 characters and 3 words after whitespace \
+normalisation, a shorter one is rejected), \
 `existing_test` (`test` = `path::name` of a repo test that passed before the change and fails \
 after it, or is your repro itself), or `unchanged_contract` (`location` = `file:line` of the \
 code BEFORE the change, for behaviour the request did not touch). The harness checks the quote \
@@ -449,7 +451,7 @@ Final answer: ONLY this JSON, at most {limit} findings (an empty list is a fine 
  "repro": {{"kind": "test", "path": "{scratch}/test_x.py"}}
  | {{"kind": "command", "command": "...",
      "expect": {{"exit_code": 0|"nonzero", "contains": "...", "not_contains": "..."}}}},
- "expected_from": {{"kind": "request", "quote": "verbatim text", "req_id": "R1"}}
+ "expected_from": {{"kind": "request", "quote": "verbatim text, 20+ chars and 3+ words after whitespace normalisation", "req_id": "R1"}}
    | {{"kind": "existing_test", "test": "tests/x/test_y.py::test_z"}}
    | {{"kind": "unchanged_contract", "location": "backend/x.py:12"}}}}]}}
 For a test repro, write it with write_test first; it must FAIL because of the defect. For a \
