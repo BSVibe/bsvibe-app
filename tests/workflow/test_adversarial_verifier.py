@@ -38,11 +38,26 @@ from backend.workflow.infrastructure.db import VerificationOutcome
 from backend.workflow.infrastructure.sandbox import SandboxResult
 from tests._support import memory_session
 from tests.execution.test_verification_service import (
-    StubLlm,
+    StubLlm as _ScriptedLlm,
+)
+from tests.execution.test_verification_service import (
     _make_run,
     _make_step_and_attempt,
 )
 from tests.workflow.test_artifact_review import _GitBox
+
+_NO_CONFLICT = LoopTurn(content='{"conflict": false, "why": "unrelated"}', tool_calls=())
+_CONFLICT = LoopTurn(content='{"conflict": true, "why": "the request asked for it"}', tool_calls=())
+
+
+class StubLlm(_ScriptedLlm):
+    """Scripted turns; once they run out, the intent judge (the only call left) finds no conflict."""
+
+    async def complete(self, *, messages: list[dict[str, Any]], tools: Any) -> LoopTurn:
+        if not self._turns:
+            self._turns.append(_NO_CONFLICT)
+        return await super().complete(messages=messages, tools=tools)
+
 
 _UV_SH = f"{REPRO_RUN_PREFIX}sh -c "
 _TEST_REPRO = {"kind": "test", "path": f"{SCRATCH_ROOT}/run-1/test_bug.py"}
@@ -55,6 +70,7 @@ def _finding(repro: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any
         "file": "backend/svc.py",
         "line": 3,
         "repro": repro or _TEST_REPRO,
+        "expected_from": {"kind": "unchanged_contract", "location": "backend/svc.py:3"},
         **extra,
     }
 
@@ -118,21 +134,23 @@ class _AdvBox(_GitBox):
         return await super().exec(command, **kwargs)
 
 
-def _run() -> Any:
+def _run(payload: dict[str, Any] | None = None) -> Any:
     return SimpleNamespace(
         id="run-1",
-        payload={"intent_text": "do it"},
+        payload=payload or {"intent_text": "do it"},
         usage_prompt_tokens=0,
         usage_completion_tokens=0,
     )
 
 
-async def _round(llm: StubLlm, box: _AdvBox, surface: str = "code") -> dict[str, Any]:
+async def _round(
+    llm: StubLlm, box: _AdvBox, surface: str = "code", run: Any = None
+) -> dict[str, Any]:
     async def release() -> None:
         return None
 
     return await run_adversarial_round(
-        llm=llm, run=_run(), box=box, baseline="base123", surface=surface, release=release
+        llm=llm, run=run or _run(), box=box, baseline="base123", surface=surface, release=release
     )
 
 
@@ -702,7 +720,8 @@ async def test_token_cap_asks_for_the_final_json_once(monkeypatch: Any) -> None:
     assert blob["status"] == "done"
     assert blob["budget_stopped"] is True
     assert len(blob["findings"]) == 1
-    assert len(llm.calls) * 30_010 <= 150_000  # the whole round stays within the cap
+    session_calls = len(llm.calls) - 1  # the last call is the separate intent judge
+    assert session_calls * 30_010 <= 150_000  # the whole session stays within the cap
 
 
 async def test_token_cap_malformed_final_answer_is_unavailable(monkeypatch: Any) -> None:
@@ -1086,3 +1105,186 @@ def test_repro_prefix_runs_without_a_lockfile(tmp_path: Path) -> None:
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "1"
+
+
+# -- the basis of the expectation: what the repro calls 'correct' must come from somewhere -----
+
+_OLD_BEHAVIOUR = {
+    "kind": "command",
+    "command": "probe",
+    "expect": {"exit_code": 0, "contains": "OLD"},
+}
+
+
+def _intent_run(request: str) -> Any:
+    return _run({"intent_text": request})
+
+
+async def _basis_round(
+    finding: dict[str, Any], box: _AdvBox, *turns: LoopTurn, request: str = "do it"
+) -> tuple[dict[str, Any], StubLlm, Any]:
+    llm = StubLlm([_tool("grep", pattern="x"), _answer(finding), *turns])
+    run = _intent_run(request)
+    blob = await _round(llm, box, run=run)
+    assert blob["status"] == "done"
+    return blob["findings"][0], llm, run
+
+
+def _only_after_box() -> _AdvBox:
+    # the repro holds after the change and not before: the baseline control alone confirms it
+    return _AdvBox(scripted_before={"probe": _res(0, "NEW")}, probe=_res(0, "OLD"))
+
+
+async def test_intended_behaviour_change_is_not_confirmed_as_regression() -> None:
+    request = "3. 재현이 import 오류로 끝나면 'unconfirmed: 재현이 실행되지 않음'으로 표시해"
+    finding = _finding(
+        _OLD_BEHAVIOUR,
+        expected_from={"kind": "unchanged_contract", "location": "backend/x.py:211"},
+    )
+    result, llm, _ = await _basis_round(finding, _only_after_box(), _CONFLICT, request=request)
+
+    assert result["confirmed"] is False
+    assert "요청된 변경과 충돌" in result["reason"]
+    assert len(llm.calls) == 3  # the session (2 turns) + ONE separate intent call
+    assert "REQUEST:" in llm.calls[-1]["messages"][-1]["content"]
+    assert request in llm.calls[-1]["messages"][-1]["content"]
+
+
+async def test_the_same_repro_without_the_intent_check_would_be_confirmed() -> None:
+    finding = _finding(
+        _OLD_BEHAVIOUR,
+        expected_from={"kind": "unchanged_contract", "location": "backend/x.py:211"},
+    )
+    result, _, _ = await _basis_round(finding, _only_after_box(), _NO_CONFLICT)
+    assert result["confirmed"] is True
+
+
+async def test_request_quote_not_in_request_is_unconfirmed() -> None:
+    finding = _finding(
+        _OLD_BEHAVIOUR, expected_from={"kind": "request", "quote": "never said this"}
+    )
+    result, llm, _ = await _basis_round(finding, _only_after_box())
+    assert result["confirmed"] is False
+    assert "기대 근거 불일치" in result["reason"]
+    assert len(llm.calls) == 2  # no intent call for a failed mechanical check
+
+
+async def test_request_quote_matches_after_whitespace_normalising_and_ledger_items() -> None:
+    run = _run(
+        {
+            "intent_text": "first   line\nsecond line",
+            "requirements": [{"id": "R7", "text": "must mark   it  not_run"}],
+        }
+    )
+    for quote, req_id in (("first line second line", ""), ("must mark it not_run", "R7")):
+        finding = _finding(
+            _OLD_BEHAVIOUR, expected_from={"kind": "request", "quote": quote, "req_id": req_id}
+        )
+        llm = StubLlm([_tool("grep", pattern="x"), _answer(finding)])
+        blob = await _round(llm, _only_after_box(), run=run)
+        assert blob["findings"][0]["confirmed"] is True, quote
+
+
+async def test_finding_without_expected_from_is_unconfirmed() -> None:
+    finding = _finding(_OLD_BEHAVIOUR)
+    del finding["expected_from"]
+    result, _, _ = await _basis_round(finding, _only_after_box())
+    assert result["confirmed"] is False
+    assert result["reason"] == "기대 근거 없음"
+
+
+async def test_existing_test_passing_before_failing_after_stays_confirmed() -> None:
+    ef = {"kind": "existing_test", "test": "tests/test_old.py::test_keeps"}
+    box = _AdvBox(pytest=_res(1, "1 failed"), pytest_before=_res(0, "1 passed"))
+    # the repro test fails only after; the named test passes before and fails after
+    result, _, _ = await _basis_round(_finding(expected_from=ef), box)
+    assert result["confirmed"] is True
+
+
+async def test_existing_test_that_does_not_pass_before_is_unconfirmed() -> None:
+    ef = {"kind": "existing_test", "test": "tests/test_old.py::test_keeps"}
+
+    class _Box(_AdvBox):
+        async def exec(self, command: str, **kwargs: Any) -> SandboxResult:
+            if "-before-" in command and "test_old.py::test_keeps" in command:
+                return _res(1, "1 failed")
+            return await super().exec(command, **kwargs)
+
+    box = _Box(pytest=_res(1, "1 failed"), pytest_before=_res(0, "1 passed"))
+    result, _, _ = await _basis_round(_finding(expected_from=ef), box)
+    assert result["confirmed"] is False
+    assert "기대 근거 불일치" in result["reason"]
+
+
+async def test_existing_test_that_still_passes_after_is_unconfirmed() -> None:
+    ef = {"kind": "existing_test", "test": "tests/test_old.py::test_keeps"}
+
+    class _Box(_AdvBox):
+        async def exec(self, command: str, **kwargs: Any) -> SandboxResult:
+            if "-before-" not in command and "test_old.py::test_keeps" in command:
+                return _res(0, "1 passed")
+            return await super().exec(command, **kwargs)
+
+    box = _Box(pytest=_res(1, "1 failed"), pytest_before=_res(0, "1 passed"))
+    result, _, _ = await _basis_round(_finding(expected_from=ef), box)
+    assert result["confirmed"] is False
+    assert "기대 근거 불일치" in result["reason"]
+
+
+async def test_unchanged_contract_needs_a_file_line_location() -> None:
+    finding = _finding(
+        _OLD_BEHAVIOUR, expected_from={"kind": "unchanged_contract", "location": "somewhere"}
+    )
+    result, _, _ = await _basis_round(finding, _only_after_box())
+    assert result["confirmed"] is False
+    assert "기대 근거 불일치" in result["reason"]
+
+
+async def test_intent_judge_failure_is_unconfirmed() -> None:
+    class _Failing(StubLlm):
+        async def complete(self, *, messages: list[dict[str, Any]], tools: Any) -> LoopTurn:
+            if not self._turns:
+                raise RuntimeError("judge down")
+            return await _ScriptedLlm.complete(self, messages=messages, tools=tools)
+
+    llm = _Failing([_tool("grep", pattern="x"), _answer(_finding(_OLD_BEHAVIOUR))])
+    blob = await _round(llm, _only_after_box())
+    assert blob["findings"][0]["confirmed"] is False
+    assert "의도 충돌 판정" in blob["findings"][0]["reason"]
+
+
+async def test_unreadable_intent_answer_is_unconfirmed() -> None:
+    garbled = LoopTurn(content="maybe", tool_calls=())
+    result, _, _ = await _basis_round(_finding(_OLD_BEHAVIOUR), _only_after_box(), garbled)
+    assert result["confirmed"] is False
+
+
+async def test_intent_judge_tokens_are_added_to_the_run() -> None:
+    judge = LoopTurn(
+        content='{"conflict": false}',
+        tool_calls=(),
+        usage_prompt_tokens=70,
+        usage_completion_tokens=5,
+    )
+    result, _, run = await _basis_round(_finding(_OLD_BEHAVIOUR), _only_after_box(), judge)
+    assert result["confirmed"] is True
+    assert run.usage_prompt_tokens == 70
+    assert run.usage_completion_tokens == 5
+
+
+def test_parse_findings_reads_the_three_basis_kinds() -> None:
+    raw = json.dumps(
+        {
+            "findings": [
+                _finding(expected_from=ef)
+                for ef in (
+                    {"kind": "request", "quote": "q", "req_id": "R1"},
+                    {"kind": "existing_test", "test": "a.py::t"},
+                    {"kind": "unchanged_contract", "location": "a.py:1"},
+                    {"kind": "request"},  # no quote: no basis
+                )
+            ]
+        }
+    )
+    kinds = [f.expected_from.kind if f.expected_from else None for f in parse_findings(raw) or []]
+    assert kinds == ["request", "existing_test", "unchanged_contract", None]

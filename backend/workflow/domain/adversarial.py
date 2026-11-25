@@ -55,6 +55,27 @@ class Repro:
     expect: dict[str, Any]
 
 
+EXPECTED_KINDS = ("request", "existing_test", "unchanged_contract")
+REASON_NO_BASIS = "기대 근거 없음"
+REASON_BASIS_MISMATCH = "기대 근거 불일치"
+REASON_INTENT_CONFLICT = "요청된 변경과 충돌(의도된 동작)"
+
+
+@dataclass(frozen=True)
+class ExpectedFrom:
+    """Where the repro's 'correct behaviour' comes from — the finding's stated basis.
+
+    ``request``: ``quote`` (verbatim) and optionally the ledger ``req_id``.
+    ``existing_test``: ``test`` = ``path::name`` of a test that passed before the change.
+    ``unchanged_contract``: ``location`` = ``file:line`` of the code BEFORE the change."""
+
+    kind: str
+    quote: str = ""
+    req_id: str = ""
+    test: str = ""
+    location: str = ""
+
+
 @dataclass(frozen=True)
 class Finding:
     severity: str
@@ -62,6 +83,65 @@ class Finding:
     file: str | None
     line: int | None
     repro: Repro
+    expected_from: ExpectedFrom | None = None
+
+
+def _text(raw: Any, limit: int = 600) -> str:
+    return raw.strip()[:limit] if isinstance(raw, str) else ""
+
+
+def parse_expected_from(raw: Any) -> ExpectedFrom | None:
+    """``None`` for anything that does not name a complete basis (→ 'no basis')."""
+    if not isinstance(raw, dict) or raw.get("kind") not in EXPECTED_KINDS:
+        return None
+    ef = ExpectedFrom(
+        kind=raw["kind"],
+        quote=_text(raw.get("quote"), 1000),
+        req_id=_text(raw.get("req_id") or raw.get("id"), 80),
+        test=_text(raw.get("test")),
+        location=_text(raw.get("location")),
+    )
+    needed = {"request": ef.quote, "existing_test": ef.test, "unchanged_contract": ef.location}
+    return ef if needed[ef.kind] else None
+
+
+def normalize_ws(text: str) -> str:
+    """Whitespace collapsed to single spaces (the quote check ignores line breaks / indents)."""
+    return " ".join((text or "").split())
+
+
+_LOCATION = re.compile(r"^[^\s:]+:\d+(?:-\d+)?$")
+
+
+def split_test_id(test: str) -> tuple[str, str] | None:
+    """``path::name`` → (path, name); ``None`` when it is not that shape."""
+    path, sep, name = test.partition("::")
+    if not sep or not path.strip() or not name.strip() or path.startswith("/") or ".." in path:
+        return None
+    return path.strip(), name.strip()
+
+
+def check_expected_basis(  # noqa: PLR0911 — one return per outcome, flat on purpose
+    ef: ExpectedFrom | None, requests: list[tuple[str, str]]
+) -> str | None:
+    """The mechanical part of the basis check that needs no run (``None`` = passes so far).
+
+    ``requests`` = (id, text) pairs: the request body (id ``""``) and each ledger item."""
+    if ef is None:
+        return REASON_NO_BASIS
+    if ef.kind == "request":
+        quote = normalize_ws(ef.quote)
+        pool = [t for i, t in requests if not ef.req_id or i in ("", ef.req_id)]
+        if quote and any(quote in normalize_ws(t) for t in pool):
+            return None
+        return f"{REASON_BASIS_MISMATCH} (인용이 요청·장부 본문에 없다)"
+    if ef.kind == "existing_test":
+        if split_test_id(ef.test) is None:
+            return f"{REASON_BASIS_MISMATCH} (기존 테스트는 경로::이름 형식이어야 한다)"
+        return None
+    if not _LOCATION.match(ef.location) or ef.location.startswith("/"):
+        return f"{REASON_BASIS_MISMATCH} (변경 전 코드 위치는 파일:줄 형식이어야 한다)"
+    return None
 
 
 def _expect(raw: Any) -> dict[str, Any] | None:
@@ -166,6 +246,7 @@ def parse_findings(raw: str) -> list[Finding] | None:
                 file=item["file"] if isinstance(item.get("file"), str) else None,
                 line=line if isinstance(line, int) and not isinstance(line, bool) else None,
                 repro=repro,
+                expected_from=parse_expected_from(item.get("expected_from")),
             )
         )
         if len(out) == MAX_FINDINGS:
@@ -280,6 +361,24 @@ def repro_test_did_not_run(*, exit_code: int | None, timed_out: bool, output: st
     return exit_code in _PYTEST_NOT_RUN or runner_is_missing(output)
 
 
+INTENT_SYSTEM_PROMPT = """\
+You judge ONE question. A verifier claims the change broke something and attached a repro that \
+holds only AFTER the change. The change is what the REQUEST asked for. Does the behaviour the \
+repro expects as 'correct' CONFLICT with a behaviour the REQUEST (or its requirement items) \
+told the agent to change? If the repro expects the OLD behaviour the request asked to replace, \
+that is a conflict (the new behaviour is intended). If the request does not touch that \
+behaviour, it is not a conflict.
+Reply with ONE JSON object only: {"conflict": true|false, "why": "one sentence"}."""
+
+
+def parse_intent_verdict(raw: str) -> tuple[bool, str] | None:
+    """(conflict, why) from the judge's reply; ``None`` = not the agreed JSON (→ conservative)."""
+    data = _load_json(raw)
+    if not isinstance(data, dict) or not isinstance(data.get("conflict"), bool):
+        return None
+    return data["conflict"], _text(data.get("why"), 300)
+
+
 def clip(text: str, limit: int = OUTPUT_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + f"…[+{len(text) - limit}자 생략]"
 
@@ -317,6 +416,15 @@ the claim "confirmed" ONLY if it does not hold before the change (the harness al
 the tree BEFORE the change, the baseline). A repro that gives the same result before the change \
 proves nothing about the change; a grep that merely finds some text is such a repro. Anything \
 else is discarded as "unconfirmed". No repro, no finding.
+A repro that holds only after the change shows the change CHANGED a behaviour, not that the new \
+behaviour is WRONG: a behaviour the REQUEST asked to change is intended. So every finding must \
+name `expected_from`, where the behaviour your repro asserts as correct comes from: \
+`request` (a verbatim `quote` from the REQUEST or a requirement item, with its `req_id`), \
+`existing_test` (`test` = `path::name` of a repo test that passed before the change and fails \
+after it, or is your repro itself), or `unchanged_contract` (`location` = `file:line` of the \
+code BEFORE the change, for behaviour the request did not touch). The harness checks the quote \
+and the test mechanically, and a judge asks whether your expectation conflicts with what the \
+request asked for. No basis, a false quote, or a conflict with the request = unconfirmed.
 Environment: repros run through `uv run` (the same way the repo's gates run), from the \
 repository root, so `python` and the project's dependencies are available. A repro that dies \
 with an import / collection error is "unconfirmed: the repro did not run".
@@ -330,7 +438,10 @@ Final answer: ONLY this JSON, at most {limit} findings (an empty list is a fine 
 {{"findings": [{{"severity": "high|medium|low", "claim": "...", "file": "path", "line": 1,
  "repro": {{"kind": "test", "path": "{scratch}/test_x.py"}}
  | {{"kind": "command", "command": "...",
-     "expect": {{"exit_code": 0|"nonzero", "contains": "...", "not_contains": "..."}}}}}}]}}
+     "expect": {{"exit_code": 0|"nonzero", "contains": "...", "not_contains": "..."}}}},
+ "expected_from": {{"kind": "request", "quote": "verbatim text", "req_id": "R1"}}
+   | {{"kind": "existing_test", "test": "tests/x/test_y.py::test_z"}}
+   | {{"kind": "unchanged_contract", "location": "backend/x.py:12"}}}}]}}
 For a test repro, write it with write_test first; it must FAIL because of the defect. For a \
 command repro, `expect` describes the output that PROVES the defect.
 """

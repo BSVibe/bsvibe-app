@@ -110,6 +110,7 @@ async def test_the_verifier_runs_a_full_loop_through_the_real_executor_adapter(
         [
             {"tool": "grep", "args": {"pattern": "cleanup"}},
             {"findings": [_finding()]},
+            {"conflict": False, "why": "unrelated"},  # the separate intent judge call
         ],
         box,
     )
@@ -117,7 +118,7 @@ async def test_the_verifier_runs_a_full_loop_through_the_real_executor_adapter(
     assert blob["status"] == "done", blob  # no ExecutorAdapterUnavailable
     assert blob["confirmed"] == 1
     assert any(c.startswith("grep cleanup") for c in blob["checks"])  # the harness ran the tool
-    assert len(prompts) == 2  # tool request → harness output → final answer
+    assert len(prompts) == 3  # tool request → harness output → final answer → intent judge
     assert any("git" in c and "grep" in c for c in box.commands)
 
 
