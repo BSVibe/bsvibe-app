@@ -20,7 +20,7 @@ from backend.config import get_settings
 from backend.dispatch.adapter import ExecutorAdapter
 from backend.executors import dispatch
 from backend.identity import oauth_service
-from backend.workflow.application.adversarial_verifier import run_adversarial_round
+from backend.workflow.application.adversarial_verifier import SCRATCH_ROOT, run_adversarial_round
 from backend.workflow.application.loop_llm import ResolverLoopLlm
 
 from .._support import shared_file_sessionmaker
@@ -198,4 +198,78 @@ async def test_one_malformed_reply_is_asked_again_once(
     )
 
     assert blob["status"] == "done"
+    assert len(prompts) == 3
+
+
+async def test_the_production_verify_round_confirms_through_the_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The round exactly as ``VerificationService.verify`` calls it: a real ``ExecutionRun`` row,
+    the SAME unbound judge adapter (as ``resolve_judge_llm`` builds it) for the investigation and the intent judge, and the real
+    ``_release_connection`` as ``release``. Run ``205fa140`` (#1469) failed its intent judge with
+    ``ExecutorAdapterUnavailable`` only here."""
+    from backend.workflow.application.verification_service import VerificationService
+    from backend.workflow.infrastructure.db import ExecutionRun, RunStatus
+
+    workspace_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    repro = {"kind": "test", "path": f"{SCRATCH_ROOT}/{str(run_id)[:12]}/test_bug.py"}
+    replies = [
+        {"tool": "grep", "args": {"pattern": "cleanup"}},
+        {"findings": [_finding(repro)]},
+        {"conflict": False, "why": "unrelated"},
+    ]
+    prompts: list[dict[str, Any]] = []
+
+    async def _fake_cli(*_a: Any, **kw: Any) -> _StubCompletedTask:
+        prompts.append(dict(kw))
+        return _StubCompletedTask(status="done", output=_reply(replies.pop(0)))
+
+    monkeypatch.setattr(dispatch, "await_completion", _fake_cli)
+
+    async with shared_file_sessionmaker() as sf:
+        async with sf() as setup:
+            worker = await _seed_worker(
+                setup, workspace_id=workspace_id, capabilities=["claude_code"]
+            )
+            account = _executor_account(workspace_id, worker.id)
+            setup.add(account)
+            setup.add(
+                ExecutionRun(
+                    id=run_id,
+                    workspace_id=workspace_id,
+                    status=RunStatus.RUNNING,
+                    payload={"intent_text": "do it"},
+                )
+            )
+            await setup.commit()
+        async with sf() as service_session:
+            run = await service_session.get(ExecutionRun, run_id)
+            assert run is not None
+            adapter = ExecutorAdapter(
+                account=account,
+                workspace_id=workspace_id,
+                account_id=account.account_id,
+                model_account_id=account.id,
+                session=service_session,
+                session_factory=sf,
+                settings=get_settings(),
+                redis=await _make_redis(),
+                run_id=None,  # resolve_judge_llm: the judge route is NOT bound to the run
+                yield_on_saturation=False,
+            )
+            llm = ResolverLoopLlm(adapter=adapter)
+            service = VerificationService(session=service_session, llm=llm, verifier_llm=llm)
+            blob = await run_adversarial_round(
+                llm=service._verifier_llm,
+                run=run,
+                box=_AdvBox(pytest=_res(1, "failed")),
+                baseline="base123",
+                surface="code",
+                release=lambda: service._release_connection(run),
+            )
+
+    assert blob["status"] == "done", blob
+    reasons = [f.get("reason") for f in blob["findings"]]
+    assert blob["confirmed"] == 1, reasons
     assert len(prompts) == 3
