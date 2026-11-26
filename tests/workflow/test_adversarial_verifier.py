@@ -28,6 +28,7 @@ from backend.workflow.domain.adversarial import (
     MAX_TEST_CHARS,
     REPRO_RUN_PREFIX,
     SCRATCH_ROOT,
+    command_did_not_run,
     judge_command,
     judge_test,
     parse_findings,
@@ -1471,3 +1472,41 @@ def test_final_requests_tell_how_to_repro() -> None:
     assert adversarial_verifier._FINAL_REQUEST.startswith(
         "Stop investigating. Give the final JSON now."
     )
+
+
+# -- command_did_not_run: only a command that really could not run ------------------------------
+
+
+def _not_run(code: int, out: str, **expect: Any) -> bool:
+    return command_did_not_run(expect, exit_code=code, output=out, timed_out=False)
+
+
+def test_command_that_exited_zero_did_not_run_is_false() -> None:
+    assert not _not_run(0, "ModuleNotFoundError: No module named 'x'\n")
+    assert not _not_run(0, "bash: foo: command not found\n")
+
+
+def test_grep_hit_lines_are_not_a_missing_command() -> None:
+    hit = "backend/x.py:12:    except ModuleNotFoundError:\n"
+    assert not _not_run(1, hit)
+    assert not _not_run(1, "see 'command not found' in docs\n")
+
+
+def test_command_not_run_still_true_for_real_shell_and_import_errors() -> None:
+    tb = "Traceback (most recent call last):\n  ...\nModuleNotFoundError: No module named 'dep'\n"
+    assert _not_run(1, tb)
+    assert _not_run(127, "")
+    assert _not_run(127, "sh: 1: curl: not found\n")
+    assert _not_run(2, "bash: foo: command not found\n")
+    assert _not_run(2, "foo: command not found\n")
+    assert not _not_run(1, tb, contains="No module named")  # the repro expects the error
+
+
+async def test_grep_repro_exit_zero_with_error_text_is_confirmed_not_not_run() -> None:
+    probe = "grep -rn ModuleNotFoundError backend"
+    out = _res(0, "backend/x.py:12:    except ModuleNotFoundError:\n")
+    repro = _cmd_repro(probe, exit_code=0, contains="backend/x.py:12")
+    box = _AdvBox(scripted_before={probe: _res(1, "")}, **{probe: out})
+    finding = await _one(box, repro)
+    assert not finding.get("not_run")
+    assert finding["confirmed"] is True
